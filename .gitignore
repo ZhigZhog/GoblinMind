@@ -1,0 +1,9 @@
+# Obsidian local config — vault notes themselves are tracked
+WoWVault/.obsidian/
+
+# OS / editor junk
+Thumbs.db
+Desktop.ini
+*.bak
+*.tmp
+__pycache__/
