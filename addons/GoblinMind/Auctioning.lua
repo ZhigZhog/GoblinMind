@@ -48,6 +48,12 @@ function A.Busy()
 	return scanning ~= nil or #scanQ > 0
 end
 
+-- public entry into the serial queue — shopping/sniper scan one item
+-- at a time too, and a second ScanItem would clobber the pending one
+function A.QueueScan(itemID, done)
+	ScanQueued(itemID, done)
+end
+
 -- ============ pure decision (harness-testable) ============
 
 -- Lowest ask that isn't ours. Own auctions can't be undercut — posting
@@ -151,51 +157,62 @@ function A.PostScan()
 		return
 	end
 
+	-- shared per-item decision → post steps appended to `steps`
+	local function ProcessItem(steps, it, cheapest)
+		local aOps = GM.Groups.GetOps(it.id, "auctioning")
+		local entry = GM.ItemEntry(it.id)
+		local normal = GM.Groups.EvalOp(aOps, "normal", it.id)
+			or (entry and entry.p) or GM.TSMMarket(it.id)
+		local unit, why = A.PriceFor(aOps, it.id, normal, cheapest)
+		if not unit then return nil, why or "?" end
+		local isComm = GM.AH.IsCommodity(it.id)
+		local cap = tonumber(aOps.postCap)
+		local qty = (cap and cap > 0) and math.min(it.qty, cap) or it.qty
+		local bidPct = tonumber(aOps.bidPercent) or 100
+		local bid = math.floor(unit * bidPct / 100)
+		local dur = tonumber(aOps.duration) or 2
+		if isComm then
+			tinsert(steps, { kind = "post", itemID = it.id, item = ItemLink(it.id),
+				name = ShortName(it.id), qty = qty, unit = unit,
+				bid = bid, duration = dur, cheapest = cheapest })
+		else
+			local stackSize = tonumber(aOps.stackSize)
+			local left = qty
+			for _, st in ipairs(it.stacks) do
+				local n = math.min(st, left)
+				while n > 0 do
+					local c = (stackSize and stackSize > 0)
+						and math.min(stackSize, n) or n
+					tinsert(steps, { kind = "post", itemID = it.id,
+						item = ItemLink(it.id), name = ShortName(it.id),
+						qty = c, unit = unit, bid = bid, duration = dur,
+						cheapest = cheapest })
+					n = n - c
+				end
+				left = left - math.min(st, left)
+				if left <= 0 then break end
+			end
+		end
+		return true
+	end
+
 	local steps, postedItems = {}, 0
+	-- a fresh shared book makes the whole scan synchronous
+	if GM.AH.BookAge() < 300 then
+		for _, it in ipairs(items) do
+			local ok, why = ProcessItem(steps, it, GM.AH.BookCheapest(it.id))
+			if ok then postedItems = postedItems + 1 else skipped[it.id] = why end
+		end
+		A.FinishPostScan(steps, skipped, postedItems)
+		return
+	end
+
 	local remaining = #items
 	GM.PlanQueue.ScanStatus(GM.CC("textDim") .. format("post scan — 0/%d items|r", #items))
-
 	for pos, it in ipairs(items) do
 		ScanQueued(it.id, function(asks)
-			local aOps = GM.Groups.GetOps(it.id, "auctioning")
-			local entry = GM.ItemEntry(it.id)
-			local normal = GM.Groups.EvalOp(aOps, "normal", it.id)
-				or (entry and entry.p) or GM.TSMMarket(it.id)
-			local cheapest = A.Cheapest(asks)
-			local unit, why = A.PriceFor(aOps, it.id, normal, cheapest)
-			if unit then
-				local isComm = GM.AH.IsCommodity(it.id)
-				local cap = tonumber(aOps.postCap)
-				local qty = (cap and cap > 0) and math.min(it.qty, cap) or it.qty
-				local bidPct = tonumber(aOps.bidPercent) or 100
-				local bid = math.floor(unit * bidPct / 100)
-				local dur = tonumber(aOps.duration) or 2
-				if isComm then
-					tinsert(steps, { kind = "post", itemID = it.id, item = ItemLink(it.id),
-						name = ShortName(it.id), qty = qty, unit = unit,
-						bid = bid, duration = dur, cheapest = cheapest })
-				else
-					local stackSize = tonumber(aOps.stackSize)
-					local left = qty
-					for _, st in ipairs(it.stacks) do
-						local n = math.min(st, left)
-						while n > 0 do
-							local c = (stackSize and stackSize > 0)
-								and math.min(stackSize, n) or n
-							tinsert(steps, { kind = "post", itemID = it.id,
-								item = ItemLink(it.id), name = ShortName(it.id),
-								qty = c, unit = unit, bid = bid, duration = dur,
-								cheapest = cheapest })
-							n = n - c
-						end
-						left = left - math.min(st, left)
-						if left <= 0 then break end
-					end
-				end
-				postedItems = postedItems + 1
-			else
-				skipped[it.id] = why or "?"
-			end
+			local ok, why = ProcessItem(steps, it, A.Cheapest(asks))
+			if ok then postedItems = postedItems + 1 else skipped[it.id] = why end
 			remaining = remaining - 1
 			GM.PlanQueue.ScanStatus(GM.CC("textDim") .. format("post scan — %d/%d items|r",
 				#items - remaining, #items))
@@ -279,6 +296,24 @@ function A.CancelScanNow()
 	end
 
 	local steps, undercutItems = {}, 0
+	-- fresh shared book → synchronous pass, same as the post scan
+	if GM.AH.BookAge() < 300 then
+		for _, id in ipairs(items) do
+			local e = byItem[id]
+			local cheapest = GM.AH.BookCheapest(id)
+			local aOps = GM.Groups.GetOps(id, "auctioning")
+			for _, own in ipairs(e.aids) do
+				if cheapest and own.unit and cheapest < own.unit and aOps.cancelUndercut then
+					tinsert(steps, { kind = "cancel", auctionID = own.aid,
+						itemID = id, item = ItemLink(id), name = ShortName(id),
+						qty = own.qty, unit = own.unit })
+				end
+			end
+			if cheapest and cheapest < e.minUnit then undercutItems = undercutItems + 1 end
+		end
+		A.FinishCancelScan(steps, undercutItems)
+		return
+	end
 	local remaining = #items
 	GM.PlanQueue.ScanStatus(GM.CC("textDim") .. format("cancel scan — 0/%d items|r", #items))
 	for _, id in ipairs(items) do

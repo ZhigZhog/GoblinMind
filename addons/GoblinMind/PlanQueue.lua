@@ -111,7 +111,7 @@ local function Build()
 	if ui.frame then return end
 
 	local frame = CreateFrame("Frame", "GoblinMindPlanFrame", UIParent)
-	frame:SetSize(700, 512)
+	frame:SetSize(700, 542)
 	frame:SetPoint("CENTER")
 	frame:SetMovable(true)
 	frame:EnableMouse(true)
@@ -136,30 +136,39 @@ local function Build()
 	local title = GM.MakeFontString(frame, GM.FONT_BOLD, 13, "accent")
 	title:SetPoint("TOPLEFT", 14, -10)
 	title:SetText("GOBLINMIND")
+	-- sliced chrome (title tab + 9-slice body) replaces the plain title
+	-- when the atlas is enabled — buttons anchor to whichever is live
+	local cTitle = GM.ChromeApply and GM.ChromeApply(frame, "GOBLINMIND")
+	if cTitle then title:Hide(); title = cTitle end
 
-	-- scan buttons ride the title row, TSM-tab style
+	-- scan buttons ride the title strip as TSM-style text tabs
 	local function TitleBtn(label, w, onclick)
 		local b = CreateFrame("Button", nil, frame)
-		b:SetSize(w, 16)
-		GM.Panel(b, "contMedium")
-		b.text = GM.MakeFontString(b, GM.FONT_MED, 9, "secondary")
+		b:SetSize(w, 18)
+		b.text = GM.MakeFontString(b, GM.FONT_BOLD, 12, "text")
 		b.text:SetAllPoints()
 		b.text:SetText(label)
 		b:SetScript("OnClick", onclick)
-		b:SetScript("OnEnter", function() GM.Panel(b, "contHigh") end)
-		b:SetScript("OnLeave", function() GM.Panel(b, "contMedium") end)
+		b:SetScript("OnEnter", function() b.text:SetTextColor(GM.RGB("accent")) end)
+		b:SetScript("OnLeave", function() b.text:SetTextColor(GM.RGB("text")) end)
 		return b
 	end
-	ui.postScan = TitleBtn("POST SCAN", 74, function() GM.Auctioning.PostScan() end)
-	ui.postScan:SetPoint("LEFT", title, "RIGHT", 12, -1)
-	ui.cancelScan = TitleBtn("CANCEL SCAN", 84, function() GM.Auctioning.CancelScan() end)
-	ui.cancelScan:SetPoint("LEFT", ui.postScan, "RIGHT", 6, 0)
+	-- action tabs ride a dedicated strip under the title bar — inside
+	-- the body, clear of the header drag zone
+	ui.postScan = TitleBtn("POST SCAN", 84, function() GM.Auctioning.PostScan() end)
+	ui.postScan:SetPoint("TOPLEFT", frame, "TOPLEFT", 64, -28)
+	ui.cancelScan = TitleBtn("CANCEL SCAN", 104, function() GM.Auctioning.CancelScan() end)
+	ui.cancelScan:SetPoint("LEFT", ui.postScan, "RIGHT", 8, 0)
+	ui.market = TitleBtn("MARKET", 66, function() GM.Shopping.Toggle() end)
+	ui.market:SetPoint("LEFT", ui.cancelScan, "RIGHT", 8, 0)
+	ui.fullScan = TitleBtn("FULL SCAN", 84, function() GM.AH.FullScan() end)
+	ui.fullScan:SetPoint("LEFT", ui.market, "RIGHT", 8, 0)
 
 	ui.age = GM.MakeFontString(frame, GM.FONT, 10, "textDim")
 
 	local close = CreateFrame("Button", nil, frame)
 	close:SetSize(18, 18)
-	close:SetPoint("TOPRIGHT", -8, -8)
+	close:SetPoint("TOPRIGHT", -PAD, -28)
 	close.text = GM.MakeFontString(close, GM.FONT_BOLD, 12, "textDim")
 	close.text:SetAllPoints()
 	close.text:SetText("×")
@@ -170,18 +179,19 @@ local function Build()
 
 	local rule = frame:CreateTexture(nil, "BORDER")
 	rule:SetColorTexture(GM.RGB("outlineVar"))
-	rule:SetPoint("TOPLEFT", PAD, -32)
-	rule:SetPoint("TOPRIGHT", -PAD, -32)
+	rule:SetPoint("TOPLEFT", PAD, -56)
+	rule:SetPoint("TOPRIGHT", -PAD, -56)
 	rule:SetHeight(1)
 
 	-- ===== left column =====
 
 	-- Item header: bordered icon slot + name + meta
 	ui.item = CreateFrame("Button", nil, frame)
-	ui.item:SetPoint("TOPLEFT", PAD, -40)
+	ui.item:SetPoint("TOPLEFT", PAD, -64)
 	ui.item:SetWidth(LEFT_W)
 	ui.item:SetHeight(56)
 	GM.Panel(ui.item, "contMedium")
+	if GM.ChromePanel then GM.ChromePanel(ui.item) end
 	ui.item:SetScript("OnEnter", function() GM.Panel(ui.item, "contHigh") end)
 	ui.item:SetScript("OnLeave", function() GM.Panel(ui.item, "contMedium") end)
 
@@ -189,6 +199,7 @@ local function Build()
 	iconBox:SetSize(44, 44)
 	iconBox:SetPoint("LEFT", 6, 0)
 	GM.Panel(iconBox, "contHighest", "outlineVar")
+	if GM.ChromePanel then GM.ChromePanel(iconBox) end
 	ui.icon = iconBox:CreateTexture(nil, "ARTWORK")
 	ui.icon:SetSize(40, 40)
 	ui.icon:SetPoint("CENTER")
@@ -213,10 +224,11 @@ local function Build()
 
 	-- Trend chart region
 	ui.chart = CreateFrame("Frame", nil, frame)
-	ui.chart:SetPoint("TOPLEFT", PAD, -104)
+	ui.chart:SetPoint("TOPLEFT", PAD, -128)
 	ui.chart:SetWidth(LEFT_W)
 	ui.chart:SetHeight(150)
 	GM.Panel(ui.chart, "contLowest")
+	if GM.ChromePanel then GM.ChromePanel(ui.chart) end
 	ui.chart.title = GM.MakeFontString(ui.chart, GM.FONT_MED, 9, "secondary")
 	ui.chart.title:SetPoint("TOPLEFT", 8, -5)
 	ui.chart.title:SetText("PRICE · VOLUME")
@@ -227,10 +239,11 @@ local function Build()
 
 	-- Steps header
 	local header = CreateFrame("Frame", nil, frame)
-	header:SetPoint("TOPLEFT", PAD, -262)
+	header:SetPoint("TOPLEFT", PAD, -286)
 	header:SetWidth(LEFT_W)
 	header:SetHeight(18)
 	GM.Panel(header, "contHigh")
+	if GM.ChromePanel then GM.ChromePanel(header, { l = 6, t = 6, r = 6, b = 6 }) end
 	for _, h in ipairs({ { "#", "LEFT", 10 }, { "ACTION", "LEFT", 34 }, { "QTY", "LEFT", 140 }, { "PRICE", "RIGHT", -10 } }) do
 		local fs = GM.MakeFontString(header, GM.FONT_MED, 9, "secondary")
 		fs:SetPoint(h[2], h[3], 0)
@@ -239,19 +252,21 @@ local function Build()
 
 	-- Step rows
 	ui.list = CreateFrame("Frame", nil, frame)
-	ui.list:SetPoint("TOPLEFT", PAD, -282)
+	ui.list:SetPoint("TOPLEFT", PAD, -306)
 	ui.list:SetWidth(LEFT_W)
 	ui.list:SetHeight(ROWS * 24 + 8)
 	GM.Panel(ui.list, "contLowest")
+	if GM.ChromePanel then GM.ChromePanel(ui.list) end
 	ui.rows = {}
 	for i = 1, ROWS do ui.rows[i] = BuildRow(ui.list, i) end
 
 	-- ===== right column: grouped stats, full height =====
 	local stats = CreateFrame("Frame", nil, frame)
-	stats:SetPoint("TOPRIGHT", -PAD, -40)
+	stats:SetPoint("TOPRIGHT", -PAD, -64)
 	stats:SetPoint("BOTTOMRIGHT", -PAD, PAD)
 	stats:SetWidth(700 - 2 * PAD - GAP - LEFT_W)
 	GM.Panel(stats, "contLow")
+	if GM.ChromePanel then GM.ChromePanel(stats) end
 	local stTitle = GM.MakeFontString(stats, GM.FONT_MED, 9, "secondary")
 	stTitle:SetPoint("TOPLEFT", 8, -6)
 	stTitle:SetText("GOBLINMIND INFO")
@@ -262,6 +277,7 @@ local function Build()
 	ui.sumBar:SetPoint("BOTTOMLEFT", PAD, 46)
 	ui.sumBar:SetSize(LEFT_W, 26)
 	GM.Panel(ui.sumBar, "contLowest")
+	if GM.ChromePanel then GM.ChromePanel(ui.sumBar, { l = 6, t = 6, r = 6, b = 6 }) end
 	ui.sumEdge = ui.sumBar:CreateTexture(nil, "ARTWORK")
 	ui.sumEdge:SetPoint("TOPLEFT")
 	ui.sumEdge:SetPoint("BOTTOMLEFT")
@@ -274,6 +290,12 @@ local function Build()
 	ui.summary:SetJustifyH("LEFT")
 	ui.summary:SetJustifyV("TOP")
 	ui.summary:SetWordWrap(true)
+	-- thin progress bar along the bottom edge of the summary strip
+	ui.prog = ui.sumBar:CreateTexture(nil, "ARTWORK")
+	ui.prog:SetPoint("BOTTOMLEFT", 0, 0)
+	ui.prog:SetHeight(2)
+	ui.prog:SetColorTexture(GM.RGB("accent"))
+	ui.prog:Hide()
 
 	-- buttons align under the left column (the plan table's edge)
 	ui.exec = CreateFrame("Button", nil, frame)
@@ -310,6 +332,10 @@ local function Build()
 	ui.skip:SetScript("OnLeave", function() GM.Panel(ui.skip, "contMedium") end)
 
 	ui.frame = frame
+	-- CreateFrame defaults to visible — Build is called from scan
+	-- paths (ScanStatus etc.) that must NOT pop the window; visibility
+	-- is driven by Toggle/Show and the AH window's lifecycle
+	frame:Hide()
 end
 
 function PQ.Toggle()
@@ -323,11 +349,33 @@ function PQ.Show()
 	PQ.Refresh()
 end
 
+function PQ.Hide()
+	if ui.frame then ui.frame:Hide() end
+end
+
+-- build at login so the first AH visit doesn't pay widget-creation
+-- cost live
+function PQ.Prewarm()
+	Build()
+end
+
 -- transient scan-progress line (post/cancel scans write here while
 -- their serialized book queries work through the queue)
 function PQ.ScanStatus(text)
 	Build()
 	ui.summary:SetText(text)
+end
+
+-- scan progress bar: frac in (0,1) shows it, anything else hides it
+function PQ.Progress(frac)
+	Build()
+	if not ui.prog then return end
+	if frac and frac > 0 and frac < 1 then
+		ui.prog:SetWidth(LEFT_W * frac)
+		ui.prog:Show()
+	else
+		ui.prog:Hide()
+	end
 end
 
 -- a scan that produced no steps drops the stale plan so the window
@@ -631,7 +679,21 @@ end
 function PQ.Refresh()
 	Build()
 	local age = GM.DataAge()
-	ui.age:SetText(age and format("data %dm old", age / 60) or "no data file")
+	local ageTxt = age and format("data %dm old", age / 60) or "no data file"
+	local bAge = GM.AH.BookAge and GM.AH.BookAge()
+	local bookFresh = bAge and bAge < 600
+	if bAge and bAge < math.huge then
+		ageTxt = ageTxt .. (bAge >= 60 and format(" · book %dm", bAge / 60)
+			or format(" · book %ds", bAge))
+	end
+	ui.age:SetText(ageTxt)
+
+	-- FULL SCAN locks while any book build (replicate or browse) is live
+	if ui.fullScan then
+		local busy = GM.AH.Busy() and true or false
+		ui.fullScan:SetEnabled(not busy)
+		ui.fullScan.text:SetTextColor(GM.RGB(busy and "textDim" or "text"))
+	end
 
 	-- header: icon, name, type/id, flow. For scan plans the display
 	-- follows the active step's item; single-item plans keep the target.
@@ -688,10 +750,13 @@ function PQ.Refresh()
 	set("hist", (entry and entry.hist)
 		and (GM.Money(entry.hist) .. " " .. (pct(p, entry.hist) or "")))
 	set("recent", entry and pct(entry.recent, p))
-	local minBuy = scanMode and curStep.cheapest or (PQ.scan and PQ.scan.cheapest)
+	local minBuy = (bookFresh and GM.AH.BookMin(dispID))
+		or (scanMode and curStep.cheapest)
+		or (PQ.scan and PQ.scan.cheapest)
 	set("min buy", minBuy and GM.Money(minBuy))
 	set("sells/day", entry and entry.vel and tostring(entry.vel))
-	set("supply", entry and entry.sup and tostring(entry.sup))
+	local sup = (bookFresh and GM.AH.BookSupply(dispID)) or (entry and entry.sup)
+	set("supply", sup and tostring(sup))
 	set("reset", entry and entry.reset and (GM.Money(entry.reset.below) .. " · ev " .. GM.Money(entry.reset.ev)))
 	set("itemID", dispID and (GM.CC("textDim") .. tostring(dispID) .. "|r"))
 	set("gold", GM.Money(GetMoney()))

@@ -1,23 +1,25 @@
 local _, GM = ...
 
--- TSM default theme, resolved from LibTSMApp ThemeColorSets OKLCH ramps
--- (hue/chroma → sRGB, token steps per ThemeColorSets.lua, extracted 2026-11-11).
+-- GoblinMind palette — ramps derived from the artwork's four source
+-- colors: #434307 (tab olive), #333506 (body olive), #0e1313 (dark),
+-- #000000. Semantic colors (err/pos/warn) keep their hues — they carry
+-- buy/sell/error meaning the palette can't express.
 GM.C = {
-	surface        = "0e1313",
-	surfaceVariant = "363c3c",
-	contLowest     = "090e0e",
-	contLow        = "161c1c",
-	contMedium     = "1d2323",
-	contHigh       = "292f2f",
-	contHighest    = "313737",
-	outline        = "99a0a0",
-	outlineVar     = "434949",
-	text           = "ecf4f3",
-	textDim        = "b8bfbf",
-	primary        = "b9bfbf",
-	secondary      = "77818d",
-	accent         = "e1ba00",
-	accentDark     = "654000",
+	surface        = "121407",
+	surfaceVariant = "333506",
+	contLowest     = "0b0d05",
+	contLow        = "14170a",
+	contMedium     = "1c1f0e",
+	contHigh       = "282b14",
+	contHighest    = "3a3d17",
+	outline        = "6f7229",
+	outlineVar     = "3b3e15",
+	text           = "ecedd8",
+	textDim        = "a2a47c",
+	primary        = "b7ba83",
+	secondary      = "696c3d",
+	accent         = "c6c83f",
+	accentDark     = "434307",
 	err            = "fd392e",
 	pos            = "08d36b",
 	warn           = "ff9707",
@@ -78,6 +80,9 @@ function GM.Panel(frame, fill, border)
 		r:SetPoint("TOPRIGHT"); r:SetPoint("BOTTOMRIGHT"); r:SetWidth(1)
 	end
 	frame._gmBg:SetColorTexture(GM.RGB(fill or "contLow"))
+	-- chromed panels use _gmBg as a translucent tint over the inner
+	-- slice instead of an opaque fill (SetColorTexture resets alpha)
+	frame._gmBg:SetAlpha(frame._gmChrome and 0.55 or 1)
 	local br, bg, bb = GM.RGB(border or "outlineVar")
 	for i = 1, 4 do
 		frame._gmEdges[i]:SetColorTexture(br, bg, bb)

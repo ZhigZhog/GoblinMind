@@ -39,6 +39,25 @@ self-owned Blizzard-API pipeline later.
     prefix (`|cnQ`, not `|cff9d9d9d`) and no `|` before the `h[` name delimiter.
     Parse item IDs with `item:(%d+)` anywhere; extract post-link text via
     `%b[]` + strip trailing `|h|r` (see `Core.lua` price handler).
+  - **Draw order is oldest-on-top within a layer**: textures created
+    first draw OVER later ones on the same layer+sublevel. This buried
+    the chrome's BACKGROUND slices under `GM.Panel`'s `_gmBg` fill —
+    fixed with explicit `SetDrawLayer` sublevels (body -7, panel chrome
+    -6, `_gmBg` tint -5). Never rely on creation order for z; set
+    sublevels.
+  - **`SetTexCoord` signature is (left, right, top, bottom)** — not
+    (l,t,r,b). Transposing silently produces 1px-column stretches that
+    look like solid bands.
+  - **TGA pipeline**: hand-written encoder in the unmatte script —
+    uncompressed 32-bit, top-down rows + `0x28` descriptor (matches
+    TSM/EllesmereUI convention; the client honors both `0x08`/`0x28`).
+  - **Item names/icons resolve asynchronously**: `GetItemInfo` returns
+    nil for uncached items — use `GM.ItemName`/`GM.ItemIcon`
+    (Core.lua) which call `RequestLoadItemDataByID`, and refresh via
+    `GM.OnItemInfoLoaded(fn)` on `GET_ITEM_INFO_RECEIVED`.
+  - **The AH book persists** in `GoblinMindSettings.book` (aggregate
+    mb/mbx/sup/n only; `math.huge` round-trips through -1). Rows stay
+    session-only. `AH.RestoreBook` runs on `PLAYER_LOGIN`.
   - **Frame strata conventions** (audited across installed addons 2026-11-12):
     **windows → `HIGH` + `SetToplevel(true)`** — TSM's ApplicationFrame and
     EllesmereUI's skinned Blizzard panels both use `HIGH`; toplevel gives

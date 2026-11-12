@@ -36,10 +36,9 @@ function GM.MinimapInit()
 	b:RegisterForDrag("LeftButton")
 
 	b.icon = b:CreateTexture(nil, "BACKGROUND")
-	b.icon:SetTexture("Interface\\Icons\\INV_Misc_Coin_02")
-	b.icon:SetSize(20, 20)
+	b.icon:SetTexture("Interface\\AddOns\\GoblinMind\\Media\\chrome-gear.tga")
+	b.icon:SetSize(24, 24)
 	b.icon:SetPoint("CENTER")
-	b.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
 
 	b.border = b:CreateTexture(nil, "OVERLAY")
 	b.border:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")

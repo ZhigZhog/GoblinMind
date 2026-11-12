@@ -31,6 +31,10 @@ GM.frame:SetScript("OnEvent", function(_, event, arg1)
 		GM.frame:UnregisterEvent("ADDON_LOADED")
 	elseif event == "PLAYER_LOGIN" then
 		if GM.MinimapInit then pcall(GM.MinimapInit) end
+		-- pre-build the plan window: its ~100 widgets cost real time,
+		-- and paying that at first AH open reads as a multi-second
+		-- stall. Build hides the frame — visibility follows the AH.
+		if GM.PlanQueue and GM.PlanQueue.Prewarm then pcall(GM.PlanQueue.Prewarm) end
 		GM.Print("loaded — /gm for the plan window")
 	end
 end)
@@ -88,6 +92,10 @@ SlashCmdList.GOBLINMIND = function(msg)
 	end
 	if msg:sub(1, 6) == "groups" then
 		GM.GroupsUI.Toggle()
+		return
+	end
+	if msg:sub(1, 6) == "market" or msg:sub(1, 4) == "shop" then
+		GM.Shopping.Toggle()
 		return
 	end
 	if msg:sub(1, 3) == "inv" then
@@ -216,3 +224,40 @@ function GM.BankCount(itemID)
 	end
 	return total
 end
+
+-- Item name/icon resolution: GetItemInfo returns nil for uncached
+-- items — request the load and re-run listeners when the data lands.
+-- Listeners register via GM.OnItemInfoLoaded(fn); each event burst
+-- coalesces into one refresh pass.
+local GetInfo = C_Item and C_Item.GetItemInfo or GetItemInfo
+local GetIcon = C_Item and C_Item.GetItemIconByID or GetItemIcon
+local ReqLoad = C_Item and C_Item.RequestLoadItemDataByID
+
+GM.itemWatch = { cbs = {} }
+
+function GM.ItemName(id)
+	if not id then return end
+	local n = GetInfo and GetInfo(id)
+	if not n and ReqLoad then pcall(ReqLoad, id) end
+	return n
+end
+
+function GM.ItemIcon(id)
+	if not id then return end
+	local icon = GetIcon and GetIcon(id)
+	if not icon and ReqLoad then pcall(ReqLoad, id) end
+	return icon
+end
+
+function GM.OnItemInfoLoaded(fn) tinsert(GM.itemWatch.cbs, fn) end
+
+local iw = CreateFrame("Frame")
+pcall(iw.RegisterEvent, iw, "GET_ITEM_INFO_RECEIVED")
+iw:SetScript("OnEvent", function()
+	if GM.itemWatch.sched then return end
+	GM.itemWatch.sched = true
+	GM.After(0.25, function()
+		GM.itemWatch.sched = nil
+		for _, fn in ipairs(GM.itemWatch.cbs) do pcall(fn) end
+	end)
+end)

@@ -21,6 +21,9 @@ local OP_FIELDS = {
 	{ "cancelUndercut", "auctioning", "cancelUndercut", "bool" },
 	{ "belowPct %",     "shopping",   "belowPct",       "num"  },
 	{ "maxPrice",       "shopping",   "maxPrice",       "expr" },
+	{ "snipeBelow",     "sniper",     "belowPrice",     "expr" },
+	{ "snipePct %",     "sniper",     "belowPct",       "num"  },
+	{ "snipeSecs",      "sniper",     "refreshTime",    "num"  },
 }
 
 local function EditBox(parent, w)
@@ -70,7 +73,7 @@ local function BuildUI()
 	if ui then return end
 	ui = {}
 	local f = CreateFrame("Frame", "GoblinMindGroupsUI", UIParent)
-	f:SetSize(380, 534)
+	f:SetSize(380, 594)
 	f:SetPoint("CENTER", -280, 20)
 	f:SetFrameStrata("HIGH")
 	f:SetToplevel(true)

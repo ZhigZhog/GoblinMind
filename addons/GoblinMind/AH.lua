@@ -20,15 +20,24 @@ GM.AH = {
 
 local EMPTY_SORTS = {}
 
+local function RefreshUIs()
+	GM.PlanQueue.Refresh()
+	if GM.Shopping and GM.Shopping.Refresh then GM.Shopping.Refresh() end
+end
+
 local f = CreateFrame("Frame")
 -- pcall each: an unknown event name would error and skip the rest
 for _, evt in ipairs({
-	"AUCTION_HOUSE_SHOW", "AUCTION_HOUSE_CLOSED",
+	"AUCTION_HOUSE_SHOW", "AUCTION_HOUSE_CLOSED", "PLAYER_LOGIN",
 	"COMMODITY_SEARCH_RESULTS_UPDATED", "ITEM_SEARCH_RESULTS_UPDATED",
 	"COMMODITY_PRICE_UPDATED", "COMMODITY_PRICE_UNAVAILABLE",
 	"COMMODITY_PURCHASE_SUCCEEDED", "COMMODITY_PURCHASE_FAILED",
 	"AUCTION_HOUSE_POST_ERROR", "AUCTION_MULTISELL_FAILURE",
-	"AUCTION_HOUSE_AUCTION_CREATED",
+	"AUCTION_HOUSE_AUCTION_CREATED", "REPLICATE_ITEM_LIST_UPDATE",
+	-- this client may deliver replicate results under the legacy name
+	"AUCTION_ITEM_LIST_UPDATE",
+	-- browse-all is the fallback book source when replicate is silent
+	"AUCTION_HOUSE_BROWSE_RESULTS_UPDATED", "AUCTION_HOUSE_BROWSE_RESULTS_ADDED",
 	-- buy-result signals: silent rejections surface here
 	"BIDS_UPDATED", "AUCTION_CANCELED", "UI_ERROR_MESSAGE", "CHAT_MSG_SYSTEM",
 	"CHAT_MSG_MONEY",
@@ -38,10 +47,56 @@ end
 f:SetScript("OnEvent", function(_, event, ...)
 	if event == "AUCTION_HOUSE_SHOW" then
 		GM.AH.open = true
+		-- follow the Blizzard AH window like a normal panel
+		GM.PlanQueue.Show()
+		-- auto-scan only when no book exists or it's a day old — full
+		-- scans are expensive (they stall window open); manual FULL SCAN
+		-- covers everything in between. Delayed so it doesn't stack on
+		-- top of TSM's own AH-open work
+		if GM.AH.BookAge() > 86400 then
+			GM.After(3, function()
+				if GM.AH.open and GM.AH.BookAge() > 86400 then GM.AH.FullScan() end
+			end)
+		end
+	elseif event == "PLAYER_LOGIN" then
+		GM.AH.RestoreBook()
 	elseif event == "AUCTION_HOUSE_CLOSED" then
 		GM.AH.open = false
 		GM.AH.asks = nil
 		GM.AH.pendingConfirm = nil
+		-- our windows show AH data — they leave with it
+		GM.PlanQueue.Hide()
+		if GM.Shopping and GM.Shopping.Hide then GM.Shopping.Hide() end
+	elseif event == "REPLICATE_ITEM_LIST_UPDATE" or event == "AUCTION_ITEM_LIST_UPDATE" then
+		if GM.AH.dbgEvents then GM.AH.dbgEvents[event] = true end
+		-- either name may carry the replicate result on this client, but
+		-- AUCTION_ITEM_LIST_UPDATE also fires for ordinary list updates —
+		-- only collect while a full scan is actually outstanding
+		if GM.AH.wantBook and not GM.AH.bookPending and not GM.AH.collecting then
+			GM.AH.bookPending = true
+			-- data can lag the event — retry the read while the buffer
+			-- is still empty instead of giving up on the first try
+			local tries = 0
+			local function TryCollect()
+				GM.AH.bookPending = nil
+				if not (GM.AH.wantBook and not GM.AH.collecting) then return end
+				tries = tries + 1
+				local n = C_AuctionHouse.GetNumReplicateItems() or 0
+				if n > 0 then
+					GM.AH.CollectBook()
+				elseif tries < 8 then
+					GM.AH.bookPending = true
+					GM.After(0.5, TryCollect)
+				end
+			end
+			GM.After(0.5, TryCollect)
+		end
+	elseif event == "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED"
+		or event == "AUCTION_HOUSE_BROWSE_RESULTS_ADDED" then
+		if GM.AH.dbgEvents then GM.AH.dbgEvents[event] = true end
+		-- these fire for every browse — ours and TSM's; only consume
+		-- while a browse book build is active
+		if GM.AH.browse then GM.AH.OnBrowseResults() end
 	elseif event == "COMMODITY_SEARCH_RESULTS_UPDATED" then
 		local itemID = ...
 		if itemID == GM.AH.scanItemID then GM.AH.CollectCommodityAsks(itemID) end
@@ -53,17 +108,17 @@ f:SetScript("OnEvent", function(_, event, ...)
 		if GM.AH.pendingConfirm then
 			GM.AH.pendingConfirm.quote = totalPrice
 			GM.Print("quote ready — total " .. GM.Money(totalPrice or 0) .. " — click CONFIRM")
-			GM.PlanQueue.Refresh()
+			RefreshUIs()
 		end
 	elseif event == "COMMODITY_PRICE_UNAVAILABLE" then
 		GM.AH.pendingConfirm = nil
 		GM.Print(GM.CC("warn") .. "no commodity quote — falling back to per-lot buyouts|r")
 		if GM.PlanQueue.CommodityFallback then GM.PlanQueue.CommodityFallback() end
-		GM.PlanQueue.Refresh()
+		RefreshUIs()
 	elseif event == "COMMODITY_PURCHASE_FAILED" then
 		GM.AH.pendingConfirm = nil
 		GM.Print(GM.CC("err") .. "commodity purchase failed|r")
-		GM.PlanQueue.Refresh()
+		RefreshUIs()
 	elseif event == "COMMODITY_PURCHASE_SUCCEEDED" then
 		local pc = GM.AH.pendingConfirm
 		if pc then
@@ -72,7 +127,7 @@ f:SetScript("OnEvent", function(_, event, ...)
 		end
 		GM.AH.pendingConfirm = nil
 		GM.Print("purchase complete")
-		GM.PlanQueue.Refresh()
+		RefreshUIs()
 	elseif event == "BIDS_UPDATED" then
 		local pb = GM.AH.pendingBuy
 		if pb then
@@ -106,7 +161,7 @@ f:SetScript("OnEvent", function(_, event, ...)
 		if copper > 0 then GM.Ledger.Gold(copper, "chat") end
 	elseif event == "AUCTION_HOUSE_POST_ERROR" or event == "AUCTION_MULTISELL_FAILURE" then
 		GM.Print(GM.CC("err") .. "post failed — check the item/stack and try again|r")
-		GM.PlanQueue.Refresh()
+		RefreshUIs()
 	elseif event == "AUCTION_HOUSE_AUCTION_CREATED" then
 		-- the owned-auction reconcile writes the post row — it attributes
 		-- posts from ANY ui, not just our executor
@@ -162,14 +217,344 @@ function GM.AH.CollectItemAsks()
 			local price = r.buyoutAmount or r.buyout or r.minBid or r.minPrice
 			local qty = r.quantity or r.totalQuantity or 1
 			if price and qty > 0 then
+				local seller = (r.owners and r.owners[1]) or r.owner or r.ownerName
 				tinsert(asks, { id = r.auctionID, qty = qty, unit = ceil(price / qty), total = price,
-					own = (r.containsOwnerItem or r.isOwned) or nil })
+					own = (r.containsOwnerItem or r.isOwned) or nil,
+					seller = seller })
 			end
 		end
 	end
 	table.sort(asks, function(a, b) return a.unit < b.unit end)
 	GM.AH.asks = asks
 	if GM.AH.onScanDone then GM.AH.onScanDone(asks) end
+end
+
+-- === Shared book: one ReplicateItems pass feeds everything ===
+-- book[itemID] = { mb = cheapest unit incl. ours, mbx = cheapest unit
+-- excluding ours, sup = units listed, n = auctions }. Subscribers get
+-- the raw per-listing rows too (sniper diffs those).
+
+GM.AH.book = nil
+GM.AH.bookT = 0
+GM.AH.bookSubs = {}
+
+-- The aggregate book persists in SavedVariables across sessions so a
+-- login doesn't force a fresh full scan. Per-auction rows are
+-- session-only — the sniper diff wants live listings anyway.
+-- math.huge (the "no non-own listing" sentinel) can't survive
+-- serialization, so it round-trips through -1.
+function GM.AH.SaveBook()
+	if not (GM.db and GM.AH.book) then return end
+	local items = {}
+	for id, e in pairs(GM.AH.book) do
+		items[id] = { mb = e.mb,
+			mbx = e.mbx == math.huge and -1 or e.mbx,
+			sup = e.sup, n = e.n }
+	end
+	GM.db.book = { t = GM.AH.bookT, kind = GM.AH.bookKind, items = items }
+end
+
+function GM.AH.RestoreBook()
+	local s = GM.db and GM.db.book
+	if not (s and s.items) then return end
+	local book = {}
+	for id, e in pairs(s.items) do
+		book[tonumber(id) or id] = { mb = e.mb,
+			mbx = e.mbx == -1 and math.huge or e.mbx,
+			sup = e.sup, n = e.n }
+	end
+	GM.AH.book, GM.AH.bookT, GM.AH.bookKind = book, s.t or time(), s.kind
+end
+
+function GM.AH.FullScan()
+	if not GM.AH.open then
+		GM.Print("open the auction house first")
+		return
+	end
+	if not (C_AuctionHouse and C_AuctionHouse.ReplicateItems) then return end
+	-- ReplicateItems is heavy: this client enforces a script execution
+	-- limit AND TSM hook-processes every replicate scan too — 30s floor
+	if GM.AH.BookAge() < 30 then
+		GM.Print(GM.CC("textDim") .. "book scanned recently — give it a moment|r")
+		return
+	end
+	local msg = GM.CC("textDim") .. "replicating full book…|r"
+	GM.PlanQueue.ScanStatus(msg)
+	if GM.Shopping and GM.Shopping.Status then GM.Shopping.Status(msg) end
+	local prevT = GM.AH.bookT
+	GM.AH.wantBook = true
+	local ok, err = pcall(C_AuctionHouse.ReplicateItems)
+	if not ok then
+		GM.AH.wantBook = nil
+		GM.PlanQueue.ScanStatus(GM.CC("warn") .. "ReplicateItems error: " .. tostring(err) .. "|r")
+		GM.PlanQueue.Refresh()
+		return
+	end
+	-- this client fires no completion event for replicate scans (neither
+	-- REPLICATE_ITEM_LIST_UPDATE nor the legacy name) — poll the buffer
+	-- instead: when the row count is nonzero and stable, data has landed
+	local polls, lastN, stable = 0, -1, 0
+	local eventsSeen = {}
+	GM.AH.dbgEvents = eventsSeen
+	local function Poll()
+		if not GM.AH.wantBook then return end -- collect ran or gave up
+		polls = polls + 1
+		local n = C_AuctionHouse.GetNumReplicateItems() or 0
+		if n > 0 then
+			if n == lastN then
+				stable = stable + 1
+				if stable >= 2 then GM.AH.CollectBook(); return end
+			else
+				lastN, stable = n, 0
+				GM.PlanQueue.ScanStatus(GM.CC("textDim") ..
+					format("book streaming — %d auctions…|r", n))
+			end
+		else
+			-- replicate is being silently dropped (server throttle) —
+			-- after ~5s fall back to a browse-all book build in parallel
+			if polls == 10 and not GM.AH.browse then
+				GM.PlanQueue.ScanStatus(GM.CC("textDim") ..
+					"replicate silent — browsing book instead…|r")
+				GM.AH.BrowseBook()
+			end
+			-- debug surface: poll count, buffer size, which events fired
+			local ev = ""
+			for k in pairs(eventsSeen) do ev = ev .. " " .. k end
+			GM.PlanQueue.ScanStatus(GM.CC("textDim") ..
+				format("replicating… poll %d · buffer %d%s|r", polls, n, ev))
+		end
+		if polls < 40 then
+			GM.After(0.5, Poll)
+		else
+			GM.AH.wantBook = nil
+			if GM.AH.bookT == prevT and GM.AH.open and not GM.AH.browse then
+				local ev = ""
+				for k in pairs(eventsSeen) do ev = ev .. " " .. k end
+				local warn = GM.CC("warn") ..
+					format("no book response — buffer stayed 0 · events:%s|r",
+						ev ~= "" and ev or " none")
+				GM.PlanQueue.ScanStatus(warn)
+				if GM.Shopping and GM.Shopping.Status then GM.Shopping.Status(warn) end
+				GM.PlanQueue.Progress(nil)
+			end
+			GM.PlanQueue.Refresh()
+		end
+	end
+	GM.After(0.5, Poll)
+	GM.PlanQueue.Refresh()
+end
+
+function GM.AH.BookAge()
+	return GM.AH.bookT > 0 and (time() - GM.AH.bookT) or math.huge
+end
+
+-- a full scan of either kind is in flight — used to disable the button
+function GM.AH.Busy()
+	return GM.AH.wantBook or GM.AH.collecting or GM.AH.browse or nil
+end
+
+-- cheapest unit excluding our own listings (decisions use this)
+function GM.AH.BookCheapest(itemID)
+	local e = GM.AH.book and GM.AH.book[itemID]
+	return e and e.mbx ~= math.huge and e.mbx or nil
+end
+
+-- cheapest unit including ours (display)
+function GM.AH.BookMin(itemID)
+	local e = GM.AH.book and GM.AH.book[itemID]
+	return e and e.mb
+end
+
+function GM.AH.BookSupply(itemID)
+	local e = GM.AH.book and GM.AH.book[itemID]
+	return e and e.sup
+end
+
+local collectGen = 0
+local CHUNK = 2000 -- rows per frame — the client kills long-running handlers
+
+function GM.AH.CollectBook()
+	if not (C_AuctionHouse and C_AuctionHouse.GetNumReplicateItems) then return end
+	local n = C_AuctionHouse.GetNumReplicateItems() or 0
+	if n == 0 then return end
+	-- same snapshot size as the book we just built — a duplicate update,
+	-- not new data
+	if n == GM.AH.lastBookN and GM.AH.BookAge() < 30 then return end
+	GM.AH.collecting = true
+	GM.AH.browse = nil -- replicate data wins over an in-flight browse build
+	collectGen = collectGen + 1
+	local gen = collectGen
+	-- own-listing keys so "cheapest" never counts ourselves
+	local ownSet = {}
+	for _, a in pairs(GM.Inventory.auctions or {}) do
+		if a.itemID and a.qty and a.buyout then
+			ownSet[a.itemID .. ":" .. a.qty .. ":" .. a.buyout] = true
+		end
+	end
+	local rows, book = {}, {}
+	local i = 0
+	local function Finish()
+		GM.AH.collecting = nil
+		GM.AH.wantBook = nil
+		GM.AH.lastBookN = n
+		GM.AH.bookKind = "replicate"
+		GM.AH.book, GM.AH.bookT = book, time()
+		GM.AH.SaveBook()
+		local items = 0
+		for _ in pairs(book) do items = items + 1 end
+		GM.PlanQueue.Progress(nil)
+		GM.PlanQueue.ScanStatus(GM.CC("textDim") .. format("book: %d auctions · %d items|r", n, items))
+		GM.Print(GM.CC("textDim") .. format("book: %d auctions · %d items|r", n, items))
+		for _, cb in ipairs(GM.AH.bookSubs) do pcall(cb, rows, book) end
+		GM.PlanQueue.Refresh()
+	end
+	local function Chunk()
+		if gen ~= collectGen then return end -- superseded by a newer collect
+		local stop = math.min(i + CHUNK, n)
+		while i < stop do
+			local link = C_AuctionHouse.GetReplicateItemLink(i)
+			-- TSM's field map: 3 = stackSize, 10 = buyout
+			local _, _, stackSize, _, _, _, _, _, _, buyout = C_AuctionHouse.GetReplicateItemInfo(i)
+			if link and stackSize and stackSize > 0 and buyout and buyout > 0 then
+				local id = tonumber(link:match("item:(%d+)"))
+				local unit = buyout / stackSize
+				local own = id and ownSet[id .. ":" .. stackSize .. ":" .. buyout] or false
+				rows[#rows + 1] = { id = id, link = link, qty = stackSize, unit = unit,
+					buyout = buyout, key = link .. ":" .. stackSize .. ":" .. buyout, own = own }
+				if id then
+					local e = book[id]
+					if not e then
+						book[id] = { mb = unit, mbx = own and math.huge or unit, sup = stackSize, n = 1 }
+					else
+						if unit < e.mb then e.mb = unit end
+						if not own and unit < e.mbx then e.mbx = unit end
+						e.sup = e.sup + stackSize
+						e.n = e.n + 1
+					end
+				end
+			end
+			i = i + 1
+		end
+		if i < n then
+			GM.PlanQueue.Progress(i / n)
+			GM.PlanQueue.ScanStatus(GM.CC("textDim") ..
+				format("collecting book — %d/%d auctions|r", i, n))
+			GM.After(0, Chunk)
+		else
+			Finish()
+		end
+	end
+	Chunk()
+end
+
+-- Browse-all book build — the fallback when ReplicateItems is silently
+-- dropped (server throttle, no completion event on this client).
+-- SendBrowseQuery returns per-itemKey aggregates — {itemKey, minPrice,
+-- totalQuantity} — so this book has mb/sup but no per-auction rows and
+-- no own-listing exclusion (mbx ≈ mb).
+local BROWSE_SORTS = Enum and Enum.AuctionHouseSortOrder and {
+	{ sortOrder = Enum.AuctionHouseSortOrder.Price, reverseSort = false },
+	{ sortOrder = Enum.AuctionHouseSortOrder.Name, reverseSort = false },
+} or nil
+
+function GM.AH.BrowseBook()
+	if not (C_AuctionHouse.SendBrowseQuery and C_AuctionHouse.GetBrowseResults) then
+		return false
+	end
+	local b = { seen = 0, book = {}, rows = {}, tries = 0 }
+	GM.AH.browse = b
+	local ok, err = pcall(C_AuctionHouse.SendBrowseQuery, {
+		searchString = "", sorts = BROWSE_SORTS,
+		filters = {}, itemClassFilters = {},
+	})
+	if not ok then
+		GM.AH.browse = nil
+		GM.PlanQueue.ScanStatus(GM.CC("warn") .. "SendBrowseQuery error: " .. tostring(err) .. "|r")
+		GM.PlanQueue.Refresh()
+		return false
+	end
+	-- stall watchdog: browse events should arrive promptly
+	GM.After(6, function()
+		if GM.AH.browse == b and b.seen == 0 then
+			GM.AH.browse = nil
+			GM.PlanQueue.ScanStatus(GM.CC("warn") .. "browse returned no results either|r")
+			GM.PlanQueue.Refresh()
+		end
+	end)
+	GM.PlanQueue.Refresh()
+	return true
+end
+
+local function FinishBrowse(b)
+	GM.AH.browse = nil
+	-- a fresh replicate book beats aggregate data — don't clobber it
+	if GM.AH.BookAge() < 60 and GM.AH.bookKind == "replicate" then return end
+	GM.AH.bookKind = "browse"
+	GM.AH.book, GM.AH.bookT = b.book, time()
+	GM.AH.SaveBook()
+	local items = 0
+	for _ in pairs(b.book) do items = items + 1 end
+	GM.PlanQueue.Progress(nil)
+	local msg = GM.CC("textDim") .. format("book: %d items (browse — no per-auction rows)|r", items)
+	GM.PlanQueue.ScanStatus(msg)
+	GM.Print(msg)
+	for _, cb in ipairs(GM.AH.bookSubs) do pcall(cb, b.rows, b.book) end
+	GM.PlanQueue.Refresh()
+end
+
+function GM.AH.OnBrowseResults()
+	local b = GM.AH.browse
+	if not b then return end
+	local results = C_AuctionHouse.GetBrowseResults() or {}
+	-- the array resets when someone (TSM) sends a new browse query —
+	-- rebuild rather than trust stale indexes
+	if #results < b.seen then
+		b.seen, b.book, b.rows = 0, {}, {}
+	end
+	for i = b.seen + 1, #results do
+		local r = results[i]
+		local id = r.itemKey and r.itemKey.itemID
+		if id and r.minPrice and r.minPrice > 0 then
+			local e = b.book[id]
+			if not e then
+				b.book[id] = { mb = r.minPrice, mbx = r.minPrice,
+					sup = r.totalQuantity or 0, n = 1 }
+			else
+				if r.minPrice < e.mb then e.mb, e.mbx = r.minPrice, r.minPrice end
+				e.sup = e.sup + (r.totalQuantity or 0)
+				e.n = e.n + 1
+			end
+			-- key carries the price so a later min-price drop re-flags
+			-- for the sniper diff
+			b.rows[#b.rows + 1] = { id = id, qty = r.totalQuantity or 1,
+				unit = r.minPrice, buyout = r.minPrice,
+				key = "b:" .. id .. ":" .. r.minPrice }
+		end
+		b.seen = i
+	end
+	GM.PlanQueue.ScanStatus(GM.CC("textDim") ..
+		format("browsing book — %d items…|r", b.seen))
+	if C_AuctionHouse.HasFullBrowseResults and C_AuctionHouse.HasFullBrowseResults() then
+		FinishBrowse(b)
+	else
+		-- request the next page; the ADDED event drives the next pass.
+		-- retry once after 4s if the event never comes
+		pcall(C_AuctionHouse.RequestMoreBrowseResults)
+		local mySeen = b.seen
+		GM.After(4, function()
+			if GM.AH.browse == b and b.seen == mySeen then
+				b.tries = b.tries + 1
+				if b.tries <= 3 then
+					pcall(C_AuctionHouse.RequestMoreBrowseResults)
+				else
+					GM.PlanQueue.ScanStatus(GM.CC("warn") ..
+						format("browse stalled at %d items|r", mySeen))
+					GM.AH.browse = nil
+					GM.PlanQueue.Refresh()
+				end
+			end
+		end)
+	end
 end
 
 -- Posting needs a real ItemLocation from the bags, not a link.
@@ -238,7 +623,7 @@ function GM.AH.Execute(step)
 				GM.AH.pendingConfirm = nil
 				GM.Print(GM.CC("warn") .. "no commodity quote — falling back to per-lot buyouts|r")
 				if GM.PlanQueue.CommodityFallback then GM.PlanQueue.CommodityFallback() end
-				GM.PlanQueue.Refresh()
+				RefreshUIs()
 			end
 		end)
 		return "confirm"

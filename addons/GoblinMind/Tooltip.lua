@@ -22,6 +22,10 @@ local function FillSideTip(tooltip, itemID)
 	local entry = GM.ItemEntry(itemID)
 	local market = GM.TSMMarket(itemID)
 	local p = (entry and entry.p) or market
+	-- live book values overlay the stale AppData snapshot — no /reload
+	local bookFresh = GM.AH and GM.AH.BookAge and GM.AH.BookAge() < 600
+	local liveMin = bookFresh and GM.AH.BookMin and GM.AH.BookMin(itemID)
+	local liveSup = bookFresh and GM.AH.BookSupply and GM.AH.BookSupply(itemID)
 	local lr, lg, lb = GM.RGB("textDim")
 	local rr, rg, rb = GM.RGB("text")
 	local ar, ag, ab = GM.RGB("accent")
@@ -62,7 +66,9 @@ local function FillSideTip(tooltip, itemID)
 		if entry.vel then
 			sideTip:AddDoubleLine("sells/day", tostring(entry.vel), lr, lg, lb, rr, rg, rb)
 		end
-		if entry.sup then
+		if liveSup then
+			sideTip:AddDoubleLine("supply", tostring(liveSup), lr, lg, lb, pr, pg, pb)
+		elseif entry.sup then
 			sideTip:AddDoubleLine("supply", tostring(entry.sup), lr, lg, lb, rr, rg, rb)
 		end
 		if entry.reset then
@@ -70,10 +76,17 @@ local function FillSideTip(tooltip, itemID)
 				.. " · ev " .. GM.Money(entry.reset.ev), wr, wg, wb, wr, wg, wb)
 		end
 	end
+	if liveMin then
+		sideTip:AddDoubleLine("min buy", GM.Money(liveMin) .. "  live", lr, lg, lb, pr, pg, pb)
+	end
 	sideTip:AddDoubleLine("itemID", tostring(itemID), lr, lg, lb, lr, lg, lb)
 	local age = GM.DataAge()
 	if age and age > GM.db.dataMaxAge then
-		sideTip:AddLine(format("data %dm old — /reload to refresh", age / 60), wr, wg, wb)
+		if bookFresh then
+			sideTip:AddLine(format("data %dm old · book live", age / 60), lr, lg, lb)
+		else
+			sideTip:AddLine(format("data %dm old — /reload or FULL SCAN", age / 60), wr, wg, wb)
+		end
 	end
 	sideTip:Show()
 
@@ -105,7 +118,9 @@ local function Hook(tooltip, data)
 	GM.lastTooltipLink = link
 	local entry = GM.ItemEntry(itemID)
 	local market = GM.TSMMarket(itemID)
-	if entry or market then
+	local live = GM.AH and GM.AH.BookAge and GM.AH.BookAge() < 600
+		and GM.AH.BookMin and GM.AH.BookMin(itemID)
+	if entry or market or live then
 		FillSideTip(tooltip, itemID)
 	elseif sideTip then
 		sideTip:Hide()

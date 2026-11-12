@@ -16,6 +16,9 @@ Pricing.lua
 Solver.lua
 AH.lua
 Auctioning.lua
+Sniper.lua
+Shopping.lua
+Chrome.lua
 PlanQueue.lua
 GroupsUI.lua
 ItemInput.lua
