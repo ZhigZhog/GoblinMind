@@ -45,8 +45,12 @@ function GM.Solver.Plan(asks, p50, p90, gold, vel, opts)
 			GM.Money(first.unit * first.qty))
 	end
 
-	-- commodities buy in one aggregated call, not per ask lot
+	-- commodities buy in one aggregated call, not per ask lot — but keep
+	-- the per-lot list so the UI can fall back to PlaceBid if the staged
+	-- quote flow produces nothing on this client
+	local buyLots
 	if qty > 0 and opts.commodity then
+		buyLots = steps
 		steps = { { kind = "buy", qty = qty, unit = ceil(spend / qty), commodity = true } }
 	end
 
@@ -57,8 +61,10 @@ function GM.Solver.Plan(asks, p50, p90, gold, vel, opts)
 	local daysToClear = vel and vel > 0 and (postQty / vel) or nil
 	return {
 		steps = steps,
+		buyLots = buyLots,
 		spend = spend,
 		ev = floor(ev),
+		resale = resale,
 		postPrice = guard,
 		qty = qty,
 		owned = owned,

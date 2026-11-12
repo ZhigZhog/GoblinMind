@@ -320,6 +320,7 @@ function PQ.Rescan()
 end
 
 function PQ.Solve(asks)
+	GM.AH.pendingConfirm = nil -- a rescan invalidates any staged quote
 	PQ.scan = { n = #asks, cheapest = asks[1] and asks[1].unit }
 	local entry = PQ.itemID and GM.ItemEntry(PQ.itemID)
 	local p50 = entry and entry.p or (PQ.itemID and GM.TSMMarket(PQ.itemID))
@@ -347,6 +348,10 @@ function PQ.Solve(asks)
 		step.itemID = PQ.itemID
 		step.item = PQ.item
 		step.commodity = isCommodity
+	end
+	for _, lot in ipairs(plan.buyLots or {}) do
+		lot.itemID = PQ.itemID
+		lot.item = PQ.item
 	end
 	plan.bank = GM.BankCount(PQ.itemID)
 	plan.deposit = GM.AH.DepositCost(PQ.itemID, plan.qty + (plan.owned or 0)) or 0
@@ -383,9 +388,50 @@ end
 
 -- Skips the current step — for when the player decides not to do a buyout.
 -- Aborts a staged commodity purchase (the quote expires server-side).
+-- The staged-quote commodity flow produced nothing — splice the per-lot
+-- buyout steps (auctionID'd PlaceBid calls) in place of the aggregate buy.
+function PQ.CommodityFallback()
+	if not (PQ.plan and PQ.plan.buyLots and #PQ.plan.buyLots > 0) then return end
+	local steps = {}
+	for _, s in ipairs(PQ.plan.steps) do
+		if s.kind == "buy" and s.commodity then
+			for _, lot in ipairs(PQ.plan.buyLots) do tinsert(steps, lot) end
+		else
+			tinsert(steps, s)
+		end
+	end
+	PQ.plan.steps = steps
+	PQ.plan.buyLots = nil
+end
+
+-- Skips the current step — always advances, never rewrites the plan.
+-- A staged commodity purchase is dropped (the quote expires server-side).
 function PQ.SkipStep()
-	if GM.AH.pendingConfirm then GM.AH.pendingConfirm = nil end
-	if PQ.plan and PQ.stepIndex <= #PQ.plan.steps then
+	GM.AH.pendingConfirm = nil
+	local plan = PQ.plan
+	local step = plan and plan.steps[PQ.stepIndex]
+	if step and step.kind == "buy" then
+		-- declined to buy: the post leg shrinks by this lot, and
+		-- spend/EV/days-to-clear get re-derived so the summary stays honest
+		plan.qty = math.max(0, (plan.qty or 0) - step.qty)
+		plan.spend = math.max(0, (plan.spend or 0) - step.unit * step.qty)
+		local cheapest = PQ.scan and PQ.scan.cheapest
+		local revenue = 0
+		for _, s in ipairs(plan.steps) do
+			if s.kind == "post" then
+				local old = s.qty
+				s.qty = math.max(0, s.qty - step.qty)
+				if plan.daysToClear and old > 0 then
+					plan.daysToClear = plan.daysToClear * s.qty / old
+				end
+				-- reprice to the book: don't post above the cheapest ask
+				if cheapest and s.unit > cheapest then s.unit = cheapest end
+				revenue = revenue + floor(s.unit * 0.95) * s.qty
+			end
+		end
+		plan.ev = floor(revenue - plan.spend - (plan.deposit or 0))
+	end
+	if plan and PQ.stepIndex <= #plan.steps then
 		PQ.stepIndex = PQ.stepIndex + 1
 	end
 	PQ.Refresh()

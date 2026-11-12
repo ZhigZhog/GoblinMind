@@ -29,6 +29,8 @@ for _, evt in ipairs({
 	"COMMODITY_PURCHASE_SUCCEEDED", "COMMODITY_PURCHASE_FAILED",
 	"AUCTION_HOUSE_POST_ERROR", "AUCTION_MULTISELL_FAILURE",
 	"AUCTION_HOUSE_AUCTION_CREATED",
+	-- buy-result signals: silent rejections surface here
+	"BIDS_UPDATED", "AUCTION_CANCELED", "UI_ERROR_MESSAGE", "CHAT_MSG_SYSTEM",
 }) do
 	pcall(f.RegisterEvent, f, evt)
 end
@@ -45,13 +47,36 @@ f:SetScript("OnEvent", function(_, event, ...)
 	elseif event == "ITEM_SEARCH_RESULTS_UPDATED" then
 		if GM.AH.scanItemKey then GM.AH.CollectItemAsks() end
 	elseif event == "COMMODITY_PRICE_UPDATED" then
-		if GM.AH.pendingConfirm then GM.PlanQueue.Refresh() end
-	elseif event == "COMMODITY_PRICE_UNAVAILABLE" or event == "COMMODITY_PURCHASE_FAILED" then
+		-- arg is the quoted total for the staged quantity
+		local totalPrice = select(2, ...)
+		if GM.AH.pendingConfirm then
+			GM.AH.pendingConfirm.quote = totalPrice
+			GM.Print("quote ready — total " .. GM.Money(totalPrice or 0) .. " — click CONFIRM")
+			GM.PlanQueue.Refresh()
+		end
+	elseif event == "COMMODITY_PRICE_UNAVAILABLE" then
 		GM.AH.pendingConfirm = nil
+		GM.Print(GM.CC("warn") .. "no commodity quote — falling back to per-lot buyouts|r")
+		if GM.PlanQueue.CommodityFallback then GM.PlanQueue.CommodityFallback() end
+		GM.PlanQueue.Refresh()
+	elseif event == "COMMODITY_PURCHASE_FAILED" then
+		GM.AH.pendingConfirm = nil
+		GM.Print(GM.CC("err") .. "commodity purchase failed|r")
 		GM.PlanQueue.Refresh()
 	elseif event == "COMMODITY_PURCHASE_SUCCEEDED" then
 		GM.AH.pendingConfirm = nil
+		GM.Print("purchase complete")
 		GM.PlanQueue.Refresh()
+	elseif event == "BIDS_UPDATED" or event == "AUCTION_CANCELED" then
+		GM.Print(GM.CC("pos") .. "buyout confirmed|r")
+	elseif event == "UI_ERROR_MESSAGE" then
+		local msg = select(2, ...) or ...
+		if msg then GM.Print(GM.CC("err") .. tostring(msg) .. "|r") end
+	elseif event == "CHAT_MSG_SYSTEM" then
+		local msg = ...
+		if msg and (msg:find("auction") or msg:find("bid")) then
+			GM.Print(GM.CC("textDim") .. tostring(msg) .. "|r")
+		end
 	elseif event == "AUCTION_HOUSE_POST_ERROR" or event == "AUCTION_MULTISELL_FAILURE" then
 		GM.Print(GM.CC("err") .. "post failed — check the item/stack and try again|r")
 		GM.PlanQueue.Refresh()
@@ -170,15 +195,34 @@ function GM.AH.Execute(step)
 	end
 	if step.kind == "buy" and step.commodity then
 		-- StartCommoditiesPurchase(itemID, quantity, expectedUnitPrice)
+		GM.Print(format("requesting quote for %d× @ %s ea…", step.qty, GM.Money(step.unit)))
 		C_AuctionHouse.StartCommoditiesPurchase(step.itemID, step.qty, step.unit)
-		GM.AH.pendingConfirm = { itemID = step.itemID, qty = step.qty }
+		local pc = { itemID = step.itemID, qty = step.qty }
+		GM.AH.pendingConfirm = pc
+		-- if no quote lands the staged flow is dead on this client —
+		-- splice in per-lot buyouts automatically
+		GM.After(4, function()
+			if GM.AH.pendingConfirm == pc and not pc.quote then
+				GM.AH.pendingConfirm = nil
+				GM.Print(GM.CC("warn") .. "no commodity quote — falling back to per-lot buyouts|r")
+				if GM.PlanQueue.CommodityFallback then GM.PlanQueue.CommodityFallback() end
+				GM.PlanQueue.Refresh()
+			end
+		end)
 		return "confirm"
 	elseif step.kind == "buy" then
+		if not step.auctionID then
+			GM.Print(GM.CC("err") .. "missing auction id — hit RESCAN|r")
+			return false
+		end
 		-- bidBuyout is the lot total — the scanned total avoids copper drift
-		C_AuctionHouse.PlaceBid(step.auctionID, step.total or step.unit * step.qty)
+		local total = step.total or step.unit * step.qty
+		GM.Print(format("buying %d× for %s…", step.qty, GM.Money(total)))
+		C_AuctionHouse.PlaceBid(step.auctionID, total)
 		return true
 	elseif step.kind == "confirm" then
 		if not GM.AH.pendingConfirm then return false end
+		GM.Print("confirming purchase…")
 		C_AuctionHouse.ConfirmCommoditiesPurchase(GM.AH.pendingConfirm.itemID, GM.AH.pendingConfirm.qty)
 		return true
 	elseif step.kind == "post" then
@@ -187,6 +231,17 @@ function GM.AH.Execute(step)
 			GM.Print("no unlocked stack of that item in bags")
 			return false
 		end
+		-- post only what bags actually hold — bought lots sit in the mailbox
+		-- until fetched, and skipped buys shrink the plan
+		local have = GM.BagCount(step.itemID)
+		local qty = math.min(step.qty, have)
+		if qty < 1 then
+			GM.Print("nothing in bags to post — collect the mailbox first")
+			return false
+		end
+		if qty < step.qty then
+			GM.Print(format("posting %d of %d (rest still in mail/bank)", qty, step.qty))
+		end
 		-- Ask the client itself: commodity status from the real ItemLocation,
 		-- exactly like TSM's PostAuction. Fall back to the maxStack heuristic.
 		local ok, status = pcall(C_AuctionHouse.GetItemCommodityStatus, loc)
@@ -194,10 +249,10 @@ function GM.AH.Execute(step)
 			and status == Enum.ItemCommodityStatus.Commodity)
 			or (not ok and GM.AH.IsCommodity(step.itemID))
 		if isComm then
-			C_AuctionHouse.PostCommodity(loc, 2, step.qty, step.unit)
+			C_AuctionHouse.PostCommodity(loc, 2, qty, step.unit)
 		else
 			-- PostItem's qty is this auction's stack size — can't exceed the stack
-			C_AuctionHouse.PostItem(loc, 2, math.min(step.qty, stackCount or step.qty), nil, step.unit)
+			C_AuctionHouse.PostItem(loc, 2, math.min(qty, stackCount or qty), nil, step.unit)
 		end
 		return true
 	elseif step.kind == "cancel" then
