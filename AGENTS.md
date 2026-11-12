@@ -6,7 +6,9 @@ self-owned Blizzard-API pipeline later.
 
 - **All notes live in `WoWVault\`** (Obsidian vault). Read
   `WoWVault\phase-1-architecture.md` first; `WoWVault\code-notes-alpha.md`
-  is the complete v0.1 functional map; theme reference is
+  is the complete v0.1 functional map; `WoWVault\tsm-subsumption-plan.md`
+  is the 14-part path to full TSM replacement; `WoWVault\phase-1-implementation.md`
+  is the Phase-1 (spine) megaplan; theme reference is
   `WoWVault\tsm-theme-palette.md`.
 - Target client: `E:\Battle.net\World of Warcraft\_forever_`
   ("Forever" flavor, **interface `16001`** — 1.60.x; modern-era API set:
@@ -33,6 +35,10 @@ self-owned Blizzard-API pipeline later.
     in AH.lua), `C_Timer` (`GM.After` shim). `pcall` every
     `RegisterEvent` — an unknown event name kills the rest of a file's
     load.
+  - **Chat links are nonstandard**: `|cnQ|Hitem:data…h[Name]|h|r` — quality-color
+    prefix (`|cnQ`, not `|cff9d9d9d`) and no `|` before the `h[` name delimiter.
+    Parse item IDs with `item:(%d+)` anywhere; extract post-link text via
+    `%b[]` + strip trailing `|h|r` (see `Core.lua` price handler).
 - Hard rule: in-game actions are click-per-step only — one protected
   `C_AuctionHouse` call per hardware event. ToS boundary is documented
   in the design doc §8.

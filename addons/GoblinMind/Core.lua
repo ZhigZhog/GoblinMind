@@ -24,6 +24,7 @@ GM.frame:SetScript("OnEvent", function(_, event, arg1)
 		GoblinMindSettings = GoblinMindSettings or {}
 		ApplyDefaults(GoblinMindSettings, DEFAULTS)
 		GM.db = GoblinMindSettings
+		GoblinMindPrices = GoblinMindPrices or { customSources = {} }
 		GM.frame:UnregisterEvent("ADDON_LOADED")
 	elseif event == "PLAYER_LOGIN" then
 		if GM.MinimapInit then pcall(GM.MinimapInit) end
@@ -53,6 +54,58 @@ SlashCmdList.GOBLINMIND = function(msg)
 		GM.db.minimapHide = not GM.db.minimapHide
 		if GM.minimapBtn then GM.minimapBtn:SetShown(not GM.db.minimapHide) end
 		GM.Print("minimap button " .. (GM.db.minimapHide and "hidden" or "shown"))
+		return
+	end
+	if msg:sub(1, 5) == "price" then
+		local sub = strtrim(msg:sub(6))
+		local name, expr = sub:match("^set%s+(%S+)%s+(.+)$")
+		if name then
+			GoblinMindPrices.customSources[strlower(name)] = expr
+			GM.Print("custom source '" .. strlower(name) .. "' = " .. expr)
+			return
+		end
+		name = sub:match("^unset%s+(%S+)$")
+		if name then
+			GoblinMindPrices.customSources[strlower(name)] = nil
+			GM.Print("custom source '" .. strlower(name) .. "' removed")
+			return
+		end
+		local pid, xpr
+		pid = tonumber(sub:match("^|c[^|]*|Hitem:(%d+)"))
+			or tonumber(sub:match("^|Hitem:(%d+)"))
+		if pid then
+			-- Forever links: |cnQ|Hitem:data...h[Name]|h|r (no | before h[)
+			local _, e = sub:find("%b[]")
+			xpr = e and strtrim((sub:sub(e + 1):gsub("^|?h?|?r?", ""))) or ""
+		elseif sub:sub(1, 1) == "[" then
+			-- typed [Item Name] — resolve via GetItemInfo
+			local name, rest = sub:match("^%[(.-)%]%s*(.*)$")
+			local info = C_Item and C_Item.GetItemInfo or GetItemInfo
+			local link = name and info and select(2, info(name))
+			pid = link and tonumber(link:match("item:(%d+)"))
+			xpr = strtrim(rest or "")
+		else
+			local arg
+			arg, xpr = sub:match("^(%S+)%s*(.*)$")
+			if arg then
+				pid = tonumber(arg:match("item:(%d+)"))
+					or tonumber(arg:match("i:(%d+)")) or tonumber(arg)
+			end
+		end
+		if not pid or not xpr or xpr == "" then
+			GM.Print("usage: /goblin price <item|i:id|[name]|link> <expr>")
+			GM.Print("  parsed: id=" .. tostring(pid) .. " expr='" .. tostring(xpr) .. "'")
+			GM.Print("  raw: " .. sub:gsub("|", "¦"):sub(1, 80))
+			return
+		end
+		local v, err = GM.Pricing.Eval(xpr, pid)
+		if v then
+			GM.Print(xpr .. " = " .. GM.Money(v) .. " (" .. floor(v) .. "c)")
+		else
+			GM.Print(GM.CC("err") .. "no value" .. (err and (" — " .. err) or "") .. "|r")
+			GM.Print("  parsed: id=" .. pid .. " expr='" .. xpr .. "'")
+			GM.Print("  raw: " .. sub:gsub("|", "¦"):sub(1, 80))
+		end
 		return
 	end
 	local id = tonumber(msg:match("item:(%d+)")) or tonumber(msg)

@@ -237,14 +237,23 @@ def cmd_emit(path, out_path):
             'p10': int(p * 0.85),      # placeholder band until the model lands
             'p90': int(p * 1.15),
         }
-        if vel:
+        # v2: pass every source field through with compact keys — the
+        # pricing engine resolves db* names to these (see Pricing.lua)
+        for k, v in (
+            ('mkt',    rec.get('marketValue')),         # dbmarket
+            ('mb',     rec.get('minBuyout')),           # dbminbuyout
+            ('hist',   rec.get('historical')),          # dbhistorical
+            ('recent', rec.get('marketValueRecent')),
+            ('sup',    rec.get('numAuctions')),
+            ('rmkt',   region.get('regionMarketValue')),  # dbregionmarketavg
+            ('rhist',  region.get('regionHistorical')),   # dbregionhistorical
+            ('rsale',  region.get('regionSale')),         # dbregionsale
+            ('rsalep', region.get('regionSalePercent')),  # permille — /1000 at read
+        ):
+            if v:
+                out[k] = v
+        if vel:  # dbregionsalerate
             out['vel'] = round(vel) if vel >= 10 else round(vel, 1)
-        if rec.get('numAuctions'):
-            out['sup'] = rec['numAuctions']
-        if rec.get('historical'):
-            out['hist'] = rec['historical']
-        if rec.get('marketValueRecent'):
-            out['recent'] = rec['marketValueRecent']
         mb = rec.get('minBuyout')
         if mb and mb < p * 0.85:
             out['reset'] = {
@@ -256,7 +265,7 @@ def cmd_emit(path, out_path):
         items[item_id] = out
 
     db = {
-        'version': 1,
+        'version': 2,
         'generated': int(time.time()),
         'dataAge': data_age,
         'items': items,

@@ -3,11 +3,12 @@
 ## Notes: Model-driven price estimates in tooltips and a guided, click-per-step auction plan queue. Phase 1: rides TradeSkillMaster data.
 ## Author: ZhigZhog
 ## Version: 0.1.0-alpha
-## SavedVariables: GoblinMindSettings
+## SavedVariables: GoblinMindSettings, GoblinMindPrices
 ## Dependencies: TradeSkillMaster, GoblinMind_Data
 
 Theme.lua
 Core.lua
+Pricing.lua
 Solver.lua
 AH.lua
 PlanQueue.lua

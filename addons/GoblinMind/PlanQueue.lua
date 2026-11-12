@@ -118,7 +118,7 @@ local function Build()
 	frame:RegisterForDrag("LeftButton")
 	frame:SetScript("OnDragStart", frame.StartMoving)
 	frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
-	frame:SetFrameStrata("HIGH")
+	frame:SetFrameStrata("MEDIUM")
 	GM.Panel(frame, "contLow", "outlineVar")
 	tinsert(UISpecialFrames, "GoblinMindPlanFrame")
 
