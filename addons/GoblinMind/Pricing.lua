@@ -61,7 +61,7 @@ local SRC = {
 	numauctions         = function(id) return ef(id, "sup") end,
 	vendorsell          = function(id) return GetInfo and select(11, GetInfo(id)) or nil end,
 	vendorbuy           = function() return nil end, -- no reliable source on Forever
-	numinventory        = function(id) return GM.BagCount(id) + GM.BankCount(id) end,
+	numinventory        = function(id) return GM.Inventory.Count(id).total end,
 	-- accounting-derived — real values arrive with the ledger (M1.B)
 	avgbuy              = function(id) return GM.Ledger and GM.Ledger.Avg(id, "buy") end,
 	smartavgbuy         = function(id) return GM.Ledger and GM.Ledger.Avg(id, "buy") end,

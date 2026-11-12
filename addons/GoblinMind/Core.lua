@@ -25,6 +25,7 @@ GM.frame:SetScript("OnEvent", function(_, event, arg1)
 		ApplyDefaults(GoblinMindSettings, DEFAULTS)
 		GM.db = GoblinMindSettings
 		GoblinMindPrices = GoblinMindPrices or { customSources = {} }
+		if GM.Ledger then GM.Ledger.Init() end
 		GM.frame:UnregisterEvent("ADDON_LOADED")
 	elseif event == "PLAYER_LOGIN" then
 		if GM.MinimapInit then pcall(GM.MinimapInit) end
@@ -34,6 +35,33 @@ end)
 
 function GM.Print(...)
 	print(GM.CC("accent") .. "GoblinMind|r:", ...)
+end
+
+-- Item-arg parse shared by price/inv: accepts real chat links
+-- (|cnQ|Hitem:…h[Name]|h|r on Forever), typed [names], i:id, bare ids.
+-- Returns (itemID|nil, remainder-of-input).
+local function ParseItemRef(sub)
+	local pid, xpr
+	pid = tonumber(sub:match("^|c[^|]*|Hitem:(%d+)"))
+		or tonumber(sub:match("^|Hitem:(%d+)"))
+	if pid then
+		local _, e = sub:find("%b[]")
+		xpr = e and strtrim((sub:sub(e + 1):gsub("^|?h?|?r?", ""))) or ""
+	elseif sub:sub(1, 1) == "[" then
+		local name, rest = sub:match("^%[(.-)%]%s*(.*)$")
+		local info = C_Item and C_Item.GetItemInfo or GetItemInfo
+		local link = name and info and select(2, info(name))
+		pid = link and tonumber(link:match("item:(%d+)"))
+		xpr = strtrim(rest or "")
+	else
+		local arg
+		arg, xpr = sub:match("^(%S+)%s*(.*)$")
+		if arg then
+			pid = tonumber(arg:match("item:(%d+)"))
+				or tonumber(arg:match("i:(%d+)")) or tonumber(arg)
+		end
+	end
+	return pid, strtrim(xpr or "")
 end
 
 SLASH_GOBLINMIND1 = "/goblinmind"
@@ -56,6 +84,32 @@ SlashCmdList.GOBLINMIND = function(msg)
 		GM.Print("minimap button " .. (GM.db.minimapHide and "hidden" or "shown"))
 		return
 	end
+	if msg:sub(1, 3) == "inv" then
+		local pid = ParseItemRef(strtrim(msg:sub(4)))
+		if not pid then
+			GM.Print("usage: /goblin inv <item|i:id|[name]|link>")
+			return
+		end
+		GM.Inventory.QueryOwned()
+		local c = GM.Inventory.Count(pid)
+		GM.Print(format("inv %d — bags %d · bank %d · mail %d · gbank %d · posted %d · total %d",
+			pid, c.bags, c.bank, c.mail, c.guild, c.auction, c.total))
+		return
+	end
+	if msg:sub(1, 6) == "ledger" then
+		local n = tonumber(msg:sub(7)) or 8
+		local rows = GM.Ledger.Recent(n)
+		if #rows == 0 then
+			GM.Print("ledger empty — buy/post/cancel actions get recorded")
+			return
+		end
+		for _, r in ipairs(rows) do
+			GM.Print(format("%s %s id=%d q=%d u=%s",
+				date("%H:%M", r.t), r.ty, r.i, r.q,
+				r.u and GM.Money(r.u) or "—"))
+		end
+		return
+	end
 	if msg:sub(1, 5) == "price" then
 		local sub = strtrim(msg:sub(6))
 		local name, expr = sub:match("^set%s+(%S+)%s+(.+)$")
@@ -70,28 +124,7 @@ SlashCmdList.GOBLINMIND = function(msg)
 			GM.Print("custom source '" .. strlower(name) .. "' removed")
 			return
 		end
-		local pid, xpr
-		pid = tonumber(sub:match("^|c[^|]*|Hitem:(%d+)"))
-			or tonumber(sub:match("^|Hitem:(%d+)"))
-		if pid then
-			-- Forever links: |cnQ|Hitem:data...h[Name]|h|r (no | before h[)
-			local _, e = sub:find("%b[]")
-			xpr = e and strtrim((sub:sub(e + 1):gsub("^|?h?|?r?", ""))) or ""
-		elseif sub:sub(1, 1) == "[" then
-			-- typed [Item Name] — resolve via GetItemInfo
-			local name, rest = sub:match("^%[(.-)%]%s*(.*)$")
-			local info = C_Item and C_Item.GetItemInfo or GetItemInfo
-			local link = name and info and select(2, info(name))
-			pid = link and tonumber(link:match("item:(%d+)"))
-			xpr = strtrim(rest or "")
-		else
-			local arg
-			arg, xpr = sub:match("^(%S+)%s*(.*)$")
-			if arg then
-				pid = tonumber(arg:match("item:(%d+)"))
-					or tonumber(arg:match("i:(%d+)")) or tonumber(arg)
-			end
-		end
+		local pid, xpr = ParseItemRef(sub)
 		if not pid or not xpr or xpr == "" then
 			GM.Print("usage: /goblin price <item|i:id|[name]|link> <expr>")
 			GM.Print("  parsed: id=" .. tostring(pid) .. " expr='" .. tostring(xpr) .. "'")

@@ -31,6 +31,7 @@ for _, evt in ipairs({
 	"AUCTION_HOUSE_AUCTION_CREATED",
 	-- buy-result signals: silent rejections surface here
 	"BIDS_UPDATED", "AUCTION_CANCELED", "UI_ERROR_MESSAGE", "CHAT_MSG_SYSTEM",
+	"CHAT_MSG_MONEY",
 }) do
 	pcall(f.RegisterEvent, f, evt)
 end
@@ -64,10 +65,20 @@ f:SetScript("OnEvent", function(_, event, ...)
 		GM.Print(GM.CC("err") .. "commodity purchase failed|r")
 		GM.PlanQueue.Refresh()
 	elseif event == "COMMODITY_PURCHASE_SUCCEEDED" then
+		local pc = GM.AH.pendingConfirm
+		if pc then
+			GM.Ledger.Add("buy", pc.itemID, pc.qty,
+				pc.quote and math.floor(pc.quote / pc.qty) or nil)
+		end
 		GM.AH.pendingConfirm = nil
 		GM.Print("purchase complete")
 		GM.PlanQueue.Refresh()
 	elseif event == "BIDS_UPDATED" or event == "AUCTION_CANCELED" then
+		local pb = GM.AH.pendingBuy
+		if pb then
+			GM.AH.pendingBuy = nil
+			GM.Ledger.Add("buy", pb.itemID, pb.qty, math.floor(pb.total / pb.qty))
+		end
 		GM.Print(GM.CC("pos") .. "buyout confirmed|r")
 	elseif event == "UI_ERROR_MESSAGE" then
 		local msg = select(2, ...) or ...
@@ -77,10 +88,24 @@ f:SetScript("OnEvent", function(_, event, ...)
 		if msg and (msg:find("auction") or msg:find("bid")) then
 			GM.Print(GM.CC("textDim") .. tostring(msg) .. "|r")
 		end
+	elseif event == "CHAT_MSG_MONEY" then
+		-- loose parse: sum g/s/c quantities anywhere in the message
+		local msg = ...
+		local copper = 0
+		for v, u in tostring(msg or ""):gmatch("(%d+)%s*([gsc])") do
+			copper = copper + v * ({ g = 10000, s = 100, c = 1 })[u]
+		end
+		if copper > 0 then GM.Ledger.Gold(copper, "chat") end
 	elseif event == "AUCTION_HOUSE_POST_ERROR" or event == "AUCTION_MULTISELL_FAILURE" then
 		GM.Print(GM.CC("err") .. "post failed — check the item/stack and try again|r")
 		GM.PlanQueue.Refresh()
 	elseif event == "AUCTION_HOUSE_AUCTION_CREATED" then
+		local lp = GM.AH.lastPost
+		if lp then
+			GM.AH.lastPost = nil
+			GM.Ledger.Add("post", lp.itemID, lp.qty, lp.unit)
+			GM.Inventory.QueryOwned()
+		end
 		GM.Print("auction posted")
 	end
 end)
@@ -218,6 +243,7 @@ function GM.AH.Execute(step)
 		-- bidBuyout is the lot total — the scanned total avoids copper drift
 		local total = step.total or step.unit * step.qty
 		GM.Print(format("buying %d× for %s…", step.qty, GM.Money(total)))
+		GM.AH.pendingBuy = { itemID = step.itemID, qty = step.qty, total = total }
 		C_AuctionHouse.PlaceBid(step.auctionID, total)
 		return true
 	elseif step.kind == "confirm" then
@@ -254,9 +280,14 @@ function GM.AH.Execute(step)
 			-- PostItem's qty is this auction's stack size — can't exceed the stack
 			C_AuctionHouse.PostItem(loc, 2, math.min(qty, stackCount or qty), nil, step.unit)
 		end
+		GM.AH.lastPost = { itemID = step.itemID, qty = qty, unit = step.unit }
 		return true
 	elseif step.kind == "cancel" then
+		GM.Inventory.recentCancels[step.auctionID] = time()
+		local a = GM.Inventory.auctions and GM.Inventory.auctions[step.auctionID]
+		if a then GM.Ledger.Add("cancel", a.itemID, a.qty, a.buyout) end
 		C_AuctionHouse.CancelAuction(step.auctionID)
+		GM.After(2, GM.Inventory.QueryOwned)
 		return true
 	end
 end
