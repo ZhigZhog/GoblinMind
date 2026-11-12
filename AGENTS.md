@@ -5,7 +5,8 @@ shim addon riding on TradeSkillMaster in phase 1, migrating to a
 self-owned Blizzard-API pipeline later.
 
 - **All notes live in `WoWVault\`** (Obsidian vault). Read
-  `WoWVault\phase-1-architecture.md` first; theme reference is
+  `WoWVault\phase-1-architecture.md` first; `WoWVault\code-notes-alpha.md`
+  is the complete v0.1 functional map; theme reference is
   `WoWVault\tsm-theme-palette.md`.
 - Target client: `E:\Battle.net\World of Warcraft\_forever_`
   ("Forever" flavor, **interface `16001`** — 1.60.x; modern-era API set:
