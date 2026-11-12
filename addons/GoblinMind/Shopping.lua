@@ -9,7 +9,7 @@ local _, GM = ...
 GM.Shopping = { mode = "shop", asks = nil, itemID = nil }
 local S = GM.Shopping
 local ui
-local ROWS = 14
+local ROWS = 13 -- 14 rows ended 4px from the frame bottom and clipped the footer
 local GetInfo = C_Item and C_Item.GetItemInfo or GetItemInfo
 
 -- ============ window ============
@@ -110,7 +110,7 @@ local function Build()
 		{ "ITEM", "LEFT", 8 }, { "QTY", "LEFT", 182 }, { "UNIT", "LEFT", 240 },
 		{ "%MKT", "LEFT", 320 }, { "SELLER", "LEFT", 382 },
 	}) do
-		local fs = GM.MakeFontString(header, GM.FONT_MED, 9, "secondary")
+		local fs = GM.MakeFontString(header, GM.FONT_MED, 10, "primary")
 		fs:SetPoint(h[2], h[3], 0)
 		fs:SetText(h[1])
 	end
@@ -296,7 +296,7 @@ function S.Refresh()
 				else
 					row.pct:SetTextColor(GM.RGB("textDim"))
 				end
-				row.seller:SetText(a.own and "you" or (a.seller or "—"))
+				row.seller:SetText(a.own and (GM.CC("accent") .. "OWN|r") or (a.seller or "—"))
 				row.buy.text:SetText(pc and pc.itemID == a.itemID and "CONFIRM" or "BUY")
 				row.buy:SetEnabled(GM.AH.open and not a.own)
 			else

@@ -33,19 +33,23 @@ local function Segment(parent, x1, y1, x2, y2, key)
 	end
 end
 
-local function Label(parent, x, y, str, colorKey, size)
+-- justify anchors LEFT/RIGHT edges at x; default centers on x
+local function Label(parent, x, y, str, colorKey, size, justify)
 	local fs = GM.MakeFontString(parent, GM.FONT, size or 9, colorKey or "textDim")
 	tinsert(ui.art, fs)
-	fs:SetPoint("CENTER", parent, "BOTTOMLEFT", x, y)
+	fs:SetPoint(justify == "LEFT" and "BOTTOMLEFT"
+		or justify == "RIGHT" and "BOTTOMRIGHT" or "CENTER",
+		parent, "BOTTOMLEFT", x, y)
+	fs:SetJustifyH(justify or "CENTER")
 	fs:SetText(str)
 	return fs
 end
 
 local function BuildRow(parent, i)
 	local row = CreateFrame("Frame", nil, parent)
-	row:SetHeight(24)
-	row:SetPoint("TOPLEFT", 4, -4 - (i - 1) * 24)
-	row:SetPoint("TOPRIGHT", -4, -4 - (i - 1) * 24)
+	row:SetHeight(22)
+	row:SetPoint("TOPLEFT", 4, -4 - (i - 1) * 22)
+	row:SetPoint("TOPRIGHT", -4, -4 - (i - 1) * 22)
 	GM.Panel(row, i % 2 == 0 and "contLow" or "contLowest", "contLowest")
 	row.edge = row:CreateTexture(nil, "ARTWORK")
 	row.edge:SetPoint("TOPLEFT")
@@ -64,19 +68,21 @@ local function BuildRow(parent, i)
 	return row
 end
 
--- grouped label/value rows for the stats column
+-- grouped label/value rows for the stats column. Labels are dynamic
+-- where the source varies (live book vs DB snapshot) — ui.statLabel.
 local STAT_SECTIONS = {
-	{ "VALUE",   { "est", "band", "vs TSM" } },
+	{ "VALUE",   { "ref price", "ref ±15%", "vs TSM" } },
 	{ "TREND",   { "hist", "recent" } },
-	{ "MARKET",  { "min buy", "sells/day", "supply" } },
-	{ "SIGNAL",  { "reset", "itemID" } },
-	{ "ACCOUNT", { "gold", "risk", "margin", "data" } },
+	{ "MARKET",  { "min buy", "region/day", "units" } },
+	{ "SIGNAL",  { "reset" } },
+	{ "ACCOUNT", { "gold", "budget cap", "margin" } },
 }
 local function BuildStats(parent)
 	ui.statText = {}
+	ui.statLabel = {}
 	local y, rowH = -28, 18
 	for _, sec in ipairs(STAT_SECTIONS) do
-		local h = GM.MakeFontString(parent, GM.FONT_MED, 9, "secondary")
+		local h = GM.MakeFontString(parent, GM.FONT_MED, 10, "primary")
 		h:SetPoint("TOPLEFT", 8, y)
 		h:SetText(sec[1])
 		y = y - 15
@@ -88,10 +94,11 @@ local function BuildStats(parent)
 				bg:SetHeight(rowH)
 				bg:SetColorTexture(GM.RGB("contLowest"))
 			end
-			local lab = GM.MakeFontString(parent, GM.FONT, 10, "textDim")
+			local lab = GM.MakeFontString(parent, GM.FONT, 11, "textDim")
 			lab:SetPoint("TOPLEFT", 10, y - 4)
 			lab:SetText(key)
-			local val = GM.MakeFontString(parent, GM.FONT_MED, 10, "text")
+			ui.statLabel[key] = lab
+			local val = GM.MakeFontString(parent, GM.FONT_MED, 11, "text")
 			val:SetPoint("TOPRIGHT", -10, y - 4)
 			val:SetJustifyH("RIGHT")
 			ui.statText[key] = val
@@ -99,7 +106,7 @@ local function BuildStats(parent)
 		end
 		y = y - 9
 	end
-	local hint = GM.MakeFontString(parent, GM.FONT, 9, "secondary")
+	local hint = GM.MakeFontString(parent, GM.FONT, 10, "textDim")
 	hint:SetPoint("BOTTOMLEFT", 10, 8)
 	hint:SetText("drop · alt-click · /goblin [link]")
 end
@@ -115,9 +122,6 @@ local function Build()
 	frame:SetPoint("CENTER")
 	frame:SetMovable(true)
 	frame:EnableMouse(true)
-	frame:RegisterForDrag("LeftButton")
-	frame:SetScript("OnDragStart", frame.StartMoving)
-	frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
 	-- convention on this client: "normal" windows live on HIGH — TSM's
 	-- ApplicationFrame and EllesmereUI's skinned Blizzard panels both.
 	-- SetToplevel gives click-to-raise so we stack WITH them instead of
@@ -140,35 +144,61 @@ local function Build()
 	-- when the atlas is enabled — buttons anchor to whichever is live
 	local cTitle = GM.ChromeApply and GM.ChromeApply(frame, "GOBLINMIND")
 	if cTitle then title:Hide(); title = cTitle end
+	-- drag lives on the chrome header zone only — a frame-level
+	-- RegisterForDrag on top of it fires StartMoving twice per press
+	-- and the second call re-baselines mid-drag (the "random jump")
+	if not cTitle then
+		frame:RegisterForDrag("LeftButton")
+		frame:SetScript("OnDragStart", frame.StartMoving)
+		frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
+	end
 
-	-- scan buttons ride the title strip as TSM-style text tabs
-	local function TitleBtn(label, w, onclick)
+	-- scan buttons ride the title strip — subtle button rects so they
+	-- read as actions, not navigation tabs
+	local function TitleBtn(label, w, onclick, tip)
 		local b = CreateFrame("Button", nil, frame)
-		b:SetSize(w, 18)
-		b.text = GM.MakeFontString(b, GM.FONT_BOLD, 12, "text")
+		b:SetSize(w, 22)
+		GM.Panel(b, "contHigh", "outlineVar")
+		b.text = GM.MakeFontString(b, GM.FONT_MED, 11, "text")
 		b.text:SetAllPoints()
 		b.text:SetText(label)
 		b:SetScript("OnClick", onclick)
-		b:SetScript("OnEnter", function() b.text:SetTextColor(GM.RGB("accent")) end)
-		b:SetScript("OnLeave", function() b.text:SetTextColor(GM.RGB("text")) end)
+		b:SetScript("OnEnter", function()
+			GM.Panel(b, "contHighest", "outlineVar")
+			b.text:SetTextColor(GM.RGB("accent"))
+			if tip and GameTooltip then
+				GameTooltip:SetOwner(b, "ANCHOR_BOTTOM")
+				GameTooltip:SetText(tip, 1, 1, 1)
+				GameTooltip:Show()
+			end
+		end)
+		b:SetScript("OnLeave", function()
+			GM.Panel(b, "contHigh", "outlineVar")
+			b.text:SetTextColor(GM.RGB("text"))
+			if GameTooltip then GameTooltip:Hide() end
+		end)
 		return b
 	end
 	-- action tabs ride a dedicated strip under the title bar — inside
 	-- the body, clear of the header drag zone
-	ui.postScan = TitleBtn("POST SCAN", 84, function() GM.Auctioning.PostScan() end)
-	ui.postScan:SetPoint("TOPLEFT", frame, "TOPLEFT", 64, -28)
-	ui.cancelScan = TitleBtn("CANCEL SCAN", 104, function() GM.Auctioning.CancelScan() end)
+	ui.postScan = TitleBtn("POST SCAN", 84, function() GM.Auctioning.PostScan() end,
+		"Scan bag items for posting")
+	ui.postScan:SetPoint("TOPLEFT", frame, "TOPLEFT", 64, -26)
+	ui.cancelScan = TitleBtn("CANCEL SCAN", 104, function() GM.Auctioning.CancelScan() end,
+		"Scan own auctions for undercuts")
 	ui.cancelScan:SetPoint("LEFT", ui.postScan, "RIGHT", 8, 0)
-	ui.market = TitleBtn("MARKET", 66, function() GM.Shopping.Toggle() end)
+	ui.market = TitleBtn("MARKET", 66, function() GM.Shopping.Toggle() end,
+		"Open market window")
 	ui.market:SetPoint("LEFT", ui.cancelScan, "RIGHT", 8, 0)
-	ui.fullScan = TitleBtn("FULL SCAN", 84, function() GM.AH.FullScan() end)
+	ui.fullScan = TitleBtn("FULL SCAN", 84, function() GM.AH.FullScan() end,
+		"Refresh the full AH book")
 	ui.fullScan:SetPoint("LEFT", ui.market, "RIGHT", 8, 0)
 
 	ui.age = GM.MakeFontString(frame, GM.FONT, 10, "textDim")
 
 	local close = CreateFrame("Button", nil, frame)
-	close:SetSize(18, 18)
-	close:SetPoint("TOPRIGHT", -PAD, -28)
+	close:SetSize(22, 22)
+	close:SetPoint("TOPRIGHT", -PAD, -26)
 	close.text = GM.MakeFontString(close, GM.FONT_BOLD, 12, "textDim")
 	close.text:SetAllPoints()
 	close.text:SetText("×")
@@ -206,8 +236,12 @@ local function Build()
 
 	ui.item.name = GM.MakeFontString(ui.item, GM.FONT_MED, 12, "text")
 	ui.item.name:SetPoint("TOPLEFT", iconBox, "TOPRIGHT", 10, -4)
+	ui.item.name:SetPoint("RIGHT", ui.item, "RIGHT", -8, 0)
+	ui.item.name:SetJustifyH("LEFT")
 	ui.item.sub = GM.MakeFontString(ui.item, GM.FONT, 10, "textDim")
 	ui.item.sub:SetPoint("TOPLEFT", ui.item.name, "BOTTOMLEFT", 0, -5)
+	ui.item.sub:SetPoint("RIGHT", ui.item, "RIGHT", -8, 0)
+	ui.item.sub:SetJustifyH("LEFT")
 
 	-- item drop target
 	ui.item:EnableMouse(true)
@@ -244,8 +278,8 @@ local function Build()
 	header:SetHeight(18)
 	GM.Panel(header, "contHigh")
 	if GM.ChromePanel then GM.ChromePanel(header, { l = 6, t = 6, r = 6, b = 6 }) end
-	for _, h in ipairs({ { "#", "LEFT", 10 }, { "ACTION", "LEFT", 34 }, { "QTY", "LEFT", 140 }, { "PRICE", "RIGHT", -10 } }) do
-		local fs = GM.MakeFontString(header, GM.FONT_MED, 9, "secondary")
+	for _, h in ipairs({ { "#", "LEFT", 10 }, { "ACTION", "LEFT", 34 }, { "QTY", "LEFT", 140 }, { "UNIT PRICE", "RIGHT", -10 } }) do
+		local fs = GM.MakeFontString(header, GM.FONT_MED, 10, "primary")
 		fs:SetPoint(h[2], h[3], 0)
 		fs:SetText(h[1])
 	end
@@ -254,7 +288,7 @@ local function Build()
 	ui.list = CreateFrame("Frame", nil, frame)
 	ui.list:SetPoint("TOPLEFT", PAD, -306)
 	ui.list:SetWidth(LEFT_W)
-	ui.list:SetHeight(ROWS * 24 + 8)
+	ui.list:SetHeight(ROWS * 22 + 8)
 	GM.Panel(ui.list, "contLowest")
 	if GM.ChromePanel then GM.ChromePanel(ui.list) end
 	ui.rows = {}
@@ -267,15 +301,15 @@ local function Build()
 	stats:SetWidth(700 - 2 * PAD - GAP - LEFT_W)
 	GM.Panel(stats, "contLow")
 	if GM.ChromePanel then GM.ChromePanel(stats) end
-	local stTitle = GM.MakeFontString(stats, GM.FONT_MED, 9, "secondary")
+	local stTitle = GM.MakeFontString(stats, GM.FONT_MED, 10, "primary")
 	stTitle:SetPoint("TOPLEFT", 8, -6)
-	stTitle:SetText("GOBLINMIND INFO")
+	stTitle:SetText("ITEM & ACCOUNT")
 	BuildStats(stats)
 
 	-- Summary strip: verdict-colored left edge + wrapped text
 	ui.sumBar = CreateFrame("Frame", nil, frame)
 	ui.sumBar:SetPoint("BOTTOMLEFT", PAD, 46)
-	ui.sumBar:SetSize(LEFT_W, 26)
+	ui.sumBar:SetSize(LEFT_W, 42)
 	GM.Panel(ui.sumBar, "contLowest")
 	if GM.ChromePanel then GM.ChromePanel(ui.sumBar, { l = 6, t = 6, r = 6, b = 6 }) end
 	ui.sumEdge = ui.sumBar:CreateTexture(nil, "ARTWORK")
@@ -283,13 +317,15 @@ local function Build()
 	ui.sumEdge:SetPoint("BOTTOMLEFT")
 	ui.sumEdge:SetWidth(3)
 	ui.sumEdge:SetColorTexture(GM.RGB("accent"))
-	ui.summary = GM.MakeFontString(ui.sumBar, GM.FONT, 10, "textDim")
-	ui.summary:SetPoint("TOPLEFT", 10, -2)
-	ui.summary:SetPoint("TOPRIGHT", -6, -2)
-	ui.summary:SetHeight(22)
+	-- two controlled lines: verdict/status on top, costs/result below
+	ui.summary = GM.MakeFontString(ui.sumBar, GM.FONT_MED, 11, "text")
+	ui.summary:SetPoint("TOPLEFT", 10, -6)
+	ui.summary:SetPoint("TOPRIGHT", -6, -6)
 	ui.summary:SetJustifyH("LEFT")
-	ui.summary:SetJustifyV("TOP")
-	ui.summary:SetWordWrap(true)
+	ui.summary2 = GM.MakeFontString(ui.sumBar, GM.FONT, 10, "textDim")
+	ui.summary2:SetPoint("TOPLEFT", ui.summary, "BOTTOMLEFT", 0, -3)
+	ui.summary2:SetPoint("TOPRIGHT", ui.summary, "BOTTOMRIGHT", 0, -3)
+	ui.summary2:SetJustifyH("LEFT")
 	-- thin progress bar along the bottom edge of the summary strip
 	ui.prog = ui.sumBar:CreateTexture(nil, "ARTWORK")
 	ui.prog:SetPoint("BOTTOMLEFT", 0, 0)
@@ -306,8 +342,13 @@ local function Build()
 	ui.exec.text:SetAllPoints()
 	ui.exec.text:SetText("EXECUTE NEXT STEP")
 	ui.exec:SetScript("OnClick", function() PQ.ExecuteNext() end)
-	ui.exec:SetScript("OnEnter", function() GM.Panel(ui.exec, "warn") end)
-	ui.exec:SetScript("OnLeave", function() GM.Panel(ui.exec, "accent") end)
+	-- hover lightens only when the action is live — disabled stays muted
+	ui.exec:SetScript("OnEnter", function()
+		if ui.exec:IsEnabled() then GM.Panel(ui.exec, "contHighest") end
+	end)
+	ui.exec:SetScript("OnLeave", function()
+		GM.Panel(ui.exec, ui.exec:IsEnabled() and "accent" or "contHigh")
+	end)
 
 	ui.rescan = CreateFrame("Button", nil, frame)
 	ui.rescan:SetSize(104, 30)
@@ -328,8 +369,12 @@ local function Build()
 	ui.skip.text:SetAllPoints()
 	ui.skip.text:SetText("SKIP")
 	ui.skip:SetScript("OnClick", function() PQ.SkipStep() end)
-	ui.skip:SetScript("OnEnter", function() GM.Panel(ui.skip, "contHigh") end)
-	ui.skip:SetScript("OnLeave", function() GM.Panel(ui.skip, "contMedium") end)
+	ui.skip:SetScript("OnEnter", function()
+		if ui.skip:IsEnabled() then GM.Panel(ui.skip, "contHigh") end
+	end)
+	ui.skip:SetScript("OnLeave", function()
+		GM.Panel(ui.skip, ui.skip:IsEnabled() and "contMedium" or "contLowest")
+	end)
 
 	ui.frame = frame
 	-- CreateFrame defaults to visible — Build is called from scan
@@ -597,9 +642,11 @@ local function DrawChart(entry, itemID)
 		hi = math.max(hi, p.v)
 	end
 	if hi == lo then hi = lo + 1 end
-	-- TradingView split: price line in the top region, volume bars below.
-	local W = ui.chart:GetWidth() - 20
-	local pad = 10
+	-- TradingView split: price line in the top region, metric readouts
+	-- below. Right gutter reserved for price labels so they never
+	-- collide with the plot.
+	local pad, gutter = 10, 72
+	local W = ui.chart:GetWidth() - pad - gutter
 	local priceBase, priceTop = 62, ui.chart:GetHeight() - 18
 	local volBase, volTop = 16, 52
 	local function py(v) return priceBase + (v - lo) / (hi - lo) * (priceTop - priceBase) end
@@ -626,9 +673,10 @@ local function DrawChart(entry, itemID)
 			Segment(ui.chart, gx, volBase, gx, priceTop, "outlineVar")
 		end
 	end
-	-- hi/lo scale labels on the right edge
-	Label(ui.chart, pad + W - 28, priceTop + 2, GM.Money(hi), "secondary", 8)
-	Label(ui.chart, pad + W - 28, priceBase - 6, GM.Money(lo), "secondary", 8)
+	-- hi/lo scale labels right-aligned inside the gutter
+	local gR = ui.chart:GetWidth() - 6
+	Label(ui.chart, gR, priceTop + 2, GM.Money(hi), "textDim", 9, "RIGHT")
+	Label(ui.chart, gR, priceBase - 6, GM.Money(lo), "textDim", 9, "RIGHT")
 
 	for i = 2, #pts do
 		Segment(ui.chart, pts[i - 1].px, pts[i - 1].py, pts[i].px, pts[i].py)
@@ -638,11 +686,15 @@ local function DrawChart(entry, itemID)
 		local hot = (weekMode and i == #pts) or p.tag == "est"
 		if not weekMode or endpoint then
 			Dot(ui.chart, p.px, p.py, hot and 5 or 4, hot and "accent" or "textDim")
-			-- labels sit above the point unless that would reach the title
-			local ly = p.py + 9
-			if ly > priceTop - 6 then ly = p.py - 16 end
-			local tag = p.tag and p.tag .. " " or (weekMode and i == #pts and "now " or "")
-			Label(ui.chart, p.px, ly, tag .. GM.Money(p.v), hot and "accent" or "textDim")
+			-- only the latest point earns an in-plot label; the rest
+			-- read from the gutter scale
+			if hot then
+				local ly = p.py + 9
+				if ly > priceTop - 6 then ly = p.py - 16 end
+				-- latest sits at the plot's right edge — end the label
+				-- just left of the dot so it can't bleed into the gutter
+				Label(ui.chart, p.px - 6, ly, GM.Money(p.v), "accent", nil, "RIGHT")
+			end
 		end
 	end
 	for _, v in ipairs({ entry.p10, entry.p90 }) do
@@ -650,43 +702,47 @@ local function DrawChart(entry, itemID)
 			HRule(py(v), 0.8)
 		end
 	end
-	-- volume panel: gold-denominated daily turnover + listed value
+	-- time axis markers at the plot's true edges
+	if weekMode then
+		Label(ui.chart, pad, 4, "7d ago", "textDim", 9, "LEFT")
+		Label(ui.chart, pad + W, 4, "now", "textDim", 9, "RIGHT")
+	end
+	-- derived metrics as labeled readouts — region turnover and DB
+	-- listed value are different units, not comparable bar heights
 	if entry.p then
-		local bars = {}
+		local reads = {}
 		if entry.vel and entry.vel > 0 then
-			tinsert(bars, { x = 0.28, v = entry.vel * entry.p, tag = "vol/day", col = "accent" })
+			tinsert(reads, "region turnover " .. GM.Money(entry.vel * entry.p) .. "/day*")
 		end
 		if entry.sup and entry.sup > 0 then
-			tinsert(bars, { x = 0.72, v = entry.sup * entry.p, tag = "listed", col = "outline" })
+			tinsert(reads, "DB listed " .. GM.Money(entry.sup * entry.p) .. "*")
 		end
-		local vmax = 0
-		for _, b in ipairs(bars) do vmax = math.max(vmax, b.v) end
-		if vmax > 0 then
-			for _, b in ipairs(bars) do
-				local bh = math.max(2, (b.v / vmax) * (volTop - volBase))
-				local bar = ui.chart:CreateTexture(nil, "ARTWORK")
-				tinsert(ui.art, bar)
-				local r2, g2, b2 = GM.RGB(b.col)
-				bar:SetColorTexture(r2, g2, b2, 0.85)
-				bar:SetSize(W * 0.18, bh)
-				bar:SetPoint("BOTTOM", ui.chart, "BOTTOMLEFT", pad + b.x * W, volBase)
-				Label(ui.chart, pad + b.x * W, 5, b.tag .. " " .. GM.Money(b.v))
-			end
+		if #reads > 0 then
+			Label(ui.chart, pad, (volBase + volTop) / 2 - 4,
+				table.concat(reads, "  ·  "), "textDim", 9, "LEFT")
 		end
 	end
 end
 
 function PQ.Refresh()
 	Build()
+	-- freshness: DB age (loaded data file) and book age (live scan)
+	-- are different things — label both, warn when each is stale
 	local age = GM.DataAge()
-	local ageTxt = age and format("data %dm old", age / 60) or "no data file"
+	local dbTxt = age
+		and ((age > (GM.db and GM.db.dataMaxAge or 7200) and GM.CC("warn") or "")
+			.. (age >= 3600 and format("DB %dh %dm", age / 3600, age % 3600 / 60)
+				or age >= 60 and format("DB %dm", age / 60) or format("DB %ds", age))
+			.. "|r")
+		or GM.CC("warn") .. "no data file|r"
 	local bAge = GM.AH.BookAge and GM.AH.BookAge()
 	local bookFresh = bAge and bAge < 600
+	local bookTxt = ""
 	if bAge and bAge < math.huge then
-		ageTxt = ageTxt .. (bAge >= 60 and format(" · book %dm", bAge / 60)
-			or format(" · book %ds", bAge))
+		bookTxt = (bAge > 300 and GM.CC("warn") or GM.CC("textDim")) .. " · "
+			.. (bAge >= 60 and format("Book %dm", bAge / 60) or format("Book %ds", bAge)) .. "|r"
 	end
-	ui.age:SetText(ageTxt)
+	ui.age:SetText(dbTxt .. bookTxt)
 
 	-- FULL SCAN locks while any book build (replicate or browse) is live
 	if ui.fullScan then
@@ -713,10 +769,10 @@ function PQ.Refresh()
 				or " · book: empty")
 			or " · RESCAN to read the book") or ""
 	end
-	ui.item.name:SetText((dispLink or (dispID and ("item " .. dispID)) or "no item")
-		.. GM.CC("textDim") .. book .. "|r")
+	-- name gets its own line; book/readout context moves to the sub line
+	ui.item.name:SetText(dispLink or (dispID and ("item " .. dispID)) or "no item")
 	if not dispID then
-		ui.item.name:SetText(GM.CC("textDim") .. "no item — drop one here · alt-click one · /goblin [link]|r")
+		ui.item.name:SetText(GM.CC("textDim") .. "drop item here · alt-click one · /goblin [link]|r")
 	end
 	local icon = dispID and C_Item and C_Item.GetItemIconByID and C_Item.GetItemIconByID(dispID)
 	if not icon and dispID and GetInfo then
@@ -724,13 +780,16 @@ function PQ.Refresh()
 	end
 	if icon then ui.icon:SetTexture(icon) ui.icon:Show() else ui.icon:Hide() end
 	local sub = {}
-	if dispID then tinsert(sub, "id " .. dispID) end
 	if dispID and GetInfo then
 		local _, _, _, _, _, itemType = GetInfo(dispID)
-		if itemType then tinsert(sub, 1, itemType) end
+		if itemType then tinsert(sub, itemType) end
 	end
-	if entry and entry.vel then tinsert(sub, "sells ~" .. entry.vel .. "/day") end
-	if entry and entry.sup then tinsert(sub, "supply " .. entry.sup) end
+	if dispID then tinsert(sub, "id " .. dispID) end
+	if entry and entry.vel then
+		tinsert(sub, "region sales ~" .. (entry.vel >= 1000
+			and format("%.0fk", entry.vel / 1000) or entry.vel) .. "/day")
+	end
+	if book and #book > 0 then tinsert(sub, strtrim(book:gsub("· ", "", 1))) end
 	ui.item.sub:SetText(table.concat(sub, " · "))
 
 	-- stats column
@@ -744,8 +803,8 @@ function PQ.Refresh()
 		local key = d > 0 and "pos" or "err"
 		return GM.CC(key) .. format("%+.0f%%", d) .. "|r"
 	end
-	set("est", p and GM.Money(p))
-	set("band", (entry and entry.p10 and entry.p90) and (GM.Money(entry.p10) .. "–" .. GM.Money(entry.p90)))
+	set("ref price", p and GM.Money(p))
+	set("ref ±15%", (entry and entry.p10 and entry.p90) and (GM.Money(entry.p10) .. "–" .. GM.Money(entry.p90)))
 	set("vs TSM", entry and pct(entry.p, market))
 	set("hist", (entry and entry.hist)
 		and (GM.Money(entry.hist) .. " " .. (pct(p, entry.hist) or "")))
@@ -754,15 +813,17 @@ function PQ.Refresh()
 		or (scanMode and curStep.cheapest)
 		or (PQ.scan and PQ.scan.cheapest)
 	set("min buy", minBuy and GM.Money(minBuy))
-	set("sells/day", entry and entry.vel and tostring(entry.vel))
-	local sup = (bookFresh and GM.AH.BookSupply(dispID)) or (entry and entry.sup)
-	set("supply", sup and tostring(sup))
+	-- velocity is regional volume, not realm-local sell-time certainty
+	set("region/day", entry and entry.vel and (entry.vel >= 1000
+		and format("%.0fk", entry.vel / 1000) or tostring(entry.vel)))
+	local liveSup = bookFresh and GM.AH.BookSupply(dispID)
+	ui.statLabel["units"]:SetText(liveSup and "live units" or "DB auctions")
+	set("units", (liveSup or (entry and entry.sup)) and tostring(liveSup or entry.sup))
 	set("reset", entry and entry.reset and (GM.Money(entry.reset.below) .. " · ev " .. GM.Money(entry.reset.ev)))
-	set("itemID", dispID and (GM.CC("textDim") .. tostring(dispID) .. "|r"))
 	set("gold", GM.Money(GetMoney()))
-	set("risk", GM.db and GM.Money(GM.db.riskBudget))
+	-- the cap is a fraction of gold, not a currency amount
+	set("budget cap", GM.db and format("%.0f%%", (GM.db.riskBudget or 0) * 100))
 	set("margin", GM.db and format("%.0f%%", (GM.db.minProfitMargin or 0) * 100))
-	set("data", age and format("%dm old", age / 60) or "none")
 
 	DrawChart(entry, dispID)
 
@@ -804,38 +865,56 @@ function PQ.Refresh()
 	if PQ.plan then
 		if PQ.plan.mode == "postscan" then
 			ui.sumEdge:SetColorTexture(GM.RGB("accent"))
-			ui.summary:SetText(format("post scan: %d posts across %d items · est %s · dep %s|r",
-				#PQ.plan.steps, PQ.plan.itemCount or 0,
+			ui.summary:SetText(format("POST SCAN · %d posts across %d items",
+				#PQ.plan.steps, PQ.plan.itemCount or 0))
+			ui.summary2:SetText(format("est %s · dep %s",
 				GM.Money(PQ.plan.ev or 0), GM.Money(PQ.plan.deposit or 0)))
 		elseif PQ.plan.mode == "cancelscan" then
 			ui.sumEdge:SetColorTexture(GM.RGB("warn"))
-			ui.summary:SetText(format("cancel scan: %d undercut auction%s — one click each|r",
+			ui.summary:SetText(format("CANCEL SCAN · %d undercut auction%s — one click each",
 				#PQ.plan.steps, #PQ.plan.steps == 1 and "" or "s"))
+			ui.summary2:SetText("")
 		else
 		local verdict, note = GM.Solver.Verdict(PQ.plan, GM.db)
-		local clear = PQ.plan.daysToClear and format(" · clears ~%.1fd", PQ.plan.daysToClear) or ""
-		local own = (PQ.plan.owned or 0) > 0 and (" · own " .. PQ.plan.owned) or ""
-		if (PQ.plan.bank or 0) > 0 then own = own .. " +" .. PQ.plan.bank .. " bank" end
-		if PQ.plan.qty == 0 then own = own .. GM.CC("warn") .. " · no buy path — relist only" .. GM.CC("textDim") end
-		local dep = (PQ.plan.deposit or 0) > 0 and (" · dep " .. GM.Money(PQ.plan.deposit)) or ""
+		local own = (PQ.plan.owned or 0) > 0 and ("own " .. PQ.plan.owned) or nil
+		if (PQ.plan.bank or 0) > 0 then own = (own or "own 0") .. " +" .. PQ.plan.bank .. " bank" end
+		-- headline the action, not the absence of alternatives
+		local headline = PQ.plan.qty == 0 and (own and "RELIST OWNED STOCK · " .. own
+				or "RELIST OWNED STOCK")
+			or format("EXECUTE PLAN · %d steps", #PQ.plan.steps)
 		ui.sumEdge:SetColorTexture(GM.RGB(verdict == "good" and "pos" or "warn"))
-		ui.summary:SetText(format("%sspend %s%s%s · ev %s%s · %s|r",
-			verdict == "good" and GM.CC("textDim") or GM.CC("warn"),
-			GM.Money(PQ.plan.spend), own, dep, GM.Money(PQ.plan.ev), clear, note))
+		ui.summary:SetText((verdict == "good" and "" or GM.CC("warn")) .. headline .. "|r")
+		local dep = (PQ.plan.deposit or 0) > 0 and (" · dep " .. GM.Money(PQ.plan.deposit)) or ""
+		ui.summary2:SetText(format("spend %s%s · net %s · %s",
+			GM.Money(PQ.plan.spend), dep, GM.Money(PQ.plan.ev), note))
 		end
 		ui.exec:Show()
 		if GM.AH.pendingConfirm then
 			ui.exec.text:SetText("CONFIRM PURCHASE")
 		else
-			local verb = PQ.plan.mode == "cancelscan" and "CANCEL NEXT"
-				or PQ.plan.mode == "postscan" and "POST NEXT" or "EXECUTE NEXT STEP"
-			ui.exec.text:SetText(PQ.stepIndex > #PQ.plan.steps and "PLAN DONE" or verb)
+			local kind = curStep and curStep.kind
+			local verb = PQ.stepIndex > #PQ.plan.steps and "PLAN DONE"
+				or kind == "cancel" and "CANCEL NEXT"
+				or kind == "post" and "POST NEXT"
+				or kind == "buy" and "BUY NEXT" or "EXECUTE NEXT STEP"
+			ui.exec.text:SetText(verb)
 		end
-		ui.exec:SetEnabled(GM.AH.pendingConfirm ~= nil or (PQ.stepIndex <= #PQ.plan.steps and GM.AH.open))
+		local canExec = GM.AH.pendingConfirm ~= nil
+			or (PQ.stepIndex <= #PQ.plan.steps and GM.AH.open)
+		ui.exec:SetEnabled(canExec)
+		-- honest disabled state: muted fill + label; blocker on line 1
+		GM.Panel(ui.exec, canExec and "accent" or "contHigh")
+		ui.exec.text:SetTextColor(GM.RGB(canExec and "contLowest" or "textDim"))
+		if not canExec and not GM.AH.open then
+			ui.summary:SetText(GM.CC("warn") .. "open the auction house to execute|r")
+		end
 		ui.skip:Show()
-		ui.skip:SetEnabled(GM.AH.pendingConfirm ~= nil or PQ.stepIndex <= #PQ.plan.steps)
+		local canSkip = GM.AH.pendingConfirm ~= nil or PQ.stepIndex <= #PQ.plan.steps
+		ui.skip:SetEnabled(canSkip)
+		GM.Panel(ui.skip, canSkip and "contMedium" or "contLowest")
 	else
 		ui.sumEdge:SetColorTexture(GM.RGB("outlineVar"))
+		ui.summary2:SetText("")
 		ui.exec:Hide()
 		ui.skip:Hide()
 	end
