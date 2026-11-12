@@ -212,6 +212,7 @@ function A.FinishPostScan(steps, skipped, itemCount)
 		for id, why in pairs(skipped) do
 			tinsert(reasons, ShortName(id) .. " (" .. why .. ")")
 		end
+		GM.PlanQueue.ClearPlan()
 		GM.PlanQueue.ScanStatus(GM.CC("warn") .. "post scan: nothing to post — "
 			.. table.concat(reasons, ", ") .. "|r")
 		return
@@ -306,9 +307,10 @@ end
 
 function A.FinishCancelScan(steps, undercutItems)
 	if #steps == 0 then
+		GM.PlanQueue.ClearPlan()
 		GM.PlanQueue.ScanStatus(GM.CC("textDim") .. (undercutItems == 0
 			and "cancel scan: no undercut auctions|r"
-			or format("cancel scan: %d undercut item%s — none flagged cancelUndercut by its group|r",
+			or format("cancel scan: %d undercut item%s — set cancelUndercut=true in the group's auctioning ops|r",
 				undercutItems, undercutItems == 1 and "" or "s")))
 		return
 	end

@@ -330,6 +330,13 @@ function PQ.ScanStatus(text)
 	ui.summary:SetText(text)
 end
 
+-- a scan that produced no steps drops the stale plan so the window
+-- isn't left showing rows/buttons for something already finished
+function PQ.ClearPlan()
+	PQ.plan = nil
+	PQ.Refresh()
+end
+
 -- a multi-item plan from a post/cancel scan — steps carry their own
 -- itemID/name, execution goes through the same click-per-step path
 function PQ.SetScanPlan(plan)

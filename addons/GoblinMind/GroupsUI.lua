@@ -10,14 +10,17 @@ local GU = GM.GroupsUI
 local ui
 
 local OP_FIELDS = {
-	{ "min",        "auctioning", "min",        "expr" },
-	{ "normal",     "auctioning", "normal",     "expr" },
-	{ "max",        "auctioning", "max",        "expr" },
-	{ "undercut",   "auctioning", "undercut",   "expr" },
-	{ "postCap",    "auctioning", "postCap",    "num"  },
-	{ "stackSize",  "auctioning", "stackSize",  "num"  },
-	{ "belowPct %", "shopping",   "belowPct",   "num"  },
-	{ "maxPrice",   "shopping",   "maxPrice",   "expr" },
+	{ "min",            "auctioning", "min",            "expr" },
+	{ "normal",         "auctioning", "normal",         "expr" },
+	{ "max",            "auctioning", "max",            "expr" },
+	{ "undercut",       "auctioning", "undercut",       "expr" },
+	{ "postCap",        "auctioning", "postCap",        "num"  },
+	{ "stackSize",      "auctioning", "stackSize",      "num"  },
+	{ "duration",       "auctioning", "duration",       "num"  },
+	{ "bidPercent %",   "auctioning", "bidPercent",     "num"  },
+	{ "cancelUndercut", "auctioning", "cancelUndercut", "bool" },
+	{ "belowPct %",     "shopping",   "belowPct",       "num"  },
+	{ "maxPrice",       "shopping",   "maxPrice",       "expr" },
 }
 
 local function EditBox(parent, w)
@@ -67,7 +70,7 @@ local function BuildUI()
 	if ui then return end
 	ui = {}
 	local f = CreateFrame("Frame", "GoblinMindGroupsUI", UIParent)
-	f:SetSize(380, 474)
+	f:SetSize(380, 534)
 	f:SetPoint("CENTER", -280, 20)
 	f:SetFrameStrata("HIGH")
 	f:SetToplevel(true)
@@ -75,6 +78,7 @@ local function BuildUI()
 		if f.Raise then f:Raise() elseif RaiseFrame then RaiseFrame(f) end
 	end)
 	f:SetFrameLevel(100) -- above the plan window so children can't interleave
+	tinsert(UISpecialFrames, "GoblinMindGroupsUI") -- ESC closes it
 	f:SetClampedToScreen(true)
 	f:EnableMouse(true)
 	f:SetMovable(true)
@@ -146,7 +150,7 @@ local function BuildUI()
 
 	local hint = GM.MakeFontString(f, GM.FONT, 9, "secondary")
 	hint:SetPoint("BOTTOMLEFT", 10, 8)
-	hint:SetText("empty field = inherit · expr validated against current item")
+	hint:SetText("empty field = inherit · bool: true/false · expr validated against current item")
 end
 
 function GU.Assign()
@@ -175,6 +179,13 @@ function GU.SaveOp(eb)
 	elseif r[4] == "num" then
 		local n = tonumber(v)
 		if n then ops[r[3]] = n SetMark(eb, true)
+		else SetMark(eb, false) return end
+	elseif r[4] == "bool" then
+		local b = v:lower()
+		if b == "true" or b == "1" or b == "on" or b == "yes" then
+			ops[r[3]] = true SetMark(eb, true)
+		elseif b == "false" or b == "0" or b == "off" or b == "no" then
+			ops[r[3]] = false SetMark(eb, true)
 		else SetMark(eb, false) return end
 	else
 		local _, err = GM.Pricing.Eval(v, id)
