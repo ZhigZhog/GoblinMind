@@ -39,6 +39,14 @@ self-owned Blizzard-API pipeline later.
     prefix (`|cnQ`, not `|cff9d9d9d`) and no `|` before the `h[` name delimiter.
     Parse item IDs with `item:(%d+)` anywhere; extract post-link text via
     `%b[]` + strip trailing `|h|r` (see `Core.lua` price handler).
+  - **Frame strata conventions** (audited across installed addons 2026-11-12):
+    **windows → `HIGH` + `SetToplevel(true)`** — TSM's ApplicationFrame and
+    EllesmereUI's skinned Blizzard panels both use `HIGH`; toplevel gives
+    click-to-raise so windows stack with peers instead of pinning above or
+    below. `MEDIUM` gets buried by the AH; `FULLSCREEN_DIALOG` (239 uses —
+    options dialogs, overlays) pins above everything. `TOOLTIP` = TSM popups.
+    Minimap buttons → `MEDIUM` + `SetFixedFrameStrata/SetFixedFrameLevel(true)`
+    at level 8 (LibDBIcon, guarded). Child ordering = `SetFrameLevel(parent + N)`.
 - Hard rule: in-game actions are click-per-step only — one protected
   `C_AuctionHouse` call per hardware event. ToS boundary is documented
   in the design doc §8.

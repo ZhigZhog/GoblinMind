@@ -27,8 +27,11 @@ function GM.MinimapInit()
 	if GM.minimapBtn or not Minimap then return end
 	local b = CreateFrame("Button", "GoblinMindMinimapButton", Minimap)
 	b:SetSize(31, 31)
+	-- LibDBIcon convention: pin strata+level so other UI can't bury it
 	b:SetFrameStrata("MEDIUM")
+	if b.SetFixedFrameStrata then b:SetFixedFrameStrata(true) end
 	b:SetFrameLevel(8)
+	if b.SetFixedFrameLevel then b:SetFixedFrameLevel(true) end
 	b:RegisterForClicks("LeftButtonUp")
 	b:RegisterForDrag("LeftButton")
 

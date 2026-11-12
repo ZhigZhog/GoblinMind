@@ -10,6 +10,8 @@ local mailCache = {}      -- [itemID] = qty, refreshed at the mailbox
 local guildCache = {}     -- [itemID] = qty, current gbank tab only
 local auctionCache = {}   -- [auctionID] = {itemID, qty, buyout, tLeft, at}
 local recentCancels = {}  -- [auctionID] = time()
+local ownedPrimed = false -- first refresh just populates — everything
+                          -- would look "new" otherwise
 GM.Inventory.recentCancels = recentCancels
 
 -- ============ mailbox ============
@@ -78,9 +80,15 @@ function GM.Inventory.RefreshOwned()
 	for aid, t0 in pairs(recentCancels) do
 		if t - t0 > 300 then recentCancels[aid] = nil end
 	end
+	-- new auctionID = posted (any UI — TSM, Blizzard, or ours)
+	for aid, cur in pairs(now) do
+		if ownedPrimed and not auctionCache[aid] then
+			GM.Ledger.Add("post", cur.itemID, cur.qty, cur.buyout)
+		end
+	end
 	for aid, prev in pairs(auctionCache) do
 		local couldExpire = prev.tLeft and (t - prev.at) >= prev.tLeft
-		if not now[aid] and not recentCancels[aid] and not couldExpire then
+		if ownedPrimed and not now[aid] and not recentCancels[aid] and not couldExpire then
 			local unit = prev.buyout and prev.qty > 0
 				and math.floor(prev.buyout * 0.95 / prev.qty) or nil
 			GM.Ledger.Add("sell", prev.itemID, prev.qty, unit, { auctionID = aid })
@@ -88,6 +96,11 @@ function GM.Inventory.RefreshOwned()
 	end
 	auctionCache = now
 	GM.Inventory.auctions = now
+	ownedPrimed = true
+	-- one-shot waiter for a fresh snapshot (cancel scan)
+	local cb = GM.Inventory.onOwned
+	GM.Inventory.onOwned = nil
+	if cb then cb() end
 end
 
 function GM.Inventory.QueryOwned()

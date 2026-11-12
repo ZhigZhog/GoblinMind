@@ -13,17 +13,41 @@ function GM.Solver.Plan(asks, p50, p90, gold, vel, opts)
 	local minMargin    = opts.minProfitMargin or 0.10
 	local ahCut        = opts.ahCut or 0.05
 	local owned        = opts.owned or 0     -- units already in bags join the relist
-	local resale       = floor(p50 * (1 - ahCut))
-	local guard        = p90 and math.min(p50, p90) or p50
+	local postCap      = opts.postCap and opts.postCap > 0 and opts.postCap or math.huge
+	-- group op override: auctioning.normal replaces the model post target,
+	-- clamped to [min, max] — resale basis and buy ceiling derive from it
+	local postTarget   = opts.normal or p50
+	if opts.minP then postTarget = math.max(postTarget, opts.minP) end
+	if opts.maxP then postTarget = math.min(postTarget, opts.maxP) end
+	local resale       = floor(postTarget * (1 - ahCut))
+	local guard        = opts.normal and postTarget
+		or (p90 and math.min(p50, p90) or p50)
+	local buyCap       = math.max(0, postCap - owned)
 	local spend, qty   = 0, 0
 	local steps        = {}
 
+	local lots = {}  -- whole-lot mirror for the per-lot buyout fallback
 	for _, ask in ipairs(asks) do
-		local lotCost = ask.unit * ask.qty
+		-- postCap granularity: items buy whole lots only; commodities
+		-- take a partial slice (the staged purchase buys exact qty)
+		local take = ask.qty
+		if qty + take > buyCap then
+			if not opts.commodity then break end
+			take = buyCap - qty
+		end
+		if take <= 0 then break end
+		local lotCost = ask.unit * take
 		local margin = (resale - ask.unit) / ask.unit
 		if margin < minMargin then break end
 		if spend + lotCost > gold * riskBudget then break end
 		tinsert(steps, {
+			kind = "buy",
+			qty = take,
+			unit = ask.unit,
+			total = lotCost,
+			auctionID = ask.id,
+		})
+		tinsert(lots, {
 			kind = "buy",
 			qty = ask.qty,
 			unit = ask.unit,
@@ -31,7 +55,7 @@ function GM.Solver.Plan(asks, p50, p90, gold, vel, opts)
 			auctionID = ask.id,
 		})
 		spend = spend + lotCost
-		qty = qty + ask.qty
+		qty = qty + take
 	end
 
 	if qty == 0 and owned == 0 then
@@ -50,12 +74,24 @@ function GM.Solver.Plan(asks, p50, p90, gold, vel, opts)
 	-- quote flow produces nothing on this client
 	local buyLots
 	if qty > 0 and opts.commodity then
-		buyLots = steps
+		buyLots = lots  -- real lot totals for PlaceBid fallback
 		steps = { { kind = "buy", qty = qty, unit = ceil(spend / qty), commodity = true } }
 	end
 
-	local postQty = qty + owned
-	tinsert(steps, { kind = "post", qty = postQty, unit = guard })
+	local postQty = math.min(qty + owned, postCap)
+	-- stackSize splits the post leg into per-stack clicks (items only —
+	-- commodities post in one call regardless)
+	local stack = opts.stackSize and opts.stackSize > 0 and opts.stackSize
+	if stack and not opts.commodity then
+		local rem = postQty
+		while rem > 0 do
+			local n = math.min(rem, stack)
+			tinsert(steps, { kind = "post", qty = n, unit = guard })
+			rem = rem - n
+		end
+	elseif postQty > 0 then
+		tinsert(steps, { kind = "post", qty = postQty, unit = guard })
+	end
 
 	local ev = resale * postQty - spend
 	local daysToClear = vel and vel > 0 and (postQty / vel) or nil

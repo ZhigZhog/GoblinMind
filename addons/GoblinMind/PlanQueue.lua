@@ -25,11 +25,11 @@ local function Dot(parent, x, y, size, rgbKey)
 	return t
 end
 
-local function Segment(parent, x1, y1, x2, y2)
+local function Segment(parent, x1, y1, x2, y2, key)
 	local dx, dy = x2 - x1, y2 - y1
 	local steps = math.max(1, floor(sqrt(dx * dx + dy * dy) / 2))
 	for i = 0, steps do
-		Dot(parent, x1 + dx * i / steps, y1 + dy * i / steps, 2, "accent")
+		Dot(parent, x1 + dx * i / steps, y1 + dy * i / steps, 2, key or "accent")
 	end
 end
 
@@ -118,13 +118,42 @@ local function Build()
 	frame:RegisterForDrag("LeftButton")
 	frame:SetScript("OnDragStart", frame.StartMoving)
 	frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
-	frame:SetFrameStrata("MEDIUM")
+	-- convention on this client: "normal" windows live on HIGH — TSM's
+	-- ApplicationFrame and EllesmereUI's skinned Blizzard panels both.
+	-- SetToplevel gives click-to-raise so we stack WITH them instead of
+	-- pinned above (FULLSCREEN_DIALOG) or buried under (MEDIUM).
+	frame:SetFrameStrata("HIGH")
+	frame:SetToplevel(true)
+	-- manual raise on click: SetToplevel's auto-raise may be a no-op on
+	-- this client; Raise() bumps us to top of HIGH — TSM/Blizzard handle
+	-- their own clicks, so last-clicked wins like a normal window
+	frame:SetScript("OnMouseDown", function(f)
+		if f.Raise then f:Raise() elseif RaiseFrame then RaiseFrame(f) end
+	end)
 	GM.Panel(frame, "contLow", "outlineVar")
 	tinsert(UISpecialFrames, "GoblinMindPlanFrame")
 
 	local title = GM.MakeFontString(frame, GM.FONT_BOLD, 13, "accent")
 	title:SetPoint("TOPLEFT", 14, -10)
 	title:SetText("GOBLINMIND")
+
+	-- scan buttons ride the title row, TSM-tab style
+	local function TitleBtn(label, w, onclick)
+		local b = CreateFrame("Button", nil, frame)
+		b:SetSize(w, 16)
+		GM.Panel(b, "contMedium")
+		b.text = GM.MakeFontString(b, GM.FONT_MED, 9, "secondary")
+		b.text:SetAllPoints()
+		b.text:SetText(label)
+		b:SetScript("OnClick", onclick)
+		b:SetScript("OnEnter", function() GM.Panel(b, "contHigh") end)
+		b:SetScript("OnLeave", function() GM.Panel(b, "contMedium") end)
+		return b
+	end
+	ui.postScan = TitleBtn("POST SCAN", 74, function() GM.Auctioning.PostScan() end)
+	ui.postScan:SetPoint("LEFT", title, "RIGHT", 12, -1)
+	ui.cancelScan = TitleBtn("CANCEL SCAN", 84, function() GM.Auctioning.CancelScan() end)
+	ui.cancelScan:SetPoint("LEFT", ui.postScan, "RIGHT", 6, 0)
 
 	ui.age = GM.MakeFontString(frame, GM.FONT, 10, "textDim")
 
@@ -294,6 +323,22 @@ function PQ.Show()
 	PQ.Refresh()
 end
 
+-- transient scan-progress line (post/cancel scans write here while
+-- their serialized book queries work through the queue)
+function PQ.ScanStatus(text)
+	Build()
+	ui.summary:SetText(text)
+end
+
+-- a multi-item plan from a post/cancel scan — steps carry their own
+-- itemID/name, execution goes through the same click-per-step path
+function PQ.SetScanPlan(plan)
+	Build()
+	PQ.plan = plan
+	PQ.stepIndex = 1
+	PQ.Refresh()
+end
+
 function PQ.SetItem(itemID, itemLink)
 	Build()
 	PQ.itemID = itemID
@@ -301,6 +346,7 @@ function PQ.SetItem(itemID, itemLink)
 	PQ.scan = nil
 	PQ.plan = nil
 	PQ.Refresh()
+	if GM.GroupsUI and GM.GroupsUI.Retarget then GM.GroupsUI.Retarget() end
 end
 
 function PQ.Rescan()
@@ -308,6 +354,8 @@ function PQ.Rescan()
 		ui.summary:SetText(GM.CC("warn") .. "auction house is not open|r")
 		return
 	end
+	if PQ.plan and PQ.plan.mode == "postscan" then GM.Auctioning.PostScan() return end
+	if PQ.plan and PQ.plan.mode == "cancelscan" then GM.Auctioning.CancelScan() return end
 	if not PQ.itemID then
 		ui.summary:SetText(GM.CC("textDim") .. "pick an item first — drop one in the header|r")
 		return
@@ -332,12 +380,25 @@ function PQ.Solve(asks)
 	local gold = GetMoney()
 	local vel = entry and entry.vel
 	local isCommodity = GM.AH.IsCommodity(PQ.itemID)
+	-- group ops: auctioning drives post price/cap/stack/undercut,
+	-- shopping.belowPct is the buy-margin gate (replaces minProfitMargin)
+	local aOps = GM.Groups.GetOps(PQ.itemID, "auctioning")
+	local sOps = GM.Groups.GetOps(PQ.itemID, "shopping")
+	local function ev(f) return GM.Groups.EvalOp(aOps, f, PQ.itemID) end
 	local plan, err = GM.Solver.Plan(asks, p50, entry and entry.p90, gold, vel, {
 		riskBudget = GM.db.riskBudget,
-		minProfitMargin = GM.db.minProfitMargin,
+		minProfitMargin = (tonumber(sOps.belowPct) or 10) / 100,
 		commodity = isCommodity,
 		owned = GM.BagCount(PQ.itemID),
+		normal = ev("normal"),
+		minP = ev("min"),
+		maxP = ev("max"),
+		postCap = tonumber(aOps.postCap),
+		stackSize = tonumber(aOps.stackSize),
 	})
+	if plan then
+		plan.undercut = ev("undercut") or 0
+	end
 	if not plan then
 		ui.summary:SetText(GM.CC("warn") .. err .. "|r")
 		PQ.plan = nil
@@ -380,8 +441,11 @@ function PQ.ExecuteNext()
 	end
 	if result then
 		PQ.stepIndex = PQ.stepIndex + 1
-		-- book changed under us; a rescan keeps the plan honest
-		GM.After(1.0, function() PQ.Rescan() end)
+		-- single-item plans rescan after each action; scan-mode plans are
+		-- independent steps — re-querying the book per click would stall
+		if not (PQ.plan and PQ.plan.mode) then
+			GM.After(1.0, function() PQ.Rescan() end)
+		end
 	end
 	PQ.Refresh()
 end
@@ -424,8 +488,11 @@ function PQ.SkipStep()
 				if plan.daysToClear and old > 0 then
 					plan.daysToClear = plan.daysToClear * s.qty / old
 				end
-				-- reprice to the book: don't post above the cheapest ask
-				if cheapest and s.unit > cheapest then s.unit = cheapest end
+				-- reprice to the book, TSM-style: cheapest minus undercut
+				local uc = plan.undercut or 0
+				if cheapest and s.unit > cheapest - uc then
+					s.unit = math.max(1, cheapest - uc)
+				end
 				revenue = revenue + floor(s.unit * 0.95) * s.qty
 			end
 		end
@@ -437,23 +504,36 @@ function PQ.SkipStep()
 	PQ.Refresh()
 end
 
-local function DrawChart(entry)
+local function DrawChart(entry, itemID)
 	for _, a in ipairs(ui.art) do a:Hide() end
 	wipe(ui.art)
 	ui.chart.msg:SetText("")
 
-	-- the three anchors we actually have: historical, most-recent scan,
-	-- current estimate. Real time-series arrives with snapshot storage.
-	local pts = {}
-	if entry then
+	-- a real 1-week series from GoblinMindHistory once it has ≥2 points;
+	-- until then the three data anchors (hist/recent/est) stand in
+	local pts, weekMode = {}, false
+	if entry and itemID and GM.History then
+		local series = GM.History.Points(itemID, 7 * 86400)
+		if #series >= 2 then
+			weekMode = true
+			local t0 = time() - 7 * 86400
+			for _, p in ipairs(series) do
+				local x = (p.t - t0) / (7 * 86400)
+				tinsert(pts, { x = x < 0 and 0 or x > 1 and 1 or x, v = p.p })
+			end
+			tinsert(pts, { x = 1.0, v = entry.p }) -- live estimate at "now"
+		end
+	end
+	if not weekMode and entry then
 		if entry.hist then tinsert(pts, { x = 0.05, v = entry.hist, tag = "hist" }) end
 		if entry.recent and entry.recent ~= (entry.hist or 0) then
 			tinsert(pts, { x = 0.5, v = entry.recent, tag = "recent" })
 		end
 		tinsert(pts, { x = 0.95, v = entry.p, tag = "est" })
 	end
+	ui.chart.title:SetText(weekMode and "PRICE · VOLUME · 7D" or "PRICE · VOLUME")
 	if #pts < 2 then
-		ui.chart.msg:SetText("trend chart — needs historical + current data")
+		ui.chart.msg:SetText("trend chart — building a 7-day series, check back tomorrow")
 		return
 	end
 	local lo, hi = math.huge, 0
@@ -484,6 +564,13 @@ local function DrawChart(entry)
 	-- faint mid-grid + divider between price and volume regions
 	HRule((priceBase + priceTop) / 2, 0.35)
 	HRule(56)
+	-- day-boundary gridlines across the 7-day window
+	if weekMode then
+		for d = 1, 6 do
+			local gx = pad + d / 7 * W
+			Segment(ui.chart, gx, volBase, gx, priceTop, "outlineVar")
+		end
+	end
 	-- hi/lo scale labels on the right edge
 	Label(ui.chart, pad + W - 28, priceTop + 2, GM.Money(hi), "secondary", 8)
 	Label(ui.chart, pad + W - 28, priceBase - 6, GM.Money(lo), "secondary", 8)
@@ -491,10 +578,17 @@ local function DrawChart(entry)
 	for i = 2, #pts do
 		Segment(ui.chart, pts[i - 1].px, pts[i - 1].py, pts[i].px, pts[i].py)
 	end
-	for _, p in ipairs(pts) do
-		local isEst = p.tag == "est"
-		Dot(ui.chart, p.px, p.py, isEst and 5 or 4, isEst and "accent" or "textDim")
-		Label(ui.chart, p.px, p.py + 9, p.tag .. " " .. GM.Money(p.v), isEst and "accent" or "textDim")
+	for i, p in ipairs(pts) do
+		local endpoint = i == 1 or i == #pts
+		local hot = (weekMode and i == #pts) or p.tag == "est"
+		if not weekMode or endpoint then
+			Dot(ui.chart, p.px, p.py, hot and 5 or 4, hot and "accent" or "textDim")
+			-- labels sit above the point unless that would reach the title
+			local ly = p.py + 9
+			if ly > priceTop - 6 then ly = p.py - 16 end
+			local tag = p.tag and p.tag .. " " or (weekMode and i == #pts and "now " or "")
+			Label(ui.chart, p.px, ly, tag .. GM.Money(p.v), hot and "accent" or "textDim")
+		end
 	end
 	for _, v in ipairs({ entry.p10, entry.p90 }) do
 		if v and v >= lo and v <= hi then
@@ -532,27 +626,38 @@ function PQ.Refresh()
 	local age = GM.DataAge()
 	ui.age:SetText(age and format("data %dm old", age / 60) or "no data file")
 
-	-- header: icon, name, type/id, flow
-	local entry = PQ.itemID and GM.ItemEntry(PQ.itemID)
-	local book = PQ.itemID and (PQ.scan
-		and (PQ.scan.n > 0
-			and format(" · book: %d asks · cheapest %s", PQ.scan.n, GM.Money(PQ.scan.cheapest))
-			or " · book: empty")
-		or " · RESCAN to read the book") or ""
-	ui.item.name:SetText((PQ.item or (PQ.itemID and ("item " .. PQ.itemID)) or "no item")
+	-- header: icon, name, type/id, flow. For scan plans the display
+	-- follows the active step's item; single-item plans keep the target.
+	local stepN = PQ.plan and math.min(PQ.stepIndex, #PQ.plan.steps)
+	local curStep = PQ.plan and PQ.plan.steps[stepN]
+	local scanMode = PQ.plan and PQ.plan.mode and curStep
+	local dispID = scanMode and curStep.itemID or PQ.itemID
+	local dispLink = scanMode and (curStep.item or curStep.name) or PQ.item
+	local entry = dispID and GM.ItemEntry(dispID)
+	local book
+	if scanMode then
+		book = format(" · step %d/%d", stepN, #PQ.plan.steps)
+	else
+		book = dispID and (PQ.scan
+			and (PQ.scan.n > 0
+				and format(" · book: %d asks · cheapest %s", PQ.scan.n, GM.Money(PQ.scan.cheapest))
+				or " · book: empty")
+			or " · RESCAN to read the book") or ""
+	end
+	ui.item.name:SetText((dispLink or (dispID and ("item " .. dispID)) or "no item")
 		.. GM.CC("textDim") .. book .. "|r")
-	if not PQ.itemID then
+	if not dispID then
 		ui.item.name:SetText(GM.CC("textDim") .. "no item — drop one here · alt-click one · /goblin [link]|r")
 	end
-	local icon = PQ.itemID and C_Item and C_Item.GetItemIconByID and C_Item.GetItemIconByID(PQ.itemID)
-	if not icon and PQ.itemID and GetInfo then
-		icon = select(10, GetInfo(PQ.itemID))
+	local icon = dispID and C_Item and C_Item.GetItemIconByID and C_Item.GetItemIconByID(dispID)
+	if not icon and dispID and GetInfo then
+		icon = select(10, GetInfo(dispID))
 	end
 	if icon then ui.icon:SetTexture(icon) ui.icon:Show() else ui.icon:Hide() end
 	local sub = {}
-	if PQ.itemID then tinsert(sub, "id " .. PQ.itemID) end
-	if PQ.itemID and GetInfo then
-		local _, _, _, _, _, itemType = GetInfo(PQ.itemID)
+	if dispID then tinsert(sub, "id " .. dispID) end
+	if dispID and GetInfo then
+		local _, _, _, _, _, itemType = GetInfo(dispID)
 		if itemType then tinsert(sub, 1, itemType) end
 	end
 	if entry and entry.vel then tinsert(sub, "sells ~" .. entry.vel .. "/day") end
@@ -560,7 +665,7 @@ function PQ.Refresh()
 	ui.item.sub:SetText(table.concat(sub, " · "))
 
 	-- stats column
-	local market = PQ.itemID and GM.TSMMarket(PQ.itemID)
+	local market = dispID and GM.TSMMarket(dispID)
 	local p = (entry and entry.p) or market
 	local function set(k, v) ui.statText[k]:SetText(v or "") end
 	local function pct(a, b)
@@ -576,34 +681,48 @@ function PQ.Refresh()
 	set("hist", (entry and entry.hist)
 		and (GM.Money(entry.hist) .. " " .. (pct(p, entry.hist) or "")))
 	set("recent", entry and pct(entry.recent, p))
-	set("min buy", PQ.scan and PQ.scan.cheapest and GM.Money(PQ.scan.cheapest))
+	local minBuy = scanMode and curStep.cheapest or (PQ.scan and PQ.scan.cheapest)
+	set("min buy", minBuy and GM.Money(minBuy))
 	set("sells/day", entry and entry.vel and tostring(entry.vel))
 	set("supply", entry and entry.sup and tostring(entry.sup))
 	set("reset", entry and entry.reset and (GM.Money(entry.reset.below) .. " · ev " .. GM.Money(entry.reset.ev)))
-	set("itemID", PQ.itemID and (GM.CC("textDim") .. tostring(PQ.itemID) .. "|r"))
+	set("itemID", dispID and (GM.CC("textDim") .. tostring(dispID) .. "|r"))
 	set("gold", GM.Money(GetMoney()))
 	set("risk", GM.db and GM.Money(GM.db.riskBudget))
 	set("margin", GM.db and format("%.0f%%", (GM.db.minProfitMargin or 0) * 100))
 	set("data", age and format("%dm old", age / 60) or "none")
 
-	DrawChart(entry)
+	DrawChart(entry, dispID)
 
-	-- plan rows
+	-- plan rows — a window into steps that follows the active step
+	local off = 0
+	if PQ.plan and #PQ.plan.steps > ROWS then
+		off = math.min(math.max(PQ.stepIndex - 1, 0), #PQ.plan.steps - ROWS)
+	end
 	for i = 1, ROWS do
 		local row = ui.rows[i]
-		local step = PQ.plan and PQ.plan.steps[i]
+		local n = i + off
+		local step = PQ.plan and PQ.plan.steps[n]
 		if step then
 			row:Show()
-			local active = i == PQ.stepIndex
+			local active = n == PQ.stepIndex
 			row.edge:SetShown(active)
-			row.num:SetText(GM.CC("textDim") .. i .. "|r")
-			local verb = step.kind == "post" and "POST" or "BUY"
+			row.num:SetText(GM.CC("textDim") .. n .. "|r")
+			local verb = step.kind == "post" and "POST"
+				or step.kind == "cancel" and "CANCEL" or "BUY"
 			if active then
 				row.act:SetText(GM.CC("accent") .. verb .. " ▶|r")
 			else
-				row.act:SetText(GM.CC(step.kind == "post" and "pos" or "text") .. verb .. "|r")
+				row.act:SetText(GM.CC(step.kind == "post" and "pos"
+					or step.kind == "cancel" and "warn" or "text") .. verb .. "|r")
 			end
-			row.qty:SetText(step.qty .. (step.kind == "post" and " (relist)" or ""))
+			if PQ.plan.mode then
+				local nm = step.name or ""
+				if #nm > 16 then nm = nm:sub(1, 15) .. "…" end
+				row.qty:SetText(nm .. " ×" .. step.qty)
+			else
+				row.qty:SetText(step.qty .. (step.kind == "post" and " (relist)" or ""))
+			end
 			row.price:SetText(GM.Money(step.unit) .. (step.kind == "post" and "" or " /ea"))
 		else
 			row:Hide()
@@ -611,6 +730,16 @@ function PQ.Refresh()
 	end
 
 	if PQ.plan then
+		if PQ.plan.mode == "postscan" then
+			ui.sumEdge:SetColorTexture(GM.RGB("accent"))
+			ui.summary:SetText(format("post scan: %d posts across %d items · est %s · dep %s|r",
+				#PQ.plan.steps, PQ.plan.itemCount or 0,
+				GM.Money(PQ.plan.ev or 0), GM.Money(PQ.plan.deposit or 0)))
+		elseif PQ.plan.mode == "cancelscan" then
+			ui.sumEdge:SetColorTexture(GM.RGB("warn"))
+			ui.summary:SetText(format("cancel scan: %d undercut auction%s — one click each|r",
+				#PQ.plan.steps, #PQ.plan.steps == 1 and "" or "s"))
+		else
 		local verdict, note = GM.Solver.Verdict(PQ.plan, GM.db)
 		local clear = PQ.plan.daysToClear and format(" · clears ~%.1fd", PQ.plan.daysToClear) or ""
 		local own = (PQ.plan.owned or 0) > 0 and (" · own " .. PQ.plan.owned) or ""
@@ -621,11 +750,14 @@ function PQ.Refresh()
 		ui.summary:SetText(format("%sspend %s%s%s · ev %s%s · %s|r",
 			verdict == "good" and GM.CC("textDim") or GM.CC("warn"),
 			GM.Money(PQ.plan.spend), own, dep, GM.Money(PQ.plan.ev), clear, note))
+		end
 		ui.exec:Show()
 		if GM.AH.pendingConfirm then
 			ui.exec.text:SetText("CONFIRM PURCHASE")
 		else
-			ui.exec.text:SetText(PQ.stepIndex > #PQ.plan.steps and "PLAN DONE" or "EXECUTE NEXT STEP")
+			local verb = PQ.plan.mode == "cancelscan" and "CANCEL NEXT"
+				or PQ.plan.mode == "postscan" and "POST NEXT" or "EXECUTE NEXT STEP"
+			ui.exec.text:SetText(PQ.stepIndex > #PQ.plan.steps and "PLAN DONE" or verb)
 		end
 		ui.exec:SetEnabled(GM.AH.pendingConfirm ~= nil or (PQ.stepIndex <= #PQ.plan.steps and GM.AH.open))
 		ui.skip:Show()

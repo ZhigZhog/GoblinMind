@@ -73,19 +73,27 @@ f:SetScript("OnEvent", function(_, event, ...)
 		GM.AH.pendingConfirm = nil
 		GM.Print("purchase complete")
 		GM.PlanQueue.Refresh()
-	elseif event == "BIDS_UPDATED" or event == "AUCTION_CANCELED" then
+	elseif event == "BIDS_UPDATED" then
 		local pb = GM.AH.pendingBuy
 		if pb then
 			GM.AH.pendingBuy = nil
 			GM.Ledger.Add("buy", pb.itemID, pb.qty, math.floor(pb.total / pb.qty))
+			GM.Print(GM.CC("pos") .. "buyout confirmed|r")
 		end
-		GM.Print(GM.CC("pos") .. "buyout confirmed|r")
+	elseif event == "AUCTION_CANCELED" then
+		if GM.AH.open then
+			GM.Print(GM.CC("textDim") .. "auction canceled|r")
+		end
 	elseif event == "UI_ERROR_MESSAGE" then
+		-- only surface errors at the AH — combat/gameplay errors like
+		-- "target too close" aren't ours to echo
 		local msg = select(2, ...) or ...
-		if msg then GM.Print(GM.CC("err") .. tostring(msg) .. "|r") end
+		if msg and GM.AH.open then
+			GM.Print(GM.CC("err") .. tostring(msg) .. "|r")
+		end
 	elseif event == "CHAT_MSG_SYSTEM" then
 		local msg = ...
-		if msg and (msg:find("auction") or msg:find("bid")) then
+		if msg and GM.AH.open and (msg:find("auction") or msg:find("bid")) then
 			GM.Print(GM.CC("textDim") .. tostring(msg) .. "|r")
 		end
 	elseif event == "CHAT_MSG_MONEY" then
@@ -100,12 +108,9 @@ f:SetScript("OnEvent", function(_, event, ...)
 		GM.Print(GM.CC("err") .. "post failed — check the item/stack and try again|r")
 		GM.PlanQueue.Refresh()
 	elseif event == "AUCTION_HOUSE_AUCTION_CREATED" then
-		local lp = GM.AH.lastPost
-		if lp then
-			GM.AH.lastPost = nil
-			GM.Ledger.Add("post", lp.itemID, lp.qty, lp.unit)
-			GM.Inventory.QueryOwned()
-		end
+		-- the owned-auction reconcile writes the post row — it attributes
+		-- posts from ANY ui, not just our executor
+		GM.Inventory.QueryOwned()
 		GM.Print("auction posted")
 	end
 end)
@@ -139,7 +144,8 @@ function GM.AH.CollectCommodityAsks(itemID)
 	for i = 1, C_AuctionHouse.GetNumCommoditySearchResults(itemID) do
 		local r = C_AuctionHouse.GetCommoditySearchResultInfo(itemID, i)
 		if r and r.unitPrice and r.quantity and r.quantity > 0 then
-			tinsert(asks, { qty = r.quantity, unit = r.unitPrice })
+			tinsert(asks, { qty = r.quantity, unit = r.unitPrice,
+				own = (r.containsOwnerItem or r.isOwned) or nil })
 		end
 	end
 	table.sort(asks, function(a, b) return a.unit < b.unit end)
@@ -156,7 +162,8 @@ function GM.AH.CollectItemAsks()
 			local price = r.buyoutAmount or r.buyout or r.minBid or r.minPrice
 			local qty = r.quantity or r.totalQuantity or 1
 			if price and qty > 0 then
-				tinsert(asks, { id = r.auctionID, qty = qty, unit = ceil(price / qty), total = price })
+				tinsert(asks, { id = r.auctionID, qty = qty, unit = ceil(price / qty), total = price,
+					own = (r.containsOwnerItem or r.isOwned) or nil })
 			end
 		end
 	end
@@ -274,13 +281,14 @@ function GM.AH.Execute(step)
 		local isComm = (ok and Enum and Enum.ItemCommodityStatus
 			and status == Enum.ItemCommodityStatus.Commodity)
 			or (not ok and GM.AH.IsCommodity(step.itemID))
+		-- bid below buyout only — a bid equal to buyout is rejected
+		local bid = step.bid and step.bid < step.unit and step.bid or nil
 		if isComm then
-			C_AuctionHouse.PostCommodity(loc, 2, qty, step.unit)
+			C_AuctionHouse.PostCommodity(loc, step.duration or 2, qty, step.unit)
 		else
 			-- PostItem's qty is this auction's stack size — can't exceed the stack
-			C_AuctionHouse.PostItem(loc, 2, math.min(qty, stackCount or qty), nil, step.unit)
+			C_AuctionHouse.PostItem(loc, step.duration or 2, math.min(qty, stackCount or qty), bid, step.unit)
 		end
-		GM.AH.lastPost = { itemID = step.itemID, qty = qty, unit = step.unit }
 		return true
 	elseif step.kind == "cancel" then
 		GM.Inventory.recentCancels[step.auctionID] = time()

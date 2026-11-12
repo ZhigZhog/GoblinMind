@@ -26,6 +26,8 @@ GM.frame:SetScript("OnEvent", function(_, event, arg1)
 		GM.db = GoblinMindSettings
 		GoblinMindPrices = GoblinMindPrices or { customSources = {} }
 		if GM.Ledger then GM.Ledger.Init() end
+		if GM.Groups then GM.Groups.Init() end
+		if GM.History then GM.History.Init() end
 		GM.frame:UnregisterEvent("ADDON_LOADED")
 	elseif event == "PLAYER_LOGIN" then
 		if GM.MinimapInit then pcall(GM.MinimapInit) end
@@ -84,6 +86,10 @@ SlashCmdList.GOBLINMIND = function(msg)
 		GM.Print("minimap button " .. (GM.db.minimapHide and "hidden" or "shown"))
 		return
 	end
+	if msg:sub(1, 6) == "groups" then
+		GM.GroupsUI.Toggle()
+		return
+	end
 	if msg:sub(1, 3) == "inv" then
 		local pid = ParseItemRef(strtrim(msg:sub(4)))
 		if not pid then
@@ -98,6 +104,10 @@ SlashCmdList.GOBLINMIND = function(msg)
 	end
 	if msg:sub(1, 6) == "ledger" then
 		local n = tonumber(msg:sub(7)) or 8
+		if not GM.Ledger.db then
+			GM.Print("ledger not initialized")
+			return
+		end
 		local rows = GM.Ledger.Recent(n)
 		if #rows == 0 then
 			GM.Print("ledger empty — buy/post/cancel actions get recorded")
