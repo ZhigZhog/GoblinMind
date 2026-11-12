@@ -269,6 +269,17 @@ local function Build()
 	ui.rescan:SetScript("OnEnter", function() GM.Panel(ui.rescan, "contHighest") end)
 	ui.rescan:SetScript("OnLeave", function() GM.Panel(ui.rescan, "contHigh") end)
 
+	ui.skip = CreateFrame("Button", nil, frame)
+	ui.skip:SetSize(80, 30)
+	ui.skip:SetPoint("RIGHT", ui.rescan, "LEFT", -GAP, 0)
+	GM.Panel(ui.skip, "contMedium")
+	ui.skip.text = GM.MakeFontString(ui.skip, GM.FONT_MED, 11, "textDim")
+	ui.skip.text:SetAllPoints()
+	ui.skip.text:SetText("SKIP")
+	ui.skip:SetScript("OnClick", function() PQ.SkipStep() end)
+	ui.skip:SetScript("OnEnter", function() GM.Panel(ui.skip, "contHigh") end)
+	ui.skip:SetScript("OnLeave", function() GM.Panel(ui.skip, "contMedium") end)
+
 	ui.frame = frame
 end
 
@@ -366,6 +377,16 @@ function PQ.ExecuteNext()
 		PQ.stepIndex = PQ.stepIndex + 1
 		-- book changed under us; a rescan keeps the plan honest
 		GM.After(1.0, function() PQ.Rescan() end)
+	end
+	PQ.Refresh()
+end
+
+-- Skips the current step — for when the player decides not to do a buyout.
+-- Aborts a staged commodity purchase (the quote expires server-side).
+function PQ.SkipStep()
+	if GM.AH.pendingConfirm then GM.AH.pendingConfirm = nil end
+	if PQ.plan and PQ.stepIndex <= #PQ.plan.steps then
+		PQ.stepIndex = PQ.stepIndex + 1
 	end
 	PQ.Refresh()
 end
@@ -561,8 +582,11 @@ function PQ.Refresh()
 			ui.exec.text:SetText(PQ.stepIndex > #PQ.plan.steps and "PLAN DONE" or "EXECUTE NEXT STEP")
 		end
 		ui.exec:SetEnabled(GM.AH.pendingConfirm ~= nil or (PQ.stepIndex <= #PQ.plan.steps and GM.AH.open))
+		ui.skip:Show()
+		ui.skip:SetEnabled(GM.AH.pendingConfirm ~= nil or PQ.stepIndex <= #PQ.plan.steps)
 	else
 		ui.sumEdge:SetColorTexture(GM.RGB("outlineVar"))
 		ui.exec:Hide()
+		ui.skip:Hide()
 	end
 end

@@ -13,3 +13,4 @@ AH.lua
 PlanQueue.lua
 ItemInput.lua
 Tooltip.lua
+Minimap.lua

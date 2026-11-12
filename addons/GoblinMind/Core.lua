@@ -6,6 +6,8 @@ local DEFAULTS = {
 	minProfitMargin = 0.10, -- stop buying when (p50*0.95 - ask)/ask < this
 	maxDaysToClear = 7,     -- warn past this holding period
 	dataMaxAge = 7200,      -- seconds before tooltip flags data stale
+	minimapAngle = -0.785,  -- button sits bottom-left of the minimap ring
+	minimapHide = false,
 }
 
 local function ApplyDefaults(dst, src)
@@ -24,6 +26,7 @@ GM.frame:SetScript("OnEvent", function(_, event, arg1)
 		GM.db = GoblinMindSettings
 		GM.frame:UnregisterEvent("ADDON_LOADED")
 	elseif event == "PLAYER_LOGIN" then
+		if GM.MinimapInit then pcall(GM.MinimapInit) end
 		GM.Print("loaded — /gm for the plan window")
 	end
 end)
@@ -44,6 +47,12 @@ SlashCmdList.GOBLINMIND = function(msg)
 		end
 		GM.PlanQueue.SetItem(GM.lastTooltipItemID, GM.lastTooltipLink)
 		GM.PlanQueue.Show()
+		return
+	end
+	if msg == "minimap" then
+		GM.db.minimapHide = not GM.db.minimapHide
+		if GM.minimapBtn then GM.minimapBtn:SetShown(not GM.db.minimapHide) end
+		GM.Print("minimap button " .. (GM.db.minimapHide and "hidden" or "shown"))
 		return
 	end
 	local id = tonumber(msg:match("item:(%d+)")) or tonumber(msg)
