@@ -29,6 +29,7 @@ GM.frame:SetScript("OnEvent", function(_, event, arg1)
 		if GM.Groups then GM.Groups.Init() end
 		if GM.History then GM.History.Init() end
 		if GM.Crafting then GM.Crafting.Init() end
+		if GM.Budget then GM.Budget.Init() end
 		GM.frame:UnregisterEvent("ADDON_LOADED")
 	elseif event == "PLAYER_LOGIN" then
 		if GM.MinimapInit then pcall(GM.MinimapInit) end
@@ -97,6 +98,40 @@ SlashCmdList.GOBLINMIND = function(msg)
 	end
 	if msg:sub(1, 6) == "market" or msg:sub(1, 4) == "shop" then
 		GM.Shopping.Toggle()
+		return
+	end
+	if msg:sub(1, 9) == "warehouse" then
+		GM.Banking.WarehousingScan()
+		return
+	end
+	if msg:sub(1, 9) == "bankdebug" then
+		GM.Banking.debug = not GM.Banking.debug
+		GM.Print("bank debug " .. (GM.Banking.debug and "ON" or "off"))
+		return
+	end
+	if msg:sub(1, 7) == "destroy" then
+		GM.Destroying.Scan()
+		return
+	end
+	if msg:sub(1, 6) == "ledger" or msg:sub(1, 8) == "overview" then
+		GM.Overview.Toggle()
+		return
+	end
+	if msg:sub(1, 4) == "dash" or msg == "home" or msg:sub(1, 6) == "budget" then
+		GM.PlanQueue.SetHome(true)
+		GM.PlanQueue.Show()
+		return
+	end
+	if msg:sub(1, 6) == "vendor" then
+		GM.Vendoring.Scan()
+		return
+	end
+	if msg:sub(1, 4) == "mail" then
+		if MailFrame and MailFrame:IsShown() then
+			GM.Banking.MailingScan()
+		else
+			GM.Print("open the mailbox, then /goblin mail")
+		end
 		return
 	end
 	if msg:sub(1, 3) == "inv" then

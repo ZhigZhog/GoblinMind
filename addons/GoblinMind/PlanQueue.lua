@@ -193,6 +193,17 @@ local function Build()
 	ui.fullScan = TitleBtn("FULL SCAN", 84, function() GM.AH.FullScan() end,
 		"Refresh the full AH book")
 	ui.fullScan:SetPoint("LEFT", ui.market, "RIGHT", 8, 0)
+	ui.groups = TitleBtn("GROUPS", 66, function() GM.GroupsUI.Toggle() end,
+		"Open groups & operations")
+	ui.groups:SetPoint("LEFT", ui.fullScan, "RIGHT", 8, 0)
+	ui.dash = TitleBtn("DASH", 50, function() PQ.SetHome(not PQ.homeMode) end,
+		"Toggle dashboard home view")
+	ui.dash:SetScript("OnLeave", function()
+		GM.Panel(ui.dash, "contHigh", "outlineVar")
+		ui.dash.text:SetTextColor(GM.RGB(PQ.homeMode and "accent" or "text"))
+		if GameTooltip then GameTooltip:Hide() end
+	end)
+	ui.dash:SetPoint("LEFT", ui.groups, "RIGHT", 8, 0)
 
 	ui.age = GM.MakeFontString(frame, GM.FONT, 10, "textDim")
 
@@ -205,7 +216,7 @@ local function Build()
 	close:SetScript("OnClick", function() frame:Hide() end)
 	close:SetScript("OnEnter", function() close.text:SetTextColor(GM.RGB("text")) end)
 	close:SetScript("OnLeave", function() close.text:SetTextColor(GM.RGB("textDim")) end)
-	ui.age:SetPoint("RIGHT", close, "LEFT", -8, -1)
+	ui.age:SetPoint("TOPRIGHT", -12, -11) -- title strip, right of chrome tab
 
 	local rule = frame:CreateTexture(nil, "BORDER")
 	rule:SetColorTexture(GM.RGB("outlineVar"))
@@ -272,7 +283,8 @@ local function Build()
 	if ui.chart.SetClipsChildren then ui.chart:SetClipsChildren(true) end
 
 	-- Steps header
-	local header = CreateFrame("Frame", nil, frame)
+	ui.header = CreateFrame("Frame", nil, frame)
+	local header = ui.header
 	header:SetPoint("TOPLEFT", PAD, -286)
 	header:SetWidth(LEFT_W)
 	header:SetHeight(18)
@@ -295,7 +307,8 @@ local function Build()
 	for i = 1, ROWS do ui.rows[i] = BuildRow(ui.list, i) end
 
 	-- ===== right column: grouped stats, full height =====
-	local stats = CreateFrame("Frame", nil, frame)
+	ui.stats = CreateFrame("Frame", nil, frame)
+	local stats = ui.stats
 	stats:SetPoint("TOPRIGHT", -PAD, -64)
 	stats:SetPoint("BOTTOMRIGHT", -PAD, PAD)
 	stats:SetWidth(700 - 2 * PAD - GAP - LEFT_W)
@@ -376,6 +389,16 @@ local function Build()
 		GM.Panel(ui.skip, ui.skip:IsEnabled() and "contMedium" or "contLowest")
 	end)
 
+	-- home overlay: the dashboard lives INSIDE this window — covers
+	-- the whole content region when home mode is on
+	ui.home = CreateFrame("Frame", nil, frame)
+	ui.home:SetPoint("TOPLEFT", PAD, -64)
+	ui.home:SetPoint("BOTTOMRIGHT", -PAD, 8)
+	if GM.Dashboard and GM.Dashboard.MountHome then
+		ui.homeRefresh = GM.Dashboard.MountHome(ui.home)
+	end
+	ui.home:Hide()
+
 	ui.frame = frame
 	-- CreateFrame defaults to visible — Build is called from scan
 	-- paths (ScanStatus etc.) that must NOT pop the window; visibility
@@ -396,6 +419,10 @@ end
 
 function PQ.Hide()
 	if ui.frame then ui.frame:Hide() end
+end
+
+function PQ.IsShown()
+	return ui and ui.frame and ui.frame:IsShown() or false
 end
 
 -- build at login so the first AH visit doesn't pay widget-creation
@@ -436,11 +463,15 @@ function PQ.SetScanPlan(plan)
 	Build()
 	PQ.plan = plan
 	PQ.stepIndex = 1
+	PQ.homeMode = false
+	PQ.budgetConfirm = nil
+	PQ.budgetWarn = nil
 	PQ.Refresh()
 end
 
 function PQ.SetItem(itemID, itemLink)
 	Build()
+	PQ.homeMode = false
 	PQ.itemID = itemID
 	PQ.item = itemLink
 	PQ.scan = nil
@@ -510,6 +541,19 @@ function PQ.Solve(asks)
 		step.item = PQ.item
 		step.commodity = isCommodity
 	end
+	-- buys arrive by mail — insert a collect step before the post leg
+	-- so the queue models the buy→mailbox→post gap
+	do
+		local firstPost
+		for i, s in ipairs(plan.steps) do
+			if s.kind == "post" and not firstPost then firstPost = i end
+		end
+		if firstPost and firstPost > 1 then
+			tinsert(plan.steps, firstPost,
+				{ kind = "mailcollect", itemID = PQ.itemID, item = PQ.item,
+					qty = 1, name = "collect from mail" })
+		end
+	end
 	for _, lot in ipairs(plan.buyLots or {}) do
 		lot.itemID = PQ.itemID
 		lot.item = PQ.item
@@ -534,18 +578,41 @@ function PQ.ExecuteNext()
 	end
 	local step = PQ.plan and PQ.plan.steps[PQ.stepIndex]
 	if not step then return end
+	-- envelope check: warn once per step, second click confirms
+	if (step.kind == "buy" or step.kind == "vendbuy") and GM.Budget then
+		local cost = step.cost or (step.unit or 0) * (step.qty or 1)
+		local over, _, deficit = GM.Budget.Check(step, cost)
+		if over and PQ.budgetConfirm ~= PQ.stepIndex then
+			PQ.budgetConfirm = PQ.stepIndex
+			PQ.budgetWarn = deficit
+			PQ.Refresh()
+			return
+		end
+	end
 	if step.kind == "note" then
 		-- manual step (craft, fetch mail, …): the click acknowledges it
 		PQ.stepIndex = PQ.stepIndex + 1
 		PQ.Refresh()
 		return
 	end
-	local result = GM.AH.Execute(step)
+	local result = (step.kind == "move" or step.kind == "mail"
+			or step.kind == "mailcollect")
+		and GM.Banking.Execute(step)
+		or step.kind == "destroy" and GM.Destroying.Execute(step)
+		or (step.kind == "vendbuy" or step.kind == "vendsell")
+			and GM.Vendoring.Execute(step)
+		or GM.AH.Execute(step)
 	if result == "confirm" then
 		PQ.Refresh()
 		return
 	end
 	if result then
+		if (step.kind == "buy" or step.kind == "vendbuy") and GM.Budget then
+			GM.Budget.Record(step, step.cost
+				or (step.unit or 0) * (step.qty or 1))
+		end
+		PQ.budgetConfirm = nil
+		PQ.budgetWarn = nil
 		PQ.stepIndex = PQ.stepIndex + 1
 		-- single-item plans rescan after each action; scan-mode plans are
 		-- independent steps — re-querying the book per click would stall
@@ -578,6 +645,8 @@ end
 -- A staged commodity purchase is dropped (the quote expires server-side).
 function PQ.SkipStep()
 	GM.AH.pendingConfirm = nil
+	PQ.budgetConfirm = nil
+	PQ.budgetWarn = nil
 	local plan = PQ.plan
 	local step = plan and plan.steps[PQ.stepIndex]
 	if step and step.kind == "buy" then
@@ -730,8 +799,29 @@ local function DrawChart(entry, itemID)
 	end
 end
 
+function PQ.SetHome(on)
+	PQ.homeMode = on and true or false
+	PQ.Refresh()
+end
+
 function PQ.Refresh()
 	Build()
+	-- home mode: dashboard panels replace the plan inspector
+	if ui.home then
+		local h = PQ.homeMode
+		ui.home:SetShown(h)
+		for _, w in ipairs({ ui.item, ui.chart, ui.header, ui.list,
+			ui.stats, ui.sumBar, ui.exec, ui.rescan, ui.skip }) do
+			if w then w:SetShown(not h) end
+		end
+		if ui.dash then
+			ui.dash.text:SetTextColor(GM.RGB(h and "accent" or "text"))
+		end
+		if h then
+			if ui.homeRefresh then ui.homeRefresh() end
+			return
+		end
+	end
 	-- freshness: DB age (loaded data file) and book age (live scan)
 	-- are different things — label both, warn when each is stale
 	local age = GM.DataAge()
@@ -849,7 +939,13 @@ function PQ.Refresh()
 			row.num:SetText(GM.CC("textDim") .. n .. "|r")
 			local verb = step.kind == "post" and "POST"
 				or step.kind == "cancel" and "CANCEL"
-				or step.kind == "note" and "CRAFT" or "BUY"
+				or step.kind == "note" and "CRAFT"
+				or step.kind == "move" and "MOVE"
+				or step.kind == "mail" and "SEND"
+				or step.kind == "mailcollect" and "COLLECT"
+				or step.kind == "destroy" and "VENDOR"
+				or step.kind == "vendsell" and "SELL"
+				or step.kind == "vendbuy" and "BUY" or "BUY"
 			if active then
 				row.act:SetText(GM.CC("accent") .. verb .. " ▶|r")
 			else
@@ -863,7 +959,8 @@ function PQ.Refresh()
 			else
 				row.qty:SetText(step.qty .. (step.kind == "post" and " (relist)" or ""))
 			end
-			row.price:SetText(GM.Money(step.unit) .. (step.kind == "post" and "" or " /ea"))
+			row.price:SetText(step.desc
+				or (GM.Money(step.unit) .. (step.kind == "post" and "" or " /ea")))
 		else
 			row:Hide()
 		end
@@ -886,6 +983,16 @@ function PQ.Refresh()
 			ui.summary:SetText(format("CRAFT QUEUE · %d step%s — buy reagents, craft is manual",
 				#PQ.plan.steps, #PQ.plan.steps == 1 and "" or "s"))
 			ui.summary2:SetText("")
+		elseif PQ.plan.mode == "warehousing" or PQ.plan.mode == "mailing"
+			or PQ.plan.mode == "destroying" or PQ.plan.mode == "vendoring" then
+			ui.sumEdge:SetColorTexture(GM.RGB("accent"))
+			ui.summary:SetText(format("%s · %d step%s",
+				strupper(PQ.plan.mode), #PQ.plan.steps,
+				#PQ.plan.steps == 1 and "" or "s"))
+			ui.summary2:SetText(PQ.plan.mode == "warehousing"
+				and "bank must stay open"
+				or PQ.plan.mode == "mailing" and "mailbox must stay open"
+				or "merchant must stay open")
 		else
 		local verdict, note = GM.Solver.Verdict(PQ.plan, GM.db)
 		local own = (PQ.plan.owned or 0) > 0 and ("own " .. PQ.plan.owned) or nil
@@ -901,7 +1008,10 @@ function PQ.Refresh()
 			GM.Money(PQ.plan.spend), dep, GM.Money(PQ.plan.ev), note))
 		end
 		ui.exec:Show()
-		if GM.AH.pendingConfirm then
+		if PQ.budgetWarn then
+			ui.exec.text:SetText("OVER BUDGET −" ..
+				GM.Money(PQ.budgetWarn) .. " · CONFIRM")
+		elseif GM.AH.pendingConfirm then
 			ui.exec.text:SetText("CONFIRM PURCHASE")
 		else
 			local kind = curStep and curStep.kind
@@ -909,11 +1019,21 @@ function PQ.Refresh()
 				or kind == "cancel" and "CANCEL NEXT"
 				or kind == "post" and "POST NEXT"
 				or kind == "note" and "CRAFT DONE"
+				or kind == "move" and "MOVE NEXT"
+				or kind == "mail" and "SEND NEXT"
+				or kind == "mailcollect" and "COLLECT NEXT"
+				or kind == "destroy" and "VENDOR NEXT"
+				or kind == "vendsell" and "SELL NEXT"
+				or kind == "vendbuy" and "BUY NEXT"
 				or kind == "buy" and "BUY NEXT" or "EXECUTE NEXT STEP"
 			ui.exec.text:SetText(verb)
 		end
+		local moveKind = curStep and (curStep.kind == "note"
+			or curStep.kind == "move" or curStep.kind == "mail"
+			or curStep.kind == "mailcollect" or curStep.kind == "destroy"
+			or curStep.kind == "vendbuy" or curStep.kind == "vendsell")
 		local canExec = GM.AH.pendingConfirm ~= nil
-			or (curStep and curStep.kind == "note")
+			or moveKind
 			or (PQ.stepIndex <= #PQ.plan.steps and GM.AH.open)
 		ui.exec:SetEnabled(canExec)
 		-- honest disabled state: muted fill + label; blocker on line 1

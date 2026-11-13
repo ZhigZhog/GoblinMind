@@ -140,6 +140,11 @@ local function Build()
 	ui.snipeBtn:SetPoint("LEFT", ui.shopBtn, "RIGHT", 6, 0)
 	ui.craftBtn = TitleBtn("CRAFT", 52, function() S.SetMode("craft") end)
 	ui.craftBtn:SetPoint("LEFT", ui.snipeBtn, "RIGHT", 6, 0)
+	-- module tabs ride AFTER the mode buttons — the title's RIGHT edge
+	-- is where the mode strip starts, not free space
+	if GM.Dashboard and GM.Dashboard.AddTabs then
+		GM.Dashboard.AddTabs(f, ui.craftBtn, "market")
+	end
 	ui.action = TitleBtn("SCAN", 80, function() S.Action() end)
 	ui.action:SetPoint("TOPRIGHT", close, "TOPLEFT", -8, 1)
 

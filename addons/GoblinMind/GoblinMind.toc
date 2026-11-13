@@ -17,11 +17,17 @@ Solver.lua
 Crafting.lua
 AH.lua
 Auctioning.lua
+Banking.lua
+Destroying.lua
+Vendoring.lua
 Sniper.lua
+Budgets.lua
 Shopping.lua
 Chrome.lua
 PlanQueue.lua
 GroupsUI.lua
+Dashboard.lua
+Overview.lua
 ItemInput.lua
 Tooltip.lua
 Minimap.lua

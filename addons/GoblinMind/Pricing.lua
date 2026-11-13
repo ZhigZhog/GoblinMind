@@ -78,7 +78,19 @@ local SRC = {
 			or nil
 	end,
 	disenchant          = function() return nil end,
-	destroy             = function() return nil end,
+	-- destroy = TSM's disenchant/mill/prospect expected value while TSM
+	-- is installed; vendorsell is the honest floor either way
+	destroy             = function(id)
+		local best = GetInfo and select(11, GetInfo(id)) or nil
+		if TSMAPI_FOUR and TSMAPI_FOUR.CustomPrice then
+			local ok, v = pcall(TSMAPI_FOUR.CustomPrice.GetValue,
+				"destroy", "i:" .. id)
+			if ok and type(v) == "number" and v > 0 and (not best or v > best) then
+				best = v
+			end
+		end
+		return best
+	end,
 	gather              = function() return nil end,
 }
 

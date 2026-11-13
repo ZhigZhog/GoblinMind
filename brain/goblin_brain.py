@@ -8,6 +8,7 @@ GoblinMind_Data addon file.
 Usage:
     goblin_brain.py dump <AppData.lua>            tag/scope inventory + decode sanity
     goblin_brain.py emit <AppData.lua> <Data.lua> write GoblinMindDB (atomic)
+    goblin_brain.py watch <AppData.lua> <out>...  emit whenever AppData updates
 
 Format notes (verified against the live file):
   each line:  select(2, ...).LoadData("TAG","Scope",[[return {...}]])
@@ -292,18 +293,51 @@ def cmd_emit(path, out_path):
     print(f'emitted {len(items)} items -> {out_path} ({len(text)//1024} KB)')
 
 
+def cmd_watch(appdata, outs, interval=5, settle=20):
+    """Poll AppData mtime; emit after the file goes quiet. The TSM
+    desktop app rewrites chunks non-atomically, so a fresh mtime is
+    only trusted once it stops moving for `settle` seconds."""
+    last_mtime = 0
+    quiet_since = None
+    print(f'watching {appdata}')
+    while True:
+        try:
+            mtime = os.stat(appdata).st_mtime
+        except OSError:
+            mtime = 0
+        now = time.time()
+        if mtime != last_mtime:
+            last_mtime = mtime
+            quiet_since = now
+        elif quiet_since and now - quiet_since >= settle:
+            quiet_since = None
+            print(f'{time.strftime("%H:%M:%S")}: AppData settled — emitting')
+            for out in outs:
+                try:
+                    cmd_emit(appdata, out)
+                except Exception as e:  # never die on a mid-write file
+                    print(f'  emit {out} failed: {e}')
+        time.sleep(interval)
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('cmd', choices=['dump', 'emit'])
+    ap.add_argument('cmd', choices=['dump', 'emit', 'watch'])
     ap.add_argument('appdata')
-    ap.add_argument('out', nargs='?')
+    ap.add_argument('out', nargs='*')
+    ap.add_argument('--interval', type=float, default=5)
+    ap.add_argument('--settle', type=float, default=20)
     a = ap.parse_args()
     if a.cmd == 'dump':
         cmd_dump(a.appdata)
+    elif a.cmd == 'watch':
+        if not a.out:
+            ap.error('watch needs at least one output path')
+        cmd_watch(a.appdata, a.out, a.interval, a.settle)
     else:
         if not a.out:
             ap.error('emit needs an output path')
-        cmd_emit(a.appdata, a.out)
+        cmd_emit(a.appdata, a.out[0])
 
 
 if __name__ == '__main__':

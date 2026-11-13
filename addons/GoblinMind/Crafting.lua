@@ -133,7 +133,7 @@ function C.Queue(recipeID, qty)
 	for _, m in ipairs(C.Missing(recipeID, qty)) do
 		local unit = C.MatPrice(m.id)
 		tinsert(steps, { kind = "buy", itemID = m.id, qty = m.qty,
-			unit = unit or 0, commodity = true })
+			unit = unit or 0, commodity = true, btag = "craft" })
 	end
 	tinsert(steps, { kind = "note", itemID = r.itemID, qty = qty,
 		text = format("craft %d× %s (%s)", qty,

@@ -51,7 +51,14 @@ function GM.MinimapInit()
 	b.hl:SetAllPoints()
 
 	b:SetScript("OnClick", function(_, btn)
-		if btn == "LeftButton" then GM.PlanQueue.Toggle() end
+		if btn == "LeftButton" then
+			if GM.PlanQueue.IsShown and GM.PlanQueue.IsShown() then
+				GM.PlanQueue.Hide()
+			else
+				GM.PlanQueue.SetHome(true)
+				GM.PlanQueue.Show()
+			end
+		end
 	end)
 	b:SetScript("OnDragStart", function(self)
 		self:SetScript("OnUpdate", UpdatePositionFromCursor)
@@ -62,7 +69,7 @@ function GM.MinimapInit()
 	b:SetScript("OnEnter", function(self)
 		GameTooltip:SetOwner(self, "ANCHOR_LEFT")
 		GameTooltip:AddLine(GM.CC("accent") .. "GoblinMind|r")
-		GameTooltip:AddLine("Left-click: plan window", 1, 1, 1)
+		GameTooltip:AddLine("Left-click: GoblinMind home", 1, 1, 1)
 		GameTooltip:AddLine("Drag: move around the minimap", 0.7, 0.7, 0.7)
 		GameTooltip:AddLine("/goblin minimap — show/hide this button", 0.7, 0.7, 0.7)
 		GameTooltip:Show()

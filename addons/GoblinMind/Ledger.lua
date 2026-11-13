@@ -65,6 +65,10 @@ function GM.Ledger.Add(kind, itemID, qty, unit, extra)
 	elseif kind == "mail" then
 		s.mailInQ = (s.mailInQ or 0) + qty
 	end
+	-- sell proceeds return to the matching budget envelope
+	if kind == "sell" and GM.Budget and GM.Budget.CreditSale then
+		GM.Budget.CreditSale(itemID, qty * (unit or 0))
+	end
 end
 
 -- per-item aggregate snapshot for the tooltip/accounting surface;

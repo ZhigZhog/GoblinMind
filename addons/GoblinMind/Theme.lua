@@ -40,7 +40,7 @@ end
 
 -- "|cffRRGGBB" embed for font-string text
 function GM.CC(key)
-	return "|cff" .. GM.C[key]
+	return "|cff" .. (GM.C[key] or GM.C.text)
 end
 
 -- TSM-style money: gold accented, silver/copper dim. "12g 34s 56c"

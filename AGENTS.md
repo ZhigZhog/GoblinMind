@@ -16,9 +16,14 @@ self-owned Blizzard-API pipeline later.
 - Live data source: `...\AddOns\TradeSkillMaster_AppHelper\AppData.lua`
   — line-per-chunk `LoadData(tag, scope, [[return {...}]])` format,
   base-36 encoded values, **non-atomic writes** (debounce before parse).
-- Layout: `brain\` (Python service, not built yet) · `addons\GoblinMind\`
+- Brain sync: `python brain\goblin_brain.py emit <AppData.lua> <Data.lua>`
+  is manual; `scripts\brain-watch.bat` runs `watch` mode — polls mtime,
+  waits 20s for the non-atomic write to settle, then emits to BOTH the
+  repo copy and the deployed addon so `/reload` picks it up. Leave it
+  running while playing.
+- Layout: `brain\` (Python emit/watch CLI) · `addons\GoblinMind\`
   (shim addon, scaffolded — TSM-styled UI) · `addons\GoblinMind_Data\`
-  (generated-data addon, stub until the emitter exists) · `scripts\`
+  (generated-data addon — `GoblinMindDB` from `goblin_brain.py emit`) · `scripts\`
   (`sync-addons.bat` robocopy-deploys into the AddOns dir).
 - UI rule: match TSM's default theme — palette + fonts in
   `addons\GoblinMind\Theme.lua`, fonts referenced from TSM's Media dir.
@@ -30,7 +35,11 @@ self-owned Blizzard-API pipeline later.
     (`scripts\sync-addons.bat`), never mklink.
   - `/gm` appears shadowed/dead — primary commands are `/goblinmind`
     and `/goblin`.
-  - Guard modern APIs: `TooltipDataProcessor` (HookScript fallback in
+  - Guard modern APIs: bare `GetItemInfo` is NOT a global — use
+    `C_Item.GetItemInfo or GetItemInfo`; `C_Item.GetItemLink` takes an
+    ItemLocation, not an ID (get links via `GetItemInfo` return 2);
+    `C_Item.GetItemFamily` needs a LINK for items (raw IDs return 0).
+    `TooltipDataProcessor` (HookScript fallback in
     Tooltip.lua), `C_Container` (legacy `GetContainerItemInfo` fallback
     in AH.lua), `C_Timer` (`GM.After` shim). `pcall` every
     `RegisterEvent` — an unknown event name kills the rest of a file's
@@ -58,7 +67,15 @@ self-owned Blizzard-API pipeline later.
   - **The AH book persists** in `GoblinMindSettings.book` (aggregate
     mb/mbx/sup/n only; `math.huge` round-trips through -1). Rows stay
     session-only. `AH.RestoreBook` runs on `PLAYER_LOGIN`.
-  - **Frame strata conventions** (audited across installed addons 2026-11-12):
+  - **Container drops need a family check**: `PickupContainerItem` into a
+  specialized bag (reagent bag, profession bags) fails with "That item
+  doesn't go in that container". Check `ItemWillGoInBag`-style:
+  `C_Item.GetItemFamily(itemID) & C_Item.GetItemFamily(equippedBagLink) > 0`,
+  or `bagFamily == 0` (generic). TSM: `BagTracking.ItemWillGoInBag`.
+  Bag IDs on Forever: bags 0..NUM_BAG_SLOTS+NumReagentBagSlots, bank
+  bags follow for NumCharacterBankSlots, reagent bank = -3 (all via
+  `Constants.InventoryConstants`, same as TSM's Container.lua).
+- **Frame strata conventions** (audited across installed addons 2026-11-12):
     **windows → `HIGH` + `SetToplevel(true)`** — TSM's ApplicationFrame and
     EllesmereUI's skinned Blizzard panels both use `HIGH`; toplevel gives
     click-to-raise so windows stack with peers instead of pinning above or
