@@ -102,7 +102,10 @@ local function DoBuy(step)
 end
 
 local function DoSell(step)
-	if not MerchantOpen() then return nil, "merchant closed" end
+	if not MerchantOpen() then
+		GM.Print(GM.CC("warn") .. "needs a merchant open — sell this at a vendor|r")
+		return nil, "merchant closed"
+	end
 	local s = GM.Banking.FindStack(step.itemID)
 	if not s then return true end
 	C_Container.UseContainerItem(s.bag, s.slot)

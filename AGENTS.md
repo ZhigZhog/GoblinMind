@@ -83,6 +83,9 @@ self-owned Blizzard-API pipeline later.
     - `GetCommoditySearchResultInfo` can return **polluted rows for
       non-commodity itemIDs** (cloth-shaped 2c lots for a bag). Only
       consume commodity results when the item search returns nothing.
+    - `GetMouseFocus` AND `GetMouseFoci` are both gone — drop
+      resolution must hit-test panes with `IsMouseOver()` (geometric
+      bounds check, always present) instead of the focus API.
     - `C_MerchantFrame.GetItemInfo(idx)` is namespaced and returns a
       table (`price`, `stackCount`, `numAvailable`, `hasExtendedCost`) —
       the global `GetMerchantItemInfo` doesn't exist. `GetItemInfo`
@@ -103,6 +106,21 @@ self-owned Blizzard-API pipeline later.
     options dialogs, overlays) pins above everything. `TOOLTIP` = TSM popups.
     Minimap buttons → `MEDIUM` + `SetFixedFrameStrata/SetFixedFrameLevel(true)`
     at level 8 (LibDBIcon, guarded). Child ordering = `SetFrameLevel(parent + N)`.
+- **Group import/export** (`Groups.lua` + GroupsUI IMP/EXP buttons):
+  - TSM group paths are **backtick-separated** (`Tailoring`Bags`);
+    ```` is an escaped literal comma. Ours use `/` — convert at the
+    boundary (`TsmToGmPath`/`GmToTsmPath`).
+  - TSM v4 export wire format = LibSerialize (stable) →
+    `C_EncodingUtil.CompressString` → LibDeflate `EncodeForPrint`.
+    Decode via `LibStub("LibDeflate"/"LibSerialize")` — TSM embeds both
+    (vendor them at de-TSM). `Deserialize` returns `(success, values…)` —
+    index past the flag when pcall-wrapping.
+  - Export emits the TSM-legacy comma format (`group:Path`Sub,i:id,…`)
+    which TSM itself still imports — round-trips both directions.
+  - Drag-drop: custom proxy pattern (OnMouseDown arms, >6px move arms
+    the drag, OnUpdate resolves target via GetMouseFocus). OnClick fires
+    BEFORE the drop-resolving OnUpdate — guard clicks on `ui.drag`, not
+    just a timestamp.
 - Hard rule: in-game actions are click-per-step only — one protected
   `C_AuctionHouse` call per hardware event. ToS boundary is documented
   in the design doc §8.

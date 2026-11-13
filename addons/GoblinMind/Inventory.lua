@@ -69,6 +69,7 @@ function GM.Inventory.RefreshOwned()
 				now[aid] = {
 					itemID = id,
 					qty = info.quantity or 1,
+					-- per-ITEM buyout (Forever convention — not lot total)
 					buyout = info.buyoutAmount or info.bidAmount,
 					tLeft = info.timeLeftSeconds,
 					at = time(),
@@ -93,8 +94,10 @@ function GM.Inventory.RefreshOwned()
 				-- vanished on schedule without a cancel → expiry
 				GM.Ledger.Add("expire", prev.itemID, prev.qty, nil, { auctionID = aid })
 			else
+				-- buyout is per-item on Forever — sale proceeds per
+				-- unit are buyout minus the 5% AH cut
 				local unit = prev.buyout and prev.qty > 0
-					and math.floor(prev.buyout * 0.95 / prev.qty) or nil
+					and math.floor(prev.buyout * 0.95) or nil
 				GM.Ledger.Add("sell", prev.itemID, prev.qty, unit, { auctionID = aid })
 			end
 		end
@@ -129,6 +132,28 @@ function GM.Inventory.Count(itemID)
 		bags = bags, bank = bank, mail = mail, guild = guild,
 		auction = auction, total = bags + bank + mail + guild + auction,
 	}
+end
+
+-- Set of owned itemIDs across every location (ledger inventory page).
+-- Bank slots only enumerate while the bank frame is open — same
+-- constraint BankCount has; the set just lacks bank items otherwise.
+function GM.Inventory.Owned()
+	local set = GM.BagItems and GM.BagItems() or {}
+	for id in pairs(mailCache) do set[id] = true end
+	for id in pairs(guildCache) do set[id] = true end
+	for _, a in pairs(auctionCache) do
+		if a.itemID then set[a.itemID] = true end
+	end
+	if BankFrame and BankFrame:IsShown()
+		and C_Container and C_Container.GetContainerItemInfo then
+		for _, bag in ipairs({ -1, 6, 7, 8, 9, 10, 11 }) do
+			for slot = 1, (C_Container.GetContainerNumSlots(bag) or 0) do
+				local info = C_Container.GetContainerItemInfo(bag, slot)
+				if info and info.itemID then set[info.itemID] = true end
+			end
+		end
+	end
+	return set
 end
 
 -- ============ events ============

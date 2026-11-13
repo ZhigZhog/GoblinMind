@@ -151,6 +151,27 @@ function GM.Ledger.Gold(delta, source)
 	if #g > GOLD_CAP then table.remove(g, 1) end
 end
 
+-- char-switcher surface for the ledger window: sorted char keys and
+-- per-char transaction access (byChar is file-local)
+function GM.Ledger.Chars()
+	local out = {}
+	for k in pairs(GoblinMindLedger and GoblinMindLedger.byChar or {}) do
+		out[#out + 1] = k
+	end
+	sort(out)
+	return out
+end
+
+function GM.Ledger.TxFor(charKey)
+	local c = GoblinMindLedger and GoblinMindLedger.byChar
+		and GoblinMindLedger.byChar[charKey]
+	return c and c.transactions or {}
+end
+
+function GM.Ledger.CharKey()
+	return CharKey()
+end
+
 function GM.Ledger.Recent(n)
 	local tx = GM.Ledger.db and GM.Ledger.db.transactions or {}
 	n = math.min(n or 10, #tx)

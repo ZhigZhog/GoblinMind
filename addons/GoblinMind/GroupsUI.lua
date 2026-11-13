@@ -15,43 +15,9 @@ local ui
 local EXPR_SOURCES = { "dbmarket", "vendorsell", "crafting", "matprice",
 	"dbminbuyout", "dbhistorical", "dbregionmarketavg" }
 
--- { label, opType, field, kind, widget, extra }
--- widget: bool | seg{opts} | stepper{min} | num{min,max,minWarn} | expr | recip
-local OP_FIELDS = {
-	{ "Min price",       "auctioning", "min",            "expr", "expr" },
-	{ "Normal price",    "auctioning", "normal",         "expr", "expr" },
-	{ "Max price",       "auctioning", "max",            "expr", "expr" },
-	{ "Undercut",        "auctioning", "undercut",       "expr", "expr" },
-	{ "Post cap",        "auctioning", "postCap",        "num",  "stepper", { min = 0, tip = "0 = no cap" } },
-	{ "Stack size",      "auctioning", "stackSize",      "num",  "stepper", { min = 0, tip = "0 = available stack" } },
-	{ "Duration",        "auctioning", "duration",       "num",  "seg", { opts = { { "12h", 1 }, { "24h", 2 }, { "48h", 3 } } } },
-	{ "Bid %",           "auctioning", "bidPercent",     "num",  "num", { min = 0, max = 100 } },
-	{ "Cancel under",    "auctioning", "cancelUndercut", "bool", "bool" },
-	{ "Buy margin %",    "shopping",   "belowPct",       "num",  "num", { min = 0, max = 100 } },
-	{ "Buy max",         "shopping",   "maxPrice",       "expr", "expr" },
-	{ "Snipe max",       "sniper",     "belowPrice",     "expr", "expr" },
-	{ "Snipe off %",     "sniper",     "belowPct",       "num",  "num", { min = 0, max = 100,
-		tip = "fallback discount if price expr doesn't resolve" } },
-	{ "Refresh sec",     "sniper",     "refreshTime",    "num",  "num", { min = 120,
-		tip = "runtime minimum 120s; scheduler reads Base Group" } },
-	{ "Snipe sound",     "sniper",     "sound",          "bool", "bool" },
-	{ "Craft cost",      "crafting",   "craftCost",      "expr", "expr" },
-	{ "Min profit",      "crafting",   "minProfit",      "expr", "expr" },
-	{ "Restock",         "crafting",   "restock",        "bool", "bool" },
-	{ "Restock qty",     "crafting",   "restockQty",     "num",  "stepper", { min = 0 } },
-	{ "Mail to",         "mailing",    "sendTo",         "text", "recip" },
-	{ "Mail keep",       "mailing",    "keepQty",        "num",  "stepper", { min = 0 } },
-	{ "Mail max",        "mailing",    "maxQty",         "num",  "stepper", { min = 0, tip = "0 = unlimited" } },
-	{ "Mail all",        "mailing",    "sendAll",        "bool", "bool" },
-	{ "Move to",         "warehousing","moveTo",         "text", "seg", { opts = { { "Bags", "bags" }, { "Bank", "bank" } } } },
-	{ "Bank keep",       "warehousing","keepQty",        "num",  "stepper", { min = 0 } },
-	{ "Restore empty",   "warehousing","restoreEmpty",   "bool", "bool" },
-	{ "Vendor buy",      "vendoring",  "vendorBuyBelow", "expr", "expr" },
-	{ "Auto buy",        "vendoring",  "autoBuy",        "bool", "bool", { tip = "config flag — execution stays one click per action" } },
-	{ "Auto sell",       "vendoring",  "autoSell",       "bool", "bool", { tip = "config flag — execution stays one click per action" } },
-	{ "Destroy min",     "destroying", "threshold",      "expr", "expr" },
-	{ "Destroy max",     "destroying", "belowPrice",     "expr", "expr" },
-}
+-- shared op-field definitions live on GM.Groups so OpsUI can build
+-- the same controls for named operations
+local OP_FIELDS = GM.Groups.OP_FIELDS
 
 -- ============ raw vs merged state ============
 
@@ -65,6 +31,8 @@ local function ancestors(path)
 		seg = seg and seg .. "/" .. part or part
 		out[#out + 1] = seg
 	end
+	-- Base Group is the root — every group inherits its ops
+	if out[1] ~= "Base Group" then tinsert(out, 1, "Base Group") end
 	return out
 end
 
@@ -74,14 +42,22 @@ local function RawLocal(path, opType, field)
 	return g.ops[opType][field]
 end
 
--- effective value + where it comes from: "local", an ancestor path, or
--- "Defaults". excludeLeaf=true answers "what would reset restore".
+-- effective value + where it comes from: "local", "op:<name>", an
+-- ancestor path, or "Defaults". excludeLeaf=true answers "what would
+-- reset restore". Same precedence as Groups.Merged: local overrides
+-- beat the assigned named op at each cascade level.
 local function ResolveField(path, opType, field, excludeLeaf)
 	local chain = ancestors(path)
 	for i = excludeLeaf and (#chain - 1) or #chain, 1, -1 do
 		local v = RawLocal(chain[i], opType, field)
 		if v ~= nil then
 			return v, (chain[i] == path and not excludeLeaf) and "local" or chain[i]
+		end
+		local name = GM.Groups.OpAssigned(chain[i], opType)
+		local op = name and GM.Groups.OpFields(opType, name)
+		if op and op[field] ~= nil then
+			return op[field], "op:" .. name
+				.. (chain[i] ~= path and (" (" .. chain[i] .. ")") or "")
 		end
 	end
 	local d = GM.Groups.OP_DEFAULTS[opType]
@@ -199,8 +175,8 @@ local function CommitText(eb)
 		eb.dirty = nil
 		SetMark(eb)
 		eb:ClearFocus()
-		Footer(f[1] .. " → inherit")
 		GU.Refresh()
+		Footer(f[1] .. " → inherit")
 		return
 	end
 	if f[4] == "num" then
@@ -227,9 +203,6 @@ local function CommitText(eb)
 			return
 		end
 		CommitRaw(editPath(), f[2], f[3], v)
-		if not val then
-			Footer(f[1] .. " saved; no resolved price for this item")
-		end
 	else -- text
 		CommitRaw(editPath(), f[2], f[3], v)
 	end
@@ -237,6 +210,9 @@ local function CommitText(eb)
 	SetMark(eb, "ok")
 	eb:ClearFocus()
 	GU.Refresh()
+	if f[4] == "expr" and v ~= "" and not val then
+		Footer(f[1] .. " saved; no resolved price for this item")
+	end
 end
 
 -- discrete commit (toggle/segment/stepper): discard other drafts first
@@ -364,6 +340,7 @@ local function ColPanel(parent, x, w, title)
 	local t = GM.MakeFontString(p, GM.FONT_MED, 9, "secondary")
 	t:SetPoint("TOPLEFT", 8, -6)
 	t:SetText(title)
+	if p.SetClipsChildren then p:SetClipsChildren(true) end
 	return p, t
 end
 
@@ -392,6 +369,24 @@ local function ItemRow(parent, w)
 	row.x.text = GM.MakeFontString(row.x, GM.FONT_BOLD, 9, "textDim")
 	row.x.text:SetPoint("CENTER")
 	row.x.text:SetText("x")
+	row:SetScript("OnEnter", function(self)
+		if not self.id then return end
+		GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+		if GameTooltip.SetItemByID then
+			GameTooltip:SetItemByID(self.id)
+		else
+			GameTooltip:SetText(self.name:GetText() or "")
+		end
+		GameTooltip:Show()
+	end)
+	row:SetScript("OnLeave", function() GameTooltip:Hide() end)
+	row:SetScript("OnMouseDown", function(self, btn)
+		if btn == "LeftButton" and self.id then
+			local x, y = GetCursorPosition()
+			ui.pending = { kind = "item", id = self.id,
+				icon = self.icon:GetTexture(), x = x, y = y }
+		end
+	end)
 	return row
 end
 
@@ -408,18 +403,20 @@ local function ListPanel(parent, x, w, title, onWheel)
 	return p, t, rows
 end
 
+local RowName -- defined below with the name-cache helpers
+
 local function FillItemRow(row, id, right, sub)
 	row.id = id
 	row.icon:SetTexture(GM.ItemIcon and GM.ItemIcon(id)
 		or "Interface\\Icons\\INV_Misc_QuestionMark")
-	row.name:SetText(GM.ItemName(id) or ("item " .. id))
+	row.name:SetText(RowName(id))
 	row.sub:SetText(sub or "")
 	row.right:SetText(right or "")
 end
 
 local function BuildUI()
 	if ui then return end
-	ui = { catOff = 0, memOff = 0, treeOff = 0, page = "items" }
+	ui = { catOff = 0, memOff = 0, treeOff = 0, page = "items", nameCache = {} }
 	local f = CreateFrame("Frame", "GoblinMindGroupsUI", UIParent)
 	f:SetSize(WIN_W, WIN_H)
 	f:SetPoint("CENTER", -40, 20)
@@ -440,6 +437,7 @@ local function BuildUI()
 	GM.Panel(f, "contLow", "outlineVar")
 	f:SetScript("OnHide", function()
 		DiscardDrafts()
+		ui.pending, ui.drag = nil, nil
 		if ui.srcMenu then ui.srcMenu:Hide() ui.srcCatcher:Hide() end
 	end)
 	ui.frame = f
@@ -482,6 +480,7 @@ local function BuildUI()
 
 	-- col A: group tree + management
 	local treeP, treeT = ColPanel(items, 0, 186, "GROUPS")
+	ui.treePanel = treeP
 	treeP:EnableMouseWheel(true)
 	treeP:SetScript("OnMouseWheel", function(_, d)
 		ui.treeOff = math.max(0, ui.treeOff - d * 2)
@@ -492,15 +491,43 @@ local function BuildUI()
 		local row = CreateFrame("Button", nil, treeP)
 		row:SetSize(172, 18)
 		row:SetPoint("TOPLEFT", 6, -22 - (i - 1) * 20)
+		row.gmTreeRow = true
 		row.text = GM.MakeFontString(row, GM.FONT, 10, "text")
 		row.text:SetPoint("LEFT", 2, 0)
 		row.text:SetWidth(168)
 		row.text:SetJustifyH("LEFT")
 		row:SetScript("OnClick", function(self)
+			-- a drop resolving on this row shouldn't also select it —
+			-- ui.drag is still set when the release's OnClick fires
+			if ui.drag
+				or (ui.lastDrop and GetTime() - ui.lastDrop < 0.3) then
+				return
+			end
 			DiscardDrafts()
 			ui.editPath = self.path
 			GU.Refresh()
 		end)
+		row:SetScript("OnMouseDown", function(self, btn)
+			if btn == "LeftButton" and self.path then
+				if self.path == "Base Group" then
+					Footer("Base Group can't be moved", true)
+					return
+				end
+				local x, y = GetCursorPosition()
+				ui.pending = { kind = "group", path = self.path,
+					icon = "Interface\\Icons\\INV_Misc_Gift_02",
+					x = x, y = y }
+			end
+		end)
+		row:SetScript("OnEnter", function(self)
+			if not self.path then return end
+			GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+			GameTooltip:SetText(self.path)
+			GameTooltip:AddLine("drag to nest · drop items to assign",
+				0.7, 0.7, 0.65, true)
+			GameTooltip:Show()
+		end)
+		row:SetScript("OnLeave", function() GameTooltip:Hide() end)
 		-- drop an item on a group name → assign it there
 		row:SetScript("OnReceiveDrag", function(self)
 			local ty, id = GetCursorInfo()
@@ -602,6 +629,211 @@ local function BuildUI()
 	ui.catHint = GM.MakeFontString(catP, GM.FONT, 8, "secondary")
 	ui.catHint:SetPoint("BOTTOMLEFT", 8, 4)
 	ui.catHint:SetText("click adds to selected group")
+	-- OWNED toggle: bags-only view vs the full DB catalogue
+	local own = CreateFrame("Button", nil, catP)
+	own:SetSize(54, 14)
+	own:SetPoint("BOTTOMRIGHT", -6, 4)
+	own.bg = own:CreateTexture(nil, "BACKGROUND")
+	own.bg:SetAllPoints()
+	own.text = GM.MakeFontString(own, GM.FONT_BOLD, 9, "textDim")
+	own.text:SetPoint("CENTER")
+	own.text:SetText("OWNED")
+	ui.ownBtn = own
+	local function PaintOwn()
+		own.bg:SetColorTexture(GM.RGB(ui.ownedOnly and "accentDark" or "contHigh"))
+		own.text:SetTextColor(GM.RGB(ui.ownedOnly and "accent" or "textDim"))
+	end
+	PaintOwn()
+	own:SetScript("OnClick", function()
+		ui.ownedOnly = not ui.ownedOnly
+		ui.catDirty = true
+		ui.catOff = 0
+		PaintOwn()
+		GU.RefreshCatalogue()
+	end)
+
+	-- ============ drag & drop ============
+	-- Pending → armed after a few px of movement so clicks still work;
+	-- release resolves the drop target by hit-testing the pane under the
+	-- cursor. Items: drop on tree row/member pane = assign, catalogue =
+	-- unassign. Groups: drop on tree row = re-nest, catalogue = flatten.
+	local proxy = CreateFrame("Frame", nil, f)
+	proxy:SetSize(18, 18)
+	proxy:SetFrameStrata("TOOLTIP")
+	proxy:EnableMouse(false)
+	proxy.tex = proxy:CreateTexture(nil, "ARTWORK")
+	proxy.tex:SetAllPoints()
+	proxy:Hide()
+
+	-- Hit-test the panes geometrically — the client's focus API is gone
+	-- (neither GetMouseFocus nor GetMouseFoci exists), but IsMouseOver
+	-- is a bounds check and works regardless. Tree rows first: they sit
+	-- inside the tree panel, so test the more specific target first.
+	-- "treeroot" = the tree panel's empty space; groups dropped there
+	-- (or anywhere off a specific row) flatten to top level.
+	local function DropTarget()
+		for _, row in ipairs(ui.treeRows) do
+			if row:IsShown() and row.path and row:IsMouseOver() then
+				return "tree", row
+			end
+		end
+		if ui.treePanel:IsMouseOver() then return "treeroot" end
+		if ui.memPanel:IsMouseOver() then return "members" end
+		if ui.catPanel:IsMouseOver() then return "catalogue" end
+	end
+
+	local function ResolveDrop(d)
+		local kind, t = DropTarget()
+		if not kind then
+			Footer("drop missed — no pane under cursor", true)
+			return
+		end
+		local msg, isErr
+		if d.kind == "item" then
+			if kind == "tree" then
+				GM.Groups.Assign(d.id, GM.Groups.Ensure(t.path))
+				msg = RowName(d.id) .. " → " .. t.path
+			elseif kind == "members" then
+				GM.Groups.Assign(d.id, GM.Groups.Ensure(editPath()))
+				msg = RowName(d.id) .. " → " .. editPath()
+			elseif kind == "catalogue" or kind == "treeroot" then
+				GM.Groups.Unassign(d.id)
+				msg = RowName(d.id) .. " ungrouped"
+			end
+			ui.catDirty = true
+		elseif d.kind == "group" then
+			if kind == "tree" then
+				local new, err = GM.Groups.Nest(d.path, t.path)
+				msg, isErr = new and (d.path .. " → " .. new) or err, not new
+				if new then ui.editPath = new end
+			elseif kind ~= "tree" then
+				-- anywhere that isn't a specific group row = move to
+				-- top level (TSM's "drop on empty space un-nests")
+				local new, err = GM.Groups.Nest(d.path, nil)
+				msg, isErr = new and (d.path .. " → " .. new) or err, not new
+				if new then ui.editPath = new end
+			end
+		end
+		-- Refresh resets the footer to the default — message must land last
+		GU.Refresh()
+		if msg then Footer(msg, isErr) end
+	end
+
+	ui.dragWatch = CreateFrame("Frame", nil, f)
+	ui.dragWatch:SetScript("OnUpdate", function()
+		local d = ui.pending
+		if d then
+			local x, y = GetCursorPosition()
+			if math.abs(x - d.x) > 6 or math.abs(y - d.y) > 6 then
+				ui.drag = d
+				ui.pending = nil
+				proxy.tex:SetTexture(d.icon
+					or "Interface\\Icons\\INV_Misc_QuestionMark")
+				proxy:Show()
+				Footer(d.kind == "group"
+					and ("dragging " .. d.path
+						.. " — drop on a group to nest, catalogue to flatten")
+					or ("dragging " .. RowName(d.id)
+						.. " — drop on a group, member pane, or catalogue"))
+			elseif not IsMouseButtonDown(1) then
+				ui.pending = nil
+			end
+			return
+		end
+		d = ui.drag
+		if not d then return end
+		if IsMouseButtonDown(1) then
+			local x, y = GetCursorPosition()
+			local s = UIParent:GetEffectiveScale()
+			proxy:ClearAllPoints()
+			proxy:SetPoint("CENTER", UIParent, "BOTTOMLEFT",
+				x / s, y / s)
+			return
+		end
+		proxy:Hide()
+		ui.drag = nil
+		ui.lastDrop = GetTime()
+		ResolveDrop(d)
+	end)
+
+	-- ============ import / export ============
+	local function ShowXfer(mode)
+		local d = ui.xfer
+		if not d then
+			d = CreateFrame("Frame", "GoblinMindXfer", UIParent)
+			d:SetSize(560, 420)
+			d:SetPoint("CENTER", 0, 40)
+			d:SetFrameStrata("FULLSCREEN_DIALOG")
+			d:SetToplevel(true)
+			d:EnableMouse(true)
+			GM.Panel(d, "contLow", "outline")
+			d.title = GM.MakeFontString(d, GM.FONT_BOLD, 12, "accent")
+			d.title:SetPoint("TOPLEFT", 12, -10)
+			local close = CreateFrame("Button", nil, d)
+			close:SetSize(16, 16)
+			close:SetPoint("TOPRIGHT", -6, -6)
+			close.text = GM.MakeFontString(close, GM.FONT_BOLD, 12, "textDim")
+			close.text:SetPoint("CENTER")
+			close.text:SetText("x")
+			close:SetScript("OnClick", function() d:Hide() end)
+			local scroll = CreateFrame("ScrollFrame", nil, d)
+			scroll:SetPoint("TOPLEFT", 10, -30)
+			scroll:SetPoint("BOTTOMRIGHT", -10, 40)
+			local eb = CreateFrame("EditBox", nil, scroll)
+			eb:SetMultiLine(true)
+			eb:SetAutoFocus(false)
+			eb:SetFont(GM.FONT, 10, "")
+			eb:SetTextColor(GM.RGB("text"))
+			eb:SetTextInsets(4, 4, 4, 4)
+			eb:SetWidth(524)
+			eb:SetHeight(340)
+			scroll:SetScrollChild(eb)
+			d.eb = eb
+			d.status = GM.MakeFontString(d, GM.FONT, 9, "secondary")
+			d.status:SetPoint("BOTTOMLEFT", 12, 12)
+			d.ok = Btn(d, "IMPORT", 90, 20)
+			d.ok:SetPoint("BOTTOMRIGHT", -10, 8)
+			ui.xfer = d
+		end
+		d.eb:SetText("")
+		d.status:SetText(mode == "import"
+			and "paste a TSM export, group: list, or item ids — then IMPORT"
+			or "Ctrl+A, Ctrl+C — format is TSM-compatible")
+		d.title:SetText(mode == "import" and "IMPORT GROUPS"
+			or "EXPORT GROUPS")
+		d.ok.text:SetText(mode == "import" and "IMPORT" or "CLOSE")
+		d.ok:SetScript("OnClick", function()
+			if mode == "export" then d:Hide() return end
+			local ok, n = GM.Groups.Import(d.eb:GetText())
+			if ok then
+				d.status:SetText("imported " .. n .. " items")
+				d:Hide()
+				ui.catDirty = true
+				GU.Refresh()
+			else
+				d.status:SetText(n or "import failed")
+			end
+		end)
+		if mode == "export" then
+			d.eb:SetText(GM.Groups.ExportString())
+			d.eb:HighlightText()
+		end
+		d:Show()
+		if mode == "export" then d.eb:SetFocus() d.eb:HighlightText() end
+	end
+
+	local impG = Btn(treeP, "IMP", 38, 18)
+	impG:SetPoint("LEFT", delG, "RIGHT", 4, 0)
+	impG:SetScript("OnClick", function() ShowXfer("import") end)
+	Tip(impG, function() return { "Import groups",
+		"TSM exports, group: lists, or bare item ids",
+		"paste → IMPORT" } end)
+	local expG = Btn(treeP, "EXP", 38, 18)
+	expG:SetPoint("LEFT", impG, "RIGHT", 4, 0)
+	expG:SetScript("OnClick", function() ShowXfer("export") end)
+	Tip(expG, function() return { "Export groups",
+		"TSM-compatible format — paste straight into TSM",
+		"Base Group items export ungrouped" } end)
 
 	-- ============ OPS page ============
 	local ops = CreateFrame("Frame", nil, f)
@@ -638,8 +870,8 @@ local function BuildUI()
 		row.io:SetScript("OnClick", function(self)
 			if RawLocal(editPath(), fd[2], fd[3]) == nil then return end
 			groupOps(editPath(), fd[2])[fd[3]] = nil
-			Footer(fd[1] .. " → inherit")
 			GU.Refresh()
+			Footer(fd[1] .. " → inherit")
 		end)
 		Tip(row.io, function()
 			local localV = RawLocal(editPath(), fd[2], fd[3])
@@ -662,12 +894,14 @@ local function BuildUI()
 	ui.footer:SetPoint("BOTTOMLEFT", 10, 8)
 	ui.footer:SetText(FOOTER_DEFAULT)
 
-	-- async names resolve → repaint rows when item data lands
+	-- async names resolve → repaint the visible rows only. Rebuilding
+	-- the list here would re-request every uncached name and re-sort
+	-- 7k rows on every resolve burst (the flicker/lag loop).
 	if GM.OnItemInfoLoaded then
 		GM.OnItemInfoLoaded(function()
-			if ui and ui.frame:IsShown() then
-				ui.catDirty = true
-				GU.Refresh()
+			if ui and ui.frame:IsShown() and ui.page == "items" then
+				GU.RefreshMembers()
+				GU.RefreshCatalogue(true)
 			end
 		end)
 	end
@@ -735,14 +969,32 @@ end
 -- ============ refresh: tree ============
 
 local function TreeList()
-	local out = {}
+	local out, paths = {}, {}
 	for _, g in ipairs(GM.Groups.List()) do
-		local depth = select(2, g.path:gsub("/", "")) + 1
+		paths[g.path] = true
+		-- display depth: Base Group is the root row; every other
+		-- top-level group renders one level in (TSM's tree shape)
+		local depth = g.path == "Base Group" and 1
+			or select(2, g.path:gsub("/", "")) + 2
 		out[#out + 1] = { path = g.path, n = g.n, depth = depth,
 			leaf = g.path:match("[^/]+$") or g.path }
 	end
+	for _, e in ipairs(out) do
+		for p in pairs(paths) do
+			-- Base Group parents everything; others need path-prefix kids
+			if (e.path == "Base Group" and p ~= "Base Group")
+				or p:sub(1, #e.path + 1) == e.path .. "/" then
+				e.kids = true
+				break
+			end
+		end
+	end
 	return out
 end
+
+-- depth ramp: parents bright, deeper levels progressively dimmer —
+-- the indentation + fade is what makes nesting readable at a glance
+local TREE_DEPTH_COLOR = { "text", "text", "textDim", "secondary" }
 
 function GU.RefreshTree()
 	local groups = TreeList()
@@ -753,10 +1005,15 @@ function GU.RefreshTree()
 		if g then
 			row:Show()
 			row.path = g.path
-			row.text:SetText(strrep("  ", g.depth - 1) .. g.leaf
+			local marker = g.depth > 1
+				and (GM.CC("secondary") .. "· |r") or ""
+			row.text:SetText(strrep("    ", g.depth - 1) .. marker
+				.. (g.kids and (GM.CC("secondary") .. "▾ |r") or "")
+				.. g.leaf
 				.. GM.CC("secondary") .. "  " .. g.n .. "|r")
 			row.text:SetTextColor(GM.RGB(
-				g.path == ui.editPath and "accent" or "text"))
+				g.path == ui.editPath and "accent"
+					or TREE_DEPTH_COLOR[min(g.depth, #TREE_DEPTH_COLOR)]))
 		else
 			row:Hide()
 		end
@@ -765,12 +1022,37 @@ end
 
 -- ============ refresh: members ============
 
+-- cached-name lookups. The client item cache evicts under pressure,
+-- which let rows flicker back to "item N" after resolving — so every
+-- resolved name is pinned into ui.nameCache and never degrades again.
+-- CatName never requests a load (the catalogue iterates every DB
+-- item — RequestLoad-per-miss would loop forever); RowName may, for
+-- the ~15 visible rows.
+local CachedInfo = C_Item and C_Item.GetItemInfo or GetItemInfo
+local function CatName(id)
+	local c = ui and ui.nameCache
+	local n = c and c[id]
+	if not n then
+		n = CachedInfo and CachedInfo(id)
+		if n and c then c[id] = n end
+	end
+	return n or ("item " .. id)
+end
+
+RowName = function(id)
+	local c = ui and ui.nameCache
+	local n = c and c[id]
+	if not n then
+		n = GM.ItemName(id) -- requests load; repaint lands it in cache
+		if n and c then c[id] = n end
+	end
+	return n or ("item " .. id)
+end
+
 local function MemberList()
 	local ids = {}
 	for id in GM.Groups.IterateItems(editPath()) do ids[#ids + 1] = id end
-	sort(ids, function(a, b)
-		return (GM.ItemName(a) or "zz" .. a) < (GM.ItemName(b) or "zz" .. b)
-	end)
+	sort(ids, function(a, b) return CatName(a) < CatName(b) end)
 	return ids
 end
 
@@ -784,7 +1066,7 @@ function GU.RefreshMembers()
 		if id then
 			row:Show()
 			local e = GM.ItemEntry(id)
-			local own = GM.Inventory.Count and GM.Inventory.Count(id) or 0
+			local own = GM.Inventory.Count and GM.Inventory.Count(id).total or 0
 			FillItemRow(row, id,
 				(e and e.p) and GM.Money(e.p) or "",
 				own > 0 and ("own " .. own) or "")
@@ -807,14 +1089,17 @@ local function CatList()
 	if ui.catList and not ui.catDirty then return ui.catList end
 	local q = strtrim((ui.search and ui.search:GetText() or "")):lower()
 	if q == "new group path…" then q = "" end
+	local owned = ui.ownedOnly and GM.BagItems() or nil
 	local out = {}
 	if GoblinMindDB and GoblinMindDB.items then
 		for id in pairs(GoblinMindDB.items) do
-			local grp = GM.Groups.GroupForItem(id)
-			local name = GM.ItemName(id) or ("item " .. id)
-			if q == "" or name:lower():find(q, 1, true)
-				or tostring(id):find(q, 1, true) then
-				out[#out + 1] = { id = id, name = name, grp = grp }
+			if not owned or owned[id] then
+				local grp = GM.Groups.GroupForItem(id)
+				local name = CatName(id)
+				if q == "" or name:lower():find(q, 1, true)
+					or tostring(id):find(q, 1, true) then
+					out[#out + 1] = { id = id, name = name, grp = grp }
+				end
 			end
 		end
 	end
@@ -847,6 +1132,10 @@ function GU.RefreshCatalogue(skipRebuild)
 			row.x:Hide()
 			row.name:SetTextColor(GM.RGB(e.grp and "textDim" or "text"))
 			row:SetScript("OnClick", function()
+				if ui.drag
+					or (ui.lastDrop and GetTime() - ui.lastDrop < 0.3) then
+					return
+				end
 				GM.Groups.Assign(e.id, GM.Groups.Ensure(editPath()))
 				ui.catDirty = true
 				GU.Refresh()

@@ -26,8 +26,11 @@ Shopping.lua
 Chrome.lua
 PlanQueue.lua
 GroupsUI.lua
+OpsUI.lua
+CraftingUI.lua
 Dashboard.lua
 Overview.lua
+MyAuctions.lua
 Settings.lua
 ItemInput.lua
 Tooltip.lua

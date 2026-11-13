@@ -192,6 +192,8 @@ def cmd_emit(path, out_path):
     chunks = read_chunks(path)
     items = {}          # itemID -> record
     data_age = 0
+    realm_age = 0       # newest realm-scope downloadTime
+    region_age = 0      # newest region-scope downloadTime
 
     # realm-scope rows: current stats (DATA), historical, scan stats
     # region-scope rows: REGION_STAT / REGION_SALE give market avg + velocity
@@ -201,6 +203,10 @@ def cmd_emit(path, out_path):
             continue
         data_age = max(data_age, c['downloadTime'])
         is_region = scope.endswith('-US') or '_REGION_' in tag
+        if is_region:
+            region_age = max(region_age, c['downloadTime'])
+        else:
+            realm_age = max(realm_age, c['downloadTime'])
         for row in rows_of(c):
             isr = row.get('itemString')
             if isr is None:
@@ -268,7 +274,9 @@ def cmd_emit(path, out_path):
     db = {
         'version': 2,
         'generated': int(time.time()),
-        'dataAge': data_age,
+        'dataAge': data_age,      # newest downloadTime across all chunks
+        'realmAge': realm_age,    # realm-scope chunks only (≈ TSM "Realm Data")
+        'regionAge': region_age,  # region-scope chunks only (≈ TSM "Region Data")
         'items': items,
     }
 

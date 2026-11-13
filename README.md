@@ -59,6 +59,25 @@ TSM AppHelper → AppData.lua (base-36 chunks)
 - **RESCAN** reads the live book · **EXECUTE** runs one step ·
   **SKIP** drops a step (post leg shrinks and reprices to the AH)
 
+### Group import / export
+
+`/goblin groups` → ITEMS page → **IMP** / **EXP** (bottom of the GROUPS
+column). Import understands:
+
+- **TradeSkillMaster v4 group exports** — both the compressed
+  `TSM_EXPORT` string (decoded via TSM's embedded LibDeflate/LibSerialize
+  while TSM is installed) and the legacy comma format
+  (`group:Tailoring`Bags,i:4238,…`). Backtick path separators and ````
+  comma-escapes are converted to GoblinMind `a/b` paths automatically.
+- **Generic item lists** — comma/semicolon-separated `i:id` itemstrings
+  or bare itemIDs (`4238,2592,…`), the shape most addon and spreadsheet
+  exports produce. `p:` battle-pet strings are skipped.
+
+Export always emits the TSM-legacy format — paste it straight into
+TSM's group import and it round-trips. Operations are not exchanged
+(the TSM op schema doesn't map onto ours); Base Group items export as
+ungrouped.
+
 ## Deploy
 
 `scripts\sync-addons.bat` — robocopies `addons\*` into the Forever

@@ -96,6 +96,14 @@ SlashCmdList.GOBLINMIND = function(msg)
 		GM.GroupsUI.Toggle()
 		return
 	end
+	if msg:sub(1, 3) == "ops" or msg:sub(1, 10) == "operations" then
+		GM.OpsUI.Toggle()
+		return
+	end
+	if msg:sub(1, 6) == "crafts" then
+		GM.CraftingUI.Toggle()
+		return
+	end
 	if msg:sub(1, 6) == "market" or msg:sub(1, 4) == "shop" then
 		GM.Shopping.Toggle()
 		return
@@ -119,6 +127,10 @@ SlashCmdList.GOBLINMIND = function(msg)
 	end
 	if msg:sub(1, 6) == "ledger" or msg:sub(1, 8) == "overview" then
 		GM.Overview.Toggle()
+		return
+	end
+	if msg:sub(1, 8) == "auctions" or msg:sub(1, 10) == "myauctions" then
+		GM.MyAuctions.Toggle()
 		return
 	end
 	if msg:sub(1, 4) == "dash" or msg == "home" or msg:sub(1, 6) == "budget" then
@@ -227,6 +239,28 @@ function GM.DataAge()
 	end
 end
 
+-- Three separate clocks (matches TSM's desktop-status tooltip):
+-- SyncAge = when our pipeline last emitted (≈ TSM "App Synced"),
+-- RealmAge/RegionAge = upstream feed snapshots (TSM's "Realm/Region Data").
+function GM.SyncAge()
+	if GoblinMindDB and GoblinMindDB.generated then
+		return time() - GoblinMindDB.generated
+	end
+end
+
+function GM.RealmAge()
+	if GoblinMindDB and GoblinMindDB.realmAge then
+		return time() - GoblinMindDB.realmAge
+	end
+	return GM.DataAge() -- pre-split generated files: dataAge already is it
+end
+
+function GM.RegionAge()
+	if GoblinMindDB and GoblinMindDB.regionAge then
+		return time() - GoblinMindDB.regionAge
+	end
+end
+
 function GM.ItemEntry(itemID)
 	return GoblinMindDB and GoblinMindDB.items and GoblinMindDB.items[itemID]
 end
@@ -253,6 +287,19 @@ function GM.BagCount(itemID)
 		end
 	end
 	return total
+end
+
+-- Set of itemIDs in carried bags — one pass for catalogue-style filters.
+function GM.BagItems()
+	local set = {}
+	if not (C_Container and C_Container.GetContainerItemInfo) then return set end
+	for bag = 0, 5 do
+		for slot = 1, (C_Container.GetContainerNumSlots(bag) or 0) do
+			local info = C_Container.GetContainerItemInfo(bag, slot)
+			if info and info.itemID then set[info.itemID] = true end
+		end
+	end
+	return set
 end
 
 -- Bank contents are only readable while the bank frame is open.

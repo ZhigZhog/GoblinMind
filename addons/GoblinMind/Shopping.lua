@@ -36,7 +36,7 @@ local function BuildRow(parent, i)
 	row.pct:SetPoint("LEFT", 320, 0)
 	row.seller = GM.MakeFontString(row, GM.FONT, 10, "textDim")
 	row.seller:SetPoint("LEFT", 382, 0)
-	row.seller:SetWidth(84)
+	row.seller:SetWidth(190)
 	row.buy = CreateFrame("Button", nil, row)
 	row.buy:SetSize(60, 18)
 	row.buy:SetPoint("RIGHT", -6, 0)
@@ -63,6 +63,23 @@ local function BuildRow(parent, i)
 				GM.Money(m), pct), 1, 1, 1)
 		end
 		if d.own then GameTooltip:AddLine("your auction", 0.5, 0.8, 0.4) end
+		if d.mats then
+			GameTooltip:AddLine("mats (bags+bank):", 0.9, 0.9, 0.8)
+			for _, m in ipairs(d.mats) do
+				local have = GM.Crafting.Owned(m.id)
+				local p = GM.Crafting.MatPrice(m.id)
+				GameTooltip:AddLine(format("  %s ×%d — have %d @ %s",
+					(GM.ItemName and GM.ItemName(m.id)) or ("item " .. m.id),
+					m.qty, have, p and GM.Money(p) or "?"),
+					have >= m.qty and 0.5 or 1,
+					have >= m.qty and 0.9 or 0.6,
+					have >= m.qty and 0.5 or 0.5)
+			end
+			if d.suggest and d.suggest > 0 then
+				GameTooltip:AddLine(format("suggested craft ×%d", d.suggest),
+					0.5, 0.9, 0.5)
+			end
+		end
 		GameTooltip:Show()
 	end
 	local function HideTip()
@@ -94,7 +111,7 @@ local function Build()
 	if ui then return end
 	ui = {}
 	local f = CreateFrame("Frame", "GoblinMindMarketUI", UIParent)
-	f:SetSize(560, 420)
+	f:SetSize(680, 420)
 	f:SetPoint("CENTER", 100, 0)
 	f:SetMovable(true)
 	f:EnableMouse(true)
@@ -145,8 +162,10 @@ local function Build()
 	if GM.Dashboard and GM.Dashboard.AddTabs then
 		GM.Dashboard.AddTabs(f, ui.craftBtn, "market")
 	end
+	-- primary action lives at the bottom-right — the title row is
+	-- title + mode buttons + module tabs, no room for it up there
 	ui.action = TitleBtn("SCAN", 80, function() S.Action() end)
-	ui.action:SetPoint("TOPRIGHT", close, "TOPLEFT", -8, 1)
+	ui.action:SetPoint("BOTTOMRIGHT", -10, 6)
 
 	ui.status = GM.MakeFontString(f, GM.FONT, 10, "textDim")
 	ui.status:SetPoint("TOPLEFT", 14, -34)
@@ -222,7 +241,7 @@ end
 function S.QueueRow(row)
 	local d = row.data
 	if d and d.recipeID then
-		GM.Crafting.Queue(d.recipeID, 1)
+		GM.Crafting.Queue(d.recipeID, d.suggest or 1)
 		GM.PlanQueue.Show()
 	end
 end
@@ -394,19 +413,28 @@ function S.Refresh()
 		elseif e.craft then
 			local r = e.craft
 			row:Show()
-			row.data = { recipeID = r.recipeID, itemID = r.itemID }
+			row.data = { recipeID = r.recipeID, itemID = r.itemID,
+				mats = r.mats, suggest = r.suggest }
 			local ic = GM.ItemIcon and GM.ItemIcon(r.itemID)
 			if ic then row.icon:SetTexture(ic); row.icon:Show() else row.icon:Hide() end
 			row.arrow:SetText("")
 			row.name:SetPoint("LEFT", 26, 0)
 			row.name:SetText(((GM.ItemName and GM.ItemName(r.itemID)) or r.name or "?"))
+			-- profitable + mats on hand = the actionable rows
+			row.name:SetTextColor(GM.RGB(
+				r.profit and r.profit > 0 and (r.craftable > 0 and "accent" or "pos")
+				or r.profit and "err" or "textDim"))
 			row.qty:SetText(r.craftable and r.craftable > 0 and ("×" .. r.craftable) or "")
+			row.qty:SetTextColor(GM.RGB(r.craftable and r.craftable > 0 and "accent" or "textDim"))
 			row.unit:SetText(r.cost and GM.Money(r.cost) or "—")
-			row.pct:SetText(r.profit and GM.Money(r.profit) or "—")
+			row.pct:SetText(r.profit and format("%s %s%d%%|r",
+				GM.Money(r.profit), GM.CC("textDim"),
+				r.price and r.price > 0 and floor(r.profit / r.price * 100 + 0.5) or 0) or "—")
 			row.pct:SetTextColor(GM.RGB(r.profit and (r.profit >= 0 and "pos" or "err") or "textDim"))
 			row.seller:SetText(r.prof or "")
 			row.buy:Show()
-			row.buy.text:SetText("QUEUE")
+			row.buy.text:SetText(r.suggest and r.suggest > 0
+				and ("QUEUE ×" .. r.suggest) or "QUEUE")
 			row.buy:SetEnabled(true)
 		elseif e.header then
 			local g = e.g

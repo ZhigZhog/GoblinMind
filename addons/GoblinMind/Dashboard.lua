@@ -14,7 +14,10 @@ local TABS = {
 	{ key = "plan",   label = "PLAN" },
 	{ key = "market", label = "MARKET" },
 	{ key = "groups", label = "GROUPS" },
+	{ key = "ops",    label = "OPS" },
+	{ key = "crafting", label = "CRAFT" },
 	{ key = "overview", label = "LEDGER" },
+	{ key = "auctions", label = "AUCTIONS" },
 	{ key = "settings", label = "SETTINGS" },
 }
 
@@ -22,7 +25,10 @@ function DB.Switch(key)
 	GM.PlanQueue.Hide()
 	GM.Shopping.Hide()
 	GM.GroupsUI.Hide()
+	if GM.OpsUI then GM.OpsUI.Hide() end
+	if GM.CraftingUI then GM.CraftingUI.Hide() end
 	if GM.Overview then GM.Overview.Hide() end
+	if GM.MyAuctions then GM.MyAuctions.Hide() end
 	if GM.Settings then GM.Settings.Hide() end
 	if key == "dash" then
 		GM.PlanQueue.SetHome(true)
@@ -34,8 +40,14 @@ function DB.Switch(key)
 		GM.Shopping.Show()
 	elseif key == "groups" then
 		GM.GroupsUI.Show()
+	elseif key == "ops" then
+		if GM.OpsUI then GM.OpsUI.Show() end
+	elseif key == "crafting" then
+		if GM.CraftingUI then GM.CraftingUI.Show() end
 	elseif key == "overview" then
 		if GM.Overview then GM.Overview.Show() end
+	elseif key == "auctions" then
+		if GM.MyAuctions then GM.MyAuctions.Show() end
 	elseif key == "settings" then
 		if GM.Settings then GM.Settings.Show() end
 	end
@@ -48,11 +60,15 @@ function DB.AddTabs(frame, titleFs, currentKey)
 	for _, t in ipairs(TABS) do
 		if t.key ~= currentKey then
 			local b = CreateFrame("Button", nil, frame)
-			b:SetSize(44, 14)
-			b:SetPoint("LEFT", anchor, "RIGHT", 8, 0)
+			b:SetPoint("LEFT", anchor, "RIGHT", 5, 0)
+			b:SetHeight(14)
 			b.text = GM.MakeFontString(b, GM.FONT_BOLD, 9, "textDim")
 			b.text:SetPoint("CENTER")
 			b.text:SetText(t.label)
+			-- auto-width from the label — fixed px widths clip the
+			-- longer tab names into their neighbours
+			b:SetWidth((b.text.GetStringWidth
+				and b.text:GetStringWidth() or 40) + 10)
 			local key = t.key
 			b:SetScript("OnClick", function() DB.Switch(key) end)
 			b:SetScript("OnEnter", function() b.text:SetTextColor(GM.RGB("text")) end)

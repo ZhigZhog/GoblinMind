@@ -157,6 +157,14 @@ function A.PostScan()
 		return
 	end
 
+	-- vendor floor: a listing whose expected net (5% AH cut, minus the
+	-- deposit) loses to the merchant price must never be posted — the
+	-- plan carries a vendoring step so the better move is one click.
+	local function VendorUnit(id)
+		local v = GetInfo and select(11, GetInfo(id))
+		return (v and v > 0) and v or nil
+	end
+
 	-- shared per-item decision → post steps appended to `steps`
 	local function ProcessItem(steps, it, cheapest)
 		local aOps = GM.Groups.GetOps(it.id, "auctioning")
@@ -168,6 +176,18 @@ function A.PostScan()
 		local isComm = GM.AH.IsCommodity(it.id)
 		local cap = tonumber(aOps.postCap)
 		local qty = (cap and cap > 0) and math.min(it.qty, cap) or it.qty
+		local vUnit = VendorUnit(it.id)
+		if vUnit then
+			local dep = GM.AH.DepositCost(it.id, qty) or 0
+			local net = math.floor(unit * 0.95) * qty - dep
+			if net < vUnit * qty then
+				tinsert(steps, { kind = "vendsell", itemID = it.id,
+					item = ItemLink(it.id), name = ShortName(it.id), qty = qty,
+					desc = format("vendor %s beats post net %s",
+						GM.Money(vUnit * qty), GM.Money(net)) })
+				return true
+			end
+		end
 		local bidPct = tonumber(aOps.bidPercent) or 100
 		local bid = math.floor(unit * bidPct / 100)
 		local dur = tonumber(aOps.duration) or 2
@@ -234,10 +254,19 @@ function A.FinishPostScan(steps, skipped, itemCount)
 			.. table.concat(reasons, ", ") .. "|r")
 		return
 	end
-	local ev, deposit = 0, 0
+	local ev, deposit, vendN = 0, 0, 0
 	for _, s in ipairs(steps) do
-		ev = ev + math.floor(s.unit * 0.95) * s.qty
-		deposit = deposit + (GM.AH.DepositCost(s.itemID, s.qty) or 0)
+		if s.kind == "post" then
+			ev = ev + math.floor(s.unit * 0.95) * s.qty
+			deposit = deposit + (GM.AH.DepositCost(s.itemID, s.qty) or 0)
+		elseif s.kind == "vendsell" then
+			vendN = vendN + 1
+		end
+	end
+	if vendN > 0 then
+		GM.Print(GM.CC("warn") .. format(
+			"%d item%s below vendor after cut+deposit — vendored as SELL steps (needs a merchant)|r",
+			vendN, vendN == 1 and "" or "s"))
 	end
 	GM.PlanQueue.SetScanPlan({
 		mode = "postscan",
@@ -282,7 +311,9 @@ function A.CancelScanNow()
 	local byItem = {}
 	for aid, a in pairs(owned) do
 		local e = byItem[a.itemID] or { aids = {}, minUnit = math.huge }
-		local unit = a.buyout and a.qty > 0 and (a.buyout / a.qty) or nil
+		-- owned buyout is per-item on Forever (same convention as
+		-- item-search results — see AH.lua note) — no /qty
+		local unit = a.buyout and a.qty > 0 and a.buyout or nil
 		tinsert(e.aids, { aid = aid, qty = a.qty, unit = unit })
 		if unit and unit < e.minUnit then e.minUnit = unit end
 		byItem[a.itemID] = e

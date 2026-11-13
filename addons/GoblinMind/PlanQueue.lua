@@ -204,6 +204,9 @@ local function Build()
 		if GameTooltip then GameTooltip:Hide() end
 	end)
 	ui.dash:SetPoint("LEFT", ui.groups, "RIGHT", 8, 0)
+	ui.auctions = TitleBtn("AUCTIONS", 78, function() GM.MyAuctions.Toggle() end,
+		"Open my auctions")
+	ui.auctions:SetPoint("LEFT", ui.dash, "RIGHT", 8, 0)
 
 	ui.age = GM.MakeFontString(frame, GM.FONT, 10, "textDim")
 
@@ -825,15 +828,30 @@ function PQ.Refresh()
 			return
 		end
 	end
-	-- freshness: DB age (loaded data file) and book age (live scan)
-	-- are different things — label both, warn when each is stale
-	local age = GM.DataAge()
-	local dbTxt = age
-		and ((age > (GM.db and GM.db.dataMaxAge or 7200) and GM.CC("warn") or "")
-			.. (age >= 3600 and format("DB %dh %dm", age / 3600, age % 3600 / 60)
-				or age >= 60 and format("DB %dm", age / 60) or format("DB %ds", age))
-			.. "|r")
-		or GM.CC("warn") .. "no data file|r"
+	-- freshness has three clocks (same split TSM's desktop status shows):
+	-- SYNC = our pipeline emit, DB = realm-data snapshot, RGN = region
+	-- feed, BOOK = our own live scan. Each warns on its own threshold —
+	-- a stale DB is upstream cadence, a stale SYNC means the pipeline died.
+	local function AgeTxt(age, warnAt)
+		if not age then return nil end
+		return (warnAt and age > warnAt and GM.CC("warn") or GM.CC("textDim"))
+			.. (age >= 3600 and format("%dh%dm", age / 3600, age % 3600 / 60)
+				or age >= 60 and format("%dm", age / 60)
+				or format("%ds", age)) .. "|r"
+	end
+	local sync = AgeTxt(GM.SyncAge and GM.SyncAge(), 2100)
+	local realm = AgeTxt(GM.RealmAge and GM.RealmAge(),
+		GM.db and GM.db.dataMaxAge or 7200)
+	local region = AgeTxt(GM.RegionAge and GM.RegionAge())
+	local parts = {}
+	if not (sync or realm) then
+		tinsert(parts, GM.CC("warn") .. "no data file|r")
+	else
+		if realm then tinsert(parts, "DB " .. realm) end
+		if sync then tinsert(parts, "sync " .. sync) end
+		if region then tinsert(parts, "rgn " .. region) end
+	end
+	local dbTxt = table.concat(parts, " ")
 	local bAge = GM.AH.BookAge and GM.AH.BookAge()
 	local bookFresh = bAge and bAge < 600
 	local bookTxt = ""
