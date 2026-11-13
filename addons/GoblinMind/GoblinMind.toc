@@ -28,6 +28,7 @@ PlanQueue.lua
 GroupsUI.lua
 Dashboard.lua
 Overview.lua
+Settings.lua
 ItemInput.lua
 Tooltip.lua
 Minimap.lua

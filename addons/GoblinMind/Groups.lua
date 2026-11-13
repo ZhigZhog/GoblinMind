@@ -70,6 +70,32 @@ function GM.Groups.Unassign(itemID)
 	for _, g in pairs(GM.Groups.db.groups) do g.items[itemID] = nil end
 end
 
+-- delete a group subtree — member items become ungrouped (TSM semantics)
+function GM.Groups.Delete(path)
+	if not path or path == "Base Group" then return end
+	for p in pairs(GM.Groups.db.groups) do
+		if p == path or p:sub(1, #path + 1) == path .. "/" then
+			GM.Groups.db.groups[p] = nil
+		end
+	end
+end
+
+-- move a whole subtree to a new path (items + ops travel with it)
+function GM.Groups.Rename(old, new)
+	if not (old and new) or old == "Base Group" or old == new then return end
+	local moves = {}
+	for p, g in pairs(GM.Groups.db.groups) do
+		if p == old or p:sub(1, #old + 1) == old .. "/" then
+			moves[#moves + 1] = { p, g, new .. p:sub(#old + 1) }
+		end
+	end
+	for _, m in ipairs(moves) do
+		GM.Groups.db.groups[m[3]] = m[2]
+		if m[3] ~= m[1] then GM.Groups.db.groups[m[1]] = nil end
+	end
+	return new
+end
+
 local function ancestors(path)
 	local out, seg = {}, nil
 	for part in path:gmatch("[^/]+") do

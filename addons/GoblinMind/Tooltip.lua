@@ -682,6 +682,80 @@ local function Hook(tooltip, data)
 	Fill(itemID, tooltip)
 end
 
+-- ============ settings surface (Part 12) ============
+-- Writable view of the tooltip option tree: deduped entries with
+-- get/set closures for the settings pane.
+
+local function OptTable(key, module)
+	local o = Opts()
+	local tbl = module and o.moduleTooltips[module] or o
+	if type(tbl) ~= "table" then return nil end
+	local k1, k2 = strsplit(".", key)
+	if k2 then return tbl[k1], k2 end
+	return tbl, key
+end
+
+function TT.GetOption(key, module)
+	local tbl, k = OptTable(key, module)
+	return tbl and tbl[k]
+end
+
+function TT.SetOption(key, module, v)
+	local o = Opts()
+	if module then
+		o.moduleTooltips[module] = o.moduleTooltips[module] or {}
+		o = o.moduleTooltips[module]
+	end
+	local k1, k2 = strsplit(".", key)
+	if k2 then
+		o[k1] = o[k1] or {}
+		o[k1][k2] = v
+	else
+		o[key] = v
+	end
+end
+
+-- one descriptor per unique (module, key): kind "bool" | "enum",
+-- domain = the entry's set values (+ "none" for enums — the TSM off),
+-- default = the entry's declared default
+function TT.OptionEntries()
+	local seen, out = {}, {}
+	for _, sec in ipairs(Sections()) do
+		for _, e in ipairs(sec.entries) do
+			local id = (e.module or "") .. "|" .. e.key
+			if not seen[id] then
+				seen[id] = {
+					key = e.key, module = e.module,
+					heading = sec.heading, domain = {},
+					default = e.default,
+				}
+				tinsert(out, seen[id])
+			end
+			local d = seen[id]
+			local dup = false
+			for _, v in ipairs(d.domain) do
+				if v == e.set then dup = true end
+			end
+			if not dup then tinsert(d.domain, e.set) end
+		end
+	end
+	for _, d in ipairs(out) do
+		if #d.domain == 1 and d.domain[1] == true then
+			d.kind = "bool"
+		else
+			d.kind = "enum"
+			local hasNone = false
+			for _, v in ipairs(d.domain) do
+				if v == "none" then hasNone = true end
+			end
+			if not hasNone then tinsert(d.domain, "none") end
+		end
+		d.get = function() return TT.GetOption(d.key, d.module) end
+		d.set = function(v) TT.SetOption(d.key, d.module, v) end
+	end
+	return out
+end
+
 if TooltipDataProcessor and TooltipDataProcessor.AddTooltipPostCall and Enum and Enum.TooltipDataType then
 	TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Item, Hook)
 elseif GameTooltip then

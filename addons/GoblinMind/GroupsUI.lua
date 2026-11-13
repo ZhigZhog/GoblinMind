@@ -347,12 +347,82 @@ local function BuildValueControl(row, f, host)
 	end
 end
 
+-- ============ window ============
+-- TSM-parity groups page: ITEMS page = group tree · members ·
+-- searchable catalogue (click assigns to the selected group, drop
+-- items anywhere to add); OPS page = the typed operation editor.
+
+local WIN_W, WIN_H = 860, 640
+local TREE_ROWS, LIST_ROWS = 22, 20
+
+local function ColPanel(parent, x, w, title)
+	local p = CreateFrame("Frame", nil, parent)
+	p:SetPoint("TOPLEFT", x, 0)
+	p:SetPoint("BOTTOMLEFT", x, 0)
+	p:SetWidth(w)
+	GM.Panel(p, "contLowest")
+	local t = GM.MakeFontString(p, GM.FONT_MED, 9, "secondary")
+	t:SetPoint("TOPLEFT", 8, -6)
+	t:SetText(title)
+	return p, t
+end
+
+-- item row: icon + name + dim right-text + optional remove button
+local function ItemRow(parent, w)
+	local row = CreateFrame("Button", nil, parent)
+	row:SetSize(w, 22)
+	row.icon = row:CreateTexture(nil, "ARTWORK")
+	row.icon:SetSize(16, 16)
+	row.icon:SetPoint("LEFT", 2, 0)
+	row.icon:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
+	row.name = GM.MakeFontString(row, GM.FONT, 10, "text")
+	row.name:SetPoint("LEFT", 22, 0)
+	row.name:SetWidth(w - 150)
+	row.name:SetJustifyH("LEFT")
+	row.sub = GM.MakeFontString(row, GM.FONT, 8, "secondary")
+	row.sub:SetPoint("LEFT", 22, -9)
+	row.sub:SetWidth(w - 150)
+	row.sub:SetJustifyH("LEFT")
+	row.right = GM.MakeFontString(row, GM.FONT, 9, "textDim")
+	row.right:SetPoint("RIGHT", -18, 0)
+	row.right:SetJustifyH("RIGHT")
+	row.x = CreateFrame("Button", nil, row)
+	row.x:SetSize(14, 14)
+	row.x:SetPoint("RIGHT", -2, 0)
+	row.x.text = GM.MakeFontString(row.x, GM.FONT_BOLD, 9, "textDim")
+	row.x.text:SetPoint("CENTER")
+	row.x.text:SetText("x")
+	return row
+end
+
+local function ListPanel(parent, x, w, title, onWheel)
+	local p, t = ColPanel(parent, x, w, title)
+	p:EnableMouseWheel(true)
+	p:SetScript("OnMouseWheel", onWheel)
+	local rows = {}
+	for i = 1, LIST_ROWS do
+		local row = ItemRow(p, w - 16)
+		row:SetPoint("TOPLEFT", 8, -24 - (i - 1) * 23)
+		rows[i] = row
+	end
+	return p, t, rows
+end
+
+local function FillItemRow(row, id, right, sub)
+	row.id = id
+	row.icon:SetTexture(GM.ItemIcon and GM.ItemIcon(id)
+		or "Interface\\Icons\\INV_Misc_QuestionMark")
+	row.name:SetText(GM.ItemName(id) or ("item " .. id))
+	row.sub:SetText(sub or "")
+	row.right:SetText(right or "")
+end
+
 local function BuildUI()
 	if ui then return end
-	ui = {}
+	ui = { catOff = 0, memOff = 0, treeOff = 0, page = "items" }
 	local f = CreateFrame("Frame", "GoblinMindGroupsUI", UIParent)
-	f:SetSize(500, 630)
-	f:SetPoint("CENTER", -280, 20)
+	f:SetSize(WIN_W, WIN_H)
+	f:SetPoint("CENTER", -40, 20)
 	f:SetFrameStrata("HIGH")
 	f:SetToplevel(true)
 	f:SetScript("OnMouseDown", function(f)
@@ -376,7 +446,7 @@ local function BuildUI()
 
 	local title = GM.MakeFontString(f, GM.FONT_BOLD, 13, "accent")
 	title:SetPoint("TOPLEFT", 10, -8)
-	title:SetText("GROUPS · OPS")
+	title:SetText("GROUPS")
 	if GM.Dashboard and GM.Dashboard.AddTabs then
 		GM.Dashboard.AddTabs(f, title, "groups")
 	end
@@ -389,47 +459,167 @@ local function BuildUI()
 	close.text:SetText("x")
 	close:SetScript("OnClick", function() f:Hide() end)
 
-	ui.itemLine = GM.MakeFontString(f, GM.FONT_MED, 10, "text")
-	ui.itemLine:SetPoint("TOPLEFT", 10, -30)
+	-- page segments: ITEMS | OPS
+	ui.pageSegs = {}
+	for i, p in ipairs({ { "ITEMS", "items" }, { "OPS", "ops" } }) do
+		local b = CreateFrame("Button", nil, f)
+		b:SetSize(50, 18)
+		b:SetPoint("TOPRIGHT", -30 - (2 - i) * 54, -8)
+		GM.Panel(b, "contHigh")
+		b.text = GM.MakeFontString(b, GM.FONT_MED, 9, "textDim")
+		b.text:SetPoint("CENTER")
+		b.text:SetText(p[1])
+		b.key = p[2]
+		b:SetScript("OnClick", function() ui.page = p[2] GU.Refresh() end)
+		ui.pageSegs[i] = b
+	end
 
-	local pathLabel = GM.MakeFontString(f, GM.FONT, 9, "secondary")
-	pathLabel:SetPoint("TOPLEFT", 10, -50)
-	pathLabel:SetText("ASSIGN ITEM TO PATH (use / for nesting)")
-	ui.pathBox = EditBox(f, 256)
-	ui.pathBox:SetPoint("TOPLEFT", 10, -62)
-	local assign = Btn(f, "ASSIGN", 66)
-	assign:SetPoint("LEFT", ui.pathBox, "RIGHT", 8, 0)
-	assign:SetScript("OnClick", function() GU.Assign() end)
+	-- ============ ITEMS page ============
+	local items = CreateFrame("Frame", nil, f)
+	items:SetPoint("TOPLEFT", 10, -34)
+	items:SetPoint("BOTTOMRIGHT", -10, 30)
+	ui.pageItems = items
 
-	local gLabel = GM.MakeFontString(f, GM.FONT, 9, "secondary")
-	gLabel:SetPoint("TOPLEFT", 10, -92)
-	gLabel:SetText("GROUPS — click to edit")
-	ui.groupRows = {}
-	for i = 1, 8 do
-		local row = CreateFrame("Button", nil, f)
-		row:SetSize(478, 18)
-		row:SetPoint("TOPLEFT", 10, -104 - (i - 1) * 20)
+	-- col A: group tree + management
+	local treeP, treeT = ColPanel(items, 0, 186, "GROUPS")
+	treeP:EnableMouseWheel(true)
+	treeP:SetScript("OnMouseWheel", function(_, d)
+		ui.treeOff = math.max(0, ui.treeOff - d * 2)
+		GU.RefreshTree()
+	end)
+	ui.treeRows = {}
+	for i = 1, TREE_ROWS do
+		local row = CreateFrame("Button", nil, treeP)
+		row:SetSize(172, 18)
+		row:SetPoint("TOPLEFT", 6, -22 - (i - 1) * 20)
 		row.text = GM.MakeFontString(row, GM.FONT, 10, "text")
-		row.text:SetPoint("LEFT", 4, 0)
+		row.text:SetPoint("LEFT", 2, 0)
+		row.text:SetWidth(168)
+		row.text:SetJustifyH("LEFT")
 		row:SetScript("OnClick", function(self)
 			DiscardDrafts()
 			ui.editPath = self.path
-			ui.pathBox:SetText(self.path)
 			GU.Refresh()
 		end)
-		ui.groupRows[i] = row
+		-- drop an item on a group name → assign it there
+		row:SetScript("OnReceiveDrag", function(self)
+			local ty, id = GetCursorInfo()
+			if ty == "item" and id and self.path then
+				GM.Groups.Assign(id, GM.Groups.Ensure(self.path))
+				ClearCursor()
+				GU.Refresh()
+			end
+		end)
+		ui.treeRows[i] = row
 	end
+	ui.newBox = EditBox(treeP, 172)
+	ui.newBox:SetPoint("BOTTOMLEFT", 6, 30)
+	ui.newBox:SetText("new group path…")
+	ui.newBox:SetTextColor(GM.RGB("textDim"))
+	ui.newBox:SetScript("OnEditFocusGained", function(self)
+		if self:GetText() == "new group path…" then
+			self:SetText("")
+			self:SetTextColor(GM.RGB("text"))
+		end
+	end)
+	local addG = Btn(treeP, "+", 18, 18)
+	addG:SetPoint("BOTTOMLEFT", 6, 8)
+	addG:SetScript("OnClick", function()
+		local v = strtrim(ui.newBox:GetText() or "")
+		if v == "" or v == "new group path…" then return end
+		local leaf = GM.Groups.Ensure(v)
+		ui.editPath = leaf
+		ui.newBox:SetText("")
+		GU.Refresh()
+	end)
+	local renG = Btn(treeP, "REN", 38, 18)
+	renG:SetPoint("LEFT", addG, "RIGHT", 4, 0)
+	renG:SetScript("OnClick", function()
+		local v = strtrim(ui.newBox:GetText() or "")
+		if v == "" or v == "new group path…" or not ui.editPath then return end
+		GM.Groups.Rename(ui.editPath, v)
+		ui.editPath = v
+		ui.newBox:SetText("")
+		GU.Refresh()
+	end)
+	local delG = Btn(treeP, "DEL", 38, 18)
+	delG:SetPoint("LEFT", renG, "RIGHT", 4, 0)
+	delG:SetScript("OnClick", function(self)
+		if not ui.editPath or ui.editPath == "Base Group" then return end
+		if not ui.delArm then
+			ui.delArm = true
+			self.text:SetText("SURE?")
+			return
+		end
+		ui.delArm = nil
+		self.text:SetText("DEL")
+		GM.Groups.Delete(ui.editPath)
+		ui.editPath = "Base Group"
+		GU.Refresh()
+	end)
+	Tip(delG, function() return { "Delete group",
+		"Removes the group + subgroups; items become ungrouped",
+		"Click twice to confirm" } end)
 
-	ui.opsHeader = GM.MakeFontString(f, GM.FONT, 9, "secondary")
-	ui.opsHeader:SetPoint("TOPLEFT", 10, -265)
+	-- col B: members of selected group — also a drop target
+	local memP, memT, memRows = ListPanel(items, 194, 320, "ITEMS IN GROUP",
+		function(_, d)
+			ui.memOff = math.max(0, ui.memOff - d * 2)
+			GU.RefreshMembers()
+		end)
+	ui.memPanel, ui.memTitle, ui.memRows = memP, memT, memRows
+	memP:SetScript("OnReceiveDrag", function()
+		local ty, id = GetCursorInfo()
+		if ty == "item" and id then
+			GM.Groups.Assign(id, GM.Groups.Ensure(editPath()))
+			ClearCursor()
+			GU.Refresh()
+		end
+	end)
+	ui.memHint = GM.MakeFontString(memP, GM.FONT, 8, "secondary")
+	ui.memHint:SetPoint("BOTTOMLEFT", 8, 4)
+	ui.memHint:SetText("drop items here · x removes")
+
+	-- col C: catalogue — search + click to assign
+	local catP, catT, catRows = ListPanel(items, 522, 320, "CATALOGUE",
+		function(_, d)
+			ui.catOff = math.max(0, ui.catOff - d * 2)
+			GU.RefreshCatalogue(true)
+		end)
+	ui.catPanel, ui.catTitle, ui.catRows = catP, catT, catRows
+	ui.search = EditBox(catP, 200)
+	ui.search:SetPoint("TOPLEFT", 8, -2)
+	ui.search:SetHeight(16)
+	ui.search:SetScript("OnTextChanged", function(self, user)
+		if user then
+			self.dirty = true
+			ui.catDirty = true
+			ui.catOff = 0
+			GU.RefreshCatalogue()
+		end
+	end)
+	catT:SetPoint("TOPLEFT", 214, -8)
+	ui.catHint = GM.MakeFontString(catP, GM.FONT, 8, "secondary")
+	ui.catHint:SetPoint("BOTTOMLEFT", 8, 4)
+	ui.catHint:SetText("click adds to selected group")
+
+	-- ============ OPS page ============
+	local ops = CreateFrame("Frame", nil, f)
+	ops:SetPoint("TOPLEFT", 10, -34)
+	ops:SetPoint("BOTTOMRIGHT", -10, 30)
+	ui.pageOps = ops
+	ui.opsHeader = GM.MakeFontString(ops, GM.FONT, 9, "secondary")
+	ui.opsHeader:SetPoint("TOPLEFT", 6, -6)
 
 	ui.opRows = {}
+	local OPS_COL_X = { 6, 286, 566 }
+	local OPS_COL_W, OPS_Y0, OPS_PITCH = 270, -26, 19
 	for i, fd in ipairs(OP_FIELDS) do
-		local col = i <= 15 and 1 or 2
-		local rowN = col == 1 and i or i - 15
-		local host = CreateFrame("Frame", nil, f)
-		host:SetSize(COL_W, ROW_H)
-		host:SetPoint("TOPLEFT", COL_X[col], ROW_Y0 - (rowN - 1) * ROW_PITCH)
+		local col = i <= 10 and 1 or i <= 20 and 2 or 3
+		local rowN = col == 1 and i or col == 2 and i - 10 or i - 20
+		local host = CreateFrame("Frame", nil, ops)
+		host:SetSize(OPS_COL_W, ROW_H)
+		host:SetPoint("TOPLEFT", OPS_COL_X[col], OPS_Y0 - (rowN - 1) * OPS_PITCH)
 		local row = { def = fd, host = host }
 
 		row.lab = GM.MakeFontString(host, GM.FONT, 10, "textDim")
@@ -446,7 +636,6 @@ local function BuildUI()
 		row.io.text:SetPoint("CENTER")
 		row.io.row = row
 		row.io:SetScript("OnClick", function(self)
-			-- O → delete local key → inherit
 			if RawLocal(editPath(), fd[2], fd[3]) == nil then return end
 			groupOps(editPath(), fd[2])[fd[3]] = nil
 			Footer(fd[1] .. " → inherit")
@@ -472,6 +661,16 @@ local function BuildUI()
 	ui.footer = GM.MakeFontString(f, GM.FONT, 9, "secondary")
 	ui.footer:SetPoint("BOTTOMLEFT", 10, 8)
 	ui.footer:SetText(FOOTER_DEFAULT)
+
+	-- async names resolve → repaint rows when item data lands
+	if GM.OnItemInfoLoaded then
+		GM.OnItemInfoLoaded(function()
+			if ui and ui.frame:IsShown() then
+				ui.catDirty = true
+				GU.Refresh()
+			end
+		end)
+	end
 end
 
 -- ============ source picker menu ============
@@ -533,46 +732,134 @@ function GU.ToggleSourceMenu(btn)
 	ui.srcCatcher:Show()
 end
 
--- ============ assign / refresh ============
+-- ============ refresh: tree ============
 
-function GU.Assign()
-	local id = GM.PlanQueue.itemID
-	if not id then
-		GM.Print("no item targeted — /goblin [item] first")
-		return
+local function TreeList()
+	local out = {}
+	for _, g in ipairs(GM.Groups.List()) do
+		local depth = select(2, g.path:gsub("/", "")) + 1
+		out[#out + 1] = { path = g.path, n = g.n, depth = depth,
+			leaf = g.path:match("[^/]+$") or g.path }
 	end
-	local path = strtrim(ui.pathBox:GetText() or "")
-	if path == "" then path = "Base Group" end
-	local leaf = GM.Groups.Ensure(path)
-	GM.Groups.Assign(id, leaf)
-	ui.editPath = leaf
-	GM.Print(format("item %d → %s", id, leaf))
-	GU.Refresh()
+	return out
 end
 
-function GU.Refresh()
-	if not ui then return end
-	local id = GM.PlanQueue.itemID
-	local group = (id and GM.Groups.GroupForItem(id)) or "Base Group"
-	ui.editPath = ui.editPath or group
-	ui.itemLine:SetText(id
-		and format("item %d · group %s", id, group)
-		or "no item targeted — /goblin [item] first")
-	if id and ui.pathBox:GetText() == "" then ui.pathBox:SetText(group) end
-
-	local groups = GM.Groups.List()
-	for i, row in ipairs(ui.groupRows) do
-		local g = groups[i]
+function GU.RefreshTree()
+	local groups = TreeList()
+	local maxOff = math.max(0, #groups - TREE_ROWS)
+	if ui.treeOff > maxOff then ui.treeOff = maxOff end
+	for i, row in ipairs(ui.treeRows) do
+		local g = groups[i + ui.treeOff]
 		if g then
 			row:Show()
 			row.path = g.path
-			row.text:SetText(format("%s  (%d)", g.path, g.n))
-			row.text:SetTextColor(GM.RGB(g.path == ui.editPath and "accent" or "text"))
+			row.text:SetText(strrep("  ", g.depth - 1) .. g.leaf
+				.. GM.CC("secondary") .. "  " .. g.n .. "|r")
+			row.text:SetTextColor(GM.RGB(
+				g.path == ui.editPath and "accent" or "text"))
 		else
 			row:Hide()
 		end
 	end
+end
 
+-- ============ refresh: members ============
+
+local function MemberList()
+	local ids = {}
+	for id in GM.Groups.IterateItems(editPath()) do ids[#ids + 1] = id end
+	sort(ids, function(a, b)
+		return (GM.ItemName(a) or "zz" .. a) < (GM.ItemName(b) or "zz" .. b)
+	end)
+	return ids
+end
+
+function GU.RefreshMembers()
+	local ids = MemberList()
+	ui.memTitle:SetText(format("ITEMS IN %s (%d)", editPath(), #ids))
+	local maxOff = math.max(0, #ids - LIST_ROWS)
+	if ui.memOff > maxOff then ui.memOff = maxOff end
+	for i, row in ipairs(ui.memRows) do
+		local id = ids[i + ui.memOff]
+		if id then
+			row:Show()
+			local e = GM.ItemEntry(id)
+			local own = GM.Inventory.Count and GM.Inventory.Count(id) or 0
+			FillItemRow(row, id,
+				(e and e.p) and GM.Money(e.p) or "",
+				own > 0 and ("own " .. own) or "")
+			row.x:Show()
+			row.x:SetScript("OnClick", function()
+				GM.Groups.Unassign(id)
+				ui.catDirty = true
+				GU.Refresh()
+			end)
+			row:SetScript("OnClick", nil)
+		else
+			row:Hide()
+		end
+	end
+end
+
+-- ============ refresh: catalogue ============
+
+local function CatList()
+	if ui.catList and not ui.catDirty then return ui.catList end
+	local q = strtrim((ui.search and ui.search:GetText() or "")):lower()
+	if q == "new group path…" then q = "" end
+	local out = {}
+	if GoblinMindDB and GoblinMindDB.items then
+		for id in pairs(GoblinMindDB.items) do
+			local grp = GM.Groups.GroupForItem(id)
+			local name = GM.ItemName(id) or ("item " .. id)
+			if q == "" or name:lower():find(q, 1, true)
+				or tostring(id):find(q, 1, true) then
+				out[#out + 1] = { id = id, name = name, grp = grp }
+			end
+		end
+	end
+	sort(out, function(a, b)
+		if (a.grp ~= nil) ~= (b.grp ~= nil) then return a.grp == nil end
+		return a.name < b.name
+	end)
+	ui.catList = out
+	ui.catDirty = nil
+	return out
+end
+
+function GU.RefreshCatalogue(skipRebuild)
+	local list = skipRebuild and ui.catList or CatList()
+	if not list then return end
+	local ungrouped = 0
+	for _, e in ipairs(list) do if not e.grp then ungrouped = ungrouped + 1 end end
+	ui.catTitle:SetText(format("(%d shown · %d ungrouped)",
+		#list, ungrouped))
+	local maxOff = math.max(0, #list - LIST_ROWS)
+	if ui.catOff > maxOff then ui.catOff = maxOff end
+	for i, row in ipairs(ui.catRows) do
+		local e = list[i + ui.catOff]
+		if e then
+			row:Show()
+			local ent = GM.ItemEntry(e.id)
+			FillItemRow(row, e.id,
+				(ent and ent.p) and GM.Money(ent.p) or "",
+				e.grp and ("· " .. e.grp) or "")
+			row.x:Hide()
+			row.name:SetTextColor(GM.RGB(e.grp and "textDim" or "text"))
+			row:SetScript("OnClick", function()
+				GM.Groups.Assign(e.id, GM.Groups.Ensure(editPath()))
+				ui.catDirty = true
+				GU.Refresh()
+			end)
+		else
+			row:Hide()
+		end
+	end
+end
+
+-- ============ refresh: ops ============
+
+local function RefreshOps()
 	ui.opsHeader:SetText("OPS — " .. editPath())
 	local showPath = editPath()
 	for _, r in ipairs(ui.opRows) do
@@ -582,11 +869,9 @@ function GU.Refresh()
 		local eff = GM.Groups.GetOpsForPath(showPath, fd[2])[fd[3]]
 		r.effective = eff
 
-		-- I/O chip
 		r.io.text:SetText(owned and "O" or "I")
 		r.io.text:SetTextColor(GM.RGB(owned and "accent" or "textDim"))
 
-		-- value control
 		if not (r.eb and r.eb.dirty) then
 			if r.eb then r.eb:SetText(eff == nil and "" or tostring(eff)) end
 		end
@@ -596,6 +881,26 @@ function GU.Refresh()
 		elseif fd[5] == "seg" then
 			for _, b in ipairs(r.segs) do PaintSeg(b, eff == b.optValue) end
 		end
+	end
+end
+
+-- ============ refresh orchestrator ============
+
+function GU.Refresh()
+	if not ui then return end
+	ui.pageItems:SetShown(ui.page == "items")
+	ui.pageOps:SetShown(ui.page == "ops")
+	for _, b in ipairs(ui.pageSegs) do
+		b.text:SetTextColor(GM.RGB(b.key == ui.page and "accent" or "textDim"))
+		GM.Panel(b, b.key == ui.page and "contHighest" or "contHigh")
+	end
+	ui.editPath = ui.editPath or "Base Group"
+	GU.RefreshTree()
+	if ui.page == "items" then
+		GU.RefreshMembers()
+		GU.RefreshCatalogue()
+	else
+		RefreshOps()
 	end
 	ui.footer:SetText(FOOTER_DEFAULT)
 end
@@ -607,7 +912,6 @@ end
 
 function GU.Show()
 	BuildUI()
-	ui.editPath = nil
 	ui.frame:Show()
 	GU.Refresh()
 end
@@ -620,3 +924,4 @@ function GU.Toggle()
 	BuildUI()
 	if ui.frame:IsShown() then ui.frame:Hide() else GU.Show() end
 end
+

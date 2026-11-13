@@ -15,6 +15,7 @@ local TABS = {
 	{ key = "market", label = "MARKET" },
 	{ key = "groups", label = "GROUPS" },
 	{ key = "overview", label = "LEDGER" },
+	{ key = "settings", label = "SETTINGS" },
 }
 
 function DB.Switch(key)
@@ -22,6 +23,7 @@ function DB.Switch(key)
 	GM.Shopping.Hide()
 	GM.GroupsUI.Hide()
 	if GM.Overview then GM.Overview.Hide() end
+	if GM.Settings then GM.Settings.Hide() end
 	if key == "dash" then
 		GM.PlanQueue.SetHome(true)
 		GM.PlanQueue.Show()
@@ -34,6 +36,8 @@ function DB.Switch(key)
 		GM.GroupsUI.Show()
 	elseif key == "overview" then
 		if GM.Overview then GM.Overview.Show() end
+	elseif key == "settings" then
+		if GM.Settings then GM.Settings.Show() end
 	end
 end
 

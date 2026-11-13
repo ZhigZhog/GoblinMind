@@ -113,6 +113,10 @@ SlashCmdList.GOBLINMIND = function(msg)
 		GM.Destroying.Scan()
 		return
 	end
+	if msg:sub(1, 4) == "sett" or msg:sub(1, 7) == "options" then
+		GM.Settings.Toggle()
+		return
+	end
 	if msg:sub(1, 6) == "ledger" or msg:sub(1, 8) == "overview" then
 		GM.Overview.Toggle()
 		return
@@ -132,6 +136,12 @@ SlashCmdList.GOBLINMIND = function(msg)
 		else
 			GM.Print("open the mailbox, then /goblin mail")
 		end
+		return
+	end
+	if msg:sub(1, 6) == "ahdump" then
+		local arg = strtrim(msg:sub(7))
+		local pid = tonumber(arg) or ParseItemRef(arg)
+		GM.AH.DumpRows(pid ~= "" and pid or nil)
 		return
 	end
 	if msg:sub(1, 3) == "inv" then

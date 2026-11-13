@@ -20,7 +20,9 @@ self-owned Blizzard-API pipeline later.
   is manual; `scripts\brain-watch.bat` runs `watch` mode — polls mtime,
   waits 20s for the non-atomic write to settle, then emits to BOTH the
   repo copy and the deployed addon so `/reload` picks it up. Leave it
-  running while playing.
+  running while playing. **Auto-starts at login** via
+  `Startup\goblinmind-brain-watch.bat` (launches `pythonw`, no console);
+  `pythonw` + `&`/`disown` also works for a session-local watcher.
 - Layout: `brain\` (Python emit/watch CLI) · `addons\GoblinMind\`
   (shim addon, scaffolded — TSM-styled UI) · `addons\GoblinMind_Data\`
   (generated-data addon — `GoblinMindDB` from `goblin_brain.py emit`) · `scripts\`
@@ -67,6 +69,24 @@ self-owned Blizzard-API pipeline later.
   - **The AH book persists** in `GoblinMindSettings.book` (aggregate
     mb/mbx/sup/n only; `math.huge` round-trips through -1). Rows stay
     session-only. `AH.RestoreBook` runs on `PLAYER_LOGIN`.
+  - **AH price-field semantics are NON-RETAIL** (verified 2026-11-13):
+    - `C_AuctionHouse.GetItemSearchResultInfo` returns `buyoutAmount`
+      **per ITEM**, not the lot total (proof: qty=147 buyout=200 →
+      2s/bag, not 200c for 147 bags). `unit = price`, `total = price*qty`.
+      Retail/TSM convention divides by quantity — do NOT.
+    - `C_AuctionHouse.GetReplicateItemInfo` has an **extra field early
+      in the tuple**: buyoutPrice is index **11** (not 10), itemID 18
+      (not 17). Detect via itemID position (`buyout = itemIDidx - 7`),
+      don't hardcode. `GetNumReplicateItems` returns 0 when the AH is
+      closed/snapshot expired — replicate only populated after
+      `ReplicateItems` + the list-update event.
+    - `GetCommoditySearchResultInfo` can return **polluted rows for
+      non-commodity itemIDs** (cloth-shaped 2c lots for a bag). Only
+      consume commodity results when the item search returns nothing.
+    - `C_MerchantFrame.GetItemInfo(idx)` is namespaced and returns a
+      table (`price`, `stackCount`, `numAvailable`, `hasExtendedCost`) —
+      the global `GetMerchantItemInfo` doesn't exist. `GetItemInfo`
+      isn't a global either — always `C_Item.GetItemInfo`.
   - **Container drops need a family check**: `PickupContainerItem` into a
   specialized bag (reagent bag, profession bags) fails with "That item
   doesn't go in that container". Check `ItemWillGoInBag`-style:

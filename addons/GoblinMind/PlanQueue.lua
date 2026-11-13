@@ -404,6 +404,9 @@ local function Build()
 	-- paths (ScanStatus etc.) that must NOT pop the window; visibility
 	-- is driven by Toggle/Show and the AH window's lifecycle
 	frame:Hide()
+	-- repaint when async item names resolve so bare-id targets
+	-- (/goblin 4238) flip to real names without a rescan
+	GM.OnItemInfoLoaded(function() PQ.Refresh() end)
 end
 
 function PQ.Toggle()
@@ -865,8 +868,15 @@ function PQ.Refresh()
 				or " · book: empty")
 			or " · RESCAN to read the book") or ""
 	end
-	-- name gets its own line; book/readout context moves to the sub line
-	ui.item.name:SetText(dispLink or (dispID and ("item " .. dispID)) or "no item")
+	-- name gets its own line; book/readout context moves to the sub line.
+	-- a proper link already renders the name — bare "4238"-style targets
+	-- fall back to the resolved item name (async load → watcher repaints).
+	ui.item.name:SetText(
+		(dispLink and dispLink:find("%[") and dispLink)
+		or (dispID and GM.ItemName(dispID))
+		or dispLink
+		or (dispID and ("item " .. dispID))
+		or "no item")
 	if not dispID then
 		ui.item.name:SetText(GM.CC("textDim") .. "drop item here · alt-click one · /goblin [link]|r")
 	end

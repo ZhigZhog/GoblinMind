@@ -99,7 +99,19 @@ f:SetScript("OnEvent", function(_, event, ...)
 		if GM.AH.browse then GM.AH.OnBrowseResults() end
 	elseif event == "COMMODITY_SEARCH_RESULTS_UPDATED" then
 		local itemID = ...
-		if itemID == GM.AH.scanItemID then GM.AH.CollectCommodityAsks(itemID) end
+		if itemID == GM.AH.scanItemID then
+			-- item-search rows are authoritative when they exist; the
+			-- commodity endpoint can return polluted data (2c "lots"
+			-- of a 1-slot bag). Give item results a beat to land, then
+			-- only consume commodity rows if the item query was empty.
+			GM.After(0.5, function()
+				if GM.AH.scanItemID ~= itemID then return end
+				local n = (GM.AH.scanItemKey
+					and C_AuctionHouse.GetNumItemSearchResults
+					and C_AuctionHouse.GetNumItemSearchResults(GM.AH.scanItemKey)) or 0
+				if n == 0 then GM.AH.CollectCommodityAsks(itemID) end
+			end)
+		end
 	elseif event == "ITEM_SEARCH_RESULTS_UPDATED" then
 		if GM.AH.scanItemKey then GM.AH.CollectItemAsks() end
 	elseif event == "COMMODITY_PRICE_UPDATED" then
@@ -218,7 +230,10 @@ function GM.AH.CollectItemAsks()
 			local qty = r.quantity or r.totalQuantity or 1
 			if price and qty > 0 then
 				local seller = (r.owners and r.owners[1]) or r.owner or r.ownerName
-				tinsert(asks, { id = r.auctionID, qty = qty, unit = ceil(price / qty), total = price,
+				-- Forever returns buyoutAmount PER ITEM, not the lot
+				-- total (verified: qty=147 buyout=200 = 2s/bag lot 2g94s).
+				-- unit is the price directly; total is the lot cost.
+				tinsert(asks, { id = r.auctionID, qty = qty, unit = price, total = price * qty,
 					own = (r.containsOwnerItem or r.isOwned) or nil,
 					seller = seller })
 			end
@@ -373,6 +388,117 @@ end
 local collectGen = 0
 local CHUNK = 2000 -- rows per frame — the client kills long-running handlers
 
+-- Diagnostic: dump raw ask/book data so field meanings can be verified
+-- against the client's actual API contract. Three sources:
+--   item-search asks  — named-field tables (the plan's ask list)
+--   replicate rows    — positional tuples (the full-scan book)
+--   book aggregate    — what we actually stored
+local function DumpReplicate(itemID, maxRows)
+	local n = C_AuctionHouse.GetNumReplicateItems and C_AuctionHouse.GetNumReplicateItems() or 0
+	GM.Print(format("replicate rows: %d%s", n, itemID and (" — dumping id " .. itemID) or ""))
+	local shown = 0
+	for i = 0, n - 1 do
+		local link = C_AuctionHouse.GetReplicateItemLink(i)
+		local id = link and tonumber(link:match("item:(%d+)"))
+		if not itemID or id == itemID then
+			local t = { C_AuctionHouse.GetReplicateItemInfo(i) }
+			local o = {}
+			for j = 1, math.min(#t, 20) do o[j] = tostring(t[j]) end
+			GM.Print(format("row %d · linkid=%s · %s", i, tostring(id),
+				link and (link:match("%[(.-)%]") or "?") or "no-link"))
+			GM.Print("  fields(" .. #t .. "): " .. table.concat(o, " | "))
+			shown = shown + 1
+			if shown >= (maxRows or 10) then break end
+		end
+	end
+	if itemID and shown == 0 then
+		GM.Print("no matching rows — item not in this snapshot")
+	end
+	return n
+end
+
+function GM.AH.DumpRows(itemID, maxRows)
+	maxRows = maxRows or 10
+	-- part 1: live item-search asks — the same call the plan consumes.
+	-- fire a real query so results are guaranteed fresh, then dump the
+	-- raw named-field tables the API hands back.
+	if itemID and C_AuctionHouse.MakeItemKey and C_AuctionHouse.GetItemSearchResultInfo
+		and C_AuctionHouse.SendSearchQuery then
+		local key = C_AuctionHouse.MakeItemKey(itemID, 0, 0, nil)
+		GM.AH.scanItemKey = key
+		GM.AH.onScanDone = function()
+			local n = C_AuctionHouse.GetNumItemSearchResults(key) or 0
+			GM.Print(format("item-search results: %d", n))
+			for i = 1, math.min(n, 2) do
+				local r = C_AuctionHouse.GetItemSearchResultInfo(key, i)
+				if r then
+					local o = {}
+					for k, v in pairs(r) do
+						if type(v) == "table" then v = "n=" .. #v end
+						o[#o + 1] = k .. "=" .. tostring(v)
+					end
+					table.sort(o)
+					GM.Print("  ask[" .. i .. "] " .. table.concat(o, " · "))
+				end
+			end
+			-- compact sweep of every row — the buyout/qty relationship
+			-- is what we're verifying (per-item vs lot total)
+			for i = 1, n do
+				local r = C_AuctionHouse.GetItemSearchResultInfo(key, i)
+				if r then
+					GM.Print(format("  [%d] qty=%s buyout=%s bid=%s minBid=%s",
+						i, tostring(r.quantity), tostring(r.buyoutAmount),
+						tostring(r.bidAmount), tostring(r.minBid)))
+				end
+			end
+			GM.AH.onScanDone = nil
+			GM.AH.scanItemKey = nil
+		end
+		C_AuctionHouse.SendSearchQuery(key, EMPTY_SORTS, true)
+		-- commodity side of the same item — what CollectCommodityAsks
+		-- would have consumed if the event fired
+		if C_AuctionHouse.GetCommoditySearchResultInfo then
+			GM.After(1.5, function()
+				local n = C_AuctionHouse.GetNumCommoditySearchResults
+					and C_AuctionHouse.GetNumCommoditySearchResults(itemID) or 0
+				GM.Print(format("commodity-search results: %d (maxStack check: %s)",
+					n, tostring(GM.AH.IsCommodity(itemID))))
+				for i = 1, math.min(n, maxRows) do
+					local r = C_AuctionHouse.GetCommoditySearchResultInfo(itemID, i)
+					if r then
+						local o = {}
+						for k, v in pairs(r) do
+							if type(v) == "table" then v = "n=" .. #v end
+							o[#o + 1] = k .. "=" .. tostring(v)
+						end
+						table.sort(o)
+						GM.Print("  cask[" .. i .. "] " .. table.concat(o, " · "))
+					end
+				end
+			end)
+		end
+	end
+	-- part 2: replicate snapshot; if empty, kick ReplicateItems and retry
+	if not (C_AuctionHouse and C_AuctionHouse.GetReplicateItemInfo) then
+		GM.Print("replicate API unavailable")
+	else
+		local n = C_AuctionHouse.GetNumReplicateItems() or 0
+		if n == 0 and GM.AH.open and C_AuctionHouse.ReplicateItems then
+			GM.Print("snapshot empty — calling ReplicateItems, retrying in 4s…")
+			pcall(C_AuctionHouse.ReplicateItems)
+			GM.After(4, function() DumpReplicate(itemID, maxRows) end)
+		else
+			DumpReplicate(itemID, maxRows)
+		end
+	end
+	-- part 3: what we actually stored
+	if itemID and GM.AH.book and GM.AH.book[itemID] then
+		local e = GM.AH.book[itemID]
+		GM.Print(format("book[%d]: mb=%s mbx=%s sup=%d n=%d", itemID,
+			GM.Money(e.mb), e.mbx == math.huge and "—" or GM.Money(e.mbx), e.sup, e.n))
+	end
+end
+
 function GM.AH.CollectBook()
 	if not (C_AuctionHouse and C_AuctionHouse.GetNumReplicateItems) then return end
 	local n = C_AuctionHouse.GetNumReplicateItems() or 0
@@ -393,6 +519,7 @@ function GM.AH.CollectBook()
 	end
 	local rows, book = {}, {}
 	local i = 0
+	local buyIdx -- field position of buyoutPrice; detected once below
 	local function Finish()
 		GM.AH.collecting = nil
 		GM.AH.wantBook = nil
@@ -413,8 +540,22 @@ function GM.AH.CollectBook()
 		local stop = math.min(i + CHUNK, n)
 		while i < stop do
 			local link = C_AuctionHouse.GetReplicateItemLink(i)
-			-- TSM's field map: 3 = stackSize, 10 = buyout
-			local _, _, stackSize, _, _, _, _, _, _, buyout = C_AuctionHouse.GetReplicateItemInfo(i)
+			local _, _, stackSize = C_AuctionHouse.GetReplicateItemInfo(i)
+			if link and not buyIdx then
+				-- Forever's tuple carries an extra field early on, so
+				-- buyout sits one slot past the retail map (11 vs 10).
+				-- Instead of hardcoding, find the itemID field — it is
+				-- always buyoutIndex + 7 in both layouts.
+				local id = tonumber(link:match("item:(%d+)"))
+				local t = { C_AuctionHouse.GetReplicateItemInfo(i) }
+				for j = #t, 11, -1 do
+					if id and t[j] == id then buyIdx = j - 7 break end
+				end
+				buyIdx = buyIdx or 10
+				GM.Print(GM.CC("textDim") ..
+					format("book field map: buyout at index %d|r", buyIdx))
+			end
+			local buyout = buyIdx and select(buyIdx, C_AuctionHouse.GetReplicateItemInfo(i)) or nil
 			if link and stackSize and stackSize > 0 and buyout and buyout > 0 then
 				local id = tonumber(link:match("item:(%d+)"))
 				local unit = buyout / stackSize

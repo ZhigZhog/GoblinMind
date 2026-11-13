@@ -11,13 +11,43 @@ GM.Ledger = {}
 local TX_CAP = 5000
 local GOLD_CAP = 200
 
+local function CharKey()
+	local name = UnitName("player") or "?"
+	local realm = GetRealmName and GetRealmName() or ""
+	return realm ~= "" and (name .. "-" .. realm) or name
+end
+
 function GM.Ledger.Init()
 	GoblinMindLedger = GoblinMindLedger or {}
 	local L = GoblinMindLedger
-	L.transactions = L.transactions or {}
+	-- transactions + gold are per-character (keyed Name-Realm);
+	-- itemStats stays account-global — market knowledge is shared
+	L.byChar = L.byChar or {}
 	L.itemStats = L.itemStats or {}
-	L.gold = L.gold or {}
-	GM.Ledger.db = L
+	local ck = CharKey()
+	local c = L.byChar[ck]
+	if not c then c = {} L.byChar[ck] = c end
+	-- migrate legacy root-level data into this char's bucket
+	if L.transactions then
+		c.transactions = c.transactions or {}
+		for _, e in ipairs(L.transactions) do
+			tinsert(c.transactions, e)
+		end
+		L.transactions = nil
+	end
+	if L.gold then
+		c.gold = c.gold or {}
+		for _, e in ipairs(L.gold) do tinsert(c.gold, e) end
+		L.gold = nil
+	end
+	c.transactions = c.transactions or {}
+	c.gold = c.gold or {}
+	-- facade: existing readers keep working, data is per-char underneath
+	GM.Ledger.db = {
+		transactions = c.transactions,
+		itemStats = L.itemStats,
+		gold = c.gold,
+	}
 end
 
 function GM.Ledger.Add(kind, itemID, qty, unit, extra)
