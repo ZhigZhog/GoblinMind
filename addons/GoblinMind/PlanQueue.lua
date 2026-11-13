@@ -534,6 +534,12 @@ function PQ.ExecuteNext()
 	end
 	local step = PQ.plan and PQ.plan.steps[PQ.stepIndex]
 	if not step then return end
+	if step.kind == "note" then
+		-- manual step (craft, fetch mail, …): the click acknowledges it
+		PQ.stepIndex = PQ.stepIndex + 1
+		PQ.Refresh()
+		return
+	end
 	local result = GM.AH.Execute(step)
 	if result == "confirm" then
 		PQ.Refresh()
@@ -842,7 +848,8 @@ function PQ.Refresh()
 			row.edge:SetShown(active)
 			row.num:SetText(GM.CC("textDim") .. n .. "|r")
 			local verb = step.kind == "post" and "POST"
-				or step.kind == "cancel" and "CANCEL" or "BUY"
+				or step.kind == "cancel" and "CANCEL"
+				or step.kind == "note" and "CRAFT" or "BUY"
 			if active then
 				row.act:SetText(GM.CC("accent") .. verb .. " ▶|r")
 			else
@@ -874,6 +881,11 @@ function PQ.Refresh()
 			ui.summary:SetText(format("CANCEL SCAN · %d undercut auction%s — one click each",
 				#PQ.plan.steps, #PQ.plan.steps == 1 and "" or "s"))
 			ui.summary2:SetText("")
+		elseif PQ.plan.mode == "craft" then
+			ui.sumEdge:SetColorTexture(GM.RGB("accent"))
+			ui.summary:SetText(format("CRAFT QUEUE · %d step%s — buy reagents, craft is manual",
+				#PQ.plan.steps, #PQ.plan.steps == 1 and "" or "s"))
+			ui.summary2:SetText("")
 		else
 		local verdict, note = GM.Solver.Verdict(PQ.plan, GM.db)
 		local own = (PQ.plan.owned or 0) > 0 and ("own " .. PQ.plan.owned) or nil
@@ -896,10 +908,12 @@ function PQ.Refresh()
 			local verb = PQ.stepIndex > #PQ.plan.steps and "PLAN DONE"
 				or kind == "cancel" and "CANCEL NEXT"
 				or kind == "post" and "POST NEXT"
+				or kind == "note" and "CRAFT DONE"
 				or kind == "buy" and "BUY NEXT" or "EXECUTE NEXT STEP"
 			ui.exec.text:SetText(verb)
 		end
 		local canExec = GM.AH.pendingConfirm ~= nil
+			or (curStep and curStep.kind == "note")
 			or (PQ.stepIndex <= #PQ.plan.steps and GM.AH.open)
 		ui.exec:SetEnabled(canExec)
 		-- honest disabled state: muted fill + label; blocker on line 1

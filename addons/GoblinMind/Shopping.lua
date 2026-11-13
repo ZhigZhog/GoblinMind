@@ -6,7 +6,7 @@ local _, GM = ...
 -- per click: items buy via PlaceBid, commodities via the staged
 -- quote→CONFIRM flow — the same executor the plan queue uses.
 
-GM.Shopping = { mode = "shop", asks = nil, itemID = nil }
+GM.Shopping = { mode = "shop", asks = nil, itemID = nil, expanded = {} }
 local S = GM.Shopping
 local ui
 local ROWS = 13 -- 14 rows ended 4px from the frame bottom and clipped the footer
@@ -23,6 +23,8 @@ local function BuildRow(parent, i)
 	row.icon = row:CreateTexture(nil, "ARTWORK")
 	row.icon:SetSize(18, 18)
 	row.icon:SetPoint("LEFT", 4, 0)
+	row.arrow  = GM.MakeFontString(row, GM.FONT_MED, 10, "textDim")
+	row.arrow:SetPoint("LEFT", 6, 0)
 	row.name   = GM.MakeFontString(row, GM.FONT, 10, "text")
 	row.name:SetPoint("LEFT", 26, 0)
 	row.name:SetWidth(150)
@@ -44,6 +46,47 @@ local function BuildRow(parent, i)
 	row.buy:SetScript("OnClick", function() S.BuyRow(row) end)
 	row.buy:SetScript("OnEnter", function() GM.Panel(row.buy, "contHighest") end)
 	row.buy:SetScript("OnLeave", function() GM.Panel(row.buy, "contHigh") end)
+	-- row hover → native item tooltip + our price context; the buy
+	-- button forwards it too so coverage is seamless
+	row:EnableMouse(true)
+	local function ShowTip()
+		local d = row.data
+		if not d or not d.itemID or not GameTooltip then return end
+		GameTooltip:SetOwner(row, "ANCHOR_RIGHT")
+		GameTooltip:SetItemByID(d.itemID)
+		local e = GM.ItemEntry(d.itemID)
+		local m = e and (e.mkt or e.p) or GM.TSMMarket(d.itemID)
+		if m and d.unit then
+			local pct = d.unit / m * 100
+			GameTooltip:AddLine(format("unit %s · %s of ref %s (%d%%)",
+				GM.Money(d.unit), GM.CC(pct <= 100 and "pos" or "err"),
+				GM.Money(m), pct), 1, 1, 1)
+		end
+		if d.own then GameTooltip:AddLine("your auction", 0.5, 0.8, 0.4) end
+		GameTooltip:Show()
+	end
+	local function HideTip()
+		if GameTooltip then GameTooltip:Hide() end
+	end
+	row:SetScript("OnEnter", ShowTip)
+	row:SetScript("OnLeave", HideTip)
+	-- header rows collapse/expand their group on click; child rows
+	-- keep mouse free for the buy button and tooltip only
+	row:SetScript("OnMouseUp", function()
+		local d = row.data
+		if d and d.header then
+			S.expanded[d.itemID] = not d.open
+			S.Refresh()
+		end
+	end)
+	row.buy:SetScript("OnEnter", function()
+		GM.Panel(row.buy, "contHighest")
+		ShowTip()
+	end)
+	row.buy:SetScript("OnLeave", function()
+		GM.Panel(row.buy, "contHigh")
+		HideTip()
+	end)
 	return row
 end
 
@@ -95,6 +138,8 @@ local function Build()
 	ui.shopBtn:SetPoint("LEFT", title, "RIGHT", 12, -1)
 	ui.snipeBtn = TitleBtn("SNIPER", 60, function() S.SetMode("sniper") end)
 	ui.snipeBtn:SetPoint("LEFT", ui.shopBtn, "RIGHT", 6, 0)
+	ui.craftBtn = TitleBtn("CRAFT", 52, function() S.SetMode("craft") end)
+	ui.craftBtn:SetPoint("LEFT", ui.snipeBtn, "RIGHT", 6, 0)
 	ui.action = TitleBtn("SCAN", 80, function() S.Action() end)
 	ui.action:SetPoint("TOPRIGHT", close, "TOPLEFT", -8, 1)
 
@@ -168,6 +213,15 @@ function S.SetMode(mode)
 	S.Refresh()
 end
 
+-- QUEUE on a recipe row → plan steps (buy missing mats, manual craft)
+function S.QueueRow(row)
+	local d = row.data
+	if d and d.recipeID then
+		GM.Crafting.Queue(d.recipeID, 1)
+		GM.PlanQueue.Show()
+	end
+end
+
 function S.Action()
 	if ui.mode == "sniper" then
 		GM.Sniper.Scan()
@@ -202,7 +256,8 @@ end
 
 function S.BuyRow(row)
 	local d = row.data
-	if not d then return end
+	if not d or d.header then return end
+	if d.recipeID then S.QueueRow(row) return end
 	-- a staged quote for this item is live → this click is the confirm
 	local pc = GM.AH.pendingConfirm
 	if pc and pc.itemID == d.itemID then
@@ -266,70 +321,136 @@ function S.Refresh()
 	if not ui then return end
 	GM.Panel(ui.shopBtn, ui.mode == "shop" and "accent" or "contMedium")
 	GM.Panel(ui.snipeBtn, ui.mode == "sniper" and "accent" or "contMedium")
+	GM.Panel(ui.craftBtn, ui.mode == "craft" and "accent" or "contMedium")
 	ui.action.text:SetText(ui.mode == "sniper" and "SNAPSHOT" or "SCAN")
-	ui.action:SetEnabled(GM.AH.open)
+	ui.action:SetEnabled(GM.AH.open and ui.mode ~= "craft")
 
 	local pc = GM.AH.pendingConfirm
+	-- ============ tree display: group into item headers + children ============
+	-- entries: { header=true, itemID, count, totalQty, cheapest, ownCount,
+	--            name, m, cap } or { child=true, d = ask-or-hit }
+	local display = {}
+	local function PushGroup(list, getID)
+		if #list == 0 then return end
+		local order, groups = {}, {}
+		for _, e in ipairs(list) do
+			local id = getID(e)
+			local g = groups[id]
+			if not g then
+				g = { itemID = id, items = {}, totalQty = 0, count = 0,
+					cheapest = math.huge, ownCount = 0 }
+				groups[id] = g
+				tinsert(order, g)
+			end
+			tinsert(g.items, e)
+			g.count = g.count + 1
+			g.totalQty = g.totalQty + (e.qty or 1)
+			g.cheapest = math.min(g.cheapest, e.unit or math.huge)
+			if e.own then g.ownCount = g.ownCount + 1 end
+		end
+		for _, g in ipairs(order) do
+			local open = S.expanded[g.itemID]
+			if open == nil then open = true end -- groups start expanded
+			tinsert(display, { header = true, g = g, open = open })
+			if open then
+				for _, e in ipairs(g.items) do
+					tinsert(display, { child = true, d = e })
+				end
+			end
+		end
+	end
+
 	if ui.mode == "shop" then
-		local e = S.itemID and GM.ItemEntry(S.itemID)
-		local m = (e and (e.mkt or e.p)) or (S.itemID and GM.TSMMarket(S.itemID))
-		local cap = S.itemID and GM.Groups.EvalOp(
-			GM.Groups.GetOps(S.itemID, "shopping"), "maxPrice", S.itemID)
 		local asks = S.asks or {}
 		if #asks == 0 then
 			S.Status(GM.CC("textDim") .. (S.itemID and "book is empty" or
 				"SHOP — SCAN the targeted item's book|r"))
 		end
-		for i = 1, ROWS do
-			local row, a = ui.rows[i], asks[i]
-			if a then
-				row:Show()
-				row.data = a
-				local ic = GM.ItemIcon and GM.ItemIcon(a.itemID)
-				if ic then row.icon:SetTexture(ic); row.icon:Show() else row.icon:Hide() end
-				row.name:SetText(((GM.ItemName and GM.ItemName(a.itemID)) or ("item " .. a.itemID)) .. (a.own and " (yours)" or ""))
-				row.qty:SetText("×" .. a.qty)
-				row.unit:SetText(GM.Money(a.unit))
-				row.pct:SetText(a.pct and "" or (m and format("%.0f%%", a.unit / m * 100) or "—"))
-				if cap and a.unit <= cap then
-					row.pct:SetTextColor(GM.RGB("pos"))
-				else
-					row.pct:SetTextColor(GM.RGB("textDim"))
-				end
-				row.seller:SetText(a.own and (GM.CC("accent") .. "OWN|r") or (a.seller or "—"))
-				row.buy.text:SetText(pc and pc.itemID == a.itemID and "CONFIRM" or "BUY")
-				row.buy:SetEnabled(GM.AH.open and not a.own)
-			else
-				row:Hide()
-			end
-		end
-	else
+		PushGroup(asks, function(a) return a.itemID end)
+	elseif ui.mode == "sniper" then
 		local hits = GM.Sniper.hits
 		if #hits == 0 then
 			S.Status(GM.CC("textDim") .. "SNIPER — SNAPSHOT diffs the full book for under-priced listings|r")
 		end
-		for i = 1, ROWS do
-			local row, h = ui.rows[i], hits[i]
-			if h then
-				row:Show()
-				row.data = h
-				local ic = GM.ItemIcon and GM.ItemIcon(h.itemID)
-				if ic then row.icon:SetTexture(ic); row.icon:Show() else row.icon:Hide() end
-				-- h.name may be the "item N" fallback from collection
-				-- time — re-resolve so async-loaded names land too
-				local nm = (h.name and not h.name:match("^item %d+$")) and h.name
-					or (GM.ItemName and GM.ItemName(h.itemID))
-				row.name:SetText(nm or ("item " .. h.itemID))
-				row.qty:SetText("×" .. h.qty)
-				row.unit:SetText(GM.Money(h.unit))
-				row.pct:SetText(h.pct and format("%.0f%%", h.pct) or "—")
+		PushGroup(hits, function(h) return h.itemID end)
+	else
+		-- CRAFT mode: flat recipe rows sorted by profit
+		local recs = GM.Crafting and GM.Crafting.List() or {}
+		if #recs == 0 then
+			S.Status(GM.CC("textDim") .. "CRAFT — open a profession to capture its recipes|r")
+		end
+		for _, r in ipairs(recs) do tinsert(display, { craft = r }) end
+	end
+
+	for i = 1, ROWS do
+		local row, e = ui.rows[i], display[i]
+		if not e then
+			row:Hide()
+		elseif e.craft then
+			local r = e.craft
+			row:Show()
+			row.data = { recipeID = r.recipeID, itemID = r.itemID }
+			local ic = GM.ItemIcon and GM.ItemIcon(r.itemID)
+			if ic then row.icon:SetTexture(ic); row.icon:Show() else row.icon:Hide() end
+			row.arrow:SetText("")
+			row.name:SetPoint("LEFT", 26, 0)
+			row.name:SetText(((GM.ItemName and GM.ItemName(r.itemID)) or r.name or "?"))
+			row.qty:SetText(r.craftable and r.craftable > 0 and ("×" .. r.craftable) or "")
+			row.unit:SetText(r.cost and GM.Money(r.cost) or "—")
+			row.pct:SetText(r.profit and GM.Money(r.profit) or "—")
+			row.pct:SetTextColor(GM.RGB(r.profit and (r.profit >= 0 and "pos" or "err") or "textDim"))
+			row.seller:SetText(r.prof or "")
+			row.buy:Show()
+			row.buy.text:SetText("QUEUE")
+			row.buy:SetEnabled(true)
+		elseif e.header then
+			local g = e.g
+			row:Show()
+			row.data = { header = true, itemID = g.itemID, open = e.open }
+			local ic = GM.ItemIcon and GM.ItemIcon(g.itemID)
+			if ic then row.icon:SetTexture(ic); row.icon:Show() else row.icon:Hide() end
+			row.arrow:SetText(e.open and "▼" or "▶")
+			row.name:SetPoint("LEFT", 26, 0)
+			local nm = (GM.ItemName and GM.ItemName(g.itemID)) or ("item " .. g.itemID)
+			row.name:SetText(GM.CC("text") .. nm .. "|r" .. GM.CC("textDim")
+				.. "  · " .. g.count .. (g.count == 1 and " listing" or " listings") .. "|r")
+			row.qty:SetText("×" .. g.totalQty)
+			row.unit:SetText(g.cheapest < math.huge and GM.Money(g.cheapest) or "—")
+			row.pct:SetText("")
+			row.seller:SetText(g.ownCount > 0
+				and (GM.CC("accent") .. g.ownCount .. " own|r") or "")
+			row.buy:Hide()
+		else
+			local d = e.d
+			row:Show()
+			row.data = d
+			row.arrow:SetText("")
+			row.icon:Hide()
+			row.name:SetPoint("LEFT", 42, 0)
+			row.buy:Show()
+			if ui.mode == "shop" then
+				local m = S.itemID and ((GM.ItemEntry(S.itemID) or {}).mkt
+					or (GM.ItemEntry(S.itemID) or {}).p or GM.TSMMarket(S.itemID))
+				local cap = S.itemID and GM.Groups.EvalOp(
+					GM.Groups.GetOps(S.itemID, "shopping"), "maxPrice", S.itemID)
+				row.name:SetText("")
+				row.qty:SetText("×" .. d.qty)
+				row.unit:SetText(GM.Money(d.unit))
+				row.pct:SetText(m and format("%.0f%%", d.unit / m * 100) or "—")
+				row.pct:SetTextColor(GM.RGB(cap and d.unit <= cap and "pos" or "textDim"))
+				row.seller:SetText(d.own and (GM.CC("accent") .. "OWN|r") or (d.seller or "—"))
+				row.buy.text:SetText(pc and pc.itemID == d.itemID and "CONFIRM" or "BUY")
+				row.buy:SetEnabled(GM.AH.open and not d.own)
+			else
+				row.name:SetText("")
+				row.qty:SetText("×" .. d.qty)
+				row.unit:SetText(GM.Money(d.unit))
+				row.pct:SetText(d.pct and format("%.0f%%", d.pct) or "—")
 				row.pct:SetTextColor(GM.RGB("pos"))
 				row.seller:SetText("")
-				row.buy.text:SetText(h.state == "scanning" and "…"
-					or h.state == "ready" and "BUY" or "SCAN")
-				row.buy:SetEnabled(GM.AH.open and h.state ~= "scanning")
-			else
-				row:Hide()
+				row.buy.text:SetText(d.state == "scanning" and "…"
+					or d.state == "ready" and "BUY" or "SCAN")
+				row.buy:SetEnabled(GM.AH.open and d.state ~= "scanning")
 			end
 		end
 	end

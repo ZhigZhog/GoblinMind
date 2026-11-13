@@ -28,15 +28,26 @@ function GM.Ledger.Add(kind, itemID, qty, unit, extra)
 	if #tx > TX_CAP then table.remove(tx, 1) end
 	local s = L.itemStats[itemID]
 	if not s then s = {} L.itemStats[itemID] = s end
+	local t = time()
 	if kind == "buy" then
 		local tot = qty * (unit or 0)
 		s.buyQ = (s.buyQ or 0) + qty
 		s.buyT = (s.buyT or 0) + tot
 		s.paidQ = (s.paidQ or 0) + qty
 		s.paidT = (s.paidT or 0) + tot
+		if unit then
+			s.buyMin = math.min(s.buyMin or math.huge, unit)
+			s.buyMax = math.max(s.buyMax or 0, unit)
+		end
+		s.lastBuy = t
 	elseif kind == "sell" then
 		s.sellQ = (s.sellQ or 0) + qty
 		s.sellT = (s.sellT or 0) + qty * (unit or 0)
+		if unit then
+			s.sellMin = math.min(s.sellMin or math.huge, unit)
+			s.sellMax = math.max(s.sellMax or 0, unit)
+		end
+		s.lastSell = t
 		if s.paidQ and s.paidQ > 0 then
 			local avg = s.paidT / s.paidQ
 			local d = math.min(qty, s.paidQ)
@@ -48,9 +59,38 @@ function GM.Ledger.Add(kind, itemID, qty, unit, extra)
 		s.postT = (s.postT or 0) + qty * (unit or 0)
 	elseif kind == "cancel" then
 		s.cancelQ = (s.cancelQ or 0) + qty
+	elseif kind == "expire" then
+		s.expireQ = (s.expireQ or 0) + qty
+		s.lastExpire = t
 	elseif kind == "mail" then
 		s.mailInQ = (s.mailInQ or 0) + qty
 	end
+end
+
+-- per-item aggregate snapshot for the tooltip/accounting surface;
+-- cancelled/expired counts are filtered to after the last sale the
+-- way TSM's "since last sale" lines report them
+function GM.Ledger.Stats(itemID)
+	local s = GM.Ledger.db and GM.Ledger.db.itemStats[itemID]
+	if not s then return nil end
+	local cancelSinceSell, expireSinceSell = 0, 0
+	local lastSell = s.lastSell or 0
+	for _, tx in ipairs(GM.Ledger.db.transactions) do
+		if tx.i == itemID and tx.t > lastSell then
+			if tx.ty == "cancel" then cancelSinceSell = cancelSinceSell + 1
+			elseif tx.ty == "expire" then expireSinceSell = expireSinceSell + 1 end
+		end
+	end
+	return {
+		buyQ = s.buyQ or 0, buyAvg = s.buyQ and s.buyQ > 0 and s.buyT / s.buyQ or nil,
+		buyMin = s.buyMin ~= math.huge and s.buyMin or nil, buyMax = s.buyMax,
+		lastBuy = s.lastBuy,
+		sellQ = s.sellQ or 0, sellAvg = s.sellQ and s.sellQ > 0 and s.sellT / s.sellQ or nil,
+		sellMin = s.sellMin ~= math.huge and s.sellMin or nil, sellMax = s.sellMax,
+		lastSell = s.lastSell,
+		cancelSinceSell = cancelSinceSell, expireSinceSell = expireSinceSell,
+		saleRate = (s.sellQ or 0) > 0 and s.sellQ / math.max(1, (s.sellQ or 0) + (s.cancelQ or 0) + (s.expireQ or 0)) or nil,
+	}
 end
 
 -- kind: "buy" (lifetime avg buy), "sell" (lifetime avg sell),

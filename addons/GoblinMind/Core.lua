@@ -28,6 +28,7 @@ GM.frame:SetScript("OnEvent", function(_, event, arg1)
 		if GM.Ledger then GM.Ledger.Init() end
 		if GM.Groups then GM.Groups.Init() end
 		if GM.History then GM.History.Init() end
+		if GM.Crafting then GM.Crafting.Init() end
 		GM.frame:UnregisterEvent("ADDON_LOADED")
 	elseif event == "PLAYER_LOGIN" then
 		if GM.MinimapInit then pcall(GM.MinimapInit) end

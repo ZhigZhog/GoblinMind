@@ -88,10 +88,15 @@ function GM.Inventory.RefreshOwned()
 	end
 	for aid, prev in pairs(auctionCache) do
 		local couldExpire = prev.tLeft and (t - prev.at) >= prev.tLeft
-		if ownedPrimed and not now[aid] and not recentCancels[aid] and not couldExpire then
-			local unit = prev.buyout and prev.qty > 0
-				and math.floor(prev.buyout * 0.95 / prev.qty) or nil
-			GM.Ledger.Add("sell", prev.itemID, prev.qty, unit, { auctionID = aid })
+		if ownedPrimed and not now[aid] and not recentCancels[aid] then
+			if couldExpire then
+				-- vanished on schedule without a cancel → expiry
+				GM.Ledger.Add("expire", prev.itemID, prev.qty, nil, { auctionID = aid })
+			else
+				local unit = prev.buyout and prev.qty > 0
+					and math.floor(prev.buyout * 0.95 / prev.qty) or nil
+				GM.Ledger.Add("sell", prev.itemID, prev.qty, unit, { auctionID = aid })
+			end
 		end
 	end
 	auctionCache = now

@@ -68,9 +68,15 @@ local SRC = {
 	avgsell             = function(id) return GM.Ledger and GM.Ledger.Avg(id, "sell") end,
 	avgpaid             = function(id) return GM.Ledger and GM.Ledger.Avg(id, "paid") end,
 	avgminbuyout        = function(id) return GM.Ledger and GM.Ledger.Avg(id, "minbuy") end,
-	-- crafting/destroy — real values arrive with Parts 7/10
-	crafting            = function() return nil end,
-	matprice            = function() return nil end,
+	-- crafting — Part 7: recipe capture feeds these via Crafting.lua
+	crafting            = function(id)
+		local rid = GM.Crafting and GM.Crafting.RecipeForItem and GM.Crafting.RecipeForItem(id)
+		return rid and GM.Crafting.MatCost(rid) or nil
+	end,
+	matprice            = function(id)
+		return GM.Crafting and GM.Crafting.MatPrice and GM.Crafting.MatPrice(id)
+			or nil
+	end,
 	disenchant          = function() return nil end,
 	destroy             = function() return nil end,
 	gather              = function() return nil end,
