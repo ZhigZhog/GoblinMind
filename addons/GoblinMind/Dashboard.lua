@@ -10,16 +10,16 @@ GM.Dashboard = {}
 local DB = GM.Dashboard
 
 local TABS = {
-	{ key = "dash",   label = "HOME" },
-	{ key = "plan",   label = "PLAN" },
-	{ key = "market", label = "MARKET" },
-	{ key = "groups", label = "GROUPS" },
-	{ key = "ops",    label = "OPS" },
-	{ key = "crafting", label = "CRAFT" },
-	{ key = "overview", label = "LEDGER" },
-	{ key = "auctions", label = "AUCTIONS" },
-	{ key = "destroy", label = "DESTROY" },
-	{ key = "settings", label = "SETTINGS" },
+	{ key = "dash",   label = "HOME",    short = "HOME" },
+	{ key = "plan",   label = "PLAN",    short = "PLAN" },
+	{ key = "market", label = "MARKET",  short = "MKT" },
+	{ key = "groups", label = "GROUPS",  short = "GRPS" },
+	{ key = "ops",    label = "OPS",     short = "OPS" },
+	{ key = "crafting", label = "CRAFT", short = "CRFT" },
+	{ key = "overview", label = "LEDGER", short = "LDGR" },
+	{ key = "auctions", label = "AUCTIONS", short = "AUCT" },
+	{ key = "destroy", label = "DESTROY", short = "DSTR" },
+	{ key = "settings", label = "SETTINGS", short = "SET" },
 }
 
 -- window classes: the planner + auctions + crafting + destroy are
@@ -72,7 +72,8 @@ function DB.Switch(key)
 end
 
 -- shared tab strip: small text tabs anchored after the window's
--- title fontstring. The current window's tab is omitted. Rebuilding
+-- title fontstring. The current window's tab renders selected
+-- (accent + underline). Rebuilding
 -- is supported (call again when the current key changes — e.g. the
 -- main window's dash↔plan mode) — prior tabs are released first.
 function DB.AddTabs(frame, titleFs, currentKey)
@@ -85,26 +86,54 @@ function DB.AddTabs(frame, titleFs, currentKey)
 		end
 	end
 	frame._gmTabs = {}
+	-- the strip must fit the window: measure real string widths and
+	-- fall back to compact labels when the full set would run off the
+	-- frame's right edge
+	local meas = frame._gmTabMeas
+	if not meas then
+		meas = GM.MakeFontString(frame, GM.FONT_BOLD, 9, "textDim")
+		meas:SetTextColor(0, 0, 0, 0) -- measure-only, never painted
+		frame._gmTabMeas = meas
+	end
+	local avail = (frame:GetWidth() or 640)
+		- (titleFs.GetStringWidth and titleFs:GetStringWidth() or 120) - 36
+	local total = 0
+	for _, t in ipairs(TABS) do
+		meas:SetText(t.label)
+		total = total + (meas:GetStringWidth() or 40) + 15
+	end
+	local compact = total > avail
 	local anchor = titleFs
 	for _, t in ipairs(TABS) do
-		if t.key ~= currentKey then
-			local b = CreateFrame("Button", nil, frame)
-			b:SetPoint("LEFT", anchor, "RIGHT", 5, 0)
-			b:SetHeight(14)
-			b.text = GM.MakeFontString(b, GM.FONT_BOLD, 9, "textDim")
-			b.text:SetPoint("CENTER")
-			b.text:SetText(t.label)
-			-- auto-width from the label — fixed px widths clip the
-			-- longer tab names into their neighbours
-			b:SetWidth((b.text.GetStringWidth
-				and b.text:GetStringWidth() or 40) + 10)
-			local key = t.key
-			b:SetScript("OnClick", function() DB.Switch(key) end)
-			b:SetScript("OnEnter", function() b.text:SetTextColor(GM.RGB("text")) end)
-			b:SetScript("OnLeave", function() b.text:SetTextColor(GM.RGB("textDim")) end)
-			anchor = b
-			frame._gmTabs[#frame._gmTabs + 1] = b
+		local b = CreateFrame("Button", nil, frame)
+		b:SetPoint("LEFT", anchor, "RIGHT", 5, 0)
+		b:SetHeight(14)
+		local cur = t.key == currentKey
+		b.text = GM.MakeFontString(b, GM.FONT_BOLD, 9,
+			cur and "accent" or "textDim")
+		b.text:SetPoint("CENTER")
+		b.text:SetText(compact and t.short or t.label)
+		-- auto-width from the label — fixed px widths clip the
+		-- longer tab names into their neighbours
+		b:SetWidth((b.text.GetStringWidth
+			and b.text:GetStringWidth() or 40) + 10)
+		-- the current destination stays visible and selected — a
+		-- disappearing tab shifts every following target under the
+		-- cursor
+		if cur then
+			b.line = b:CreateTexture(nil, "ARTWORK")
+			b.line:SetSize(b:GetWidth() - 10, 2)
+			b.line:SetPoint("BOTTOM", 0, -1)
+			b.line:SetColorTexture(GM.RGB("accent"))
 		end
+		local key = t.key
+		b:SetScript("OnClick", function() DB.Switch(key) end)
+		b:SetScript("OnEnter", function() b.text:SetTextColor(GM.RGB("text")) end)
+		b:SetScript("OnLeave", function()
+			b.text:SetTextColor(GM.RGB(cur and "accent" or "textDim"))
+		end)
+		anchor = b
+		frame._gmTabs[#frame._gmTabs + 1] = b
 	end
 end
 
@@ -129,8 +158,8 @@ local function TaskLines()
 		posted = posted + 1
 		local e = GM.ItemEntry(a.itemID)
 		local cheapest = e and e.mb
-		if cheapest and a.buyout and a.qty and a.qty > 0
-			and a.buyout / a.qty > cheapest then
+		-- a.buyout is already per-item (Forever convention) — no /qty
+		if cheapest and a.buyout and a.buyout > cheapest then
 			under = under + 1
 		end
 	end

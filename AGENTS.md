@@ -107,7 +107,13 @@ self-owned Blizzard-API pipeline later.
       (not 17). Detect via itemID position (`buyout = itemIDidx - 7`),
       don't hardcode. `GetNumReplicateItems` returns 0 when the AH is
       closed/snapshot expired — replicate only populated after
-      `ReplicateItems` + the list-update event.
+      `ReplicateItems` + the list-update event. Replicate buyout is
+      also **per-item** (unit = buyout, no `/stackSize`) — same
+      convention as item-search results and owned auctions
+      (`GetOwnedAuctionInfo.buyout` per-item too).
+    - Owned-auction `buyout` is **per-item** (Inventory.auctions) —
+      never divide by `a.qty`; the Dashboard undercut check and
+      CancelScan compare it directly against per-item `mbx`/cheapest.
     - `GetCommoditySearchResultInfo` can return **polluted rows for
       non-commodity itemIDs** (cloth-shaped 2c lots for a bag). Only
       consume commodity results when the item search returns nothing.
@@ -118,6 +124,18 @@ self-owned Blizzard-API pipeline later.
       table (`price`, `stackCount`, `numAvailable`, `hasExtendedCost`) —
       the global `GetMerchantItemInfo` doesn't exist. `GetItemInfo`
       isn't a global either — always `C_Item.GetItemInfo`.
+  - **Frame names must never equal a SavedVariable name**: SVs load at
+    ADDON_LOADED (after files run) and OVERWRITE the frame global —
+    `UISpecialFrames` then resolves to a plain table and Blizzard's
+    `CloseSpecialWindows` crashes on `table:IsShown()`. Worse, opening
+    the window re-clobbers `_G[SVname]` with the frame so the logout
+    serializer can't write it = silent settings loss. (Was
+    `GoblinMindSettings` frame ↔ SV; renamed frame to
+    `GoblinMindSettingsFrame`. All frames get a `*Frame`/`UI` suffix.)
+    `/goblin uidump` audits UISpecialFrames + UIPanelWindows for
+    unresolvable entries — Forever ships ~29 retail-only names in
+    `UIPanelWindows` (Garrison*/OrderHall*/Chromie*/etc.) that resolve
+    NIL on this client; that's Blizzard-side noise, not ours.
   - **Container drops need a family check**: `PickupContainerItem` into a
   specialized bag (reagent bag, profession bags) fails with "That item
   doesn't go in that container". Check `ItemWillGoInBag`-style:

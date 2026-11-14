@@ -58,6 +58,7 @@ function GM.Money(copper)
 end
 
 function GM.Signed(copper)
+	copper = copper or 0
 	local key = copper >= 0 and "pos" or "err"
 	return GM.CC(key) .. (copper >= 0 and "+" or "-") .. "|r" .. GM.Money(abs(copper))
 end

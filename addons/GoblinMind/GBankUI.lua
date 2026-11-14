@@ -20,6 +20,8 @@ local ui
 
 local ROW_H = 24
 local VISIBLE = 14
+local PickupItem = C_Container and C_Container.PickupContainerItem
+	or PickupContainerItem
 local tinsert, sort = tinsert, table.sort
 local format = format
 
@@ -104,7 +106,7 @@ local function Deposit(r, tab)
 		GM.Print(GM.CC("warn") .. "[gbank] tab full|r")
 		return
 	end
-	C_Container.PickupContainerItem(r.bag, r.slot)
+	PickupItem(r.bag, r.slot)
 	PickupGuildBankItem(tab, dst)
 	if GetCursorInfo and GetCursorInfo() then ClearCursor() end
 	GM.After(0.3, GU.Refresh)
@@ -127,7 +129,7 @@ local function Withdraw(r, tab)
 		return
 	end
 	PickupGuildBankItem(tab, r.slot)
-	C_Container.PickupContainerItem(dst.bag, dst.slot)
+	PickupItem(dst.bag, dst.slot)
 	if GetCursorInfo and GetCursorInfo() then ClearCursor() end
 	GM.After(0.3, GU.Refresh)
 end
@@ -157,6 +159,11 @@ local function MakeRow(parent, i, arrow)
 	act.text:SetPoint("CENTER")
 	act.text:SetText(arrow)
 	row.act = act
+	-- disabled moves explain themselves on hover — a dead arrow with
+	-- no reason reads as a bug
+	Tip(act, function()
+		return row.actWhy and { row.actWhy } or nil
+	end)
 	row:SetScript("OnEnter", function(self)
 		if self.tipID then
 			GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
@@ -309,6 +316,13 @@ local function FillTabs()
 				pcall(QueryGuildBankTab, t)
 				GM.After(0.3, GU.Refresh)
 			end)
+			-- install once and read the live tab name at hover — Tip()
+			-- hooks OnEnter, so installing per refresh accumulated
+			-- stale closures on every repaint
+			Tip(b, function()
+				local n = GetGuildBankTabInfo and GetGuildBankTabInfo(t)
+				return n and { n } or nil
+			end)
 			ui.tabBtns[i] = b
 		end
 		local name, icon = GetGuildBankTabInfo and GetGuildBankTabInfo(i)
@@ -316,13 +330,10 @@ local function FillTabs()
 		if icon then b.icon:SetTexture(icon) end
 		b.text:SetTextColor(GM.RGB(i == cur and "accent" or "textDim"))
 		b.icon:SetDesaturated(i ~= cur)
-		if name then
-			Tip(b, function() return { name } end)
-		end
 	end
 end
 
-local function Fill(rows, vis, scrollKey, onAct, actEnabled)
+local function Fill(rows, vis, scrollKey, onAct, actEnabled, disabledWhy)
 	local maxScroll = math.max(0, #rows - VISIBLE)
 	ui[scrollKey] = math.min(ui[scrollKey] or 0, maxScroll)
 	W.ScrollText(vis[1]:GetParent().count, ui[scrollKey], VISIBLE, #rows)
@@ -337,8 +348,10 @@ local function Fill(rows, vis, scrollKey, onAct, actEnabled)
 			if actEnabled == false then
 				row.act.text:SetTextColor(GM.RGB("textDim"))
 				row.act:SetScript("OnClick", nil)
+				row.actWhy = disabledWhy
 			else
 				row.act.text:SetTextColor(GM.RGB("accent"))
+				row.actWhy = nil
 				local item = r
 				row.act:SetScript("OnClick", function() onAct(item) end)
 			end
@@ -369,10 +382,18 @@ function GU.Refresh()
 		or (#gRows == 0 and "tab empty" or ""))
 	ui.rEmpty:SetShown(#gRows == 0)
 	Fill(bagRows, ui.lrows, "lScroll",
-		function(r) Deposit(r, tab) end, canDep and open)
+		function(r) Deposit(r, tab) end, canDep and open,
+		not open and "guild bank closed"
+			or not canDep and "no deposit permission on this tab"
+			or nil)
 	Fill(gRows, ui.rrows, "rScroll",
 		function(r) Withdraw(r, tab) end, canWd and open
-			and (wdLeft == nil or wdLeft > 0))
+			and (wdLeft == nil or wdLeft > 0),
+		not open and "guild bank closed"
+			or not canWd and "no withdraw permission on this tab"
+			or (wdLeft ~= nil and wdLeft <= 0)
+				and "daily withdrawal limit reached"
+			or nil)
 end
 
 -- ============ takeover ============

@@ -16,10 +16,19 @@ function GM.TargetItem(itemID, link)
 	if GM.AH.open then GM.PlanQueue.Rescan() end
 end
 
--- Alt-click a bag slot.
+-- Alt-click always targets; Shift-click targets only while the plan
+-- window is open (shift has native meanings — chat paste, stack
+-- split — that still fire alongside; secure hooks can't suppress
+-- them, and shouldn't).
+local function Capture()
+	if IsAltKeyDown() then return true end
+	return IsShiftKeyDown() and GM.PlanQueue.IsShown()
+end
+
+-- Modified-click a bag slot.
 if ContainerFrameItemButton_OnModifiedClick then
 	hooksecurefunc("ContainerFrameItemButton_OnModifiedClick", function(self)
-		if not IsAltKeyDown() then return end
+		if not Capture() then return end
 		local bag = self:GetParent():GetID()
 		local slot = self:GetID()
 		local info = C_Container and C_Container.GetContainerItemInfo(bag, slot)
@@ -27,19 +36,19 @@ if ContainerFrameItemButton_OnModifiedClick then
 	end)
 end
 
--- Alt-click a chat link.
+-- Modified-click a chat link.
 if SetItemRef then
 	hooksecurefunc("SetItemRef", function(link)
-		if not IsAltKeyDown() then return end
+		if not Capture() then return end
 		local id = link and tonumber(link:match("item:(%d+)"))
 		if id then GM.TargetItem(id) end
 	end)
 end
 
--- Alt-click an equipped slot.
+-- Modified-click an equipped slot.
 if PaperDollItemSlotButton_OnModifiedClick then
 	hooksecurefunc("PaperDollItemSlotButton_OnModifiedClick", function(self)
-		if not IsAltKeyDown() then return end
+		if not Capture() then return end
 		local link = GetInventoryItemLink("player", self:GetID())
 		local id = link and GetIDByInfo and GetIDByInfo(link)
 		if id then GM.TargetItem(id, link) end

@@ -39,6 +39,7 @@ AHUI.lua
 MailUI.lua
 BankUI.lua
 GBankUI.lua
+SniperUI.lua
 Settings.lua
 ItemInput.lua
 Tooltip.lua

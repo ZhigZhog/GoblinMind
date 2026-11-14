@@ -17,8 +17,8 @@ local function ApplyDefaults(dst, src)
 end
 
 GM.frame = CreateFrame("Frame")
-GM.frame:RegisterEvent("ADDON_LOADED")
-GM.frame:RegisterEvent("PLAYER_LOGIN")
+pcall(GM.frame.RegisterEvent, GM.frame, "ADDON_LOADED")
+pcall(GM.frame.RegisterEvent, GM.frame, "PLAYER_LOGIN")
 GM.frame:SetScript("OnEvent", function(_, event, arg1)
 	if event == "ADDON_LOADED" and arg1 == addonName then
 		GoblinMindSettings = GoblinMindSettings or {}
@@ -164,6 +164,44 @@ SlashCmdList.GOBLINMIND = function(msg)
 	end
 	if msg:sub(1, 4) == "mail" then
 		GM.MailUI.Toggle()
+		return
+	end
+	if msg:sub(1, 4) == "snip" then
+		GM.SniperUI.Toggle()
+		return
+	end
+	if msg:sub(1, 6) == "uidump" then
+		local function FrameFor(v)
+			if type(v) == "table" then return v end
+			if type(v) ~= "string" then return nil end
+			if _G[v] then return _G[v] end
+			if GetFrameHandleFrame then
+				local ok, r = pcall(GetFrameHandleFrame, v)
+				if ok and r then return r end
+			end
+		end
+		local bad = 0
+		for i, v in ipairs(UISpecialFrames or {}) do
+			local f = FrameFor(v)
+			local ok, shown = pcall(function() return f and f:IsShown() end)
+			if not (ok and f) then
+				bad = bad + 1
+				GM.Print(GM.CC("err") .. format("UISpecialFrames[%d] = %s -> %s",
+					i, tostring(v), f and "no IsShown" or "NIL") .. "|r")
+			end
+		end
+		for k in pairs(UIPanelWindows or {}) do
+			if not FrameFor(k) then
+				bad = bad + 1
+				GM.Print(GM.CC("err") .. "UIPanelWindows[" .. tostring(k)
+					.. "] -> NIL (no frame)" .. "|r")
+			end
+		end
+		GM.Print(format("uidump: %d special, %d panel entries — %d bad",
+			#(UISpecialFrames or {}), (function()
+				local n = 0 for _ in pairs(UIPanelWindows or {}) do n = n + 1 end
+				return n end)(), bad))
+		if bad == 0 then GM.Print("no broken entries — GoblinMind's are all resolvable") end
 		return
 	end
 	if msg:sub(1, 6) == "ahdump" then

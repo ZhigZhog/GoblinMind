@@ -244,6 +244,7 @@ local function Scan()
 					-- difficulty/cooldown exist on retail-shaped
 					-- GetRecipeInfo; nil-safe, detail pane uses them
 					diff = info.relativeDifficulty or info.difficulty or prev.diff,
+					nup = info.numSkillUps or prev.nup,
 					cd = info.cooldown or prev.cd,
 				}
 				local p = GoblinMindCrafting.recipes[recipeID].prof
@@ -347,8 +348,9 @@ end
 -- per-unit mat price: market first, vendor-sell as the floor (matches
 -- TSM's default matPrice fallback chain minus sources we lack)
 function C.MatPrice(itemID)
+	local GetInfo = C_Item and C_Item.GetItemInfo or GetItemInfo
 	return GM.Price("dbmarket", itemID)
-		or (GetItemInfo and select(11, GetItemInfo(itemID)))
+		or (GetInfo and select(11, GetInfo(itemID)))
 end
 
 -- cost to craft ONE output item (÷ numMade); nil if unknown recipe
@@ -543,7 +545,8 @@ function C.List()
 		end
 		tinsert(out, {
 			recipeID = id, itemID = r.itemID, name = r.name,
-			prof = r.prof, mats = r.mats,
+			prof = r.prof, mats = r.mats, diff = r.diff,
+			nup = r.nup,
 			cost = cost, price = p, profit = profit,
 			craftable = craftable, craftableAll = C.CraftableAll(id),
 			suggest = suggest,

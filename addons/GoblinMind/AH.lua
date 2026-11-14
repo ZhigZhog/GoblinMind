@@ -1,5 +1,7 @@
 local _, GM = ...
 
+local Now = debugprofilestop or function() return GetTime() * 1000 end
+
 -- Every C_AuctionHouse mutation is invoked exclusively from a hardware
 -- click routed through PlanQueue. Nothing here self-drives.
 --
@@ -287,6 +289,9 @@ function GM.AH.FullScan()
 		return
 	end
 	if not (C_AuctionHouse and C_AuctionHouse.ReplicateItems) then return end
+	-- never stack a second replicate pass on an in-flight collect —
+	-- a parallel Poll chain doubles the frame work the loop below does
+	if GM.AH.wantBook or GM.AH.collecting then return end
 	-- ReplicateItems is heavy: this client enforces a script execution
 	-- limit AND TSM hook-processes every replicate scan too — 30s floor
 	if GM.AH.BookAge() < 30 then
@@ -386,7 +391,6 @@ function GM.AH.BookSupply(itemID)
 end
 
 local collectGen = 0
-local CHUNK = 2000 -- rows per frame — the client kills long-running handlers
 
 -- Diagnostic: dump raw ask/book data so field meanings can be verified
 -- against the client's actual API contract. Three sources:
@@ -519,6 +523,7 @@ function GM.AH.CollectBook()
 	end
 	local rows, book = {}, {}
 	local i = 0
+	local lastReport = 0
 	local buyIdx -- field position of buyoutPrice; detected once below
 	local function Finish()
 		GM.AH.collecting = nil
@@ -537,17 +542,24 @@ function GM.AH.CollectBook()
 	end
 	local function Chunk()
 		if gen ~= collectGen then return end -- superseded by a newer collect
-		local stop = math.min(i + CHUNK, n)
-		while i < stop do
+		-- time-budgeted, not row-budgeted: a fixed chunk either froze
+		-- frames on fat books or crawled on thin ones. 5ms of Lua per
+		-- tick with an inter-slice breather — After(0) chained the
+		-- slices back-to-back and held ~half of every frame for tens
+		-- of seconds under AUTO.
+		local t0 = Now()
+		while i < n and Now() - t0 < 5 do
 			local link = C_AuctionHouse.GetReplicateItemLink(i)
-			local _, _, stackSize = C_AuctionHouse.GetReplicateItemInfo(i)
+			-- one API call per row — the tuple serves stackSize, buyout
+			-- AND the field-map detection (was 3 calls/row before)
+			local t = { C_AuctionHouse.GetReplicateItemInfo(i) }
+			local stackSize = t[3]
 			if link and not buyIdx then
 				-- Forever's tuple carries an extra field early on, so
 				-- buyout sits one slot past the retail map (11 vs 10).
 				-- Instead of hardcoding, find the itemID field — it is
 				-- always buyoutIndex + 7 in both layouts.
 				local id = tonumber(link:match("item:(%d+)"))
-				local t = { C_AuctionHouse.GetReplicateItemInfo(i) }
 				for j = #t, 11, -1 do
 					if id and t[j] == id then buyIdx = j - 7 break end
 				end
@@ -555,10 +567,14 @@ function GM.AH.CollectBook()
 				GM.Print(GM.CC("textDim") ..
 					format("book field map: buyout at index %d|r", buyIdx))
 			end
-			local buyout = buyIdx and select(buyIdx, C_AuctionHouse.GetReplicateItemInfo(i)) or nil
+			local buyout = buyIdx and t[buyIdx] or nil
 			if link and stackSize and stackSize > 0 and buyout and buyout > 0 then
 				local id = tonumber(link:match("item:(%d+)"))
-				local unit = buyout / stackSize
+				-- Forever convention is per-item buyout everywhere
+				-- (verified in item-search: qty=147 buyout=200 = 2s/bag);
+				-- replicate follows the same server store — do NOT
+				-- divide by stackSize or multi-stack items underprice
+				local unit = buyout
 				local own = id and ownSet[id .. ":" .. stackSize .. ":" .. buyout] or false
 				rows[#rows + 1] = { id = id, link = link, qty = stackSize, unit = unit,
 					buyout = buyout, key = link .. ":" .. stackSize .. ":" .. buyout, own = own }
@@ -577,10 +593,14 @@ function GM.AH.CollectBook()
 			i = i + 1
 		end
 		if i < n then
-			GM.PlanQueue.Progress(i / n)
-			GM.PlanQueue.ScanStatus(GM.CC("textDim") ..
-				format("collecting book — %d/%d auctions|r", i, n))
-			GM.After(0, Chunk)
+			-- status text is font work — ~2 updates/sec, not per chunk
+			if Now() - lastReport > 400 then
+				lastReport = Now()
+				GM.PlanQueue.Progress(i / n)
+				GM.PlanQueue.ScanStatus(GM.CC("textDim") ..
+					format("collecting book — %d/%d auctions|r", i, n))
+			end
+			GM.After(0.03, Chunk)
 		else
 			Finish()
 		end

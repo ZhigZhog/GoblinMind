@@ -10,6 +10,9 @@ local _, GM = ...
 GM.Banking = {}
 local B = GM.Banking
 
+local PickupItem = C_Container and C_Container.PickupContainerItem
+	or PickupContainerItem
+
 local function Dbg(fmt, ...)
 	if not B.debug then return end
 	GM.Print(GM.CC("textDim") .. "[bank] " .. format(fmt, ...) .. "|r")
@@ -222,8 +225,8 @@ local function MoveStack(srcSlot, toScope)
 		end
 	end
 	if not dstSlot then return nil, "no room in " .. toScope end
-	C_Container.PickupContainerItem(srcSlot.bag, srcSlot.slot)
-	C_Container.PickupContainerItem(dstSlot.bag, dstSlot.slot)
+	PickupItem(srcSlot.bag, srcSlot.slot)
+	PickupItem(dstSlot.bag, dstSlot.slot)
 	return true
 end
 
@@ -300,7 +303,7 @@ local function DoMail(step)
 		if not name then free = i break end
 	end
 	if not free then return nil, "mail is full (12 attachments)" end
-	C_Container.PickupContainerItem(slot.bag, slot.slot)
+	PickupItem(slot.bag, slot.slot)
 	ClickSendMailItemButton(free)
 	-- stay on the step until the send click — "confirm" keeps index put
 	return "confirm"

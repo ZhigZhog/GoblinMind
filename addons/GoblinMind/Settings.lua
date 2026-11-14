@@ -269,7 +269,10 @@ end
 local function Build()
 	if ui then return end
 	ui = { rows = {}, genRows = {} }
-	local f = CreateFrame("Frame", "GoblinMindSettings", UIParent)
+	-- name must NOT collide with the GoblinMindSettings SavedVariable —
+	-- SVs populate after file load and would overwrite the frame global,
+	-- leaving UISpecialFrames pointing at a plain table (IsShown crash)
+	local f = CreateFrame("Frame", "GoblinMindSettingsFrame", UIParent)
 	f:SetSize(620, 560)
 	f:SetPoint("CENTER", -60, 10)
 	f:SetFrameStrata("HIGH")
@@ -282,7 +285,7 @@ local function Build()
 	f:EnableMouse(true)
 	f:Hide()
 	GM.Panel(f, "contLow", "outlineVar")
-	tinsert(UISpecialFrames, "GoblinMindSettings")
+	tinsert(UISpecialFrames, "GoblinMindSettingsFrame")
 	ui.frame = f
 
 	local title = GM.MakeFontString(f, GM.FONT_BOLD, 13, "accent")

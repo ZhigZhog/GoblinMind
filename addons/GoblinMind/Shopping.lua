@@ -1,8 +1,9 @@
 local _, GM = ...
 
 -- Part 6a: the market window. SHOP mode lists the targeted item's asks
--- (unit price, % of market, seller, own rows dimmed); SNIPER mode lists
--- Sniper.lua's under-threshold hits. Every buy is one protected call
+-- (unit price, % of market, seller, own rows dimmed); the sniper feed
+-- lives in SniperUI.lua — the SNIPER button here just launches it.
+-- Every buy is one protected call
 -- per click: items buy via PlaceBid, commodities via the staged
 -- quote→CONFIRM flow — the same executor the plan queue uses.
 
@@ -155,7 +156,9 @@ local function Build()
 	-- window's action strip) — the title row is title + module tabs
 	ui.shopBtn = TitleBtn("SHOP", 52, function() S.SetMode("shop") end)
 	ui.shopBtn:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -6)
-	ui.snipeBtn = TitleBtn("SNIPER", 60, function() S.SetMode("sniper") end)
+	ui.snipeBtn = TitleBtn("SNIPER", 60, function()
+		if GM.SniperUI then GM.SniperUI.Toggle() end
+	end)
 	ui.snipeBtn:SetPoint("LEFT", ui.shopBtn, "RIGHT", 6, 0)
 	ui.craftBtn = TitleBtn("CRAFT", 52, function() S.SetMode("craft") end)
 	ui.craftBtn:SetPoint("LEFT", ui.snipeBtn, "RIGHT", 6, 0)
@@ -223,17 +226,12 @@ function S.Status(text)
 	if ui then ui.status:SetText(text) end
 end
 
-function S.SniperOpen()
-	return ui and ui.mode == "sniper" and ui.frame:IsShown()
-end
-
 function S.Hide()
 	if ui and ui.frame then ui.frame:Hide() end
 end
 
 function S.SetMode(mode)
 	ui.mode = mode
-	if mode == "sniper" then GM.Sniper.StartAuto() end
 	S.Refresh()
 end
 
@@ -247,11 +245,7 @@ function S.QueueRow(row)
 end
 
 function S.Action()
-	if ui.mode == "sniper" then
-		GM.Sniper.Scan()
-	else
-		S.ShopScan()
-	end
+	S.ShopScan()
 end
 
 -- ============ shop scan ============
@@ -288,10 +282,6 @@ function S.BuyRow(row)
 		GM.AH.Execute({ kind = "confirm" })
 		return
 	end
-	if d.hit then
-		S.BuyHit(d)
-		return
-	end
 	if d.id then
 		GM.AH.Execute({ kind = "buy", itemID = d.itemID, qty = d.qty,
 			unit = d.unit, total = d.total, auctionID = d.id })
@@ -304,16 +294,37 @@ end
 -- sniper hit: click 1 re-queries the item's book; click 2 buys the
 -- matching listing — the two clicks keep purchases hardware-driven
 function S.BuyHit(h)
+	-- commodity hits stage a quote — the next click confirms it, but
+	-- only if the pending quote still belongs to this hit
+	if h.state == "staged" then
+		local pc = GM.AH.pendingConfirm
+		if pc and pc.itemID == h.itemID then
+			GM.AH.Execute({ kind = "confirm" })
+			h.done = true
+		else
+			h.state = nil -- quote died or was replaced — rescan
+		end
+		S.Refresh()
+		return
+	end
 	if h.state == "ready" and h.live then
 		if h.live.id then
 			GM.AH.Execute({ kind = "buy", itemID = h.itemID, qty = h.live.qty,
 				unit = h.live.unit, total = h.live.total, auctionID = h.live.id })
+			h.done = true
+			h.state = nil
 		else
-			GM.AH.Execute({ kind = "buy", itemID = h.itemID, qty = h.qty,
+			local r = GM.AH.Execute({ kind = "buy", itemID = h.itemID, qty = h.qty,
 				unit = h.live.unit, commodity = true })
+			-- "confirm" = quote staged, NOT purchased — mark staged so
+			-- the next click fires ConfirmCommoditiesPurchase
+			if r == "confirm" then
+				h.state = "staged"
+			else
+				h.done = true
+				h.state = nil
+			end
 		end
-		h.done = true
-		h.state = nil
 		S.Refresh()
 		return
 	end
@@ -344,9 +355,11 @@ end
 function S.Refresh()
 	if not ui then return end
 	GM.Panel(ui.shopBtn, ui.mode == "shop" and "accent" or "contMedium")
-	GM.Panel(ui.snipeBtn, ui.mode == "sniper" and "accent" or "contMedium")
+	GM.Panel(ui.snipeBtn,
+		(GM.SniperUI and GM.SniperUI.IsOpen and GM.SniperUI.IsOpen())
+		and "accent" or "contMedium")
 	GM.Panel(ui.craftBtn, ui.mode == "craft" and "accent" or "contMedium")
-	ui.action.text:SetText(ui.mode == "sniper" and "SNAPSHOT" or "SCAN")
+	ui.action.text:SetText("SCAN")
 	ui.action:SetEnabled(GM.AH.open and ui.mode ~= "craft")
 
 	local pc = GM.AH.pendingConfirm
@@ -391,12 +404,6 @@ function S.Refresh()
 				"SHOP — SCAN the targeted item's book|r"))
 		end
 		PushGroup(asks, function(a) return a.itemID end)
-	elseif ui.mode == "sniper" then
-		local hits = GM.Sniper.hits
-		if #hits == 0 then
-			S.Status(GM.CC("textDim") .. "SNIPER — SNAPSHOT diffs the full book for under-priced listings|r")
-		end
-		PushGroup(hits, function(h) return h.itemID end)
 	else
 		-- CRAFT mode: flat recipe rows sorted by profit
 		local recs = GM.Crafting and GM.Crafting.List() or {}
@@ -461,30 +468,18 @@ function S.Refresh()
 			row.icon:Hide()
 			row.name:SetPoint("LEFT", 42, 0)
 			row.buy:Show()
-			if ui.mode == "shop" then
-				local m = S.itemID and ((GM.ItemEntry(S.itemID) or {}).mkt
-					or (GM.ItemEntry(S.itemID) or {}).p or GM.TSMMarket(S.itemID))
-				local cap = S.itemID and GM.Groups.EvalOp(
-					GM.Groups.GetOps(S.itemID, "shopping"), "maxPrice", S.itemID)
-				row.name:SetText("")
-				row.qty:SetText("×" .. d.qty)
-				row.unit:SetText(GM.Money(d.unit))
-				row.pct:SetText(m and format("%.0f%%", d.unit / m * 100) or "—")
-				row.pct:SetTextColor(GM.RGB(cap and d.unit <= cap and "pos" or "textDim"))
-				row.seller:SetText(d.own and (GM.CC("accent") .. "OWN|r") or (d.seller or "—"))
-				row.buy.text:SetText(pc and pc.itemID == d.itemID and "CONFIRM" or "BUY")
-				row.buy:SetEnabled(GM.AH.open and not d.own)
-			else
-				row.name:SetText("")
-				row.qty:SetText("×" .. d.qty)
-				row.unit:SetText(GM.Money(d.unit))
-				row.pct:SetText(d.pct and format("%.0f%%", d.pct) or "—")
-				row.pct:SetTextColor(GM.RGB("pos"))
-				row.seller:SetText("")
-				row.buy.text:SetText(d.state == "scanning" and "…"
-					or d.state == "ready" and "BUY" or "SCAN")
-				row.buy:SetEnabled(GM.AH.open and d.state ~= "scanning")
-			end
+			local m = S.itemID and ((GM.ItemEntry(S.itemID) or {}).mkt
+				or (GM.ItemEntry(S.itemID) or {}).p or GM.TSMMarket(S.itemID))
+			local cap = S.itemID and GM.Groups.EvalOp(
+				GM.Groups.GetOps(S.itemID, "shopping"), "maxPrice", S.itemID)
+			row.name:SetText("")
+			row.qty:SetText("×" .. d.qty)
+			row.unit:SetText(GM.Money(d.unit))
+			row.pct:SetText(m and format("%.0f%%", d.unit / m * 100) or "—")
+			row.pct:SetTextColor(GM.RGB(cap and d.unit <= cap and "pos" or "textDim"))
+			row.seller:SetText(d.own and (GM.CC("accent") .. "OWN|r") or (d.seller or "—"))
+			row.buy.text:SetText(pc and pc.itemID == d.itemID and "CONFIRM" or "BUY")
+			row.buy:SetEnabled(GM.AH.open and not d.own)
 		end
 	end
 end

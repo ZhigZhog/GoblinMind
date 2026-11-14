@@ -54,6 +54,7 @@ local function DoSearch()
 		return
 	end
 	ui.results = nil
+	ui.searchedAt = time()
 	ui.status = "searching…"
 	local ok, err = pcall(C_AuctionHouse.SendBrowseQuery, {
 		searchString = q, sorts = SEARCH_SORTS,
@@ -63,12 +64,29 @@ local function DoSearch()
 	AU.Refresh()
 end
 
--- read the shared browse array (reset by any new query — always re-read)
+-- read the shared browse array — but ONLY for our own query. A book
+-- build (replicate or the BrowseBook fallback's empty search) floods
+-- this same array with every auction on the house; iterating it per
+-- repaint was the scroll-storm lag. Suppress during a book pass and
+-- after one lands (it clobbered our results), and cap what we build.
+local RESULT_CAP = 2000
 local function Results()
 	local rows = {}
+	if GM.AH.wantBook or GM.AH.collecting or GM.AH.browse then
+		ui.status = "book scan in progress…"
+		return rows
+	end
+	if not ui.searchedAt then return rows end
+	if (GM.AH.bookT or 0) > ui.searchedAt then
+		ui.searchedAt = nil
+		ui.status = "results cleared by a book scan — search again"
+		return rows
+	end
 	local rs = C_AuctionHouse and C_AuctionHouse.GetBrowseResults
 		and C_AuctionHouse.GetBrowseResults() or {}
-	for _, r in ipairs(rs) do
+	local truncated = #rs > RESULT_CAP
+	for i = 1, math.min(#rs, RESULT_CAP) do
+		local r = rs[i]
 		local id = r.itemKey and r.itemKey.itemID
 		if id then
 			local e = GM.ItemEntry(id)
@@ -85,6 +103,10 @@ local function Results()
 		if a.low ~= b.low then return a.low and true or false end
 		return (a.name or "") < (b.name or "")
 	end)
+	if truncated then
+		ui.status = format("%d results — first %d shown, refine the search",
+			#rs, RESULT_CAP)
+	end
 	return rows
 end
 
@@ -120,7 +142,12 @@ end
 -- One StartCommoditiesPurchase per click → CONFIRM commits.
 function AU.BuyN()
 	if ui.stagedBuy then
-		GM.AH.Execute({ kind = "confirm" })
+		local pc = GM.AH.pendingConfirm
+		if pc and ui.sel and pc.itemID == ui.sel.id then
+			GM.AH.Execute({ kind = "confirm" })
+		else
+			ui.status = "staged quote was replaced — stage the buy again"
+		end
 		ui.stagedBuy = nil
 		ui.confirmAsk = nil
 		AU.Refresh()
@@ -521,7 +548,9 @@ function AU.Refresh()
 		if isComm then
 			local n = tonumber(ui.qty:GetText())
 			local pending = ui.stagedBuy or ui.confirmAsk
-			ui.buyN.text:SetText(pending and "CONFIRM"
+			local pc = GM.AH.pendingConfirm
+			ui.buyN.text:SetText(pending and (pc and pc.quote
+				and ("CONFIRM " .. GM.Money(pc.quote)) or "CONFIRM")
 				or ("BUY" .. (n and n > 0 and (" ×" .. n) or "")))
 			ui.buyN.text:SetTextColor(GM.RGB(pending and "warn" or "accent"))
 		else
@@ -564,7 +593,12 @@ function AU.Refresh()
 				local ask = a
 				row.act:SetScript("OnClick", function()
 					if confirming then
-						GM.AH.Execute({ kind = "confirm" })
+						local pc = GM.AH.pendingConfirm
+						if pc and ui.sel and pc.itemID == ui.sel.id then
+							GM.AH.Execute({ kind = "confirm" })
+						else
+							ui.status = "staged quote was replaced — stage the buy again"
+						end
 						ui.confirmAsk = nil
 						AU.Refresh()
 					else

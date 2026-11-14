@@ -294,6 +294,7 @@ function MU.OpenAll()
 		return
 	end
 	ui.openingAll = true
+	ui.openedCount = 0
 	local step
 	step = function()
 		if not (ui.openingAll and ui.frame:IsShown() and MailOpen()) then
@@ -313,6 +314,9 @@ function MU.OpenAll()
 		if not next_i then
 			ui.openingAll = nil
 			ui.openAllBtn.text:SetText("OPEN ALL")
+			if ui.openedCount and ui.openedCount > 0 then
+				GM.Print(format("open all: %d mail collected", ui.openedCount))
+			end
 			MU.Refresh()
 			return
 		end
@@ -321,7 +325,8 @@ function MU.OpenAll()
 			return
 		end
 		pcall(AutoLootMailItem, next_i)
-		ui.openAllBtn.text:SetText("OPENING…")
+		ui.openedCount = (ui.openedCount or 0) + 1
+		ui.openAllBtn.text:SetText("OPENING · " .. ui.openedCount)
 		GM.After(0.45, step)
 	end
 	step()

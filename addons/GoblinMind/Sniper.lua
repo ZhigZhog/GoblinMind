@@ -10,6 +10,7 @@ GM.Sniper = { hits = {}, snapshot = nil, lastT = 0 }
 local N = GM.Sniper
 
 local GetInfo = C_Item and C_Item.GetItemInfo or GetItemInfo
+local Now = debugprofilestop or function() return GetTime() * 1000 end
 local CAP = 50
 
 -- ============ replicate scan ============
@@ -23,6 +24,10 @@ GM.AH.bookSubs[#GM.AH.bookSubs + 1] = function(rows) N.Collect(rows) end
 -- price cap for a hit: sniper.belowPrice expr, else belowPct of market
 local function PriceCap(itemID, ops)
 	local cap = GM.Groups.EvalOp(ops, "belowPrice", itemID)
+	-- corrupted market data can explode the expression into
+	-- e+45-scale caps — a cap above ~1M gold flags every listing as
+	-- a hit, so treat it as no usable cap
+	if cap and cap > 1e10 then return nil end
 	if cap then return cap end
 	local e = GM.ItemEntry(itemID)
 	local m = (e and (e.mkt or e.p)) or GM.TSMMarket(itemID)
@@ -50,11 +55,13 @@ function N.Collect(rows)
 	-- itemID and spread the work across frames
 	collectGen = collectGen + 1
 	local gen = collectGen
-	local caps, i = {}, 0
+	local caps, i, lastReport = {}, 0, 0
 	local function ChunkEval()
 		if gen ~= collectGen then return end
-		local stop = math.min(i + 2000, #fresh)
-		while i < stop do
+		-- 5ms slices with an inter-slice breather — back-to-back 8ms
+		-- chunks held ~half of every frame through a full-book eval
+		local t0 = Now()
+		while i < #fresh and Now() - t0 < 5 do
 			i = i + 1
 			local c = fresh[i]
 			local cap = caps[c.itemID]
@@ -73,10 +80,13 @@ function N.Collect(rows)
 			end
 		end
 		if i < #fresh then
-			GM.PlanQueue.Progress(i / #fresh)
-			GM.PlanQueue.ScanStatus(GM.CC("textDim") ..
-				format("sniper: evaluating %d/%d listings|r", i, #fresh))
-			GM.After(0, ChunkEval)
+			if Now() - lastReport > 400 then
+				lastReport = Now()
+				GM.PlanQueue.Progress(i / #fresh)
+				GM.PlanQueue.ScanStatus(GM.CC("textDim") ..
+					format("sniper: evaluating %d/%d listings|r", i, #fresh))
+			end
+			GM.After(0.03, ChunkEval)
 		else
 			GM.PlanQueue.Progress(nil)
 			N.FinishCollect(now, hadSnapshot, #rows, #fresh)
@@ -114,23 +124,31 @@ function N.FinishCollect(now, hadSnapshot, nRows, nFresh)
 		or format("sniper: book primed — %d auctions, %d hits", nRows, #N.hits)
 	GM.Shopping.Status(GM.CC("textDim") .. msg .. "|r")
 	if GM.Shopping.Refresh then GM.Shopping.Refresh() end
+	if GM.SniperUI and GM.SniperUI.Refresh then GM.SniperUI.Refresh() end
 end
 
 -- ============ auto-refresh while the sniper pane is open ============
 
 local autoOn = false
+function N.AutoRunning() return autoOn end
+
+-- the auto loop lives while the sniper feed window is open
+local function AnySniperUI()
+	return GM.SniperUI and GM.SniperUI.IsOpen and GM.SniperUI.IsOpen()
+end
+
 function N.StartAuto()
 	if autoOn then return end
 	autoOn = true
 	local function loop()
-		if not GM.Shopping.SniperOpen() then
+		if not AnySniperUI() then
 			autoOn = false
 			return
 		end
-		N.Scan()
+		if GM.AH.open then N.Scan() end
 		local rt = tonumber(GM.Groups.GetOps(nil, "sniper").refreshTime) or 60
-		-- replicate scans are expensive on this client — 2 min floor
-		GM.After(math.max(rt, 120), loop)
+		-- replicate scans are the heaviest thing we do — 5 min floor
+		GM.After(math.max(rt, 300), loop)
 	end
 	loop()
 end

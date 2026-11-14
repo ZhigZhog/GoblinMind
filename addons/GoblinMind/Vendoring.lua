@@ -10,6 +10,9 @@ local _, GM = ...
 GM.Vendoring = {}
 local V = GM.Vendoring
 
+local UseItem = C_Container and C_Container.UseContainerItem
+	or UseContainerItem
+
 local function MerchantOpen()
 	return MerchantFrame and MerchantFrame:IsShown()
 end
@@ -108,7 +111,7 @@ local function DoSell(step)
 	end
 	local s = GM.Banking.FindStack(step.itemID)
 	if not s then return true end
-	C_Container.UseContainerItem(s.bag, s.slot)
+	UseItem(s.bag, s.slot)
 	step.sold = (step.sold or 0) + s.count
 	return (step.sold or 0) >= step.qty
 end

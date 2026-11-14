@@ -467,8 +467,8 @@ local function ParseLegacy(str)
 	end
 	local rel = "Base Group"
 	local out = {}
-	for part in str:gmatch("[^,]+") do
-		part = strtrim(part)
+	for raw in str:gmatch("[^,]+") do
+		local part = strtrim(raw)
 		if part ~= "" then
 			local gp = part:match("^group:(.+)$")
 			local is = part:match("^[ip]?:?[0-9%-:]+$")

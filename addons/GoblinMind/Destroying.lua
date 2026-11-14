@@ -11,23 +11,34 @@ local _, GM = ...
 GM.Destroying = {}
 local D = GM.Destroying
 
+local UseItem = C_Container and C_Container.UseContainerItem
+	or UseContainerItem
+
 local function VendorSell(itemID)
 	local info = C_Item and C_Item.GetItemInfo or GetItemInfo
 	local _, _, _, _, _, _, _, _, _, _, sell = info and info(itemID)
 	return sell and sell > 0 and sell or nil
 end
 
--- expected value of destroying one unit, copper
-function D.Value(itemID)
-	local best = VendorSell(itemID)
+-- vendor price vs alternative-processing EV, kept separate: the
+-- merchant pays `vendor` per unit — the proc estimate only lands if
+-- the operator disenchants/mills it themselves
+function D.Split(itemID)
+	local vendor = VendorSell(itemID)
+	local proc
 	if TSMAPI_FOUR and TSMAPI_FOUR.CustomPrice then
 		local ok, v = pcall(TSMAPI_FOUR.CustomPrice.GetValue, "destroy",
 			"i:" .. itemID)
-		if ok and type(v) == "number" and v > 0 and (not best or v > best) then
-			best = v
-		end
+		if ok and type(v) == "number" and v > 0 then proc = v end
 	end
-	return best
+	return vendor, proc
+end
+
+-- expected value of destroying one unit, copper
+function D.Value(itemID)
+	local vendor, proc = D.Split(itemID)
+	if proc and (not vendor or proc > vendor) then return proc end
+	return vendor
 end
 
 -- scan ALL bag stacks (not just grouped items — TSM's destroying
@@ -47,11 +58,13 @@ function D.Candidates()
 		local group = GM.Groups.GroupForItem(id) or "Base Group"
 		local ops = GM.Groups.GetOpsForPath(group, "destroying")
 		local thresh = GM.Groups.EvalOp(ops, "threshold", id) or 0
-		local dv = D.Value(id)
+		local vendor, proc = D.Split(id)
+		local dv = (proc and (not vendor or proc > vendor)) and proc or vendor
 		local e = GM.ItemEntry(id)
 		local mkt = e and e.p
 		if dv and dv >= thresh and (not mkt or dv > mkt) then
 			tinsert(rows, { id = id, qty = qty, dv = dv, mkt = mkt,
+				vendor = vendor, proc = proc,
 				gain = mkt and (dv - mkt) or dv,
 				group = group, name = GM.ItemName(id) })
 		end
@@ -90,7 +103,7 @@ function D.SellOne(itemID)
 	end
 	local s = GM.Banking.FindStack(itemID)
 	if not s then return true end -- nothing left → done
-	C_Container.UseContainerItem(s.bag, s.slot)
+	UseItem(s.bag, s.slot)
 	return s.count
 end
 

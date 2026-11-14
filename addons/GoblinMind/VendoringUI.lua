@@ -23,6 +23,8 @@ local ui
 
 local ROW_H = 26
 local VISIBLE = 13
+local UseItem = C_Container and C_Container.UseContainerItem
+	or UseContainerItem
 local tinsert, tremove, sort = tinsert, tremove, table.sort
 local format = format
 
@@ -373,8 +375,8 @@ function VU.Refresh()
 				row.tipID = r.id
 				local bag, slot = r.bag, r.slot
 				row.act:SetScript("OnClick", function()
-					if MerchantOpen() then
-						pcall(C_Container.UseContainerItem, bag, slot)
+					if MerchantOpen() and UseItem then
+						pcall(UseItem, bag, slot)
 						VU.Refresh()
 					end
 				end)

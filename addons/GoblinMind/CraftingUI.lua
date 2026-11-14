@@ -279,9 +279,13 @@ local function BuildUI()
 		r:SetPoint("TOPLEFT", 8, -24 - (i - 1) * (ROW_H + 2))
 		r:RegisterForClicks("LeftButtonUp", "RightButtonUp")
 		GM.Panel(r, "contLowest")
+		r.skill = GM.MakeFontString(r, GM.FONT_BOLD, 9, "pos")
+		r.skill:SetPoint("LEFT", 6, 0)
+		r.skill:SetText("▲")
+		r.skill:Hide()
 		r.name = GM.MakeFontString(r, GM.FONT, 10, "text")
-		r.name:SetPoint("LEFT", 6, 0)
-		r.name:SetWidth(168)
+		r.name:SetPoint("LEFT", 18, 0)
+		r.name:SetWidth(156)
 		r.name:SetJustifyH("LEFT")
 		r.profit = GM.MakeFontString(r, GM.FONT, 9, "textDim")
 		r.profit:SetPoint("LEFT", 178, 0)
@@ -337,8 +341,32 @@ local function BuildUI()
 		r.name:SetPoint("LEFT", 6, 0)
 		r.name:SetWidth(130)
 		r.name:SetJustifyH("LEFT")
-		r.qty = GM.MakeFontString(r, GM.FONT_BOLD, 10, "accent")
-		r.qty:SetPoint("LEFT", 140, 0)
+		r.qty = CreateFrame("EditBox", nil, r)
+		r.qty:SetSize(32, ROW_H - 4)
+		r.qty:SetPoint("LEFT", 138, 0)
+		r.qty:SetAutoFocus(false)
+		r.qty:SetFont(GM.FONT_BOLD, 10, "")
+		r.qty:SetTextColor(GM.RGB("accent"))
+		r.qty:SetJustifyH("RIGHT")
+		r.qty:SetScript("OnEnterPressed", function(self)
+			local n = tonumber((self:GetText():gsub("%D", "")))
+			if n and self._id then
+				GM.Crafting.QueueSet(self._id, n)
+			end
+			self:ClearFocus()
+			CU.Refresh()
+		end)
+		r.qty:SetScript("OnEscapePressed", function(self)
+			self:ClearFocus()
+		end)
+		r.qty:SetScript("OnEditFocusLost", function(self)
+			if self._q then self:SetText("×" .. self._q) end
+		end)
+		W.Tip(r.qty, function()
+			return { "queued quantity",
+				"type a number · Enter commits · Esc reverts",
+				"+/- still fine-adjust by one" }
+		end)
 		r.profit = GM.MakeFontString(r, GM.FONT, 9, "textDim")
 		r.profit:SetPoint("LEFT", 172, 0)
 		r.profit:SetWidth(70)
@@ -489,7 +517,7 @@ local function BuildUI()
 
 	ui.footer = GM.MakeFontString(f, GM.FONT, 9, "secondary")
 	ui.footer:SetPoint("BOTTOMLEFT", 10, 8)
-	ui.footer:SetText("+N on a recipe queues its suggested amount · EMIT builds the mat-buy plan")
+	ui.footer:SetText("▲ = grants skill-ups (orange optimal · yellow medium · green easy · N = multi) · +N queues suggested")
 
 	if GM.OnItemInfoLoaded then
 		GM.OnItemInfoLoaded(function()
@@ -549,7 +577,7 @@ local function RecipeRows()
 	return out
 end
 
-local DIFF_NAMES = { "trivial", "easy", "optimal", "difficult" }
+local DIFF_NAMES = { "optimal", "medium", "easy", "trivial" }
 
 function CU.Refresh()
 	if not ui then return end
@@ -614,6 +642,19 @@ function CU.Refresh()
 			local isSel = row.recipeID == ui.sel
 			r._gmBg:SetColorTexture(GM.RGB(isSel and "contHigh" or "contLowest"))
 			r.name:SetText(row.name or ("recipe " .. row.recipeID))
+			-- skill-ups: TradeskillRelativeDifficulty 0-2 grants
+			-- (optimal/medium/easy), 3 = trivial is grayed out;
+			-- optimal recipes may award >1 (numSkillUps)
+			if row.diff and row.diff < 3 then
+				r.skill:SetText("▲" .. ((row.nup or 1) > 1
+					and row.nup or ""))
+				r.skill:Show()
+				r.skill:SetTextColor(GM.RGB(
+					row.diff == 0 and "warn"
+					or row.diff == 1 and "accent" or "pos"))
+			else
+				r.skill:Hide()
+			end
 			-- verdict color: can-craft accent, profitable green, loss red
 			local nc = row.profit and (row.profit > 0
 				and ((row.craftable or 0) > 0 and "accent" or "pos") or "err")
@@ -623,10 +664,10 @@ function CU.Refresh()
 				(row.profit > 0 and "+" or "") .. GM.Money(row.profit) or "—")
 			r.profit:SetTextColor(GM.RGB(
 				row.profit and (row.profit > 0 and "pos" or "err") or "textDim"))
-			-- on-hand vs raid-everything: can:2 +5 = fetch 5 more's
-			-- worth of mats from bank/alts to make them all
+			-- on-hand vs raid-everything: bags 2 +5 = 2 craftable now,
+			-- +5 more's worth fetchable from bank/alts
 			local extra = (row.craftableAll or 0) - (row.craftable or 0)
-			r.can:SetText("can:" .. (row.craftable or 0)
+			r.can:SetText("bags " .. (row.craftable or 0)
 				.. (extra > 0 and " +" .. extra or ""))
 			-- +N queues the suggested amount; ×N shows it's queued
 			if row.queued > 0 then
@@ -682,7 +723,8 @@ function CU.Refresh()
 		if q then
 			r:Show()
 			r.name:SetText((q.name or "?") )
-			r.qty:SetText("×" .. q.qty)
+			r.qty._id, r.qty._q = q.recipeID, q.qty
+			if not r.qty:HasFocus() then r.qty:SetText("×" .. q.qty) end
 			local p = q.profit and q.profit * q.qty
 			r.profit:SetText(p and ((p > 0 and "+" or "") .. GM.Money(p)) or "—")
 			r.profit:SetTextColor(GM.RGB(p and (p > 0 and "pos" or "err") or "textDim"))

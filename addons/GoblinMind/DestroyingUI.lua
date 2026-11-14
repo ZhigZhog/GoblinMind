@@ -72,8 +72,9 @@ local function Build()
 	hdr:SetSize(596, 16)
 	hdr:SetPoint("TOPLEFT", 12, -60)
 	for _, h in ipairs({
-		{ "ITEM", 28 }, { "QTY", 214 }, { "DESTROY", 250 },
-		{ "MARKET", 315 }, { "+GAIN", 380 }, { "GROUP", 445 },
+		{ "ITEM", 28 }, { "QTY", 208 }, { "VENDOR", 240 },
+		{ "PROC EST", 310 }, { "MKT", 375 }, { "+GAIN", 424 },
+		{ "GROUP", 488 },
 	}) do
 		local fs = GM.MakeFontString(hdr, GM.FONT_BOLD, 9, "secondary")
 		fs:SetPoint("LEFT", h[2], 0)
@@ -111,16 +112,18 @@ local function Build()
 		row.name:SetWidth(180)
 		row.name:SetJustifyH("LEFT")
 		row.qty = GM.MakeFontString(row, GM.FONT, 10, "text")
-		row.qty:SetPoint("LEFT", 214, 0)
+		row.qty:SetPoint("LEFT", 208, 0)
 		row.dv = GM.MakeFontString(row, GM.FONT, 10, "accent")
-		row.dv:SetPoint("LEFT", 250, 0)
+		row.dv:SetPoint("LEFT", 240, 0)
+		row.proc = GM.MakeFontString(row, GM.FONT, 10, "textDim")
+		row.proc:SetPoint("LEFT", 310, 0)
 		row.mkt = GM.MakeFontString(row, GM.FONT, 10, "textDim")
-		row.mkt:SetPoint("LEFT", 315, 0)
+		row.mkt:SetPoint("LEFT", 375, 0)
 		row.gain = GM.MakeFontString(row, GM.FONT, 10, "pos")
-		row.gain:SetPoint("LEFT", 380, 0)
+		row.gain:SetPoint("LEFT", 424, 0)
 		row.group = GM.MakeFontString(row, GM.FONT, 9, "textDim")
-		row.group:SetPoint("LEFT", 445, 0)
-		row.group:SetWidth(90)
+		row.group:SetPoint("LEFT", 488, 0)
+		row.group:SetWidth(56)
 		row.group:SetJustifyH("LEFT")
 		-- armed destroy: click → ? → click sells one stack
 		local act = CreateFrame("Button", nil, row)
@@ -132,7 +135,7 @@ local function Build()
 		act.text:SetText("DESTROY")
 		act:SetScript("OnEnter", function()
 			GameTooltip:SetOwner(act, "ANCHOR_TOP")
-			GameTooltip:SetText("vendor this stack at an open merchant", 1, 1, 1)
+			GameTooltip:SetText("sell one stack to the open merchant", 1, 1, 1)
 			GameTooltip:AddLine("click to arm, click again to sell", 0.6, 0.6, 0.6)
 			GameTooltip:Show()
 		end)
@@ -146,7 +149,8 @@ local function Build()
 
 	ui.foot = GM.MakeFontString(f, GM.FONT, 9, "textDim")
 	ui.foot:SetPoint("BOTTOMLEFT", 14, 10)
-	ui.foot:SetText("destroy = max(vendor, TSM destroy) vs market · click row = target item")
+	ui.foot:SetText("VENDOR is what SELL pays · PROC EST needs manual "
+		.. "disenchant/mill · click row = target item")
 end
 
 -- ============ data ============
@@ -160,7 +164,7 @@ function DU.Refresh()
 		totGain = totGain + r.gain * r.qty
 	end
 	local mOpen = MerchantFrame and MerchantFrame:IsShown()
-	ui.summary:SetText(format("%d item%s · destroy %s%s",
+	ui.summary:SetText(format("%d item%s · best destroy %s%s",
 		#rows, #rows == 1 and "" or "s", GM.Money(totDv),
 		not mOpen and GM.CC("warn") .. " · merchant closed|r" or ""))
 	ui.empty:SetText("nothing worth destroying — threshold + market checked")
@@ -176,18 +180,37 @@ function DU.Refresh()
 			row.icon:SetTexture(GM.ItemIcon(r.id) or 134400)
 			row.name:SetText(GM.ItemName(r.id) or ("item " .. r.id))
 			row.qty:SetText("×" .. r.qty)
-			row.dv:SetText(GM.Money(r.dv))
+			-- VENDOR = what the SELL button actually pays per unit
+			row.dv:SetText(r.vendor and GM.Money(r.vendor) or "—")
+			row.proc:SetText(r.proc and GM.Money(r.proc) or "—")
 			row.mkt:SetText(r.mkt and GM.Money(r.mkt) or "no market")
-			row.gain:SetText("+" .. GM.Money(r.gain) .. "/ea")
+			-- +GAIN counts only the executable action: vendor-over-
+			-- market. A proc-only edge is labeled est — the button
+			-- can't realize it
+			if r.vendor and r.mkt and r.vendor > r.mkt then
+				row.gain:SetText("+" .. GM.Money(r.vendor - r.mkt) .. "/ea")
+				row.gain:SetTextColor(GM.RGB("pos"))
+			elseif r.proc and r.mkt and r.proc > r.mkt then
+				row.gain:SetText("proc +" .. GM.Money(r.proc - r.mkt))
+				row.gain:SetTextColor(GM.RGB("warn"))
+			else
+				row.gain:SetText("—")
+				row.gain:SetTextColor(GM.RGB("textDim"))
+			end
 			row.group:SetText(r.group)
 			row.act.armed = nil
-			row.act.text:SetText("DESTROY")
+			row.act.text:SetText("SELL")
 			row.act.text:SetTextColor(GM.RGB("warn"))
 			local id = r.id
 			row.act:SetScript("OnClick", function(act)
 				if not act.armed then
+					local st = GM.Banking.FindStack(id)
 					act.armed = true
-					act.text:SetText("SURE?")
+					-- name the real proceeds: stack qty × vendor price
+					act.text:SetText(st and r.vendor
+						and format("×%d %s?", st.count,
+							GM.Money(st.count * r.vendor))
+						or "SELL?")
 					return
 				end
 				act.armed = nil

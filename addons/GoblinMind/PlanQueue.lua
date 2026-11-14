@@ -514,8 +514,13 @@ function PQ.SetItem(itemID, itemLink)
 	PQ.itemID = itemID
 	PQ.item = itemLink
 	PQ.scan = nil
-	PQ.plan = nil
-	PQ.lossConfirm = nil
+	-- inspecting an item must not erase work: a plan with unfinished
+	-- steps survives — the step list keeps running while the stats
+	-- pane shows the inspected item. Only a finished/empty plan clears.
+	if not (PQ.plan and PQ.stepIndex <= #PQ.plan.steps) then
+		PQ.plan = nil
+		PQ.lossConfirm = nil
+	end
 	PQ.Refresh()
 	if GM.GroupsUI and GM.GroupsUI.Retarget then GM.GroupsUI.Retarget() end
 end
@@ -527,22 +532,27 @@ function PQ.Rescan()
 	end
 	if PQ.plan and PQ.plan.mode == "postscan" then GM.Auctioning.PostScan() return end
 	if PQ.plan and PQ.plan.mode == "cancelscan" then GM.Auctioning.CancelScan() return end
-	if not PQ.itemID then
+	-- a live plan owns its item — inspecting another item must not
+	-- retarget the rescan (SetItem deliberately preserves live plans)
+	local workID = (PQ.plan and PQ.stepIndex <= #PQ.plan.steps
+		and PQ.plan.itemID) or PQ.itemID
+	if not workID then
 		ui.summary:SetText(GM.CC("textDim") .. "pick an item first — drop one in the header|r")
 		return
 	end
-	local name = GetInfo and GetInfo(PQ.itemID)
-	GM.AH.ScanItem(PQ.itemID, name, function(asks)
-		PQ.Solve(asks)
+	local name = GetInfo and GetInfo(workID)
+	GM.AH.ScanItem(workID, name, function(asks)
+		PQ.Solve(asks, workID)
 	end)
 	ui.summary:SetText(GM.CC("textDim") .. "scanning…|r")
 end
 
-function PQ.Solve(asks)
+function PQ.Solve(asks, workID)
+	workID = workID or PQ.itemID
 	GM.AH.pendingConfirm = nil -- a rescan invalidates any staged quote
 	PQ.scan = { n = #asks, cheapest = asks[1] and asks[1].unit }
-	local entry = PQ.itemID and GM.ItemEntry(PQ.itemID)
-	local p50 = entry and entry.p or (PQ.itemID and GM.TSMMarket(PQ.itemID))
+	local entry = workID and GM.ItemEntry(workID)
+	local p50 = entry and entry.p or (workID and GM.TSMMarket(workID))
 	if not p50 then
 		ui.summary:SetText(GM.CC("err") .. "no price estimate for this item yet|r")
 		PQ.Refresh()
@@ -550,17 +560,17 @@ function PQ.Solve(asks)
 	end
 	local gold = GetMoney()
 	local vel = entry and entry.vel
-	local isCommodity = GM.AH.IsCommodity(PQ.itemID)
+	local isCommodity = GM.AH.IsCommodity(workID)
 	-- group ops: auctioning drives post price/cap/stack/undercut,
 	-- shopping.belowPct is the buy-margin gate (replaces minProfitMargin)
-	local aOps = GM.Groups.GetOps(PQ.itemID, "auctioning")
-	local sOps = GM.Groups.GetOps(PQ.itemID, "shopping")
-	local function ev(f) return GM.Groups.EvalOp(aOps, f, PQ.itemID) end
+	local aOps = GM.Groups.GetOps(workID, "auctioning")
+	local sOps = GM.Groups.GetOps(workID, "shopping")
+	local function ev(f) return GM.Groups.EvalOp(aOps, f, workID) end
 	local plan, err = GM.Solver.Plan(asks, p50, entry and entry.p90, gold, vel, {
 		riskBudget = GM.db.riskBudget,
 		minProfitMargin = (tonumber(sOps.belowPct) or 10) / 100,
 		commodity = isCommodity,
-		owned = GM.BagCount(PQ.itemID),
+		owned = GM.BagCount(workID),
 		normal = ev("normal"),
 		minP = ev("min"),
 		maxP = ev("max"),
@@ -576,9 +586,12 @@ function PQ.Solve(asks)
 		PQ.Refresh()
 		return
 	end
+	-- the work item's own link — PQ.item is the *inspected* link and
+	-- can belong to a different item when a plan outlives inspection
+	local workLink = select(2, GetInfo and GetInfo(workID)) or PQ.item
 	for _, step in ipairs(plan.steps) do
-		step.itemID = PQ.itemID
-		step.item = PQ.item
+		step.itemID = workID
+		step.item = workLink
 		step.commodity = isCommodity
 	end
 	-- buys arrive by mail — insert a collect step before the post leg
@@ -590,16 +603,17 @@ function PQ.Solve(asks)
 		end
 		if firstPost and firstPost > 1 then
 			tinsert(plan.steps, firstPost,
-				{ kind = "mailcollect", itemID = PQ.itemID, item = PQ.item,
+				{ kind = "mailcollect", itemID = workID, item = workLink,
 					qty = 1, name = "collect from mail" })
 		end
 	end
 	for _, lot in ipairs(plan.buyLots or {}) do
-		lot.itemID = PQ.itemID
-		lot.item = PQ.item
+		lot.itemID = workID
+		lot.item = workLink
 	end
-	plan.bank = GM.BankCount(PQ.itemID)
-	plan.deposit = GM.AH.DepositCost(PQ.itemID, plan.qty + (plan.owned or 0)) or 0
+	plan.itemID = workID
+	plan.bank = GM.BankCount(workID)
+	plan.deposit = GM.AH.DepositCost(workID, plan.qty + (plan.owned or 0)) or 0
 	plan.ev = plan.ev - plan.deposit
 	PQ.plan = plan
 	PQ.stepIndex = 1
@@ -610,9 +624,20 @@ end
 function PQ.ExecuteNext()
 	-- a staged commodity buy: this click is the ConfirmCommoditiesPurchase
 	if GM.AH.pendingConfirm then
-		if GM.AH.Execute({ kind = "confirm" }) then
-			PQ.stepIndex = PQ.stepIndex + 1
-			GM.After(1.0, function() PQ.Rescan() end)
+		local pc = GM.AH.pendingConfirm
+		local cur = PQ.plan and PQ.plan.steps[PQ.stepIndex]
+		-- one quote has one owner: only the step that staged it may
+		-- confirm. A quote staged from the AH window for a different
+		-- item must not be spent under this plan's context
+		if cur and cur.itemID == pc.itemID then
+			if GM.AH.Execute({ kind = "confirm" }) then
+				PQ.submitFlash = GetTime()
+				PQ.stepIndex = PQ.stepIndex + 1
+				GM.After(1.0, function() PQ.Rescan() end)
+			end
+		else
+			ui.summary:SetText(GM.CC("warn")
+				.. "a quote is staged for another item — resolve it in the AH window|r")
 		end
 		PQ.Refresh()
 		return
@@ -680,6 +705,7 @@ function PQ.ExecuteNext()
 		end
 		PQ.budgetConfirm = nil
 		PQ.budgetWarn = nil
+		PQ.submitFlash = GetTime()
 		PQ.stepIndex = PQ.stepIndex + 1
 		-- single-item plans rescan after each action; scan-mode plans are
 		-- independent steps — re-querying the book per click would stall
@@ -1120,10 +1146,15 @@ function PQ.Refresh()
 		ui.sumEdge:SetColorTexture(GM.RGB(verdict == "good" and "pos" or "warn"))
 		ui.summary:SetText((verdict == "good" and "" or GM.CC("warn")) .. headline .. "|r")
 		local dep = (PQ.plan.deposit or 0) > 0 and (" · dep " .. GM.Money(PQ.plan.deposit)) or ""
-		ui.summary2:SetText(format("spend %s%s · net %s · %s",
-			GM.Money(PQ.plan.spend), dep, GM.Money(PQ.plan.ev), note))
+		local sub = PQ.submitFlash and (GetTime() - PQ.submitFlash < 3)
+			and (GM.CC("textDim") .. " · submitted — verifying|r") or ""
+		ui.summary2:SetText(format("spend %s%s · net %s · %s%s",
+			GM.Money(PQ.plan.spend), dep, GM.Money(PQ.plan.ev), note, sub))
 		end
 		ui.exec:Show()
+		local pcPending = GM.AH.pendingConfirm
+		local pcMatch = pcPending and curStep
+			and curStep.itemID == pcPending.itemID
 		local badPlan = not PQ.plan.mode and not PQ.lossConfirm
 			and GM.Solver.Verdict(PQ.plan, GM.db) == "bad"
 		if PQ.budgetWarn then
@@ -1131,8 +1162,12 @@ function PQ.Refresh()
 				GM.Money(PQ.budgetWarn) .. " · CONFIRM")
 		elseif badPlan then
 			ui.exec.text:SetText("EXPECTED LOSS · CONFIRM")
-		elseif GM.AH.pendingConfirm then
-			ui.exec.text:SetText("CONFIRM PURCHASE")
+		elseif pcMatch then
+			ui.exec.text:SetText(pcPending.quote
+				and ("CONFIRM " .. GM.Money(pcPending.quote))
+				or "CONFIRM PURCHASE")
+		elseif pcPending then
+			ui.exec.text:SetText("QUOTE · OTHER ITEM")
 		else
 			local kind = curStep and curStep.kind
 			local verb = PQ.stepIndex > #PQ.plan.steps and "PLAN DONE"
@@ -1156,14 +1191,19 @@ function PQ.Refresh()
 			or curStep.kind == "move" or curStep.kind == "mail"
 			or curStep.kind == "mailcollect" or curStep.kind == "destroy"
 			or curStep.kind == "vendbuy" or curStep.kind == "vendsell")
-		local canExec = GM.AH.pendingConfirm ~= nil
+		-- a live quote serializes AH mutations: only its own confirm or
+		-- non-transactional steps may run until it resolves
+		local canExec = pcMatch
 			or moveKind
-			or (PQ.stepIndex <= #PQ.plan.steps and GM.AH.open)
+			or (not pcPending and PQ.stepIndex <= #PQ.plan.steps and GM.AH.open)
 		ui.exec:SetEnabled(canExec)
 		-- honest disabled state: muted fill + label; blocker on line 1
 		GM.Panel(ui.exec, canExec and "accent" or "contHigh")
 		ui.exec.text:SetTextColor(GM.RGB(canExec and "contLowest" or "textDim"))
-		if not canExec and not GM.AH.open then
+		if pcPending and not pcMatch and not moveKind then
+			ui.summary:SetText(GM.CC("warn")
+				.. "a quote is staged for another item — resolve it in the AH window|r")
+		elseif not canExec and not GM.AH.open then
 			ui.summary:SetText(GM.CC("warn") .. "open the auction house to execute|r")
 		end
 		ui.skip:Show()
