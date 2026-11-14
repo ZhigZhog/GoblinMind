@@ -120,6 +120,30 @@ function A.BagItems()
 	return out
 end
 
+-- per-item post preview without running a scan — the same decision
+-- PostScan's ProcessItem makes, driven off the shared book when it's
+-- fresh (<300s). Returns unit or nil,reason + the inputs for display.
+function A.PreviewPost(id)
+	local aOps = GM.Groups.GetOps(id, "auctioning")
+	local entry = GM.ItemEntry(id)
+	if not (entry or GM.TSMMarket(id)) then return nil, "no price" end
+	local normal = GM.Groups.EvalOp(aOps, "normal", id)
+		or (entry and entry.p) or GM.TSMMarket(id)
+	local cheapest = (GM.AH.BookAge() < 300)
+		and GM.AH.BookCheapest(id) or nil
+	local unit, why = A.PriceFor(aOps, id, normal, cheapest)
+	if not unit then return nil, why or "?", normal, cheapest end
+	-- vendor floor: net after 5% cut + deposit must beat vendoring
+	local v = GetInfo and select(11, GetInfo(id))
+	if v and v > 0 then
+		local dep = GM.AH.DepositCost(id, 1) or 0
+		if floor(unit * 0.95) - dep < v then
+			return nil, "vendor beats", normal, cheapest
+		end
+	end
+	return unit, nil, normal, cheapest
+end
+
 -- ============ post scan ============
 
 local function ShortName(id)
@@ -131,7 +155,9 @@ local function ItemLink(id)
 	return select(2, GetInfo(id)) or nil
 end
 
-function A.PostScan()
+-- `only` (optional): set of itemIDs to include — the bag-table page
+-- uses it to post a checked subset instead of every bag item
+function A.PostScan(only)
 	if not GM.AH.open then
 		GM.Print("open the auction house first")
 		return
@@ -140,10 +166,15 @@ function A.PostScan()
 		GM.PlanQueue.ScanStatus(GM.CC("warn") .. "scan already running|r")
 		return
 	end
+	-- the plan + scan progress live in the main window — surface it
+	-- when the scan was launched from the auctions window or a slash
+	GM.PlanQueue.Show()
 	local bags = A.BagItems()
 	local items, skipped = {}, {}
 	for id, e in pairs(bags) do
-		if e.bound then
+		if only and not only[id] then
+			-- unchecked on the bag table — not a skip, just excluded
+		elseif e.bound then
 			skipped[id] = "soulbound"
 		elseif not (GM.ItemEntry(id) or GM.TSMMarket(id)) then
 			skipped[id] = "no price"
@@ -151,7 +182,11 @@ function A.PostScan()
 			tinsert(items, { id = id, qty = e.total, stacks = e.stacks })
 		end
 	end
-	table.sort(items, function(a, b) return a.id < b.id end)
+	-- same order the bag table shows (name) — the plan should read
+	-- like the list the scan was launched from
+	table.sort(items, function(a, b)
+		return (GM.ItemName(a.id) or "") < (GM.ItemName(b.id) or "")
+	end)
 	if #items == 0 then
 		GM.PlanQueue.ScanStatus(GM.CC("warn") .. "nothing postable — bags empty or no price data|r")
 		return
@@ -254,6 +289,14 @@ function A.FinishPostScan(steps, skipped, itemCount)
 			.. table.concat(reasons, ", ") .. "|r")
 		return
 	end
+	-- skipped items stay visible at the end of the plan — a checked row
+	-- that produced no posts shouldn't vanish silently into chat spam
+	local skipN = 0
+	for id, why in pairs(skipped) do
+		skipN = skipN + 1
+		tinsert(steps, { kind = "skip", itemID = id, name = ShortName(id),
+			qty = 0, desc = "skipped — " .. why })
+	end
 	local ev, deposit, vendN = 0, 0, 0
 	for _, s in ipairs(steps) do
 		if s.kind == "post" then
@@ -275,7 +318,7 @@ function A.FinishPostScan(steps, skipped, itemCount)
 		ev = ev - deposit,
 		deposit = deposit,
 		itemCount = itemCount,
-		skipCount = 0,
+		skipCount = skipN,
 	})
 	for id, why in pairs(skipped) do
 		GM.Print(GM.CC("textDim") .. "skipped " .. ShortName(id) .. " — " .. why .. "|r")
@@ -293,6 +336,7 @@ function A.CancelScan()
 		GM.PlanQueue.ScanStatus(GM.CC("warn") .. "scan already running|r")
 		return
 	end
+	GM.PlanQueue.Show() -- progress + results live in the main window
 	-- decide off a fresh owned-auction snapshot; fall back to whatever
 	-- the cache holds if the event never lands
 	GM.PlanQueue.ScanStatus(GM.CC("textDim") .. "refreshing owned auctions…|r")

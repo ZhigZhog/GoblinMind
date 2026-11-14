@@ -64,6 +64,7 @@ local function Build()
 	f:EnableMouse(true)
 	f:Hide()
 	GM.Panel(f, "contLow", "outlineVar")
+	tinsert(UISpecialFrames, "GoblinMindMyAuctions")
 	ui.frame = f
 
 	local title = GM.MakeFontString(f, GM.FONT_BOLD, 13, "accent")
@@ -81,14 +82,38 @@ local function Build()
 	close.text:SetText("x")
 	close:SetScript("OnClick", function() f:Hide() end)
 
+	-- page segs: POSTED (owned auctions) | BAGS (post picker)
+	ui.page = "posted"
+	ui.segs = {}
+	for i, p in ipairs({ { "POSTED", "posted" }, { "BAGS", "bags" } }) do
+		local b = CreateFrame("Button", nil, f)
+		b:SetSize(58, 16)
+		b:SetPoint("TOPLEFT", 12 + (i - 1) * 62, -34)
+		GM.Panel(b, "contLowest")
+		b.text = GM.MakeFontString(b, GM.FONT_BOLD, 9, "textDim")
+		b.text:SetPoint("CENTER")
+		b.text:SetText(p[1])
+		b.key = p[2]
+		b:SetScript("OnClick", function()
+			ui.page = p[2]
+			ui.scroll = 0
+			MA.Refresh()
+		end)
+		ui.segs[i] = b
+	end
+
 	-- toolbar
 	local refresh = Btn(f, 66, "REFRESH", function()
 		GM.Inventory.QueryOwned()
 		GM.After(0.5, MA.Refresh)
 	end)
-	refresh:SetPoint("TOPLEFT", 12, -32)
+	refresh:SetPoint("TOPLEFT", 136, -32)
 	local post = Btn(f, 78, "POST SCAN", function()
-		GM.Auctioning.PostScan()
+		if ui.page == "bags" then
+			GM.Auctioning.PostScan(ui.include)
+		else
+			GM.Auctioning.PostScan()
+		end
 	end)
 	post:SetPoint("LEFT", refresh, "RIGHT", 6, 0)
 	local cancel = Btn(f, 88, "CANCEL SCAN", function()
@@ -99,16 +124,14 @@ local function Build()
 	ui.summary:SetPoint("LEFT", cancel, "RIGHT", 12, 0)
 	ui.summary:SetJustifyH("LEFT")
 
-	-- column header
+	-- column header — text/positions set per page in Refresh
 	local hdr = CreateFrame("Frame", nil, f)
 	hdr:SetSize(616, 16)
 	hdr:SetPoint("TOPLEFT", 12, -60)
-	local cols = { { "ITEM", 28 }, { "QTY", 236 }, { "UNIT", 288 },
-		{ "TOTAL", 366 }, { "LEFT", 444 }, { "STATUS", 500 } }
-	for _, c in ipairs(cols) do
+	ui.hdrFs = {}
+	for i = 1, 6 do
 		local fs = GM.MakeFontString(hdr, GM.FONT_BOLD, 9, "secondary")
-		fs:SetPoint("LEFT", c[2], 0)
-		fs:SetText(c[1])
+		ui.hdrFs[i] = fs
 	end
 
 	-- scroll host
@@ -164,6 +187,45 @@ local function Build()
 		ui.rows[i] = row
 	end
 
+	-- BAGS page rows: include toggle + name/qty/group/suggested/verdict
+	ui.excl = {}
+	ui.bagRows = {}
+	for i = 1, VISIBLE do
+		local row = CreateFrame("Button", nil, host)
+		row:SetSize(608, ROW_H - 2)
+		row:SetPoint("TOPLEFT", 0, -((i - 1) * ROW_H))
+		row.bg = row:CreateTexture(nil, "BACKGROUND")
+		row.bg:SetAllPoints()
+		row.bg:SetColorTexture(GM.RGB(i % 2 == 0 and "contMedium" or "contLowest"))
+		row.chk = CreateFrame("Button", nil, row)
+		row.chk:SetSize(14, 14)
+		row.chk:SetPoint("LEFT", 4, 0)
+		GM.Panel(row.chk, "contLowest", "outlineVar")
+		row.chk.text = GM.MakeFontString(row.chk, GM.FONT_BOLD, 10, "accent")
+		row.chk.text:SetPoint("CENTER")
+		row.icon = row:CreateTexture(nil, "ARTWORK")
+		row.icon:SetSize(18, 18)
+		row.icon:SetPoint("LEFT", 24, 0)
+		row.name = GM.MakeFontString(row, GM.FONT, 10, "text")
+		row.name:SetPoint("LEFT", 48, 0)
+		row.name:SetWidth(180)
+		row.name:SetJustifyH("LEFT")
+		row.qty = GM.MakeFontString(row, GM.FONT, 10, "text")
+		row.qty:SetPoint("LEFT", 232, 0)
+		row.group = GM.MakeFontString(row, GM.FONT, 9, "textDim")
+		row.group:SetPoint("LEFT", 290, 0)
+		row.group:SetWidth(150)
+		row.group:SetJustifyH("LEFT")
+		row.unit = GM.MakeFontString(row, GM.FONT, 10, "text")
+		row.unit:SetPoint("LEFT", 444, 0)
+		row.verdict = GM.MakeFontString(row, GM.FONT, 10, "text")
+		row.verdict:SetPoint("LEFT", 520, 0)
+		row.verdict:SetWidth(84)
+		row.verdict:SetJustifyH("LEFT")
+		row:Hide()
+		ui.bagRows[i] = row
+	end
+
 	ui.empty = GM.MakeFontString(host, GM.FONT, 10, "textDim")
 	ui.empty:SetPoint("CENTER")
 	ui.empty:SetText("no auctions posted — POST SCAN lists bags by group ops")
@@ -175,8 +237,37 @@ end
 
 -- ============ data ============
 
+local POSTED_COLS = { { "ITEM", 28 }, { "QTY", 236 }, { "UNIT", 288 },
+	{ "TOTAL", 366 }, { "LEFT", 444 }, { "STATUS", 500 } }
+local BAGS_COLS = { { "", 4 }, { "ITEM", 24 }, { "QTY", 232 },
+	{ "GROUP", 290 }, { "UNIT", 444 }, { "VERDICT", 520 } }
+
 function MA.Refresh()
 	if not ui then return end
+	for _, b in ipairs(ui.segs) do
+		local sel = b.key == ui.page
+		b._gmBg:SetColorTexture(GM.RGB(sel and "contHighest" or "contLowest"))
+		b.text:SetTextColor(GM.RGB(sel and "accent" or "textDim"))
+	end
+	local cols = ui.page == "bags" and BAGS_COLS or POSTED_COLS
+	for i, fs in ipairs(ui.hdrFs) do
+		local c = cols[i]
+		if c then
+			fs:ClearAllPoints()
+			fs:SetPoint("LEFT", c[2], 0)
+			fs:SetText(c[1])
+			fs:Show()
+		else
+			fs:Hide()
+		end
+	end
+	-- hide the inactive page's pool; the active refresh re-shows its own
+	for _, r in ipairs(ui.rows) do r:SetShown(ui.page == "posted") end
+	for _, r in ipairs(ui.bagRows) do r:SetShown(false) end
+	if ui.page == "bags" then MA.RefreshBags() else MA.RefreshPosted() end
+end
+
+function MA.RefreshPosted()
 	local owned = GM.Inventory.auctions or {}
 	local rows, totalVal, n = {}, 0, 0
 	for aid, a in pairs(owned) do
@@ -197,7 +288,9 @@ function MA.Refresh()
 	end)
 
 	ui.summary:SetText(format("%d auctions · %s listed", n, GM.Money(totalVal)))
+	ui.empty:SetText("no auctions posted — POST SCAN lists bags by group ops")
 	ui.empty:SetShown(#rows == 0)
+	ui.foot:SetText("x = cancel auction (click to arm, click again to confirm)")
 	local maxScroll = math.max(0, #rows - VISIBLE)
 	ui.scroll = math.min(ui.scroll, maxScroll)
 
@@ -239,6 +332,83 @@ function MA.Refresh()
 				if a then GM.Ledger.Add("cancel", a.itemID, a.qty, a.buyout) end
 				C_AuctionHouse.CancelAuction(aid)
 				GM.After(2, GM.Inventory.QueryOwned)
+				MA.Refresh()
+			end)
+			row:SetScript("OnClick", function()
+				if r.id then GM.TargetItem(r.id) end
+			end)
+		else
+			row:Hide()
+		end
+	end
+end
+
+-- BAGS page: every bag item with its live post decision (book-driven,
+-- no scan) — check toggles include; POST SCAN takes only checked rows.
+function MA.RefreshBags()
+	local bags = GM.Auctioning.BagItems()
+	local bookFresh = GM.AH.BookAge() < 300
+	local rows, nPost, nChk = {}, 0, 0
+	for id, e in pairs(bags) do
+		local unit, why = GM.Auctioning.PreviewPost(id)
+		local verdict
+		if e.bound then verdict = "soulbound"
+		elseif unit then verdict = "post"
+		else verdict = why or "skip" end
+		-- a bound item can still price — postable means POSTABLE,
+		-- otherwise it checks on, gets included, then the scan drops
+		-- it as "soulbound" and the row looks skipped for no reason
+		local postable = unit ~= nil and not e.bound
+		if postable then nPost = nPost + 1 end
+		-- default: postable rows checked; ui.excl remembers user unchecks
+		local checked = postable and not ui.excl[id]
+		if checked then nChk = nChk + 1 end
+		rows[#rows + 1] = {
+			id = id, total = e.total, stacks = #e.stacks,
+			group = GM.Groups.GroupForItem(id) or "Base Group",
+			unit = unit, verdict = verdict,
+			postable = postable, checked = checked,
+		}
+	end
+	table.sort(rows, function(a, b)
+		if a.postable ~= b.postable then return a.postable end
+		if a.checked ~= b.checked then return a.checked end
+		return (GM.ItemName(a.id) or "") < (GM.ItemName(b.id) or "")
+	end)
+	ui.include = {}
+	for _, r in ipairs(rows) do
+		if r.checked then ui.include[r.id] = true end
+	end
+	ui.summary:SetText(format("%d items · %d postable · %d checked%s",
+		#rows, nPost, nChk,
+		bookFresh and "" or GM.CC("warn") .. " · book stale|r"))
+	ui.empty:SetText("no bag items — PostScan needs something auctionable")
+	ui.empty:SetShown(#rows == 0)
+	ui.foot:SetText("checks include in POST SCAN · verdicts use the shared book when <5m old")
+	local maxScroll = math.max(0, #rows - VISIBLE)
+	ui.scroll = math.min(ui.scroll or 0, maxScroll)
+	for i = 1, VISIBLE do
+		local row = ui.bagRows[i]
+		local r = rows[i + ui.scroll]
+		if r then
+			row:Show()
+			local dim = not r.postable
+			row.icon:SetTexture(GM.ItemIcon(r.id) or 134400)
+			row.icon:SetDesaturated(dim)
+			row.name:SetText(GM.ItemName(r.id) or ("item " .. r.id))
+			row.name:SetTextColor(GM.RGB(dim and "textDim" or "text"))
+			row.qty:SetText("×" .. r.total .. (r.stacks > 1 and ("·" .. r.stacks .. "st") or ""))
+			row.group:SetText(r.group)
+			row.unit:SetText(r.unit and GM.Money(r.unit) or "—")
+			row.unit:SetTextColor(GM.RGB(r.unit and "accent" or "textDim"))
+			local vc = r.verdict == "post" and "pos"
+				or r.verdict == "soulbound" and "textDim" or "warn"
+			row.verdict:SetText(r.verdict)
+			row.verdict:SetTextColor(GM.RGB(vc))
+			row.chk.text:SetText(r.checked and "✓" or "")
+			local id = r.id
+			row.chk:SetScript("OnClick", function()
+				ui.excl[id] = not ui.excl[id] and true or nil
 				MA.Refresh()
 			end)
 			row:SetScript("OnClick", function()

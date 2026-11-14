@@ -18,17 +18,21 @@ local TABS = {
 	{ key = "crafting", label = "CRAFT" },
 	{ key = "overview", label = "LEDGER" },
 	{ key = "auctions", label = "AUCTIONS" },
+	{ key = "destroy", label = "DESTROY" },
 	{ key = "settings", label = "SETTINGS" },
 }
 
 function DB.Switch(key)
-	GM.PlanQueue.Hide()
+	-- the auctions window coexists with the main window — post/cancel
+	-- scans write their plan into it, so it stays up as a peer
+	if key ~= "auctions" then GM.PlanQueue.Hide() end
 	GM.Shopping.Hide()
 	GM.GroupsUI.Hide()
 	if GM.OpsUI then GM.OpsUI.Hide() end
 	if GM.CraftingUI then GM.CraftingUI.Hide() end
 	if GM.Overview then GM.Overview.Hide() end
 	if GM.MyAuctions then GM.MyAuctions.Hide() end
+	if GM.DestroyingUI then GM.DestroyingUI.Hide() end
 	if GM.Settings then GM.Settings.Hide() end
 	if key == "dash" then
 		GM.PlanQueue.SetHome(true)
@@ -48,14 +52,27 @@ function DB.Switch(key)
 		if GM.Overview then GM.Overview.Show() end
 	elseif key == "auctions" then
 		if GM.MyAuctions then GM.MyAuctions.Show() end
+	elseif key == "destroy" then
+		if GM.DestroyingUI then GM.DestroyingUI.Show() end
 	elseif key == "settings" then
 		if GM.Settings then GM.Settings.Show() end
 	end
 end
 
 -- shared tab strip: small text tabs anchored after the window's
--- title fontstring. Active tab accent, others dim.
+-- title fontstring. The current window's tab is omitted. Rebuilding
+-- is supported (call again when the current key changes — e.g. the
+-- main window's dash↔plan mode) — prior tabs are released first.
 function DB.AddTabs(frame, titleFs, currentKey)
+	if frame._gmTabKey == currentKey then return end
+	frame._gmTabKey = currentKey
+	if frame._gmTabs then
+		for _, b in ipairs(frame._gmTabs) do
+			b:Hide()
+			b:SetParent(nil)
+		end
+	end
+	frame._gmTabs = {}
 	local anchor = titleFs
 	for _, t in ipairs(TABS) do
 		if t.key ~= currentKey then
@@ -74,6 +91,7 @@ function DB.AddTabs(frame, titleFs, currentKey)
 			b:SetScript("OnEnter", function() b.text:SetTextColor(GM.RGB("text")) end)
 			b:SetScript("OnLeave", function() b.text:SetTextColor(GM.RGB("textDim")) end)
 			anchor = b
+			frame._gmTabs[#frame._gmTabs + 1] = b
 		end
 	end
 end

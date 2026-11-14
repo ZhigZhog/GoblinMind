@@ -31,6 +31,7 @@ CraftingUI.lua
 Dashboard.lua
 Overview.lua
 MyAuctions.lua
+DestroyingUI.lua
 Settings.lua
 ItemInput.lua
 Tooltip.lua

@@ -231,10 +231,12 @@ end
 -- ============ refresh ============
 
 local function ProfList()
-	-- distinct professions with recipe counts, "ALL" first
+	-- distinct professions with recipe counts, "ALL" first — C.Prof
+	-- resolves via the recipe's category root, which also heals stored
+	-- mistags as it reads
 	local counts, total = {}, 0
-	for _, r in pairs(GoblinMindCrafting and GoblinMindCrafting.recipes or {}) do
-		local p = r.prof or "?"
+	for id in pairs(GoblinMindCrafting and GoblinMindCrafting.recipes or {}) do
+		local p = GM.Crafting.Prof(id)
 		counts[p] = (counts[p] or 0) + 1
 		total = total + 1
 	end
@@ -254,7 +256,7 @@ local function RecipeRows()
 	local out = {}
 	local queue = GoblinMindCrafting.queue or {}
 	for _, row in ipairs(GM.Crafting.List()) do
-		if not ui.selProf or row.prof == ui.selProf then
+		if not ui.selProf or GM.Crafting.Prof(row.recipeID) == ui.selProf then
 			row.queued = queue[row.recipeID] or 0
 			out[#out + 1] = row
 		end

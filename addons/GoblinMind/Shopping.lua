@@ -111,7 +111,7 @@ local function Build()
 	if ui then return end
 	ui = {}
 	local f = CreateFrame("Frame", "GoblinMindMarketUI", UIParent)
-	f:SetSize(680, 420)
+	f:SetSize(680, 436)
 	f:SetPoint("CENTER", 100, 0)
 	f:SetMovable(true)
 	f:EnableMouse(true)
@@ -151,16 +151,16 @@ local function Build()
 		b:SetScript("OnClick", onclick)
 		return b
 	end
+	-- mode buttons ride a second row under the title (like the main
+	-- window's action strip) — the title row is title + module tabs
 	ui.shopBtn = TitleBtn("SHOP", 52, function() S.SetMode("shop") end)
-	ui.shopBtn:SetPoint("LEFT", title, "RIGHT", 12, -1)
+	ui.shopBtn:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -6)
 	ui.snipeBtn = TitleBtn("SNIPER", 60, function() S.SetMode("sniper") end)
 	ui.snipeBtn:SetPoint("LEFT", ui.shopBtn, "RIGHT", 6, 0)
 	ui.craftBtn = TitleBtn("CRAFT", 52, function() S.SetMode("craft") end)
 	ui.craftBtn:SetPoint("LEFT", ui.snipeBtn, "RIGHT", 6, 0)
-	-- module tabs ride AFTER the mode buttons — the title's RIGHT edge
-	-- is where the mode strip starts, not free space
 	if GM.Dashboard and GM.Dashboard.AddTabs then
-		GM.Dashboard.AddTabs(f, ui.craftBtn, "market")
+		GM.Dashboard.AddTabs(f, title, "market")
 	end
 	-- primary action lives at the bottom-right — the title row is
 	-- title + mode buttons + module tabs, no room for it up there
@@ -168,11 +168,11 @@ local function Build()
 	ui.action:SetPoint("BOTTOMRIGHT", -10, 6)
 
 	ui.status = GM.MakeFontString(f, GM.FONT, 10, "textDim")
-	ui.status:SetPoint("TOPLEFT", 14, -34)
+	ui.status:SetPoint("TOPLEFT", 14, -50)
 
 	local header = CreateFrame("Frame", nil, f)
-	header:SetPoint("TOPLEFT", 10, -52)
-	header:SetPoint("TOPRIGHT", -10, -52)
+	header:SetPoint("TOPLEFT", 10, -68)
+	header:SetPoint("TOPRIGHT", -10, -68)
 	header:SetHeight(18)
 	GM.Panel(header, "contHigh")
 	for _, h in ipairs({
@@ -185,8 +185,8 @@ local function Build()
 	end
 
 	ui.list = CreateFrame("Frame", nil, f)
-	ui.list:SetPoint("TOPLEFT", 10, -72)
-	ui.list:SetPoint("TOPRIGHT", -10, -72)
+	ui.list:SetPoint("TOPLEFT", 10, -88)
+	ui.list:SetPoint("TOPRIGHT", -10, -88)
 	ui.list:SetHeight(ROWS * 24 + 8)
 	GM.Panel(ui.list, "contLowest")
 	ui.rows = {}

@@ -104,6 +104,10 @@ SlashCmdList.GOBLINMIND = function(msg)
 		GM.CraftingUI.Toggle()
 		return
 	end
+	if msg:sub(1, 10) == "craftdebug" then
+		GM.Crafting.Debug(strtrim(msg:sub(11)))
+		return
+	end
 	if msg:sub(1, 6) == "market" or msg:sub(1, 4) == "shop" then
 		GM.Shopping.Toggle()
 		return
@@ -118,7 +122,7 @@ SlashCmdList.GOBLINMIND = function(msg)
 		return
 	end
 	if msg:sub(1, 7) == "destroy" then
-		GM.Destroying.Scan()
+		GM.DestroyingUI.Toggle()
 		return
 	end
 	if msg:sub(1, 4) == "sett" or msg:sub(1, 7) == "options" then

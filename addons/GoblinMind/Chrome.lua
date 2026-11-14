@@ -22,7 +22,11 @@ local _, GM = ...
 --   (alpha = coverage, RGB = flat palette) — see notes in AGENTS.md.
 
 GM.CHROME = {
-	enabled = true,
+	-- rounded chrome retired 2026-11-13: every window uses the flat
+	-- square green+gold GM.Panel look. Keep the atlas + slicer — the
+	-- minimap button still uses the gear emblem and this can be
+	-- re-enabled by flipping the flag.
+	enabled = false,
 	body = {
 		file = "Interface\\AddOns\\GoblinMind\\Media\\chrome-body.tga",
 		w = 1024, h = 1024,

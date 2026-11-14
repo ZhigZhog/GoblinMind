@@ -17,11 +17,34 @@ Format notes (verified against the live file):
               tokens like 9C / 1JI are base-36 encoded copper (or counts).
 """
 import argparse
+import logging
+import logging.handlers
 import os
 import re
 import sys
 import tempfile
 import time
+
+LOG = logging.getLogger('goblin_brain')
+
+
+def setup_logging(verbose=False, log_path=None):
+    """Console gets timestamped lines; the file gets full timestamps and
+    survives the process so a dead window still leaves a post-mortem."""
+    LOG.setLevel(logging.DEBUG if verbose else logging.INFO)
+    fmt = logging.Formatter('%(asctime)s %(levelname)-5s %(message)s',
+                            '%H:%M:%S')
+    ch = logging.StreamHandler(sys.stdout)
+    ch.setFormatter(fmt)
+    LOG.addHandler(ch)
+    if log_path:
+        fh = logging.handlers.RotatingFileHandler(
+            log_path, maxBytes=2 * 1024 * 1024, backupCount=2,
+            encoding='utf-8')
+        fh.setFormatter(logging.Formatter(
+            '%(asctime)s %(levelname)-5s %(message)s'))
+        LOG.addHandler(fh)
+        LOG.info('logging to %s', log_path)
 
 CHUNK_RE = re.compile(
     r'select\(2, \.\.\.\)\.LoadData\("([^"]+)","([^"]+)",\[\[(.*)\]\]\)')
@@ -194,6 +217,7 @@ def cmd_emit(path, out_path):
     data_age = 0
     realm_age = 0       # newest realm-scope downloadTime
     region_age = 0      # newest region-scope downloadTime
+    n_adb = n_rows = n_priced = 0
 
     # realm-scope rows: current stats (DATA), historical, scan stats
     # region-scope rows: REGION_STAT / REGION_SALE give market avg + velocity
@@ -201,6 +225,8 @@ def cmd_emit(path, out_path):
     for (tag, scope), c in chunks.items():
         if not tag.startswith('AUCTIONDB'):
             continue
+        n_adb += 1
+        n_rows += sum(1 for k in c.get('data', {}) if isinstance(k, int))
         data_age = max(data_age, c['downloadTime'])
         is_region = scope.endswith('-US') or '_REGION_' in tag
         if is_region:
@@ -234,7 +260,9 @@ def cmd_emit(path, out_path):
         if not p:
             p = region.get('regionMarketValue') or region.get('regionHistorical')
         if not p:
+            LOG.debug('item %s: no price fields — skipped', item_id)
             continue
+        n_priced += 1
         # regionSoldPerDay is a raw count — TSM displays it unscaled in
         # its tooltip (regionSalePercent is the only permille field).
         raw_vel = region.get('regionSoldPerDay') or region.get('regionSale')
@@ -298,7 +326,16 @@ def cmd_emit(path, out_path):
     with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as fh:
         fh.write(text)
     os.replace(tmp, out_path)
-    print(f'emitted {len(items)} items -> {out_path} ({len(text)//1024} KB)')
+    LOG.info('emitted %d items -> %s (%d KB)',
+             len(items), out_path, len(text) // 1024)
+    LOG.debug('  %d chunks total, %d AUCTIONDB, %d rows, %d priced '
+              '(%d skipped no-price)',
+              len(chunks), n_adb, n_rows, n_priced,
+              len(per_item) - n_priced)
+    return len(items)
+
+
+HEARTBEAT = 300  # verbose "still alive" line every 5 min
 
 
 def cmd_watch(appdata, outs, interval=5, settle=20):
@@ -307,24 +344,39 @@ def cmd_watch(appdata, outs, interval=5, settle=20):
     only trusted once it stops moving for `settle` seconds."""
     last_mtime = 0
     quiet_since = None
-    print(f'watching {appdata}')
+    last_beat = time.time()
+    LOG.info('watching %s', appdata)
+    LOG.info('outputs: %s', ' ; '.join(outs))
+    LOG.info('poll=%ss settle=%ss', interval, settle)
     while True:
         try:
-            mtime = os.stat(appdata).st_mtime
-        except OSError:
-            mtime = 0
+            st = os.stat(appdata)
+            mtime, size = st.st_mtime, st.st_size
+        except OSError as e:
+            mtime, size = 0, -1
+            LOG.debug('stat failed: %s', e)
         now = time.time()
         if mtime != last_mtime:
+            LOG.info('AppData touched (mtime=%s size=%s) — settling',
+                     time.strftime('%H:%M:%S', time.localtime(mtime))
+                     if mtime else '-', size)
             last_mtime = mtime
             quiet_since = now
         elif quiet_since and now - quiet_since >= settle:
             quiet_since = None
-            print(f'{time.strftime("%H:%M:%S")}: AppData settled — emitting')
+            LOG.info('AppData settled — emitting')
             for out in outs:
+                t0 = time.time()
                 try:
                     cmd_emit(appdata, out)
-                except Exception as e:  # never die on a mid-write file
-                    print(f'  emit {out} failed: {e}')
+                    LOG.debug('  %s done in %.1fs', out, time.time() - t0)
+                except Exception:  # never die on a mid-write file
+                    LOG.exception('emit %s failed', out)
+        elif now - last_beat >= HEARTBEAT:
+            last_beat = now
+            LOG.debug('heartbeat — watching, last mtime=%s',
+                      time.strftime('%H:%M:%S', time.localtime(last_mtime))
+                      if last_mtime else 'none yet')
         time.sleep(interval)
 
 
@@ -335,13 +387,31 @@ def main():
     ap.add_argument('out', nargs='*')
     ap.add_argument('--interval', type=float, default=5)
     ap.add_argument('--settle', type=float, default=20)
+    ap.add_argument('--verbose', '-v', action='store_true',
+                    help='debug-level logging (heartbeats, skip reasons)')
+    ap.add_argument('--log', metavar='PATH',
+                    default=os.path.join(os.path.dirname(
+                        os.path.abspath(__file__)), 'brain.log'),
+                    help='log file (default: brain.log next to the script; '
+                         'empty string disables)')
     a = ap.parse_args()
+    setup_logging(a.verbose, a.log or None)
     if a.cmd == 'dump':
         cmd_dump(a.appdata)
     elif a.cmd == 'watch':
         if not a.out:
             ap.error('watch needs at least one output path')
-        cmd_watch(a.appdata, a.out, a.interval, a.settle)
+        # anything escaping the loop is a real crash — log the full
+        # traceback, then come back up instead of dying silently
+        while True:
+            try:
+                cmd_watch(a.appdata, a.out, a.interval, a.settle)
+            except KeyboardInterrupt:
+                LOG.info('stopped by user')
+                return
+            except Exception:
+                LOG.exception('watcher crashed — restarting in 10s')
+                time.sleep(10)
     else:
         if not a.out:
             ap.error('emit needs an output path')

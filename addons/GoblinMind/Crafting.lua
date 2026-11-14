@@ -14,15 +14,157 @@ local _, GM = ...
 GM.Crafting = {}
 local C = GM.Crafting
 
+-- per-recipe profession: a recipe's category tree roots at the
+-- profession ("Engineering", "Mining"). Scan-time APIs like
+-- GetBaseProfessionInfo report the PREVIOUSLY open tradeskill — the
+-- category walk never lags. Works on Forever (TSM uses the same
+-- GetCategoryInfo signature: out-param table).
+local catProfCache = {}
+local function ProfFromCat(cat)
+	if not (cat and C_TradeSkillUI and C_TradeSkillUI.GetCategoryInfo) then return end
+	local cached = catProfCache[cat]
+	if cached ~= nil then return cached or nil end
+	local info, cur, guard = {}, cat, 0
+	while cur and guard < 10 do
+		guard = guard + 1
+		wipe(info)
+		local ok, res = pcall(C_TradeSkillUI.GetCategoryInfo, cur, info)
+		if not ok then break end
+		if type(res) == "table" then info = res end
+		local parent = info and info.parentCategoryID
+		if not parent or parent == cur then break end
+		cur = parent
+	end
+	local name = info and info.name
+	local p = (type(name) == "string" and name ~= "") and name or nil
+	catProfCache[cat] = p or false
+	return p
+end
+
+-- authoritative per-recipe profession: GetTradeSkillLineForRecipe
+-- exists on Forever (TSM marks it retail-only and never calls it here)
+-- and returns (skillLineID, displayName, rootSkillLine) — the name is
+-- return 2. No profession needs to be open; this also heals stored
+-- mistags on read.
+local function ProfForRecipe(recipeID)
+	if not (C_TradeSkillUI and C_TradeSkillUI.GetTradeSkillLineForRecipe) then
+		return nil
+	end
+	local ok, _, name = pcall(C_TradeSkillUI.GetTradeSkillLineForRecipe,
+		recipeID)
+	if ok and type(name) == "string" and name ~= "" then
+		return name
+	end
+end
+
+function C.Prof(recipeID)
+	local r = GoblinMindCrafting and GoblinMindCrafting.recipes
+		and GoblinMindCrafting.recipes[recipeID]
+	if not r then return "?" end
+	local p = ProfForRecipe(recipeID) or ProfFromCat(r.cat)
+	if p then
+		if r.prof ~= p then r.prof = p end
+		return p
+	end
+	if type(r.prof) == "string" and r.prof ~= "" then return r.prof end
+	return "?"
+end
+
+-- /goblin craftdebug — dump every profession API + category walks
+function C.Debug(matchName)
+	GM.Print("— tradeskill API probe —")
+	GM.Print("global GetTradeSkillLine: " .. tostring(
+		GetTradeSkillLine and GetTradeSkillLine() or GetTradeSkillLine))
+	if C_TradeSkillUI then
+		GM.Print("C_TSUI.GetTradeSkillLine: " .. tostring(C_TradeSkillUI.GetTradeSkillLine))
+		GM.Print("C_TSUI.GetCategoryInfo: " .. tostring(C_TradeSkillUI.GetCategoryInfo))
+		GM.Print("C_TSUI.GetTradeSkillLineForRecipe: " .. tostring(C_TradeSkillUI.GetTradeSkillLineForRecipe))
+		GM.Print("C_TSUI.GetProfessionName: " .. tostring(C_TradeSkillUI.GetProfessionName))
+		GM.Print("global GetProfessions: " .. tostring(GetProfessions))
+		GM.Print("global GetProfessionInfo: " .. tostring(GetProfessionInfo))
+		if GetProfessions then
+			local profs = { GetProfessions() }
+			GM.Print("  GetProfessions → " .. table.concat(
+				(function() local t = {} for i, v in ipairs(profs) do t[i] = tostring(v) end return t end)(), ", "))
+			for _, idx in ipairs(profs) do
+				local info = { GetProfessionInfo(idx) }
+				GM.Print("  GetProfessionInfo(" .. tostring(idx) .. ") → "
+					.. table.concat((function()
+						local t = {} for i, v in ipairs(info) do t[i] = tostring(v) end return t end)(), ", "))
+			end
+		end
+		if C_TradeSkillUI.GetBaseProfessionInfo then
+			local pi = C_TradeSkillUI.GetBaseProfessionInfo()
+			if pi then
+				for k, v in pairs(pi) do
+					GM.Print("  basePI." .. tostring(k) .. " = " .. tostring(v))
+				end
+			else
+				GM.Print("  basePI = nil")
+			end
+		end
+	else
+		GM.Print("C_TradeSkillUI missing")
+	end
+	local shown = 0
+	for id, r in pairs(GoblinMindCrafting.recipes or {}) do
+		if (not matchName or (r.name or ""):lower():find(matchName))
+			and shown < 5 then
+			shown = shown + 1
+			GM.Print(format("recipe %d %q: prof=%s cat=%s",
+				id, r.name or "?", tostring(r.prof), tostring(r.cat)))
+			if C_TradeSkillUI and C_TradeSkillUI.GetTradeSkillLineForRecipe then
+				local ok, a, b, c = pcall(C_TradeSkillUI.GetTradeSkillLineForRecipe, id)
+				GM.Print("  GetTradeSkillLineForRecipe → "
+					.. tostring(ok) .. " " .. tostring(a) .. " "
+					.. tostring(b) .. " " .. tostring(c))
+			end
+			if r.cat and C_TradeSkillUI and C_TradeSkillUI.GetCategoryInfo then
+				local info, cur = {}, r.cat
+				for hop = 1, 6 do
+					wipe(info)
+					local ok, res = pcall(C_TradeSkillUI.GetCategoryInfo, cur, info)
+					if not ok then
+						GM.Print("  GetCategoryInfo error: " .. tostring(info))
+						break
+					end
+					if type(res) == "table" then info = res end
+					if not info or not next(info) then
+						GM.Print("  cat " .. cur .. " → no info")
+						break
+					end
+					GM.Print(format("  cat %d: name=%q parent=%s indents=%s",
+						cur, tostring(info.name),
+						tostring(info.parentCategoryID), tostring(info.numIndents)))
+					if not info.parentCategoryID
+						or info.parentCategoryID == cur then break end
+					cur = info.parentCategoryID
+				end
+			end
+		end
+	end
+	if shown == 0 then GM.Print("no recipes matched") end
+end
+
 local function Scan()
 	if not (C_TradeSkillUI and C_TradeSkillUI.GetFilteredRecipeIDs) then return end
 	local ok, ids = pcall(C_TradeSkillUI.GetFilteredRecipeIDs)
 	if not ok or type(ids) ~= "table" then return end
+	-- GetBaseProfessionInfo LAGS the recipe list — at event time it
+	-- still names the previously open profession (off-by-one tagging).
+	-- GetTradeSkillLine reflects the list actually showing.
 	local prof
-	if C_TradeSkillUI.GetBaseProfessionInfo then
+	if C_TradeSkillUI.GetTradeSkillLine then
+		local name = C_TradeSkillUI.GetTradeSkillLine()
+		if type(name) == "string" and name ~= "" then prof = name end
+	end
+	if not prof and C_TradeSkillUI.GetBaseProfessionInfo then
 		local pi = C_TradeSkillUI.GetBaseProfessionInfo()
 		prof = pi and pi.professionName or pi and pi.profession
 	end
+	-- Forever can hand back "" for some professions — keep nil so
+	-- prev.prof survives and consumers can normalize once
+	if type(prof) ~= "string" or prof == "" then prof = nil end
 	local n = 0
 	for _, recipeID in ipairs(ids) do
 		local info = C_TradeSkillUI.GetRecipeInfo and C_TradeSkillUI.GetRecipeInfo(recipeID)
@@ -43,7 +185,9 @@ local function Scan()
 				GoblinMindCrafting.recipes[recipeID] = {
 					name = info.name or prev.name,
 					itemID = sc.outputItemID,
-					prof = prof or prev.prof,
+					prof = ProfForRecipe(recipeID) or prof
+						or (type(prev.prof) == "string"
+							and prev.prof ~= "" and prev.prof or nil),
 					mats = mats,
 					numMade = sc.quantityMin or prev.numMade or 1,
 					cat = info.categoryID or prev.cat,
@@ -66,9 +210,14 @@ function C.Init()
 	}) do pcall(f.RegisterEvent, f, evt) end
 	f:SetScript("OnEvent", function(_, e)
 		if e == "TRADE_SKILL_CLOSE" then return end
-		-- data source changes mid-session; rescan whenever the list
-		-- updates or a profession opens
-		Scan()
+		-- trailing debounce: profession context settles sometime during
+		-- the event burst — only scan 0.5s after the LAST event, never
+		-- the first. DATA_SOURCE_CHANGED can land after LIST_UPDATE.
+		C.scanGen = (C.scanGen or 0) + 1
+		local gen = C.scanGen
+		GM.After(0.5, function()
+			if gen == C.scanGen then Scan() end
+		end)
 	end)
 end
 

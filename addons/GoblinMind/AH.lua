@@ -812,8 +812,13 @@ function GM.AH.Execute(step)
 		if isComm then
 			C_AuctionHouse.PostCommodity(loc, step.duration or 2, qty, step.unit)
 		else
-			-- PostItem's qty is this auction's stack size — can't exceed the stack
-			C_AuctionHouse.PostItem(loc, step.duration or 2, math.min(qty, stackCount or qty), bid, step.unit)
+			-- PostItem's qty is this auction's stack size — can't exceed the stack.
+			-- bid/buyout are LOT prices (TSM: itemBid*stackSize — verified in
+			-- LibTSMWoW AuctionHouseWrapper) — step.unit/bid are per-item, so
+			-- scale by the posted stack or a multi-stack lists at 1 item's price
+			local postQty = math.min(qty, stackCount or qty)
+			C_AuctionHouse.PostItem(loc, step.duration or 2, postQty,
+				bid and bid * postQty or nil, step.unit * postQty)
 		end
 		return true
 	elseif step.kind == "cancel" then

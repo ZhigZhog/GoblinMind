@@ -33,55 +33,72 @@ end
 -- scan ALL bag stacks (not just grouped items — TSM's destroying
 -- window surfaces everything disenchantable/vendorable). Threshold
 -- comes from the item's own group's destroying op, Base Group for
--- ungrouped items.
-function D.Scan()
-	local steps = {}
-	local seen = {}
+-- ungrouped items. Rows carry full context for the results window
+-- AND the plan emitter — sorted by gain over market, desc.
+function D.Candidates()
+	local totals = {}
 	for _, s in ipairs(GM.Banking.BagSlots()) do
-		local id = s.itemID
-		if id and not seen[id] then
-			seen[id] = true
-			local group = GM.Groups.GroupForItem(id) or "Base Group"
-			local ops = GM.Groups.GetOpsForPath(group, "destroying")
-			local thresh = GM.Groups.EvalOp(ops, "threshold", id) or 0
-			local dv = D.Value(id)
-			local e = GM.ItemEntry(id)
-			local mkt = e and e.p
-			if dv and dv >= thresh and (not mkt or dv > mkt) then
-				local gain = mkt and (dv - mkt) or dv
-				tinsert(steps, { kind = "destroy", itemID = id,
-					qty = s.count,
-					name = GM.ItemName(id),
-					desc = format("%s > %s (+%s)",
-						GM.Money(dv), mkt and GM.Money(mkt) or "no market",
-						GM.Money(gain)) })
-			end
+		if s.itemID then
+			totals[s.itemID] = (totals[s.itemID] or 0) + s.count
 		end
 	end
-	table.sort(steps, function(a, b)
-		local av = (D.Value(a.itemID) or 0) - ((GM.ItemEntry(a.itemID) or {}).p or 0)
-		local bv = (D.Value(b.itemID) or 0) - ((GM.ItemEntry(b.itemID) or {}).p or 0)
-		return av > bv
-	end)
-	if #steps == 0 then
+	local rows = {}
+	for id, qty in pairs(totals) do
+		local group = GM.Groups.GroupForItem(id) or "Base Group"
+		local ops = GM.Groups.GetOpsForPath(group, "destroying")
+		local thresh = GM.Groups.EvalOp(ops, "threshold", id) or 0
+		local dv = D.Value(id)
+		local e = GM.ItemEntry(id)
+		local mkt = e and e.p
+		if dv and dv >= thresh and (not mkt or dv > mkt) then
+			tinsert(rows, { id = id, qty = qty, dv = dv, mkt = mkt,
+				gain = mkt and (dv - mkt) or dv,
+				group = group, name = GM.ItemName(id) })
+		end
+	end
+	table.sort(rows, function(a, b) return (a.gain or 0) > (b.gain or 0) end)
+	return rows
+end
+
+function D.Scan()
+	local rows = D.Candidates()
+	if #rows == 0 then
 		GM.Print(GM.CC("textDim") .. "destroy: no candidates in bags|r")
 		return
+	end
+	local steps = {}
+	for _, r in ipairs(rows) do
+		tinsert(steps, { kind = "destroy", itemID = r.id,
+			qty = r.qty, name = r.name,
+			desc = format("%s > %s (+%s)",
+				GM.Money(r.dv), r.mkt and GM.Money(r.mkt) or "no market",
+				GM.Money(r.gain)) })
 	end
 	GM.PlanQueue.SetScanPlan({ steps = steps, mode = "destroying",
 		itemCount = #steps })
 	GM.PlanQueue.Show()
 end
 
--- sell one stack at the open merchant — UseContainerItem on a bag
--- item while the merchant frame is up is the right-click sell
-local function DoDestroy(step)
+-- sell one stack of itemID at the open merchant — UseContainerItem on
+-- a bag item while the merchant frame is up is the right-click sell.
+-- Returns the stack size sold, false if the merchant isn't open, or
+-- true when nothing is left (stack exhausted).
+function D.SellOne(itemID)
 	if not (MerchantFrame and MerchantFrame:IsShown()) then
-		return nil, "open a merchant to vendor"
+		GM.Print(GM.CC("warn") .. "open a merchant to vendor|r")
+		return false
 	end
-	local s = GM.Banking.FindStack(step.itemID)
+	local s = GM.Banking.FindStack(itemID)
 	if not s then return true end -- nothing left → done
 	C_Container.UseContainerItem(s.bag, s.slot)
-	step.sold = (step.sold or 0) + s.count
+	return s.count
+end
+
+local function DoDestroy(step)
+	local sold = D.SellOne(step.itemID)
+	if sold == false then return nil, "open a merchant to vendor" end
+	if sold == true then return true end -- nothing left → done
+	step.sold = (step.sold or 0) + sold
 	return (step.sold or 0) >= step.qty
 end
 

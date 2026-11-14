@@ -140,18 +140,19 @@ local function Build()
 	local title = GM.MakeFontString(frame, GM.FONT_BOLD, 13, "accent")
 	title:SetPoint("TOPLEFT", 14, -10)
 	title:SetText("GOBLINMIND")
-	-- sliced chrome (title tab + 9-slice body) replaces the plain title
-	-- when the atlas is enabled — buttons anchor to whichever is live
-	local cTitle = GM.ChromeApply and GM.ChromeApply(frame, "GOBLINMIND")
-	if cTitle then title:Hide(); title = cTitle end
-	-- drag lives on the chrome header zone only — a frame-level
-	-- RegisterForDrag on top of it fires StartMoving twice per press
-	-- and the second call re-baselines mid-drag (the "random jump")
-	if not cTitle then
-		frame:RegisterForDrag("LeftButton")
-		frame:SetScript("OnDragStart", frame.StartMoving)
-		frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
+	ui.titleFs = title
+	-- module tab strip rides the title row like every other window —
+	-- dash↔plan is a mode of this window, so the strip rebuilds on
+	-- Refresh when the current key flips
+	if GM.Dashboard and GM.Dashboard.AddTabs then
+		GM.Dashboard.AddTabs(frame, title,
+			PQ.homeMode and "dash" or "plan")
 	end
+	-- drag on the frame title zone (RegisterForDrag on the frame itself
+	-- — no chrome overlay any more)
+	frame:RegisterForDrag("LeftButton")
+	frame:SetScript("OnDragStart", frame.StartMoving)
+	frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
 
 	-- scan buttons ride the title strip — subtle button rects so they
 	-- read as actions, not navigation tabs
@@ -179,34 +180,18 @@ local function Build()
 		end)
 		return b
 	end
-	-- action tabs ride a dedicated strip under the title bar — inside
-	-- the body, clear of the header drag zone
+	-- action buttons ride a dedicated strip under the title bar —
+	-- navigation lives in the shared tab strip; these are the
+	-- window-specific actions only
 	ui.postScan = TitleBtn("POST SCAN", 84, function() GM.Auctioning.PostScan() end,
 		"Scan bag items for posting")
-	ui.postScan:SetPoint("TOPLEFT", frame, "TOPLEFT", 64, -26)
+	ui.postScan:SetPoint("TOPLEFT", frame, "TOPLEFT", PAD, -30)
 	ui.cancelScan = TitleBtn("CANCEL SCAN", 104, function() GM.Auctioning.CancelScan() end,
 		"Scan own auctions for undercuts")
 	ui.cancelScan:SetPoint("LEFT", ui.postScan, "RIGHT", 8, 0)
-	ui.market = TitleBtn("MARKET", 66, function() GM.Shopping.Toggle() end,
-		"Open market window")
-	ui.market:SetPoint("LEFT", ui.cancelScan, "RIGHT", 8, 0)
 	ui.fullScan = TitleBtn("FULL SCAN", 84, function() GM.AH.FullScan() end,
 		"Refresh the full AH book")
-	ui.fullScan:SetPoint("LEFT", ui.market, "RIGHT", 8, 0)
-	ui.groups = TitleBtn("GROUPS", 66, function() GM.GroupsUI.Toggle() end,
-		"Open groups & operations")
-	ui.groups:SetPoint("LEFT", ui.fullScan, "RIGHT", 8, 0)
-	ui.dash = TitleBtn("DASH", 50, function() PQ.SetHome(not PQ.homeMode) end,
-		"Toggle dashboard home view")
-	ui.dash:SetScript("OnLeave", function()
-		GM.Panel(ui.dash, "contHigh", "outlineVar")
-		ui.dash.text:SetTextColor(GM.RGB(PQ.homeMode and "accent" or "text"))
-		if GameTooltip then GameTooltip:Hide() end
-	end)
-	ui.dash:SetPoint("LEFT", ui.groups, "RIGHT", 8, 0)
-	ui.auctions = TitleBtn("AUCTIONS", 78, function() GM.MyAuctions.Toggle() end,
-		"Open my auctions")
-	ui.auctions:SetPoint("LEFT", ui.dash, "RIGHT", 8, 0)
+	ui.fullScan:SetPoint("LEFT", ui.cancelScan, "RIGHT", 8, 0)
 
 	ui.age = GM.MakeFontString(frame, GM.FONT, 10, "textDim")
 
@@ -219,7 +204,10 @@ local function Build()
 	close:SetScript("OnClick", function() frame:Hide() end)
 	close:SetScript("OnEnter", function() close.text:SetTextColor(GM.RGB("text")) end)
 	close:SetScript("OnLeave", function() close.text:SetTextColor(GM.RGB("textDim")) end)
-	ui.age:SetPoint("TOPRIGHT", -12, -11) -- title strip, right of chrome tab
+	-- freshness text lives on the action-strip row's right edge —
+	-- the title row is title + module tabs now and a long age string
+	-- collides with the last tabs
+	ui.age:SetPoint("TOPRIGHT", -40, -33)
 
 	local rule = frame:CreateTexture(nil, "BORDER")
 	rule:SetColorTexture(GM.RGB("outlineVar"))
@@ -595,8 +583,9 @@ function PQ.ExecuteNext()
 			return
 		end
 	end
-	if step.kind == "note" then
-		-- manual step (craft, fetch mail, …): the click acknowledges it
+	if step.kind == "note" or step.kind == "skip" then
+		-- manual step (craft, fetch mail, …) or scan-skip info row:
+		-- the click acknowledges it, no protected call involved
 		PQ.stepIndex = PQ.stepIndex + 1
 		PQ.Refresh()
 		return
@@ -820,8 +809,11 @@ function PQ.Refresh()
 			ui.stats, ui.sumBar, ui.exec, ui.rescan, ui.skip }) do
 			if w then w:SetShown(not h) end
 		end
-		if ui.dash then
-			ui.dash.text:SetTextColor(GM.RGB(h and "accent" or "text"))
+		-- dash↔plan flips the current tab — rebuild the strip when it
+		-- changes (AddTabs no-ops on an unchanged key)
+		if GM.Dashboard and GM.Dashboard.AddTabs and ui.titleFs then
+			GM.Dashboard.AddTabs(ui.frame, ui.titleFs,
+				h and "dash" or "plan")
 		end
 		if h then
 			if ui.homeRefresh then ui.homeRefresh() end
@@ -967,6 +959,7 @@ function PQ.Refresh()
 			row.num:SetText(GM.CC("textDim") .. n .. "|r")
 			local verb = step.kind == "post" and "POST"
 				or step.kind == "cancel" and "CANCEL"
+				or step.kind == "skip" and "SKIP"
 				or step.kind == "note" and "CRAFT"
 				or step.kind == "move" and "MOVE"
 				or step.kind == "mail" and "SEND"
@@ -978,7 +971,8 @@ function PQ.Refresh()
 				row.act:SetText(GM.CC("accent") .. verb .. " ▶|r")
 			else
 				row.act:SetText(GM.CC(step.kind == "post" and "pos"
-					or step.kind == "cancel" and "warn" or "text") .. verb .. "|r")
+					or step.kind == "cancel" and "warn"
+					or step.kind == "skip" and "textDim" or "text") .. verb .. "|r")
 			end
 			if PQ.plan.mode then
 				local nm = step.name or ""
@@ -997,8 +991,10 @@ function PQ.Refresh()
 	if PQ.plan then
 		if PQ.plan.mode == "postscan" then
 			ui.sumEdge:SetColorTexture(GM.RGB("accent"))
-			ui.summary:SetText(format("POST SCAN · %d posts across %d items",
-				#PQ.plan.steps, PQ.plan.itemCount or 0))
+			local skipN = PQ.plan.skipCount or 0
+			ui.summary:SetText(format("POST SCAN · %d posts across %d items%s",
+				#PQ.plan.steps - skipN, PQ.plan.itemCount or 0,
+				skipN > 0 and format(" · %d skipped", skipN) or ""))
 			ui.summary2:SetText(format("est %s · dep %s",
 				GM.Money(PQ.plan.ev or 0), GM.Money(PQ.plan.deposit or 0)))
 		elseif PQ.plan.mode == "cancelscan" then
@@ -1046,6 +1042,7 @@ function PQ.Refresh()
 			local verb = PQ.stepIndex > #PQ.plan.steps and "PLAN DONE"
 				or kind == "cancel" and "CANCEL NEXT"
 				or kind == "post" and "POST NEXT"
+				or kind == "skip" and "NEXT"
 				or kind == "note" and "CRAFT DONE"
 				or kind == "move" and "MOVE NEXT"
 				or kind == "mail" and "SEND NEXT"

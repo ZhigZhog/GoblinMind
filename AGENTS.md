@@ -62,6 +62,17 @@ self-owned Blizzard-API pipeline later.
   - **TGA pipeline**: hand-written encoder in the unmatte script —
     uncompressed 32-bit, top-down rows + `0x28` descriptor (matches
     TSM/EllesmereUI convention; the client honors both `0x08`/`0x28`).
+  - **Recipe capture is event-driven**: `C_TradeSkillUI` only returns
+    data for the *open* profession — `Scan()` hooks
+    `TRADE_SKILL_LIST_UPDATE`/`TRADE_SKILL_SHOW`, so recipes appear as
+    the player opens each tradeskill (the Blizzard "Professions" book
+    counts). Profession naming on Forever (verified 2026-11-15):
+    `GetBaseProfessionInfo` returns an all-zero table,
+    `GetCategoryInfo` returns nothing, `GetTradeSkillLine` doesn't
+    exist — but **`C_TradeSkillUI.GetTradeSkillLineForRecipe(id)`
+    works** (TSM asserts it retail-only and never calls it here):
+    returns `(skillLineID, displayName, rootSkillLine)` — name is
+    return 2. `C.Prof(recipeID)` uses it.
   - **Item names/icons resolve asynchronously**: `GetItemInfo` returns
     nil for uncached items — use `GM.ItemName`/`GM.ItemIcon`
     (Core.lua) which call `RequestLoadItemDataByID`, and refresh via
