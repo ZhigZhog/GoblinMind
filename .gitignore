@@ -10,3 +10,4 @@ __pycache__/
 
 # stray file from `2> nul` redirects (Git Bash makes a real file)
 nul
+brain/brain.log
