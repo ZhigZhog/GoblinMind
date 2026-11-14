@@ -451,6 +451,21 @@ function PQ.ClearPlan()
 	PQ.Refresh()
 end
 
+-- the step the executor is sitting on — the craft cast listener ticks
+-- progress into it
+function PQ.ActiveStep()
+	return PQ.plan and PQ.plan.steps[PQ.stepIndex]
+end
+
+-- advance without executing — for steps driven by an external event
+-- (a completed craft cast) rather than a button click
+function PQ.Advance()
+	if PQ.plan and PQ.stepIndex <= #PQ.plan.steps then
+		PQ.stepIndex = PQ.stepIndex + 1
+	end
+	PQ.Refresh()
+end
+
 -- a multi-item plan from a post/cancel scan — steps carry their own
 -- itemID/name, execution goes through the same click-per-step path
 function PQ.SetScanPlan(plan)
@@ -460,6 +475,7 @@ function PQ.SetScanPlan(plan)
 	PQ.homeMode = false
 	PQ.budgetConfirm = nil
 	PQ.budgetWarn = nil
+	PQ.lossConfirm = nil
 	PQ.Refresh()
 end
 
@@ -470,6 +486,7 @@ function PQ.SetItem(itemID, itemLink)
 	PQ.item = itemLink
 	PQ.scan = nil
 	PQ.plan = nil
+	PQ.lossConfirm = nil
 	PQ.Refresh()
 	if GM.GroupsUI and GM.GroupsUI.Retarget then GM.GroupsUI.Retarget() end
 end
@@ -557,6 +574,7 @@ function PQ.Solve(asks)
 	plan.ev = plan.ev - plan.deposit
 	PQ.plan = plan
 	PQ.stepIndex = 1
+	PQ.lossConfirm = nil
 	PQ.Refresh()
 end
 
@@ -572,6 +590,17 @@ function PQ.ExecuteNext()
 	end
 	local step = PQ.plan and PQ.plan.steps[PQ.stepIndex]
 	if not step then return end
+	-- expected-loss gate: a "bad" verdict holds the plan until one
+	-- explicit confirm click. Single-item plans only — scan plans have
+	-- their own economics (a cancelscan's ev is 0 by design) and would
+	-- flag constantly. One confirm covers the plan; skip/rescan is the
+	-- way out of a plan you don't want.
+	if not PQ.plan.mode and not PQ.lossConfirm
+			and GM.Solver.Verdict(PQ.plan, GM.db) == "bad" then
+		PQ.lossConfirm = true
+		PQ.Refresh()
+		return
+	end
 	-- envelope check: warn once per step, second click confirms
 	if (step.kind == "buy" or step.kind == "vendbuy") and GM.Budget then
 		local cost = step.cost or (step.unit or 0) * (step.qty or 1)
@@ -583,8 +612,22 @@ function PQ.ExecuteNext()
 			return
 		end
 	end
+	if step.kind == "note" and step.recipeID then
+		-- a real craft step: fire the remaining count — Blizzard's own
+		-- multicraft call, one protected call per click. Completed
+		-- casts tick step.crafted via UNIT_SPELLCAST_SUCCEEDED and the
+		-- plan advances itself at qty; a dead call (tradeskill closed,
+		-- unsupported batch) just stays armed for the next click.
+		local left = (step.qty or 1) - (step.crafted or 0)
+		local ok, err = GM.Crafting.Craft(step.recipeID, left)
+		if not ok then
+			GM.Print(GM.CC("err") .. tostring(err) .. "|r")
+		end
+		PQ.Refresh()
+		return
+	end
 	if step.kind == "note" or step.kind == "skip" then
-		-- manual step (craft, fetch mail, …) or scan-skip info row:
+		-- manual step (fetch mail, …) or scan-skip info row:
 		-- the click acknowledges it, no protected call involved
 		PQ.stepIndex = PQ.stepIndex + 1
 		PQ.Refresh()
@@ -1032,9 +1075,13 @@ function PQ.Refresh()
 			GM.Money(PQ.plan.spend), dep, GM.Money(PQ.plan.ev), note))
 		end
 		ui.exec:Show()
+		local badPlan = not PQ.plan.mode and not PQ.lossConfirm
+			and GM.Solver.Verdict(PQ.plan, GM.db) == "bad"
 		if PQ.budgetWarn then
 			ui.exec.text:SetText("OVER BUDGET −" ..
 				GM.Money(PQ.budgetWarn) .. " · CONFIRM")
+		elseif badPlan then
+			ui.exec.text:SetText("EXPECTED LOSS · CONFIRM")
 		elseif GM.AH.pendingConfirm then
 			ui.exec.text:SetText("CONFIRM PURCHASE")
 		else
@@ -1043,7 +1090,10 @@ function PQ.Refresh()
 				or kind == "cancel" and "CANCEL NEXT"
 				or kind == "post" and "POST NEXT"
 				or kind == "skip" and "NEXT"
-				or kind == "note" and "CRAFT DONE"
+				or kind == "note" and (curStep.recipeID
+					and format("CRAFT · %d/%d", curStep.crafted or 0,
+						curStep.qty or 1)
+					or "DONE")
 				or kind == "move" and "MOVE NEXT"
 				or kind == "mail" and "SEND NEXT"
 				or kind == "mailcollect" and "COLLECT NEXT"

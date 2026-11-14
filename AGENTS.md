@@ -59,6 +59,23 @@ self-owned Blizzard-API pipeline later.
   - **`SetTexCoord` signature is (left, right, top, bottom)** — not
     (l,t,r,b). Transposing silently produces 1px-column stretches that
     look like solid bands.
+  - **`C_TradeSkillUI.CraftRecipe` works for qty=1** (verified
+    2026-11-14 via `/goblin craftprobe`); count>1 is Blizzard's
+    multicraft path — `C.Craft` attempts it and a `pendingCast`
+    watchdog (UNIT_SPELLCAST_START within 0.6s) detects a dead call
+    and sets `C.noBatch` → session-wide single-cast fallback. Actual
+    crafting progress is tracked by listening to
+    `UNIT_SPELLCAST_SUCCEEDED`/`CHANNEL_STOP` (spellID == recipeID):
+    each finished cast decrements `queue[spellID]` and ticks
+    `step.crafted` on the active plan note step. `CraftEnchant`/
+    `CraftSalvage`/`IsRecipeRepeating`/`RecraftRecipe` also exist in
+    the namespace; classic `DoTradeSkill`/`DoCraft`/`GetCraftInfo`
+    globals are all nil — the client is purely retail-shaped here.
+    `GetTradeSkillLineForRecipe(recipeID)` exists (TSM marks it
+    retail-only and never calls it on Forever) and returns
+    `(skillLineID, "Profession Name", rootSkillLine)` — the
+    authoritative per-recipe profession lookup; `GetTradeSkillLine`
+    and `GetBaseProfessionInfo` are dead ends (absent / zero-table).
   - **TGA pipeline**: hand-written encoder in the unmatte script —
     uncompressed 32-bit, top-down rows + `0x28` descriptor (matches
     TSM/EllesmereUI convention; the client honors both `0x08`/`0x28`).

@@ -108,6 +108,10 @@ SlashCmdList.GOBLINMIND = function(msg)
 		GM.Crafting.Debug(strtrim(msg:sub(11)))
 		return
 	end
+	if msg:sub(1, 10) == "craftprobe" then
+		GM.Crafting.CraftProbe(strtrim(msg:sub(11)))
+		return
+	end
 	if msg:sub(1, 6) == "market" or msg:sub(1, 4) == "shop" then
 		GM.Shopping.Toggle()
 		return

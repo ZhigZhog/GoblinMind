@@ -47,7 +47,7 @@ local PROF_ROWS, LIST_ROWS = 12, 22
 
 local function Panel(parent, x, w, title)
 	local p = CreateFrame("Frame", nil, parent)
-	p:SetPoint("TOPLEFT", x, -34)
+	p:SetPoint("TOPLEFT", x, -52) -- toolbar row sits at -32..-48
 	p:SetPoint("BOTTOM", 0, 30)
 	p:SetWidth(w)
 	GM.Panel(p, "contLowest")
@@ -56,6 +56,29 @@ local function Panel(parent, x, w, title)
 	t:SetPoint("TOPLEFT", 8, -6)
 	t:SetText(title)
 	return p
+end
+
+local function EditBox(parent, w, hint)
+	local eb = CreateFrame("EditBox", nil, parent)
+	eb:SetSize(w, 16)
+	eb:SetAutoFocus(false)
+	eb:SetFont(GM.FONT, 10, "")
+	eb:SetTextColor(GM.RGB("text"))
+	eb:SetTextInsets(5, 4, 0, 0)
+	local bg = eb:CreateTexture(nil, "BACKGROUND")
+	bg:SetAllPoints()
+	bg:SetColorTexture(GM.RGB("contLowest"))
+	eb:SetText(hint)
+	eb:SetTextColor(GM.RGB("textDim"))
+	eb:SetScript("OnEditFocusGained", function()
+		if eb:GetText() == hint then
+			eb:SetText("")
+			eb:SetTextColor(GM.RGB("text"))
+		end
+	end)
+	eb:SetScript("OnEscapePressed", function() eb:ClearFocus() end)
+	eb:SetScript("OnEnterPressed", function() eb:ClearFocus() end)
+	return eb
 end
 
 local function ListRow(parent, w)
@@ -85,6 +108,16 @@ local function BuildUI()
 	tinsert(UISpecialFrames, "GoblinMindCrafts")
 	GM.Panel(f, "contLow", "outlineVar")
 	ui.frame = f
+	-- craftable counts move with the bags — debounced repaint
+	pcall(f.RegisterEvent, f, "BAG_UPDATE")
+	f:SetScript("OnEvent", function()
+		if not f:IsShown() or ui.bagPending then return end
+		ui.bagPending = true
+		GM.After(0.3, function()
+			ui.bagPending = nil
+			CU.Refresh()
+		end)
+	end)
 
 	local title = GM.MakeFontString(f, GM.FONT_BOLD, 12, "accent")
 	title:SetPoint("TOPLEFT", 12, -10)
@@ -98,6 +131,23 @@ local function BuildUI()
 	close.text:SetPoint("CENTER")
 	close.text:SetText("x")
 	close:SetScript("OnClick", function() f:Hide() end)
+
+	-- toolbar: name filter + craftable-only (Blizzard frame parity)
+	ui.search = EditBox(f, 150, "filter recipes…")
+	ui.search:SetPoint("TOPLEFT", 12, -32)
+	ui.search:SetScript("OnTextChanged", function()
+		ui.recOff = 0
+		CU.Refresh()
+	end)
+	local matsOnly = Btn(f, "CRAFTABLE ONLY", 104, 16)
+	matsOnly:SetPoint("LEFT", ui.search, "RIGHT", 8, 0)
+	matsOnly.text:SetTextColor(GM.RGB("textDim"))
+	matsOnly:SetScript("OnClick", function()
+		ui.matsOnly = not ui.matsOnly or nil
+		matsOnly.text:SetTextColor(GM.RGB(ui.matsOnly and "accent" or "textDim"))
+		ui.recOff = 0
+		CU.Refresh()
+	end)
 
 	-- left: professions
 	local profP = Panel(f, 10, PROF_W, "PROFESSIONS")
@@ -160,7 +210,7 @@ local function BuildUI()
 		WIN_W - PROF_W - REC_W - 38, "QUEUE")
 	ui.qRows = {}
 	local qw = WIN_W - PROF_W - REC_W - 38 - 16
-	for i = 1, 18 do
+	for i = 1, 11 do
 		local r = CreateFrame("Button", nil, qP)
 		r:SetSize(qw, ROW_H)
 		r:SetPoint("TOPLEFT", 8, -24 - (i - 1) * (ROW_H + 2))
@@ -188,9 +238,63 @@ local function BuildUI()
 		r.del = StepBtn(-2, "x")
 		r.plus = StepBtn(-20, "+")
 		r.minus = StepBtn(-38, "-")
+		r.craft = StepBtn(-56, "»")
 		r:Hide()
 		ui.qRows[i] = r
 	end
+
+	-- detail pane: the selected recipe — Blizzard's right pane
+	-- equivalent (output, reagents with have/need, craft actions)
+	local det = CreateFrame("Frame", nil, qP)
+	det:SetPoint("TOPLEFT", 8, -252)
+	det:SetSize(qw + 8, 192)
+	GM.Panel(det, "contLow")
+	ui.det = det
+	ui.detIcon = det:CreateTexture(nil, "ARTWORK")
+	ui.detIcon:SetSize(22, 22)
+	ui.detIcon:SetPoint("TOPLEFT", 10, -8)
+	ui.detName = GM.MakeFontString(det, GM.FONT_BOLD, 10, "text")
+	ui.detName:SetPoint("LEFT", ui.detIcon, "RIGHT", 8, 0)
+	ui.detName:SetWidth(280)
+	ui.detName:SetJustifyH("LEFT")
+	ui.detSub = GM.MakeFontString(det, GM.FONT, 9, "textDim")
+	ui.detSub:SetPoint("TOPLEFT", ui.detName, "BOTTOMLEFT", 0, -4)
+	ui.detSub:SetWidth(320)
+	ui.detSub:SetJustifyH("LEFT")
+	ui.detMats = {}
+	for i = 1, 6 do
+		local m = {}
+		m.icon = det:CreateTexture(nil, "ARTWORK")
+		m.icon:SetSize(12, 12)
+		m.icon:SetPoint("TOPLEFT", 10, -54 - (i - 1) * 15)
+		m.name = GM.MakeFontString(det, GM.FONT, 9, "text")
+		m.name:SetPoint("LEFT", m.icon, "RIGHT", 6, 0)
+		m.name:SetWidth(200)
+		m.name:SetJustifyH("LEFT")
+		m.have = GM.MakeFontString(det, GM.FONT_MED, 9, "textDim")
+		m.have:SetPoint("TOPRIGHT", det, "TOPRIGHT", -10, -54 - (i - 1) * 15)
+		ui.detMats[i] = m
+	end
+	-- CRAFT ×N: Blizzard's multicraft call — one click, one protected
+	-- call, N casts. If Forever doesn't honor count>1 the watchdog
+	-- falls back to single casts automatically.
+	ui.craft1 = Btn(det, "CRAFT", 66)
+	ui.craft1:SetPoint("BOTTOMLEFT", 8, 8)
+	ui.craftHint = GM.MakeFontString(det, GM.FONT, 8, "textDim")
+	ui.craftHint:SetPoint("LEFT", ui.craft1, "RIGHT", 8, 0)
+	ui.craftHint:SetWidth(240)
+	ui.craftHint:SetJustifyH("LEFT")
+	ui.craft1:SetScript("OnClick", function()
+		if not ui.sel then return end
+		local n = GM.Crafting.Craftable(ui.sel)
+		if n < 1 then
+			Footer("no materials on hand", true)
+			return
+		end
+		local ok, err = GM.Crafting.Craft(ui.sel, n)
+		if not ok then Footer(err, true) end
+		CU.Refresh()
+	end)
 
 	local emit = Btn(qP, "EMIT PLAN", 90)
 	emit:SetPoint("BOTTOMRIGHT", -8, 6)
@@ -255,14 +359,20 @@ end
 local function RecipeRows()
 	local out = {}
 	local queue = GoblinMindCrafting.queue or {}
+	local q = ui.search and ui.search:GetText() or ""
+	q = (q == "filter recipes…") and "" or q:lower()
 	for _, row in ipairs(GM.Crafting.List()) do
-		if not ui.selProf or GM.Crafting.Prof(row.recipeID) == ui.selProf then
+		if (not ui.selProf or GM.Crafting.Prof(row.recipeID) == ui.selProf)
+			and (not ui.matsOnly or (row.craftable or 0) > 0)
+			and (q == "" or (row.name or ""):lower():find(q, 1, true)) then
 			row.queued = queue[row.recipeID] or 0
 			out[#out + 1] = row
 		end
 	end
 	return out
 end
+
+local DIFF_NAMES = { "trivial", "easy", "optimal", "difficult" }
 
 function CU.Refresh()
 	if not ui then return end
@@ -294,10 +404,16 @@ function CU.Refresh()
 	ui.recOff = math.min(ui.recOff or 0,
 		math.max(0, #rows - LIST_ROWS))
 	ui.recEmpty:SetShown(#rows == 0)
+	-- keep a live selection — the detail pane needs one
+	if not (ui.sel and GoblinMindCrafting.recipes[ui.sel]) then
+		ui.sel = rows[1] and rows[1].recipeID or nil
+	end
 	for i, r in ipairs(ui.recRows) do
 		local row = rows[ui.recOff + i]
 		if row then
 			r:Show()
+			local isSel = row.recipeID == ui.sel
+			r._gmBg:SetColorTexture(GM.RGB(isSel and "contHigh" or "contLowest"))
 			r.name:SetText(row.name or ("recipe " .. row.recipeID))
 			-- verdict color: can-craft accent, profitable green, loss red
 			local nc = row.profit and (row.profit > 0
@@ -320,6 +436,10 @@ function CU.Refresh()
 			local id, sug = row.recipeID, row.suggest
 			r.qbtn:SetScript("OnClick", function()
 				GM.Crafting.QueueAdd(id, max(1, sug or 1))
+				CU.Refresh()
+			end)
+			r:SetScript("OnClick", function()
+				ui.sel = id
 				CU.Refresh()
 			end)
 			Tip(r, function()
@@ -367,6 +487,23 @@ function CU.Refresh()
 			r.del:SetScript("OnClick", function()
 				GM.Crafting.QueueSet(id, 0) CU.Refresh()
 			end)
+			-- » = craft the queued amount in one call — Blizzard's
+			-- multicraft path; watchdog drops to 1/click if unsupported
+			r.craft.text:SetTextColor(GM.RGB(
+				(q.craftable or 0) > 0 and "accent" or "textDim"))
+			r.craft:SetScript("OnClick", function()
+				if (q.craftable or 0) < 1 then
+					Footer("no materials on hand", true)
+					return
+				end
+				local ok, err = GM.Crafting.Craft(id, q.qty)
+				if not ok then Footer(err, true) end
+				CU.Refresh()
+			end)
+			r:SetScript("OnClick", function()
+				ui.sel = id
+				CU.Refresh()
+			end)
 			local short = q.qty - (q.craftable or 0)
 			Tip(r, function()
 				local miss = GM.Crafting.Missing(id, q.qty)
@@ -389,6 +526,59 @@ function CU.Refresh()
 		"%d recipes · cost %s · est %s · %d mats short",
 		#qs, GM.Money(totCost), GM.Money(totProfit), matsN)
 		or "queue empty — +N on a recipe adds it")
+
+	-- selected-recipe detail — Blizzard's right pane
+	local dr = ui.sel and GoblinMindCrafting.recipes
+		and GoblinMindCrafting.recipes[ui.sel]
+	if dr then
+		ui.det:Show()
+		ui.detIcon:SetTexture(GM.ItemIcon(dr.itemID) or 134400)
+		ui.detName:SetText(GM.ItemName(dr.itemID) or dr.name or "?")
+		local profit, price, cost = GM.Crafting.Profit(ui.sel)
+		local sub = {}
+		if (dr.numMade or 1) > 1 then tinsert(sub, "makes ×" .. dr.numMade) end
+		if dr.diff then
+			tinsert(sub, DIFF_NAMES[(dr.diff or 0) + 1] or tostring(dr.diff))
+		end
+		if dr.cd and dr.cd > 0 then
+			tinsert(sub, format("cd %ds", dr.cd))
+		end
+		tinsert(sub, format("cost %s → %s (%s)",
+			cost and GM.Money(cost) or "?",
+			price and GM.Money(price) or "?",
+			profit and (profit > 0 and "+" or "") .. GM.Money(profit) or "?"))
+		ui.detSub:SetText(table.concat(sub, " · "))
+		local craftable = GM.Crafting.Craftable(ui.sel)
+		for i, m in ipairs(ui.detMats) do
+			local mat = dr.mats and dr.mats[i]
+			if mat then
+				m.icon:Show()
+				m.icon:SetTexture(GM.ItemIcon(mat.id) or 134400)
+				m.name:Show()
+				m.name:SetText(GM.ItemName(mat.id) or ("item " .. mat.id))
+				local have = GM.Crafting.Owned(mat.id)
+				m.have:Show()
+				m.have:SetText(have .. " / " .. mat.qty)
+				m.have:SetTextColor(GM.RGB(have >= mat.qty and "pos" or "err"))
+				m.name:SetTextColor(GM.RGB(have >= mat.qty and "text" or "warn"))
+			else
+				m.icon:Hide()
+				m.name:Hide()
+				m.have:Hide()
+			end
+		end
+		ui.craft1._gmBg:SetColorTexture(GM.RGB(
+			craftable > 0 and "accent" or "contHigh"))
+		ui.craft1.text:SetText(craftable > 0
+			and ("CRAFT ×" .. craftable) or "CRAFT")
+		ui.craft1.text:SetTextColor(GM.RGB(
+			craftable > 0 and "contLowest" or "textDim"))
+		ui.craftHint:SetText(craftable > 0
+			and "tradeskill must be open · one click crafts the batch"
+			or "missing materials")
+	else
+		ui.det:Hide()
+	end
 end
 
 function CU.Show()

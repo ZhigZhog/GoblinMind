@@ -146,6 +146,56 @@ function C.Debug(matchName)
 	if shown == 0 then GM.Print("no recipes matched") end
 end
 
+-- /goblin craftprobe <recipeID|name> — enumerate every craft-shaped
+-- API on this client and fire CraftRecipe with full result capture.
+-- Run with the tradeskill window open; says exactly what the call did.
+function C.CraftProbe(match)
+	GM.Print("— craft API probe —")
+	if C_TradeSkillUI then
+		local names = {}
+		for k in pairs(C_TradeSkillUI) do
+			if type(C_TradeSkillUI[k]) == "function"
+				and k:lower():find("craft") then
+				names[#names + 1] = k
+			end
+		end
+		sort(names)
+		GM.Print("C_TradeSkillUI craft fns: " .. table.concat(names, ", "))
+	else
+		GM.Print("C_TradeSkillUI missing!")
+	end
+	GM.Print("globals: DoTradeSkill=" .. tostring(DoTradeSkill)
+		.. " DoCraft=" .. tostring(DoCraft)
+		.. " GetCraftInfo=" .. tostring(GetCraftInfo)
+		.. " GetTradeSkillInfo=" .. tostring(GetTradeSkillInfo)
+		.. " ExpandTradeSkillSubClass=" .. tostring(ExpandTradeSkillSubClass))
+	-- resolve the target recipe
+	local id
+	if tonumber(match) then
+		id = tonumber(match)
+	else
+		match = (match or ""):lower()
+		for rid, r in pairs(GoblinMindCrafting.recipes or {}) do
+			if (r.name or ""):lower():find(match) then id = rid break end
+		end
+	end
+	if not (id and GoblinMindCrafting.recipes[id]) then
+		GM.Print("no stored recipe matched — pass a recipeID")
+		return
+	end
+	GM.Print(format("target: %d %q craftable=%d", id,
+		GoblinMindCrafting.recipes[id].name or "?",
+		C.Craftable(id)))
+	if C_TradeSkillUI and C_TradeSkillUI.CraftRecipe then
+		-- full TSM arg list (count, optionalMats, level, orderID,
+		-- concentration) — matches LibTSMWoW TradeSkill.Craft verbatim
+		local ok, r1, r2 = pcall(C_TradeSkillUI.CraftRecipe,
+			id, 1, nil, nil, nil, nil)
+		GM.Print("CraftRecipe(1) pcall=" .. tostring(ok)
+			.. " r1=" .. tostring(r1) .. " r2=" .. tostring(r2))
+	end
+end
+
 local function Scan()
 	if not (C_TradeSkillUI and C_TradeSkillUI.GetFilteredRecipeIDs) then return end
 	local ok, ids = pcall(C_TradeSkillUI.GetFilteredRecipeIDs)
@@ -191,12 +241,38 @@ local function Scan()
 					mats = mats,
 					numMade = sc.quantityMin or prev.numMade or 1,
 					cat = info.categoryID or prev.cat,
+					-- difficulty/cooldown exist on retail-shaped
+					-- GetRecipeInfo; nil-safe, detail pane uses them
+					diff = info.relativeDifficulty or info.difficulty or prev.diff,
+					cd = info.cooldown or prev.cd,
 				}
 				n = n + 1
 			end
 		end
 	end
 	if n > 0 then GM.Crafting.dirty = true end
+end
+
+-- craft bookkeeping: UNIT_SPELLCAST_* events are the truth. Each
+-- completed craft cast (spellID == recipeID) decrements the queue by
+-- one and ticks the active plan step — so queue counts always match
+-- what actually got made, whether the call batched or not.
+local function OnCastComplete(unit, _, spellID)
+	if unit ~= "player" or not spellID then return end
+	if GoblinMindCrafting.queue and GoblinMindCrafting.queue[spellID] then
+		C.QueueAdd(spellID, -1)
+		if GM.CraftingUI and GM.CraftingUI.Refresh then GM.CraftingUI.Refresh() end
+	end
+	local step = GM.PlanQueue and GM.PlanQueue.ActiveStep
+		and GM.PlanQueue.ActiveStep()
+	if step and step.recipeID == spellID then
+		step.crafted = (step.crafted or 0) + 1
+		if step.crafted >= (step.qty or 1) then
+			GM.PlanQueue.Advance()
+		else
+			GM.PlanQueue.Refresh()
+		end
+	end
 end
 
 function C.Init()
@@ -207,8 +283,27 @@ function C.Init()
 	for _, evt in ipairs({
 		"TRADE_SKILL_LIST_UPDATE", "TRADE_SKILL_DATA_SOURCE_CHANGED",
 		"TRADE_SKILL_SHOW", "TRADE_SKILL_CLOSE", "PLAYER_LOGIN",
+		"UNIT_SPELLCAST_START", "UNIT_SPELLCAST_CHANNEL_START",
+		"UNIT_SPELLCAST_SUCCEEDED", "UNIT_SPELLCAST_CHANNEL_STOP",
 	}) do pcall(f.RegisterEvent, f, evt) end
-	f:SetScript("OnEvent", function(_, e)
+	f:SetScript("OnEvent", function(_, e, ...)
+		if e == "UNIT_SPELLCAST_START"
+			or e == "UNIT_SPELLCAST_CHANNEL_START" then
+			local unit = ...
+			-- any player cast starting inside the watch window means
+			-- the call landed — don't filter on spellID: if the cast
+			-- spell ever differs from recipeID we'd false-positive
+			-- into the no-batch fallback while crafts actually work
+			if unit == "player" and C.pendingCast then
+				C.pendingCast = nil
+			end
+			return
+		end
+		if e == "UNIT_SPELLCAST_SUCCEEDED"
+			or e == "UNIT_SPELLCAST_CHANNEL_STOP" then
+			OnCastComplete(...)
+			return
+		end
 		if e == "TRADE_SKILL_CLOSE" then return end
 		-- trailing debounce: profession context settles sometime during
 		-- the event burst — only scan 0.5s after the LAST event, never
@@ -293,6 +388,7 @@ function C.Queue(recipeID, qty)
 			unit = unit or 0, commodity = true, btag = "craft" })
 	end
 	tinsert(steps, { kind = "note", itemID = r.itemID, qty = qty,
+		recipeID = recipeID,
 		text = format("craft %d× %s (%s)", qty,
 			(GM.ItemName and GM.ItemName(r.itemID)) or r.name or "item",
 			r.prof or "tradeskill") })
@@ -341,6 +437,42 @@ function C.Craftable(recipeID)
 		n = min(n, floor(C.Owned(m.id) / m.qty))
 	end
 	return n == math.huge and 0 or n
+end
+
+-- execute a craft — the same protected call Blizzard's Create buttons
+-- make (verified: CraftRecipe(id,1) produces the item). count>1 is
+-- Blizzard's own multicraft path — one call, N casts. If Forever
+-- doesn't honor it the call produces no cast at all, so a watchdog
+-- watches for UNIT_SPELLCAST_START: nothing within 0.6s → the batch
+-- path is dead and every future call this session falls back to 1.
+-- Queue decrements happen in OnCastComplete, not here — counts track
+-- casts that actually finished, not casts we asked for.
+function C.Craft(recipeID, qty)
+	local r = GoblinMindCrafting.recipes and GoblinMindCrafting.recipes[recipeID]
+	if not r then return nil, "unknown recipe" end
+	if not (C_TradeSkillUI and C_TradeSkillUI.CraftRecipe) then
+		return nil, "no craft API on this client"
+	end
+	local n = C.noBatch and 1 or max(1, floor(qty or 1))
+	C.pendingCast = { id = recipeID }
+	local ok, err = pcall(C_TradeSkillUI.CraftRecipe, recipeID, n)
+	if not ok then
+		C.pendingCast = nil
+		return nil, tostring(err)
+	end
+	GM.After(0.6, function()
+		if not (C.pendingCast and C.pendingCast.id == recipeID) then return end
+		C.pendingCast = nil
+		if n > 1 then
+			C.noBatch = true
+			GM.Print(GM.CC("warn") .. "multi-cast not honored on this client — "
+				.. "falling back to one cast per click|r")
+		else
+			GM.Print(GM.CC("warn") .. "craft didn't start — "
+				.. "open the tradeskill window|r")
+		end
+	end)
+	return true
 end
 
 -- ============ persistent queue ============
@@ -416,6 +548,7 @@ function C.QueueEmit()
 	end
 	for _, q in ipairs(C.QueueList()) do
 		tinsert(steps, { kind = "note", itemID = q.itemID, qty = q.qty,
+			recipeID = q.recipeID,
 			text = format("craft %d× %s (%s)", q.qty,
 				(GM.ItemName and GM.ItemName(q.itemID)) or q.name or "item",
 				q.prof or "tradeskill") })

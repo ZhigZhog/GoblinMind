@@ -23,9 +23,10 @@ local TABS = {
 }
 
 function DB.Switch(key)
-	-- the auctions window coexists with the main window — post/cancel
-	-- scans write their plan into it, so it stays up as a peer
-	if key ~= "auctions" then GM.PlanQueue.Hide() end
+	-- the auctions + crafting windows coexist with the main window —
+	-- scans/craft queues write their plan into it, so it stays up as
+	-- a peer. Everything else still swaps one-for-one.
+	if key ~= "auctions" and key ~= "crafting" then GM.PlanQueue.Hide() end
 	GM.Shopping.Hide()
 	GM.GroupsUI.Hide()
 	if GM.OpsUI then GM.OpsUI.Hide() end
