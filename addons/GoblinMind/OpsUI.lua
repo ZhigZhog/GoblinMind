@@ -1,4 +1,5 @@
 local _, GM = ...
+local W = GM.Widgets
 
 -- Operations manager (/goblin ops). TSM-parity named-operation editor:
 -- ops are shared objects (GM.Groups.operations[opType][name]) assigned
@@ -242,6 +243,7 @@ local function ListRow(parent, w)
 	local r = CreateFrame("Button", nil, parent)
 	r:SetSize(w, ROW_H)
 	GM.Panel(r, "contLowest")
+	W.HoverTint(r)
 	r.text = GM.MakeFontString(r, GM.FONT, 10, "text")
 	r.text:SetPoint("LEFT", 6, 0)
 	r.text:SetJustifyH("LEFT")

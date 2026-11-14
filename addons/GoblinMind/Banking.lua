@@ -200,6 +200,47 @@ end
 
 -- ============ execution (one protected call per click) ============
 
+-- pick srcSlot {bag,slot,itemID,count} up and drop it into `toScope`:
+-- prefer merging onto a same-item partial stack (always legal), else
+-- the first drop-legal empty slot. Shared by plan moves and BankUI's
+-- manual per-stack moves. Returns true when the drop was made.
+local function MoveStack(srcSlot, toScope)
+	Dbg("src: bag=%d slot=%d count=%d → %s",
+		srcSlot.bag, srcSlot.slot, srcSlot.count, toScope)
+	local dstSlot
+	local max = select(8, (C_Item and C_Item.GetItemInfo or GetItemInfo)(srcSlot.itemID))
+	for _, s in ipairs(Slots(toScope)) do
+		if s.itemID == srcSlot.itemID and max and s.count < max then
+			dstSlot = s break
+		end
+	end
+	if not dstSlot then
+		for _, s in ipairs(Slots(toScope)) do
+			if not s.itemID and ItemWillGoInBag(srcSlot.itemID, s.bag) then
+				dstSlot = s break
+			end
+		end
+	end
+	if not dstSlot then return nil, "no room in " .. toScope end
+	C_Container.PickupContainerItem(srcSlot.bag, srcSlot.slot)
+	C_Container.PickupContainerItem(dstSlot.bag, dstSlot.slot)
+	return true
+end
+
+-- public single-stack move for the bank window's manual rows
+function B.MoveTo(srcSlot, toScope)
+	if not BankOpen() then return nil, "bank is closed" end
+	local ok, err = MoveStack(srcSlot, toScope)
+	if not ok then
+		GM.Print(GM.CC("warn") .. "[bank] " .. tostring(err) .. "|r")
+	end
+	return ok
+end
+
+function B.BankSlots()
+	return Slots("bank")
+end
+
 -- move: pick up one stack of itemID from `from`, drop in a free `to`
 -- slot. Advances when the step's total moved reaches qty.
 local function DoMove(step)
@@ -217,43 +258,11 @@ local function DoMove(step)
 		Dbg("no source stack found — done")
 		return true -- nothing left → done
 	end
-	Dbg("src: bag=%d slot=%d count=%d", srcSlot.bag, srcSlot.slot, srcSlot.count)
-	-- prefer merging onto a same-item partial stack (always legal —
-	-- the item clearly belongs); empty slots must be drop-legal
-	local dstSlot
-	local max = select(8, (C_Item and C_Item.GetItemInfo or GetItemInfo)(step.itemID))
-	Dbg("item maxStack=%s", tostring(max))
-	for _, s in ipairs(Slots(step.to)) do
-		if s.itemID == step.itemID and max and s.count < max then
-			dstSlot = s break
-		end
-	end
-	if dstSlot then
-		Dbg("dst: merge bag=%d slot=%d (have %d)", dstSlot.bag, dstSlot.slot, dstSlot.count)
-	else
-		for _, s in ipairs(Slots(step.to)) do
-			if not s.itemID then
-				local bFam, link, invId = BagFamily(s.bag)
-				local iFam = ItemFamily(step.itemID)
-				local ok = ItemWillGoInBag(step.itemID, s.bag)
-				Dbg("dst? bag=%d slot=%d invId=%s bagLink=%s itemFam=%s bagFam=%s → %s",
-					s.bag, s.slot, tostring(invId), link and link:match("%[(.-)%]") or "none",
-					tostring(iFam), tostring(bFam), ok and "OK" or "REJECT")
-				if ok and not dstSlot then dstSlot = s end
-			end
-		end
-	end
-	if not dstSlot then
+	local ok, err = MoveStack(srcSlot, step.to)
+	if not ok then
 		GM.Print(GM.CC("warn") .. "[bank] no legal drop slot in " .. step.to .. "|r")
-		return nil, "no room in " .. step.to
+		return nil, err
 	end
-	Dbg("drop: bag=%d slot=%d", dstSlot.bag, dstSlot.slot)
-	C_Container.PickupContainerItem(srcSlot.bag, srcSlot.slot)
-	local curType, curId = GetCursorInfo()
-	Dbg("after pickup: cursor=%s id=%s", tostring(curType), tostring(curId))
-	C_Container.PickupContainerItem(dstSlot.bag, dstSlot.slot)
-	curType, curId = GetCursorInfo()
-	Dbg("after drop: cursor=%s id=%s", tostring(curType), tostring(curId))
 	-- report the src slot state; the move itself is server-confirmed —
 	-- if it bounced, the item reappears and the next click retries
 	local after = C_Container.GetContainerItemInfo

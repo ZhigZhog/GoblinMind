@@ -114,6 +114,19 @@ end
 local PAD, GAP = 10, 8
 local LEFT_W = 456
 
+-- step-table column labels per plan kind — mode'd plans put the item
+-- name in col 3 and step.desc/source detail in col 4, so the headers
+-- say what the function actually shows instead of always "QTY/PRICE"
+local HEAD_COLS = {
+	postscan     = { "ITEM", "POST @" },
+	cancelscan   = { "ITEM", "UNDER @" },
+	craft        = { "ITEM", "SOURCE" },
+	vendoring    = { "ITEM", "VENDOR" },
+	warehousing  = { "ITEM", "WHERE" },
+	mailing      = { "ITEM", "TO" },
+	destroying   = { "ITEM", "VALUE" },
+}
+
 local function Build()
 	if ui.frame then return end
 
@@ -235,6 +248,20 @@ local function Build()
 	ui.icon = iconBox:CreateTexture(nil, "ARTWORK")
 	ui.icon:SetSize(40, 40)
 	ui.icon:SetPoint("CENTER")
+	-- hover → real item tooltip (textures can't take scripts)
+	ui.iconBtn = CreateFrame("Button", nil, iconBox)
+	ui.iconBtn:SetAllPoints()
+	ui.iconBtn:SetScript("OnEnter", function(self)
+		if not self.itemID then return end
+		GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+		if GameTooltip.SetItemByID then
+			GameTooltip:SetItemByID(self.itemID)
+		else
+			GameTooltip:SetHyperlink("item:" .. self.itemID)
+		end
+		GameTooltip:Show()
+	end)
+	ui.iconBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
 	ui.item.name = GM.MakeFontString(ui.item, GM.FONT_MED, 12, "text")
 	ui.item.name:SetPoint("TOPLEFT", iconBox, "TOPRIGHT", 10, -4)
@@ -281,10 +308,12 @@ local function Build()
 	header:SetHeight(18)
 	GM.Panel(header, "contHigh")
 	if GM.ChromePanel then GM.ChromePanel(header, { l = 6, t = 6, r = 6, b = 6 }) end
+	ui.headerCols = {}
 	for _, h in ipairs({ { "#", "LEFT", 10 }, { "ACTION", "LEFT", 34 }, { "QTY", "LEFT", 140 }, { "UNIT PRICE", "RIGHT", -10 } }) do
 		local fs = GM.MakeFontString(header, GM.FONT_MED, 10, "primary")
 		fs:SetPoint(h[2], h[3], 0)
 		fs:SetText(h[1])
+		ui.headerCols[h[1]] = fs
 	end
 
 	-- Step rows
@@ -938,6 +967,7 @@ function PQ.Refresh()
 		icon = select(10, GetInfo(dispID))
 	end
 	if icon then ui.icon:SetTexture(icon) ui.icon:Show() else ui.icon:Hide() end
+	ui.iconBtn.itemID = dispID
 	local sub = {}
 	if dispID and GetInfo then
 		local _, _, _, _, _, itemType = GetInfo(dispID)
@@ -1000,16 +1030,17 @@ function PQ.Refresh()
 			local active = n == PQ.stepIndex
 			row.edge:SetShown(active)
 			row.num:SetText(GM.CC("textDim") .. n .. "|r")
-			local verb = step.kind == "post" and "POST"
+			local verb = step.verb
+				or (step.kind == "post" and "POST"
 				or step.kind == "cancel" and "CANCEL"
 				or step.kind == "skip" and "SKIP"
-				or step.kind == "note" and "CRAFT"
+				or step.kind == "note" and (step.recipeID and "CRAFT" or "DONE")
 				or step.kind == "move" and "MOVE"
 				or step.kind == "mail" and "SEND"
 				or step.kind == "mailcollect" and "COLLECT"
 				or step.kind == "destroy" and "VENDOR"
 				or step.kind == "vendsell" and "SELL"
-				or step.kind == "vendbuy" and "BUY" or "BUY"
+				or step.kind == "vendbuy" and "BUY" or "BUY")
 			if active then
 				row.act:SetText(GM.CC("accent") .. verb .. " ▶|r")
 			else
@@ -1018,13 +1049,15 @@ function PQ.Refresh()
 					or step.kind == "skip" and "textDim" or "text") .. verb .. "|r")
 			end
 			if PQ.plan.mode then
-				local nm = step.name or ""
+				local nm = step.name
+					or (step.itemID and GM.ItemName and GM.ItemName(step.itemID))
+					or ""
 				if #nm > 16 then nm = nm:sub(1, 15) .. "…" end
 				row.qty:SetText(nm .. " ×" .. step.qty)
 			else
 				row.qty:SetText(step.qty .. (step.kind == "post" and " (relist)" or ""))
 			end
-			row.price:SetText(step.desc
+			row.price:SetText(step.desc or step.text
 				or (GM.Money(step.unit) .. (step.kind == "post" and "" or " /ea")))
 		else
 			row:Hide()
@@ -1032,6 +1065,13 @@ function PQ.Refresh()
 	end
 
 	if PQ.plan then
+		if ui.headerCols then
+			local hc = PQ.plan.mode
+				and (HEAD_COLS[PQ.plan.mode] or { "ITEM", "DETAIL" })
+				or { "QTY", "UNIT PRICE" }
+			ui.headerCols.QTY:SetText(hc[1])
+			ui.headerCols["UNIT PRICE"]:SetText(hc[2])
+		end
 		if PQ.plan.mode == "postscan" then
 			ui.sumEdge:SetColorTexture(GM.RGB("accent"))
 			local skipN = PQ.plan.skipCount or 0
@@ -1047,9 +1087,18 @@ function PQ.Refresh()
 			ui.summary2:SetText("")
 		elseif PQ.plan.mode == "craft" then
 			ui.sumEdge:SetColorTexture(GM.RGB("accent"))
-			ui.summary:SetText(format("CRAFT QUEUE · %d step%s — buy reagents, craft is manual",
+			-- name the products, not just the step count
+			local prods, seen = {}, {}
+			for _, s in ipairs(PQ.plan.steps) do
+				if s.kind == "note" and s.recipeID and s.name and not seen[s.name] then
+					seen[s.name] = true
+					prods[#prods + 1] = format("%s ×%d", s.name, s.qty or 1)
+				end
+			end
+			ui.summary:SetText(format("CRAFT QUEUE · %d step%s — craft is manual",
 				#PQ.plan.steps, #PQ.plan.steps == 1 and "" or "s"))
-			ui.summary2:SetText("")
+			ui.summary2:SetText(#prods > 0 and table.concat(prods, " · ")
+				or "fetch/alt mats first, then buy the shortfall")
 		elseif PQ.plan.mode == "warehousing" or PQ.plan.mode == "mailing"
 			or PQ.plan.mode == "destroying" or PQ.plan.mode == "vendoring" then
 			ui.sumEdge:SetColorTexture(GM.RGB("accent"))

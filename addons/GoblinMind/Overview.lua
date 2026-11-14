@@ -1,4 +1,5 @@
 local _, GM = ...
+local W = GM.Widgets
 
 -- The ledger window: TSM-style paged layout — left nav over ACTIVITY /
 -- INVENTORY / SALES / RESALE / EXPENSES / FAILED / ACCOUNTS, per-char
@@ -97,6 +98,8 @@ local function MakeTable(parent, cols, onClick)
 		fs:SetPoint("LEFT", c[2], 0)
 		fs:SetText(c[1])
 	end
+	t.count = GM.MakeFontString(head, GM.FONT, 9, "textDim")
+	t.count:SetPoint("RIGHT", 0, 0)
 	local body = CreateFrame("Frame", nil, parent)
 	body:SetPoint("TOPLEFT", 6, -34)
 	body:SetPoint("BOTTOMRIGHT", -6, 24)
@@ -109,6 +112,7 @@ local function MakeTable(parent, cols, onClick)
 	end)
 	for i = 1, ROWS do
 		local row = CreateFrame("Button", nil, body)
+		W.HoverTint(row)
 		row:SetHeight(22)
 		row:SetPoint("TOPLEFT", 0, -(i - 1) * 23)
 		row:SetPoint("TOPRIGHT", 0, -(i - 1) * 23)
@@ -142,6 +146,7 @@ local function MakeTable(parent, cols, onClick)
 		t.rows[i] = row
 	end
 	t.paint = function()
+		W.ScrollText(t.count, t.off, ROWS, #t.list)
 		for i, row in ipairs(t.rows) do
 			local e = t.list[i + t.off]
 			if e then

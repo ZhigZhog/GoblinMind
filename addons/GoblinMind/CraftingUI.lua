@@ -1,4 +1,5 @@
 local _, GM = ...
+local W = GM.Widgets
 
 -- Crafting queue manager (/goblin crafts). TSM-parity crafting window:
 -- left = professions browser · middle = recipe table (profit, can-
@@ -10,6 +11,7 @@ local _, GM = ...
 GM.CraftingUI = {}
 local CU = GM.CraftingUI
 local ui
+local unpack = unpack or table.unpack
 
 local ROW_H = 18
 
@@ -43,7 +45,7 @@ end
 
 local WIN_W, WIN_H = 860, 560
 local PROF_W, REC_W = 140, 330
-local PROF_ROWS, LIST_ROWS = 12, 22
+local PROF_ROWS, LIST_ROWS = 16, 22
 
 local function Panel(parent, x, w, title)
 	local p = CreateFrame("Frame", nil, parent)
@@ -55,6 +57,8 @@ local function Panel(parent, x, w, title)
 	local t = GM.MakeFontString(p, GM.FONT_BOLD, 9, "secondary")
 	t:SetPoint("TOPLEFT", 8, -6)
 	t:SetText(title)
+	p.count = GM.MakeFontString(p, GM.FONT, 9, "textDim")
+	p.count:SetPoint("TOPRIGHT", -8, -7)
 	return p
 end
 
@@ -85,10 +89,73 @@ local function ListRow(parent, w)
 	local r = CreateFrame("Button", nil, parent)
 	r:SetSize(w, ROW_H)
 	GM.Panel(r, "contLowest")
+	W.HoverTint(r)
 	r.text = GM.MakeFontString(r, GM.FONT, 10, "text")
 	r.text:SetPoint("LEFT", 6, 0)
 	r.text:SetJustifyH("LEFT")
 	return r
+end
+
+-- shared name prompt for category create/assign flows — the existing
+-- categories list under the editbox doubles as the dropdown: click
+-- one to reuse it, or type a new name + OK
+local function CatPrompt(title, cb)
+	if not ui.catBox then
+		local p = CreateFrame("Frame", nil, ui.frame)
+		p:SetSize(260, 64)
+		p:SetPoint("BOTTOMLEFT", 10, 30)
+		p:SetFrameStrata("DIALOG")
+		GM.Panel(p, "contHigh")
+		p.title = GM.MakeFontString(p, GM.FONT_BOLD, 9, "accent")
+		p.title:SetPoint("TOPLEFT", 8, -6)
+		p.eb = EditBox(p, 176, "category name…")
+		p.eb:SetPoint("TOPLEFT", 10, -22)
+		local ok = Btn(p, "OK", 44, 16)
+		ok:SetPoint("LEFT", p.eb, "RIGHT", 6, 0)
+		local function finish(name)
+			if name and name ~= "" and name ~= "category name…" and p.cb then
+				p.cb(name)
+			end
+			p.eb:SetText("")
+			p.eb:ClearFocus()
+			p:Hide()
+		end
+		ok:SetScript("OnClick", function() finish(p.eb:GetText()) end)
+		p.eb:SetScript("OnEnterPressed", function() ok:Click() end)
+		-- existing categories — dropdown rows under the input
+		p.catBtns = {}
+		for i = 1, 8 do
+			local b = Btn(p, "", 240, 15)
+			b:SetPoint("TOPLEFT", 8, -42 - (i - 1) * 16)
+			b.text:SetJustifyH("LEFT")
+			b:Hide()
+			p.catBtns[i] = b
+		end
+		ui.catBox = p
+	end
+	local p = ui.catBox
+	p.title:SetText(title)
+	p.cb = cb
+	local cats = GM.Crafting.CatList()
+	p:SetHeight(46 + min(#cats, 8) * 16)
+	for i, b in ipairs(p.catBtns) do
+		local c = cats[i]
+		if c then
+			b:Show()
+			b.text:SetText(c.name .. "  ×" .. c.n)
+			local name = c.name
+			b:SetScript("OnClick", function()
+				if p.cb then p.cb(name) end
+				p.eb:SetText("")
+				p.eb:ClearFocus()
+				p:Hide()
+			end)
+		else
+			b:Hide()
+		end
+	end
+	p:Show()
+	p.eb:SetFocus()
 end
 
 local function BuildUI()
@@ -110,13 +177,24 @@ local function BuildUI()
 	ui.frame = f
 	-- craftable counts move with the bags — debounced repaint
 	pcall(f.RegisterEvent, f, "BAG_UPDATE")
-	f:SetScript("OnEvent", function()
+	f:SetScript("OnEvent", function(_, e)
 		if not f:IsShown() or ui.bagPending then return end
 		ui.bagPending = true
 		GM.After(0.3, function()
 			ui.bagPending = nil
 			CU.Refresh()
 		end)
+	end)
+	-- closing our window: if the user asked for the Blizzard frame it
+	-- gets its spot back; otherwise close means close — unpark quietly
+	-- and end the tradeskill session (TSM closes it on frame close too)
+	-- so nothing invisible keeps the professions UI alive
+	f:SetScript("OnHide", function()
+		CU.RestoreDefault()
+		if not ui.wantDefault
+			and C_TradeSkillUI and C_TradeSkillUI.CloseTradeSkill then
+			pcall(C_TradeSkillUI.CloseTradeSkill)
+		end
 	end)
 
 	local title = GM.MakeFontString(f, GM.FONT_BOLD, 12, "accent")
@@ -148,26 +226,58 @@ local function BuildUI()
 		ui.recOff = 0
 		CU.Refresh()
 	end)
+	local blizz = Btn(f, "BLIZZARD UI", 84, 16)
+	blizz:SetPoint("LEFT", matsOnly, "RIGHT", 8, 0)
+	blizz.text:SetTextColor(GM.RGB("secondary"))
+	Tip(blizz, function()
+		return { "Blizzard default UI",
+			"Brings the default professions frame back and hides this",
+			"window. The GOBLINMIND button on that frame switches back." }
+	end)
+	blizz:SetScript("OnClick", function()
+		ui.wantDefault = true
+		ui.frame:Hide() -- OnHide → RestoreDefault parks it back on-screen
+	end)
 
-	-- left: professions
+	-- left: professions (+ user categories)
 	local profP = Panel(f, 10, PROF_W, "PROFESSIONS")
+	ui.profP = profP
 	ui.profRows = {}
 	for i = 1, PROF_ROWS do
 		local r = ListRow(profP, PROF_W - 16)
 		r:SetPoint("TOPLEFT", 8, -24 - (i - 1) * (ROW_H + 2))
+		r:RegisterForClicks("LeftButtonUp", "RightButtonUp")
 		r.sub = GM.MakeFontString(r, GM.FONT_MED, 8, "textDim")
 		r.sub:SetPoint("RIGHT", -6, 0)
 		r:Hide()
 		ui.profRows[i] = r
 	end
+	profP:EnableMouseWheel(true)
+	profP:SetScript("OnMouseWheel", function(_, d)
+		ui.profOff = math.max(0, (ui.profOff or 0) - d * 4)
+		CU.Refresh()
+	end)
+	local addCat = Btn(profP, "+ CATEGORY", 92, 16)
+	addCat:SetPoint("BOTTOMLEFT", 8, 6)
+	addCat.text:SetTextColor(GM.RGB("secondary"))
+	addCat:SetScript("OnClick", function()
+		CatPrompt("new category", function(name)
+			GM.Crafting.CatCreate(name)
+			ui.selCat, ui.selProf, ui.recOff = name, nil, 0
+			CU.Refresh()
+			Footer("category '" .. name .. "' created — CAT+ on a recipe adds it")
+		end)
+	end)
 
 	-- middle: recipes of the selected profession
 	local recP = Panel(f, 10 + PROF_W + 6, REC_W, "RECIPES")
+	ui.recP = recP
 	ui.recRows = {}
 	for i = 1, LIST_ROWS do
 		local r = CreateFrame("Button", nil, recP)
 		r:SetSize(REC_W - 16, ROW_H)
 		r:SetPoint("TOPLEFT", 8, -24 - (i - 1) * (ROW_H + 2))
+		r:RegisterForClicks("LeftButtonUp", "RightButtonUp")
 		GM.Panel(r, "contLowest")
 		r.name = GM.MakeFontString(r, GM.FONT, 10, "text")
 		r.name:SetPoint("LEFT", 6, 0)
@@ -188,17 +298,23 @@ local function BuildUI()
 		r:Hide()
 		ui.recRows[i] = r
 	end
-	-- recipe scroll offset buttons (list is short; page with up/down)
-	local recUp = Btn(recP, "▲", 30, 16)
-	recUp:SetPoint("BOTTOMRIGHT", -42, 6)
-	local recDn = Btn(recP, "▼", 30, 16)
-	recDn:SetPoint("BOTTOMRIGHT", -8, 6)
+	-- paging buttons in the panel header + mouse-wheel scrolling —
+	-- the bottom pair overlapped the list's last row
+	local recUp = Btn(recP, "▲", 22, 14)
+	recUp:SetPoint("TOPRIGHT", -28, -4)
+	local recDn = Btn(recP, "▼", 22, 14)
+	recDn:SetPoint("TOPRIGHT", -4, -4)
 	recUp:SetScript("OnClick", function()
 		ui.recOff = math.max(0, (ui.recOff or 0) - LIST_ROWS)
 		CU.Refresh()
 	end)
 	recDn:SetScript("OnClick", function()
 		ui.recOff = (ui.recOff or 0) + LIST_ROWS
+		CU.Refresh()
+	end)
+	recP:EnableMouseWheel(true)
+	recP:SetScript("OnMouseWheel", function(_, d)
+		ui.recOff = math.max(0, (ui.recOff or 0) - d * 4)
 		CU.Refresh()
 	end)
 	ui.recEmpty = GM.MakeFontString(recP, GM.FONT, 10, "textDim")
@@ -208,6 +324,7 @@ local function BuildUI()
 	-- right: the queue
 	local qP = Panel(f, 10 + PROF_W + 6 + REC_W + 6,
 		WIN_W - PROF_W - REC_W - 38, "QUEUE")
+	ui.qP = qP
 	ui.qRows = {}
 	local qw = WIN_W - PROF_W - REC_W - 38 - 16
 	for i = 1, 11 do
@@ -215,6 +332,7 @@ local function BuildUI()
 		r:SetSize(qw, ROW_H)
 		r:SetPoint("TOPLEFT", 8, -24 - (i - 1) * (ROW_H + 2))
 		GM.Panel(r, "contLowest")
+		W.HoverTint(r)
 		r.name = GM.MakeFontString(r, GM.FONT, 10, "text")
 		r.name:SetPoint("LEFT", 6, 0)
 		r.name:SetWidth(130)
@@ -242,6 +360,11 @@ local function BuildUI()
 		r:Hide()
 		ui.qRows[i] = r
 	end
+	qP:EnableMouseWheel(true)
+	qP:SetScript("OnMouseWheel", function(_, d)
+		ui.qOff = math.max(0, (ui.qOff or 0) - d * 3)
+		CU.Refresh()
+	end)
 
 	-- detail pane: the selected recipe — Blizzard's right pane
 	-- equivalent (output, reagents with have/need, craft actions)
@@ -253,6 +376,20 @@ local function BuildUI()
 	ui.detIcon = det:CreateTexture(nil, "ARTWORK")
 	ui.detIcon:SetSize(22, 22)
 	ui.detIcon:SetPoint("TOPLEFT", 10, -8)
+	-- hover → the real item tooltip (textures can't take scripts)
+	ui.detIconBtn = CreateFrame("Button", nil, det)
+	ui.detIconBtn:SetAllPoints(ui.detIcon)
+	ui.detIconBtn:SetScript("OnEnter", function(self)
+		if not self.itemID then return end
+		GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+		if GameTooltip.SetItemByID then
+			GameTooltip:SetItemByID(self.itemID)
+		else
+			GameTooltip:SetHyperlink("item:" .. self.itemID)
+		end
+		GameTooltip:Show()
+	end)
+	ui.detIconBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
 	ui.detName = GM.MakeFontString(det, GM.FONT_BOLD, 10, "text")
 	ui.detName:SetPoint("LEFT", ui.detIcon, "RIGHT", 8, 0)
 	ui.detName:SetWidth(280)
@@ -273,6 +410,14 @@ local function BuildUI()
 		m.name:SetJustifyH("LEFT")
 		m.have = GM.MakeFontString(det, GM.FONT_MED, 9, "textDim")
 		m.have:SetPoint("TOPRIGHT", det, "TOPRIGHT", -10, -54 - (i - 1) * 15)
+		-- invisible hover region for the location tooltip — anchored
+		-- top+height, NOT top+bottom-right: the latter stretches each
+		-- box to the pane's lower edge and swallows clicks meant for
+		-- the buttons below
+		m.hit = CreateFrame("Button", nil, det)
+		m.hit:SetPoint("TOPLEFT", det, "TOPLEFT", 6, -52 - (i - 1) * 15)
+		m.hit:SetPoint("RIGHT", det, "RIGHT", -6, 0)
+		m.hit:SetHeight(14)
 		ui.detMats[i] = m
 	end
 	-- CRAFT ×N: Blizzard's multicraft call — one click, one protected
@@ -282,7 +427,7 @@ local function BuildUI()
 	ui.craft1:SetPoint("BOTTOMLEFT", 8, 8)
 	ui.craftHint = GM.MakeFontString(det, GM.FONT, 8, "textDim")
 	ui.craftHint:SetPoint("LEFT", ui.craft1, "RIGHT", 8, 0)
-	ui.craftHint:SetWidth(240)
+	ui.craftHint:SetWidth(200)
 	ui.craftHint:SetJustifyH("LEFT")
 	ui.craft1:SetScript("OnClick", function()
 		if not ui.sel then return end
@@ -295,6 +440,25 @@ local function BuildUI()
 		if not ok then Footer(err, true) end
 		CU.Refresh()
 	end)
+	ui.catBtn = Btn(det, "+CAT", 44)
+	ui.catBtn:SetPoint("BOTTOMRIGHT", -8, 8)
+	Tip(ui.catBtn, function()
+		return { "Add to category",
+			"File this recipe under a custom category (created if new).",
+			"Categories list at the bottom of the professions panel —",
+			"right-click a category to delete it." }
+	end)
+	ui.catBtn:SetScript("OnClick", function()
+		if not ui.sel then return end
+		local id = ui.sel
+		CatPrompt("category for " .. (GoblinMindCrafting.recipes[id]
+			and GoblinMindCrafting.recipes[id].name or "recipe"), function(name)
+			GM.Crafting.CatAssign(name, id)
+			ui.selCat, ui.selProf, ui.recOff = name, nil, 0
+			CU.Refresh()
+			Footer("added to '" .. name .. "'")
+		end)
+	end)
 
 	local emit = Btn(qP, "EMIT PLAN", 90)
 	emit:SetPoint("BOTTOMRIGHT", -8, 6)
@@ -304,6 +468,8 @@ local function BuildUI()
 		local ok, err = GM.Crafting.QueueEmit()
 		CU.Refresh()
 		if ok then
+			GM.PlanQueue.SetHome(false)
+			GM.PlanQueue.Show()
 			Footer("plan emitted — plan window has the steps")
 		else
 			Footer(err, true)
@@ -353,6 +519,14 @@ local function ProfList()
 		if b.prof == nil then return false end
 		return a.label < b.label
 	end)
+	-- user categories ride under the professions, TSM-group style
+	local cats = GM.Crafting.CatList and GM.Crafting.CatList() or {}
+	if #cats > 0 then
+		tinsert(out, { hdr = true, label = "CATEGORIES" })
+		for _, c in ipairs(cats) do
+			tinsert(out, { cat = c.name, label = c.name, n = c.n })
+		end
+	end
 	return out
 end
 
@@ -362,7 +536,10 @@ local function RecipeRows()
 	local q = ui.search and ui.search:GetText() or ""
 	q = (q == "filter recipes…") and "" or q:lower()
 	for _, row in ipairs(GM.Crafting.List()) do
-		if (not ui.selProf or GM.Crafting.Prof(row.recipeID) == ui.selProf)
+		local inSel = ui.selCat and GM.Crafting.CatHas(ui.selCat, row.recipeID)
+			or (not ui.selCat and (not ui.selProf
+				or GM.Crafting.Prof(row.recipeID) == ui.selProf))
+		if inSel
 			and (not ui.matsOnly or (row.craftable or 0) > 0)
 			and (q == "" or (row.name or ""):lower():find(q, 1, true)) then
 			row.queued = queue[row.recipeID] or 0
@@ -377,20 +554,41 @@ local DIFF_NAMES = { "trivial", "easy", "optimal", "difficult" }
 function CU.Refresh()
 	if not ui then return end
 
-	-- professions
+	-- professions + categories (scrolled)
 	local profs = ProfList()
+	ui.profOff = math.min(ui.profOff or 0,
+		math.max(0, #profs - PROF_ROWS))
+	W.ScrollText(ui.profP.count, ui.profOff, PROF_ROWS, #profs)
 	for i, r in ipairs(ui.profRows) do
-		local p = profs[i]
-		if p then
+		local p = profs[(ui.profOff or 0) + i]
+		if p and p.hdr then
 			r:Show()
-			local sel = (p.prof or false) == (ui.selProf or false)
+			r._gmBg:SetColorTexture(GM.RGB("contLowest"))
+			r.text:SetText(p.label)
+			r.text:SetTextColor(GM.RGB("textDim"))
+			r.sub:SetText("")
+			r:SetScript("OnClick", nil)
+		elseif p then
+			r:Show()
+			local sel = p.cat and ui.selCat == p.cat
+				or (not p.cat and not ui.selCat
+					and (p.prof or false) == (ui.selProf or false))
 			r._gmBg:SetColorTexture(GM.RGB(sel and "contHighest" or "contLowest"))
 			r.text:SetText(p.label)
-			r.text:SetTextColor(GM.RGB(sel and "accent" or "text"))
+			r.text:SetTextColor(GM.RGB(p.cat
+				and (sel and "accent" or "warn") or (sel and "accent" or "text")))
 			r.sub:SetText(p.n)
-			local key = p.prof
-			r:SetScript("OnClick", function()
-				ui.selProf = key
+			local key, cat = p.prof, p.cat
+			r:SetScript("OnClick", function(_, btn)
+				if cat and btn == "RightButton" then
+					GM.Crafting.CatDelete(cat)
+					if ui.selCat == cat then ui.selCat = nil end
+					Footer("category '" .. cat .. "' deleted")
+				elseif cat then
+					ui.selCat, ui.selProf = cat, nil
+				else
+					ui.selProf, ui.selCat = key, nil
+				end
 				ui.recOff = 0
 				CU.Refresh()
 			end)
@@ -403,6 +601,7 @@ function CU.Refresh()
 	local rows = RecipeRows()
 	ui.recOff = math.min(ui.recOff or 0,
 		math.max(0, #rows - LIST_ROWS))
+	W.ScrollText(ui.recP.count, ui.recOff, LIST_ROWS, #rows)
 	ui.recEmpty:SetShown(#rows == 0)
 	-- keep a live selection — the detail pane needs one
 	if not (ui.sel and GoblinMindCrafting.recipes[ui.sel]) then
@@ -424,7 +623,11 @@ function CU.Refresh()
 				(row.profit > 0 and "+" or "") .. GM.Money(row.profit) or "—")
 			r.profit:SetTextColor(GM.RGB(
 				row.profit and (row.profit > 0 and "pos" or "err") or "textDim"))
-			r.can:SetText("can:" .. (row.craftable or 0))
+			-- on-hand vs raid-everything: can:2 +5 = fetch 5 more's
+			-- worth of mats from bank/alts to make them all
+			local extra = (row.craftableAll or 0) - (row.craftable or 0)
+			r.can:SetText("can:" .. (row.craftable or 0)
+				.. (extra > 0 and " +" .. extra or ""))
 			-- +N queues the suggested amount; ×N shows it's queued
 			if row.queued > 0 then
 				r.qbtn.text:SetText("×" .. row.queued)
@@ -438,8 +641,14 @@ function CU.Refresh()
 				GM.Crafting.QueueAdd(id, max(1, sug or 1))
 				CU.Refresh()
 			end)
-			r:SetScript("OnClick", function()
-				ui.sel = id
+			r:SetScript("OnClick", function(_, btn)
+				-- right-click in a category view pulls the recipe out
+				if btn == "RightButton" and ui.selCat then
+					GM.Crafting.CatUnassign(ui.selCat, id)
+					Footer("removed from '" .. ui.selCat .. "'")
+				else
+					ui.sel = id
+				end
 				CU.Refresh()
 			end)
 			Tip(r, function()
@@ -466,8 +675,10 @@ function CU.Refresh()
 	local qs = GM.Crafting.QueueList()
 	local totCost, totProfit, matsN = 0, 0, 0
 	for _ in pairs(GM.Crafting.QueueMissing()) do matsN = matsN + 1 end
+	ui.qOff = math.min(ui.qOff or 0, math.max(0, #qs - #ui.qRows))
+	W.ScrollText(ui.qP.count, ui.qOff, #ui.qRows, #qs)
 	for i, r in ipairs(ui.qRows) do
-		local q = qs[i]
+		local q = qs[(ui.qOff or 0) + i]
 		if q then
 			r:Show()
 			r.name:SetText((q.name or "?") )
@@ -506,16 +717,25 @@ function CU.Refresh()
 			end)
 			local short = q.qty - (q.craftable or 0)
 			Tip(r, function()
-				local miss = GM.Crafting.Missing(id, q.qty)
+				local extra = (q.craftableAll or 0) - (q.craftable or 0)
 				local lines = { q.name or "recipe",
-					format("queue ×%d · can craft %d now%s", q.qty,
+					format("queue ×%d · can craft %d on hand%s%s", q.qty,
 						q.craftable or 0,
+						extra > 0 and format(" · +%d with bank/alts", extra) or "",
 						short > 0 and format(" (%d short)", short) or "") }
-				for _, m in ipairs(miss) do
-					tinsert(lines, format("  need %s ×%d",
-						GM.ItemName(m.id) or ("item " .. m.id), m.qty))
+				for _, m in ipairs(GM.Crafting.MatSources(id, q.qty)) do
+					local nm = GM.ItemName(m.id) or ("item " .. m.id)
+					if m.fetch > 0 then
+						tinsert(lines, format("  fetch %s ×%d (bank/mail/gbank)", nm, m.fetch))
+					end
+					if m.alt > 0 then
+						tinsert(lines, format("  alt has %s ×%d", nm, m.alt))
+					end
+					if m.buy > 0 then
+						tinsert(lines, format("  buy %s ×%d", nm, m.buy))
+					end
 				end
-				if #miss == 0 then tinsert(lines, "all mats on hand") end
+				if #lines == 2 then tinsert(lines, "all mats on hand") end
 				return lines
 			end)
 		else
@@ -533,6 +753,7 @@ function CU.Refresh()
 	if dr then
 		ui.det:Show()
 		ui.detIcon:SetTexture(GM.ItemIcon(dr.itemID) or 134400)
+		ui.detIconBtn.itemID = dr.itemID
 		ui.detName:SetText(GM.ItemName(dr.itemID) or dr.name or "?")
 		local profit, price, cost = GM.Crafting.Profit(ui.sel)
 		local sub = {}
@@ -557,10 +778,18 @@ function CU.Refresh()
 				m.name:Show()
 				m.name:SetText(GM.ItemName(mat.id) or ("item " .. mat.id))
 				local have = GM.Crafting.Owned(mat.id)
+				local all = GM.Crafting.Available
+					and GM.Crafting.Available(mat.id) or have
 				m.have:Show()
-				m.have:SetText(have .. " / " .. mat.qty)
+				m.have:SetText(have .. " / " .. mat.qty
+					.. (all > have and " +" .. (all - have) or ""))
 				m.have:SetTextColor(GM.RGB(have >= mat.qty and "pos" or "err"))
 				m.name:SetTextColor(GM.RGB(have >= mat.qty and "text" or "warn"))
+				Tip(m.hit, function()
+					return { GM.ItemName(mat.id) or ("item " .. mat.id),
+						format("bags+bank %d · mail/gbank/ah/alts %d · total %d",
+							have, all - have, all) }
+				end)
 			else
 				m.icon:Hide()
 				m.name:Hide()
@@ -569,16 +798,93 @@ function CU.Refresh()
 		end
 		ui.craft1._gmBg:SetColorTexture(GM.RGB(
 			craftable > 0 and "accent" or "contHigh"))
-		ui.craft1.text:SetText(craftable > 0
+		local batch = not GM.Crafting.noBatch
+		ui.craft1.text:SetText(craftable > 0 and batch
 			and ("CRAFT ×" .. craftable) or "CRAFT")
 		ui.craft1.text:SetTextColor(GM.RGB(
 			craftable > 0 and "contLowest" or "textDim"))
+		local allCraftable = GM.Crafting.CraftableAll
+			and GM.Crafting.CraftableAll(ui.sel) or craftable
 		ui.craftHint:SetText(craftable > 0
-			and "tradeskill must be open · one click crafts the batch"
-			or "missing materials")
+			and ((batch
+				and "tradeskill must be open · one click crafts the batch"
+				or "tradeskill must be open · 1 cast per click — this client can't batch")
+				.. (allCraftable > craftable
+					and format(" · +%d w/ bank+alts", allCraftable - craftable) or ""))
+			or (allCraftable > 0
+				and format("0 on hand — %d possible with bank/alts", allCraftable)
+				or "missing materials"))
 	else
 		ui.det:Hide()
 	end
+end
+
+-- ============ default-frame takeover (TSM parity) ============
+-- TRADE_SKILL_SHOW opens OUR window and parks the Blizzard
+-- ProfessionsFrame offscreen. Never Hide() it — its OnHide closes the
+-- tradeskill session CraftRecipe needs. TSM's Move approach: collapse
+-- the UIPanel footprint + pin at 100000,100000 + a SetPoint hook that
+-- re-parks it whenever Blizzard's panel manager repositions it.
+-- ProfessionsFrame is combat-locked on Forever → lockdown defers to
+-- PLAYER_REGEN_ENABLED.
+
+local function DefaultFrame()
+	return ProfessionsFrame or TradeSkillFrame
+end
+
+-- parking mechanics live in FramePark.lua — shared with VendoringUI's
+-- MerchantFrame takeover (offscreen pin, SetPoint re-park hook,
+-- UIPanelWindows/UISpecialFrames strip, combat-lockdown deferral)
+function CU.ParkDefault()
+	GM.FramePark.Park(DefaultFrame())
+end
+
+function CU.RestoreDefault()
+	GM.FramePark.Restore(DefaultFrame())
+end
+
+-- GOBLINMIND button ON the Blizzard frame — the round-trip back once
+-- the user has switched to default (TSM's defaultUISwitchBtn)
+local function EnsureSwitchBtn()
+	local pf = DefaultFrame()
+	if not (pf and ui and not ui.switchBtn) then return end
+	local b = CreateFrame("Button", nil, pf)
+	b:SetSize(84, 16)
+	b:SetPoint("TOPRIGHT", pf, "TOPRIGHT", -40, -8)
+	b:SetFrameLevel(pf:GetFrameLevel() + 20)
+	GM.Panel(b, "accent")
+	b.text = GM.MakeFontString(b, GM.FONT_BOLD, 9, "contLowest")
+	b.text:SetPoint("CENTER")
+	b.text:SetText("GOBLINMIND")
+	b:SetScript("OnClick", function()
+		ui.wantDefault = nil
+		CU.OnTradeSkillOpen()
+	end)
+	ui.switchBtn = b
+	pf:HookScript("OnShow", function()
+		if not ui.wantDefault then CU.ParkDefault() end
+	end)
+end
+
+-- TRADE_SKILL_SHOW entry — called from Crafting.lua's event frame
+function CU.OnTradeSkillOpen()
+	BuildUI()
+	EnsureSwitchBtn()
+	if ui.wantDefault then return end
+	ui.selProf = nil -- scan selects the opened profession (C.lastProf)
+	ui.frame:Show()
+	CU.Refresh()
+	-- the frame may not be shown at event time; park now and retry
+	CU.ParkDefault()
+	GM.After(0.3, CU.ParkDefault)
+end
+
+function CU.SelectProf(name)
+	if not ui then return end
+	if ui.selProf == name then return end
+	ui.selProf = name
+	ui.recOff = 0
+	CU.Refresh()
 end
 
 function CU.Show()

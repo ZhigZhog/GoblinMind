@@ -117,20 +117,90 @@ function GM.Inventory.QueryOwned()
 	end
 end
 
+-- ============ bank + alt snapshots ============
+-- Bank contents only exist while the bank frame is open, and alts are
+-- never live — both persist to GoblinMindSettings.inv[char] =
+-- { bags = {id=qty}, bank = {id=qty}, at }. Bags snapshot on
+-- BAG_UPDATE (debounced) + logout; bank on BANKFRAME_OPENED + bag
+-- changes while the frame is up.
+
+local function CharKey()
+	return (UnitName("player") or "?") .. "-" .. (GetRealmName() or "?")
+end
+
+local BANK_BAGS = { -1, -3 } -- classic bank container + reagent bank
+do
+	local inv = Constants and Constants.InventoryConstants
+	local first = (NUM_BAG_SLOTS or 4) + (inv and inv.NumReagentBagSlots or 0) + 1
+	local n = (inv and inv.NumCharacterBankSlots) or NUM_BANKBAGSLOTS or 7
+	for b = first, first + n - 1 do tinsert(BANK_BAGS, b) end
+end
+
+local function ScanContainers(bags)
+	local t = {}
+	if not (C_Container and C_Container.GetContainerItemInfo) then return t end
+	for _, bag in ipairs(bags) do
+		for slot = 1, (C_Container.GetContainerNumSlots(bag) or 0) do
+			local info = C_Container.GetContainerItemInfo(bag, slot)
+			if info and info.itemID then
+				t[info.itemID] = (t[info.itemID] or 0) + (info.stackCount or 1)
+			end
+		end
+	end
+	return t
+end
+
+local function Snapshot(where)
+	if not GoblinMindSettings then return end
+	GoblinMindSettings.inv = GoblinMindSettings.inv or {}
+	local me = CharKey()
+	local snap = GoblinMindSettings.inv[me]
+		or { bags = {}, bank = {}, at = 0 }
+	snap[where] = ScanContainers(
+		where == "bags" and { 0, 1, 2, 3, 4, 5 } or BANK_BAGS)
+	snap.at = time()
+	GoblinMindSettings.inv[me] = snap
+end
+
+-- this char's bank: live while the frame is open, snapshot otherwise
+function GM.Inventory.BankStored(itemID)
+	local live = GM.BankCount(itemID)
+	if live > 0 then return live end
+	local snap = GoblinMindSettings and GoblinMindSettings.inv
+		and GoblinMindSettings.inv[CharKey()]
+	return snap and snap.bank and snap.bank[itemID] or 0
+end
+
+-- every OTHER character's bag + bank stock combined
+function GM.Inventory.AltTotal(itemID)
+	local me, n = CharKey(), 0
+	for char, snap in pairs(
+		GoblinMindSettings and GoblinMindSettings.inv or {}) do
+		if char ~= me then
+			n = n + (snap.bags and snap.bags[itemID] or 0)
+				+ (snap.bank and snap.bank[itemID] or 0)
+		end
+	end
+	return n
+end
+
 -- ============ counts ============
 
 function GM.Inventory.Count(itemID)
 	local bags = GM.BagCount(itemID)
-	local bank = GM.BankCount(itemID)
+	local bank = GM.Inventory.BankStored(itemID)
 	local mail = mailCache[itemID] or 0
 	local guild = guildCache[itemID] or 0
 	local auction = 0
 	for _, a in pairs(auctionCache) do
 		if a.itemID == itemID then auction = auction + a.qty end
 	end
+	local alts = GM.Inventory.AltTotal(itemID)
 	return {
 		bags = bags, bank = bank, mail = mail, guild = guild,
-		auction = auction, total = bags + bank + mail + guild + auction,
+		auction = auction, alts = alts,
+		total = bags + bank + mail + guild + auction,
+		allTotal = bags + bank + mail + guild + auction + alts,
 	}
 end
 
@@ -162,8 +232,8 @@ local f = CreateFrame("Frame")
 for _, evt in ipairs({
 	"MAIL_INBOX_UPDATE", "MAIL_SHOW",
 	"OWNED_AUCTIONS_UPDATED", "AUCTION_HOUSE_SHOW",
-	"GUILDBANKBAGSLOTS_CHANGED",
-	"PLAYER_LOGIN",
+	"GUILDBANKBAGSLOTS_CHANGED", "BANKFRAME_OPENED",
+	"BAG_UPDATE", "PLAYER_LOGOUT", "PLAYER_LOGIN",
 }) do
 	pcall(f.RegisterEvent, f, evt)
 end
@@ -176,5 +246,16 @@ f:SetScript("OnEvent", function(_, event)
 		GM.Inventory.QueryOwned()
 	elseif event == "GUILDBANKBAGSLOTS_CHANGED" then
 		scanGuildBank()
+	elseif event == "BANKFRAME_OPENED" then
+		Snapshot("bank")
+	elseif event == "BAG_UPDATE" or event == "PLAYER_LOGOUT" then
+		-- coalesce bag churn into one snapshot; bank only while open
+		if f._snapPending then return end
+		f._snapPending = true
+		GM.After(0.5, function()
+			f._snapPending = nil
+			Snapshot("bags")
+			if BankFrame and BankFrame:IsShown() then Snapshot("bank") end
+		end)
 	end
 end)

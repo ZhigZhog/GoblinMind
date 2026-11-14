@@ -22,26 +22,35 @@ local TABS = {
 	{ key = "settings", label = "SETTINGS" },
 }
 
+-- window classes: the planner + auctions + crafting + destroy are
+-- peers — opening one never hides another. The rest swap one-for-one.
+-- (vendor is a contextual takeover window, not a tab — it hides with
+-- the exclusive set in the block below.)
+local PEERS = { auctions = true, crafting = true, destroy = true }
+
 function DB.Switch(key)
-	-- the auctions + crafting windows coexist with the main window —
-	-- scans/craft queues write their plan into it, so it stays up as
-	-- a peer. Everything else still swaps one-for-one.
-	if key ~= "auctions" and key ~= "crafting" then GM.PlanQueue.Hide() end
+	-- HOME/PLAN is a mode toggle on the planner itself — it must not
+	-- disturb any other window
+	if key == "dash" or key == "plan" then
+		GM.PlanQueue.SetHome(key == "dash")
+		GM.PlanQueue.Show()
+		return
+	end
+	-- peers keep the planner and each other open; everything exclusive
+	-- still goes away
+	if not PEERS[key] then
+		GM.PlanQueue.Hide()
+		if GM.MyAuctions then GM.MyAuctions.Hide() end
+		if GM.CraftingUI then GM.CraftingUI.Hide() end
+		if GM.DestroyingUI then GM.DestroyingUI.Hide() end
+		if GM.VendoringUI then GM.VendoringUI.Hide() end
+	end
 	GM.Shopping.Hide()
 	GM.GroupsUI.Hide()
 	if GM.OpsUI then GM.OpsUI.Hide() end
-	if GM.CraftingUI then GM.CraftingUI.Hide() end
 	if GM.Overview then GM.Overview.Hide() end
-	if GM.MyAuctions then GM.MyAuctions.Hide() end
-	if GM.DestroyingUI then GM.DestroyingUI.Hide() end
 	if GM.Settings then GM.Settings.Hide() end
-	if key == "dash" then
-		GM.PlanQueue.SetHome(true)
-		GM.PlanQueue.Show()
-	elseif key == "plan" then
-		GM.PlanQueue.SetHome(false)
-		GM.PlanQueue.Show()
-	elseif key == "market" then
+	if key == "market" then
 		GM.Shopping.Show()
 	elseif key == "groups" then
 		GM.GroupsUI.Show()
@@ -55,6 +64,8 @@ function DB.Switch(key)
 		if GM.MyAuctions then GM.MyAuctions.Show() end
 	elseif key == "destroy" then
 		if GM.DestroyingUI then GM.DestroyingUI.Show() end
+	elseif key == "vendor" then
+		if GM.VendoringUI then GM.VendoringUI.Show() end
 	elseif key == "settings" then
 		if GM.Settings then GM.Settings.Show() end
 	end

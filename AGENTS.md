@@ -134,6 +134,23 @@ self-owned Blizzard-API pipeline later.
     options dialogs, overlays) pins above everything. `TOOLTIP` = TSM popups.
     Minimap buttons → `MEDIUM` + `SetFixedFrameStrata/SetFixedFrameLevel(true)`
     at level 8 (LibDBIcon, guarded). Child ordering = `SetFrameLevel(parent + N)`.
+- **Blizzard-frame takeovers** (`FramePark.lua`, shared): never `Hide()`
+  a native session frame (OnHide closes the tradeskill/merchant session
+  the API calls need). `GM.FramePark.Park(pf)` collapses UIPanel attrs,
+  pins at `100000,100000`, hooks `SetPoint` to re-park, and strips
+  `UIPanelWindows`/`UISpecialFrames` so ESC can't reach it (a parked
+  frame is still SHOWN and eats ESC). `FP.Restore` hands registrations
+  + position back but never `Show()`s (session may be dead — popping a
+  ghost window is a bug). Combat-locked frames defer to
+  `PLAYER_REGEN_ENABLED` internally. Takeover windows each stamp a
+  GOBLINMIND button on the native frame and carry a BLIZZARD UI button;
+  closing ours (not wantDefault) unparks + `CloseTradeSkill`/
+  `CloseMerchant` — close means close. Used by CraftingUI
+  (ProfessionsFrame) and VendoringUI (MerchantFrame). Merchant API on
+  Forever: `GetMerchantNumItems`/`GetMerchantItemLink` globals exist;
+  `GetBuybackItemInfo(i)` → (_, _, price, qty); `BuyMerchantItem`,
+  `BuybackItem`, `CanMerchantRepair`, `GetRepairAllCost`,
+  `RepairAllItems(fromGuild)` all global (TSM LibTSMWoW/API/Merchant.lua).
 - **Group import/export** (`Groups.lua` + GroupsUI IMP/EXP buttons):
   - TSM group paths are **backtick-separated** (`Tailoring`Bags`);
     ```` is an escaped literal comma. Ours use `/` — convert at the

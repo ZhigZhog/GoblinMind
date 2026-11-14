@@ -1,4 +1,5 @@
 local _, GM = ...
+local W = GM.Widgets
 
 -- Groups/ops editor (/goblin groups). Typed controls per the
 -- goblinmind-groups-controls proposal: every row shows an I/O
@@ -340,6 +341,8 @@ local function ColPanel(parent, x, w, title)
 	local t = GM.MakeFontString(p, GM.FONT_MED, 9, "secondary")
 	t:SetPoint("TOPLEFT", 8, -6)
 	t:SetText(title)
+	p.count = GM.MakeFontString(p, GM.FONT, 9, "textDim")
+	p.count:SetPoint("TOPRIGHT", -8, -7)
 	if p.SetClipsChildren then p:SetClipsChildren(true) end
 	return p, t
 end
@@ -348,6 +351,7 @@ end
 local function ItemRow(parent, w)
 	local row = CreateFrame("Button", nil, parent)
 	row:SetSize(w, 22)
+	W.HoverTint(row)
 	row.icon = row:CreateTexture(nil, "ARTWORK")
 	row.icon:SetSize(16, 16)
 	row.icon:SetPoint("LEFT", 2, 0)
@@ -492,6 +496,7 @@ local function BuildUI()
 		row:SetSize(172, 18)
 		row:SetPoint("TOPLEFT", 6, -22 - (i - 1) * 20)
 		row.gmTreeRow = true
+		W.HoverTint(row)
 		row.text = GM.MakeFontString(row, GM.FONT, 10, "text")
 		row.text:SetPoint("LEFT", 2, 0)
 		row.text:SetWidth(168)
@@ -1000,6 +1005,7 @@ function GU.RefreshTree()
 	local groups = TreeList()
 	local maxOff = math.max(0, #groups - TREE_ROWS)
 	if ui.treeOff > maxOff then ui.treeOff = maxOff end
+	W.ScrollText(ui.treePanel.count, ui.treeOff, TREE_ROWS, #groups)
 	for i, row in ipairs(ui.treeRows) do
 		local g = groups[i + ui.treeOff]
 		if g then
@@ -1061,6 +1067,7 @@ function GU.RefreshMembers()
 	ui.memTitle:SetText(format("ITEMS IN %s (%d)", editPath(), #ids))
 	local maxOff = math.max(0, #ids - LIST_ROWS)
 	if ui.memOff > maxOff then ui.memOff = maxOff end
+	W.ScrollText(ui.memPanel.count, ui.memOff, LIST_ROWS, #ids)
 	for i, row in ipairs(ui.memRows) do
 		local id = ids[i + ui.memOff]
 		if id then
@@ -1121,6 +1128,7 @@ function GU.RefreshCatalogue(skipRebuild)
 		#list, ungrouped))
 	local maxOff = math.max(0, #list - LIST_ROWS)
 	if ui.catOff > maxOff then ui.catOff = maxOff end
+	W.ScrollText(ui.catPanel.count, ui.catOff, LIST_ROWS, #list)
 	for i, row in ipairs(ui.catRows) do
 		local e = list[i + ui.catOff]
 		if e then

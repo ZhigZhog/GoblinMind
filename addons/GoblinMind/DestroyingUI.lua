@@ -17,26 +17,8 @@ local ui
 local ROW_H = 26
 local VISIBLE = 13
 
-local function Btn(parent, w, label, fn)
-	local b = CreateFrame("Button", nil, parent)
-	b:SetSize(w, 20)
-	b.bg = b:CreateTexture(nil, "BACKGROUND")
-	b.bg:SetAllPoints()
-	b.bg:SetColorTexture(GM.RGB("contHigh"))
-	b.text = GM.MakeFontString(b, GM.FONT_BOLD, 9, "textDim")
-	b.text:SetPoint("CENTER")
-	b.text:SetText(label)
-	b:SetScript("OnEnter", function()
-		b.bg:SetColorTexture(GM.RGB("contHighest"))
-		b.text:SetTextColor(GM.RGB("text"))
-	end)
-	b:SetScript("OnLeave", function()
-		b.bg:SetColorTexture(GM.RGB("contHigh"))
-		b.text:SetTextColor(GM.RGB("textDim"))
-	end)
-	b:SetScript("OnClick", fn)
-	return b
-end
+local W = GM.Widgets
+local Btn = W.Btn
 
 -- ============ window ============
 
@@ -97,6 +79,8 @@ local function Build()
 		fs:SetPoint("LEFT", h[2], 0)
 		fs:SetText(h[1])
 	end
+	ui.count = GM.MakeFontString(hdr, GM.FONT, 9, "textDim")
+	ui.count:SetPoint("RIGHT", -2, 0)
 
 	-- scroll host
 	local host = CreateFrame("Frame", nil, f)
@@ -118,6 +102,7 @@ local function Build()
 		row.bg = row:CreateTexture(nil, "BACKGROUND")
 		row.bg:SetAllPoints()
 		row.bg:SetColorTexture(GM.RGB(i % 2 == 0 and "contMedium" or "contLowest"))
+		W.HoverTint(row)
 		row.icon = row:CreateTexture(nil, "ARTWORK")
 		row.icon:SetSize(18, 18)
 		row.icon:SetPoint("LEFT", 4, 0)
@@ -182,6 +167,7 @@ function DU.Refresh()
 	ui.empty:SetShown(#rows == 0)
 	local maxScroll = math.max(0, #rows - VISIBLE)
 	ui.scroll = math.min(ui.scroll or 0, maxScroll)
+	W.ScrollText(ui.count, ui.scroll, VISIBLE, #rows)
 	for i = 1, VISIBLE do
 		local row = ui.rows[i]
 		local r = rows[i + ui.scroll]

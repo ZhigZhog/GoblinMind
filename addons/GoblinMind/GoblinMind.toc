@@ -8,6 +8,7 @@
 
 Theme.lua
 Core.lua
+FramePark.lua
 Inventory.lua
 Ledger.lua
 History.lua
@@ -24,6 +25,7 @@ Sniper.lua
 Budgets.lua
 Shopping.lua
 Chrome.lua
+Widgets.lua
 PlanQueue.lua
 GroupsUI.lua
 OpsUI.lua
@@ -32,6 +34,11 @@ Dashboard.lua
 Overview.lua
 MyAuctions.lua
 DestroyingUI.lua
+VendoringUI.lua
+AHUI.lua
+MailUI.lua
+BankUI.lua
+GBankUI.lua
 Settings.lua
 ItemInput.lua
 Tooltip.lua

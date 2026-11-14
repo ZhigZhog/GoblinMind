@@ -246,6 +246,8 @@ local function Scan()
 					diff = info.relativeDifficulty or info.difficulty or prev.diff,
 					cd = info.cooldown or prev.cd,
 				}
+				local p = GoblinMindCrafting.recipes[recipeID].prof
+				if p then C.lastProf = p end -- profession this scan saw
 				n = n + 1
 			end
 		end
@@ -304,14 +306,38 @@ function C.Init()
 			OnCastComplete(...)
 			return
 		end
-		if e == "TRADE_SKILL_CLOSE" then return end
+		if e == "TRADE_SKILL_SHOW" then
+			-- TSM parity: opening a tradeskill IS opening our crafting
+			-- window (linked/NPC sessions excluded — not ours to drive)
+			local linked = C_TradeSkillUI
+				and C_TradeSkillUI.IsTradeSkillLinked
+				and C_TradeSkillUI.IsTradeSkillLinked()
+			local npc = C_TradeSkillUI and C_TradeSkillUI.IsNPCCrafting
+				and C_TradeSkillUI.IsNPCCrafting()
+			if not (linked or npc)
+				and GM.CraftingUI and GM.CraftingUI.OnTradeSkillOpen then
+				GM.CraftingUI.OnTradeSkillOpen()
+			end
+		elseif e == "TRADE_SKILL_CLOSE" then
+			return -- no scan on close
+		end
 		-- trailing debounce: profession context settles sometime during
 		-- the event burst — only scan 0.5s after the LAST event, never
 		-- the first. DATA_SOURCE_CHANGED can land after LIST_UPDATE.
 		C.scanGen = (C.scanGen or 0) + 1
 		local gen = C.scanGen
 		GM.After(0.5, function()
-			if gen == C.scanGen then Scan() end
+			if gen ~= C.scanGen then return end
+			Scan()
+			-- the scan knows which profession just opened — point the
+			-- browser at it (no-op if the window isn't up)
+			if GM.CraftingUI then
+				if C.lastProf and GM.CraftingUI.SelectProf then
+					GM.CraftingUI.SelectProf(C.lastProf)
+				elseif GM.CraftingUI.Refresh then
+					GM.CraftingUI.Refresh()
+				end
+			end
 		end)
 	end)
 end
@@ -354,44 +380,145 @@ function C.Profit(recipeID)
 	if cost and p then return p - cost, p, cost end
 end
 
--- inventory a crafter can actually use: bags + bank (mail/gbank/AH
--- stock isn't reachable from the profession window)
+-- mats a crafter can actually use RIGHT NOW: carried bags + live bank.
+-- BankCount returns 0 while the bank frame is closed — snapshot stock
+-- is counted by C.Available, not here, because closed-bank mats can't
+-- feed a cast.
 function C.Owned(itemID)
-	local c = GM.Inventory.Count(itemID)
-	return (c.bags or 0) + (c.bank or 0)
+	return (GM.BagCount(itemID) or 0) + (GM.BankCount(itemID) or 0)
 end
 
--- mats still needed to craft qty× (inventory-aware)
+-- stock the account actually has: bags + bank + mail + gbank + owned
+-- auctions + every alt's bags/bank. Plans buy only the true shortfall;
+-- craftable counts deliberately stay on C.Owned (reachable mats).
+function C.Available(itemID)
+	local c = GM.Inventory.Count(itemID)
+	return c.allTotal or c.total or 0
+end
+
+-- mats still needed to craft qty× — the true BUY shortfall after
+-- every tracked location (bank, mail, gbank, owned auctions, alts)
 function C.Missing(recipeID, qty)
 	local r = GoblinMindCrafting.recipes[recipeID]
 	if not r then return {} end
 	local out = {}
 	for _, m in ipairs(r.mats) do
-		local need = m.qty * qty - C.Owned(m.id)
+		local need = m.qty * qty - C.Available(m.id)
 		if need > 0 then tinsert(out, { id = m.id, qty = need }) end
 	end
 	return out
 end
 
+-- per-mat coverage for qty× of a recipe — the split a plan needs:
+-- what's in bags vs retrievable from this char's bank/mail/gbank/AH
+-- vs sitting on an alt vs a genuine buy shortfall. Plans emit
+-- fetch → alt → buy steps in that order; craftability itself is bags.
+function C.MatSources(recipeID, qty)
+	local r = GoblinMindCrafting.recipes[recipeID]
+	if not r then return {} end
+	local out = {}
+	for _, m in ipairs(r.mats) do
+		local need = (m.qty or 1) * qty
+		local c = GM.Inventory.Count(m.id)
+		local short = need - (c.bags or 0)
+		if short > 0 then
+			local fetch = min(short,
+				(c.bank or 0) + (c.mail or 0) + (c.guild or 0)
+					+ (c.auction or 0))
+			local alt = min(short - fetch, c.alts or 0)
+			tinsert(out, { id = m.id, need = need, fetch = fetch,
+				alt = alt, buy = short - fetch - alt })
+		end
+	end
+	return out
+end
+
+-- ============ custom categories ============
+-- user-defined recipe groupings, independent of profession. Stored as
+-- GoblinMindCrafting.cats[name][recipeID] = true; the browser lists
+-- them under the professions like TSM's groups.
+
+local function Cats()
+	GoblinMindCrafting.cats = GoblinMindCrafting.cats or {}
+	return GoblinMindCrafting.cats
+end
+
+function C.CatList()
+	local out = {}
+	for name, set in pairs(Cats()) do
+		local n = 0
+		for _ in pairs(set) do n = n + 1 end
+		tinsert(out, { name = name, n = n })
+	end
+	sort(out, function(a, b) return a.name < b.name end)
+	return out
+end
+
+function C.CatCreate(name)
+	if not (name and name ~= "") then return end
+	Cats()[name] = Cats()[name] or {}
+	GM.Crafting.dirty = true
+end
+
+function C.CatAssign(name, recipeID)
+	if not (name and name ~= "") then return end
+	Cats()[name] = Cats()[name] or {}
+	Cats()[name][recipeID] = true
+	GM.Crafting.dirty = true
+end
+
+function C.CatUnassign(name, recipeID)
+	local c = Cats()[name]
+	if c then c[recipeID] = nil GM.Crafting.dirty = true end
+end
+
+function C.CatDelete(name)
+	if Cats()[name] then Cats()[name] = nil GM.Crafting.dirty = true end
+end
+
+function C.CatHas(name, recipeID)
+	local c = Cats()[name]
+	return c and c[recipeID] and true or false
+end
+
 -- ============ queue ============
 
--- Emit a plan: buy missing mats, then a manual craft note. Follows the
--- plan-queue step shape (kind/qty/unit/itemID).
+-- shared step emission for a mat coverage row: fetch from this char's
+-- bank/mail/gbank/auctions first, note what an alt has, buy only the
+-- true shortfall. Fetch/alt are plain note steps — the click
+-- acknowledges, no protected call.
+local function MatSteps(steps, s)
+	local nm = (GM.ItemName and GM.ItemName(s.id)) or ("item " .. s.id)
+	if s.fetch > 0 then
+		tinsert(steps, { kind = "note", verb = "FETCH", itemID = s.id,
+			qty = s.fetch, name = nm,
+			desc = "from bank/mail/gbank" })
+	end
+	if s.alt > 0 then
+		tinsert(steps, { kind = "note", verb = "ALT", itemID = s.id,
+			qty = s.alt, name = nm,
+			desc = "mail over from an alt" })
+	end
+	if s.buy > 0 then
+		tinsert(steps, { kind = "buy", itemID = s.id, qty = s.buy,
+			name = nm, unit = C.MatPrice(s.id) or 0,
+			commodity = true, btag = "craft" })
+	end
+end
+
+-- Emit a plan: fetch/alt/buy missing mats, then a craft step.
 function C.Queue(recipeID, qty)
 	local r = GoblinMindCrafting.recipes[recipeID]
 	if not r then return end
 	qty = max(1, qty or 1)
 	local steps = {}
-	for _, m in ipairs(C.Missing(recipeID, qty)) do
-		local unit = C.MatPrice(m.id)
-		tinsert(steps, { kind = "buy", itemID = m.id, qty = m.qty,
-			unit = unit or 0, commodity = true, btag = "craft" })
+	for _, s in ipairs(C.MatSources(recipeID, qty)) do
+		MatSteps(steps, s)
 	end
-	tinsert(steps, { kind = "note", itemID = r.itemID, qty = qty,
-		recipeID = recipeID,
-		text = format("craft %d× %s (%s)", qty,
-			(GM.ItemName and GM.ItemName(r.itemID)) or r.name or "item",
-			r.prof or "tradeskill") })
+	local nm = (GM.ItemName and GM.ItemName(r.itemID)) or r.name or "item"
+	tinsert(steps, { kind = "note", verb = "CRAFT", itemID = r.itemID,
+		qty = qty, recipeID = recipeID, name = nm,
+		desc = r.prof or "tradeskill" })
 	GM.PlanQueue.SetScanPlan({ steps = steps, itemID = r.itemID,
 		mode = "craft", source = "craft:" .. recipeID })
 end
@@ -418,7 +545,8 @@ function C.List()
 			recipeID = id, itemID = r.itemID, name = r.name,
 			prof = r.prof, mats = r.mats,
 			cost = cost, price = p, profit = profit,
-			craftable = craftable, suggest = suggest,
+			craftable = craftable, craftableAll = C.CraftableAll(id),
+			suggest = suggest,
 		})
 	end
 	sort(out, function(a, b)
@@ -435,6 +563,18 @@ function C.Craftable(recipeID)
 	local n = math.huge
 	for _, m in ipairs(r.mats) do
 		n = min(n, floor(C.Owned(m.id) / m.qty))
+	end
+	return n == math.huge and 0 or n
+end
+
+-- how many IF every tracked location is raided — bags + bank + mail +
+-- gbank + auctions + alts. The "+N" beside can: means "fetchable stock".
+function C.CraftableAll(recipeID)
+	local r = GoblinMindCrafting.recipes[recipeID]
+	if not r then return 0 end
+	local n = math.huge
+	for _, m in ipairs(r.mats) do
+		n = min(n, floor(C.Available(m.id) / m.qty))
 	end
 	return n == math.huge and 0 or n
 end
@@ -515,6 +655,7 @@ function C.QueueList()
 				name = r.name, prof = r.prof, mats = r.mats,
 				cost = cost, price = p, profit = profit,
 				craftable = C.Craftable(id),
+				craftableAll = C.CraftableAll(id),
 			})
 		end
 	end
@@ -533,25 +674,47 @@ function C.QueueMissing()
 	return need
 end
 
--- emit one plan for the whole queue: aggregated mat buys (priciest
--- first) then a manual-craft note per recipe
+-- emit one plan for the whole queue: aggregated fetch/alt/buy mat
+-- steps (buys priciest first) then a craft step per recipe
 function C.QueueEmit()
-	local steps, need = {}, C.QueueMissing()
+	local steps = {}
+	local ql = C.QueueList()
+	-- aggregate the coverage split across every queued recipe
+	local agg = {}
+	for _, q in ipairs(ql) do
+		for _, s in ipairs(C.MatSources(q.recipeID, q.qty)) do
+			local a = agg[s.id] or { id = s.id, fetch = 0, alt = 0, buy = 0 }
+			a.fetch = a.fetch + s.fetch
+			a.alt = a.alt + s.alt
+			a.buy = a.buy + s.buy
+			agg[s.id] = a
+		end
+	end
 	local ids = {}
-	for id in pairs(need) do ids[#ids + 1] = id end
+	for id in pairs(agg) do ids[#ids + 1] = id end
+	-- plan order: all fetches first (bank trip), then buys (AH trip)
+	for _, id in ipairs(ids) do
+		MatSteps(steps, { id = id, fetch = agg[id].fetch,
+			alt = agg[id].alt, buy = 0 })
+	end
 	sort(ids, function(a, b)
-		return ((C.MatPrice(a) or 0) * need[a]) > ((C.MatPrice(b) or 0) * need[b])
+		return ((C.MatPrice(a) or 0) * agg[a].buy)
+			> ((C.MatPrice(b) or 0) * agg[b].buy)
 	end)
 	for _, id in ipairs(ids) do
-		tinsert(steps, { kind = "buy", itemID = id, qty = need[id],
-			unit = C.MatPrice(id) or 0, commodity = true, btag = "craft" })
+		local s = agg[id]
+		if s.buy > 0 then
+			tinsert(steps, { kind = "buy", itemID = id, qty = s.buy,
+				name = (GM.ItemName and GM.ItemName(id)) or ("item " .. id),
+				unit = C.MatPrice(id) or 0, commodity = true,
+				btag = "craft" })
+		end
 	end
-	for _, q in ipairs(C.QueueList()) do
-		tinsert(steps, { kind = "note", itemID = q.itemID, qty = q.qty,
-			recipeID = q.recipeID,
-			text = format("craft %d× %s (%s)", q.qty,
-				(GM.ItemName and GM.ItemName(q.itemID)) or q.name or "item",
-				q.prof or "tradeskill") })
+	for _, q in ipairs(ql) do
+		local nm = (GM.ItemName and GM.ItemName(q.itemID)) or q.name or "item"
+		tinsert(steps, { kind = "note", verb = "CRAFT", itemID = q.itemID,
+			qty = q.qty, recipeID = q.recipeID, name = nm,
+			desc = q.prof or "tradeskill" })
 	end
 	if #steps == 0 then return nil, "queue is empty" end
 	GM.PlanQueue.SetScanPlan({ steps = steps, mode = "craft",

@@ -282,6 +282,7 @@ local function Build()
 	f:EnableMouse(true)
 	f:Hide()
 	GM.Panel(f, "contLow", "outlineVar")
+	tinsert(UISpecialFrames, "GoblinMindSettings")
 	ui.frame = f
 
 	local title = GM.MakeFontString(f, GM.FONT_BOLD, 13, "accent")

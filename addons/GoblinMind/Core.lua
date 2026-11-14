@@ -137,6 +137,10 @@ SlashCmdList.GOBLINMIND = function(msg)
 		GM.Overview.Toggle()
 		return
 	end
+	if msg == "ah" then
+		GM.AHUI.Toggle()
+		return
+	end
 	if msg:sub(1, 8) == "auctions" or msg:sub(1, 10) == "myauctions" then
 		GM.MyAuctions.Toggle()
 		return
@@ -147,15 +151,19 @@ SlashCmdList.GOBLINMIND = function(msg)
 		return
 	end
 	if msg:sub(1, 6) == "vendor" then
-		GM.Vendoring.Scan()
+		GM.VendoringUI.Toggle()
+		return
+	end
+	if msg:sub(1, 4) == "bank" then
+		GM.BankUI.Toggle()
+		return
+	end
+	if msg:sub(1, 5) == "gbank" then
+		GM.GBankUI.Toggle()
 		return
 	end
 	if msg:sub(1, 4) == "mail" then
-		if MailFrame and MailFrame:IsShown() then
-			GM.Banking.MailingScan()
-		else
-			GM.Print("open the mailbox, then /goblin mail")
-		end
+		GM.MailUI.Toggle()
 		return
 	end
 	if msg:sub(1, 6) == "ahdump" then
