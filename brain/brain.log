@@ -1361,3 +1361,5 @@ ValueError: cannot convert float NaN to integer
 2026-11-15 07:27:16,100 INFO  outputs: D:\WoW Mods\addons\GoblinMind_Data\Data.lua ; E:\Battle.net\World of Warcraft\_forever_\Interface\AddOns\GoblinMind_Data\Data.lua
 2026-11-15 07:27:16,100 INFO  poll=5s settle=20s
 2026-11-15 07:27:16,100 INFO  AppData touched (mtime=07:23:19 size=579071) — settling
+2026-11-15 07:27:34,282 INFO  book emit 6339 items (1 sv) -> D:\WoW Mods\addons\GoblinMind_Data\Data.lua
+2026-11-15 07:27:34,296 INFO  book emit 6339 items (1 sv) -> E:\Battle.net\World of Warcraft\_forever_\Interface\AddOns\GoblinMind_Data\Data.lua

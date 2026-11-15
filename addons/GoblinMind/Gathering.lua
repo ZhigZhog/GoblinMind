@@ -189,9 +189,14 @@ if GameTooltip then
 		if not tt:IsShown() then tt._gmNodeN = nil return end
 		local fs = GameTooltipTextLeft1
 		local text = fs and fs:IsShown() and fs:GetText()
+		-- GetText can hand back a "secret string" under taint —
+		-- indexing it throws; skip the poll instead
 		if text then
-			text = strtrim((text:gsub("|c%x%x%x%x%x%x%x%x", "")
-				:gsub("|r", "")))
+			local ok, clean = pcall(function()
+				return strtrim((text:gsub("|c%x%x%x%x%x%x%x%x", "")
+					:gsub("|r", "")))
+			end)
+			text = ok and clean or nil
 		end
 		if text and NODES[text] then
 			if not tt._gmNodeN or tt:NumLines() < tt._gmNodeN then
