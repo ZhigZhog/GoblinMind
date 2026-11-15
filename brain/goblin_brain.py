@@ -620,7 +620,10 @@ def cmd_book(sv_arg, out_paths):
         'filedBugs': [{'id': rid, 'url': url}
                       for rid, url in load_filed().items()],
         'generated': int(now),
-        'dataAge': int(now - latest_t) if latest_t else None,
+        # client computes time() - dataAge — must be the snapshot
+        # TIMESTAMP (like the TSM emit's newest downloadTime), not
+        # an age duration
+        'dataAge': latest_t or None,
         'items': items,
         'vendorBuy': load_vendor_buy(os.path.join(
             os.path.dirname(paths[0] if paths else sv_arg),

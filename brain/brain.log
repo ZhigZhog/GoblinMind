@@ -1363,3 +1363,17 @@ ValueError: cannot convert float NaN to integer
 2026-11-15 07:27:16,100 INFO  AppData touched (mtime=07:23:19 size=579071) — settling
 2026-11-15 07:27:34,282 INFO  book emit 6339 items (1 sv) -> D:\WoW Mods\addons\GoblinMind_Data\Data.lua
 2026-11-15 07:27:34,296 INFO  book emit 6339 items (1 sv) -> E:\Battle.net\World of Warcraft\_forever_\Interface\AddOns\GoblinMind_Data\Data.lua
+2026-11-15 07:29:30,999 INFO  book emit 6339 items (1 sv) -> D:\WoW Mods\addons\GoblinMind_Data\Data.lua
+2026-11-15 07:29:31,013 INFO  book emit 6339 items (1 sv) -> E:\Battle.net\World of Warcraft\_forever_\Interface\AddOns\GoblinMind_Data\Data.lua
+2026-11-15 07:29:57,240 INFO  book emit 6339 items (1 sv) -> D:\WoW Mods\addons\GoblinMind_Data\Data.lua
+2026-11-15 07:29:57,253 INFO  book emit 6339 items (1 sv) -> E:\Battle.net\World of Warcraft\_forever_\Interface\AddOns\GoblinMind_Data\Data.lua
+2026-11-15 07:30:14,464 INFO  logging to D:\WoW Mods\brain\brain.log
+2026-11-15 07:30:14,464 INFO  watching E:\Battle.net\World of Warcraft\_forever_\Interface\AddOns\TradeSkillMaster_AppHelper\AppData.lua
+2026-11-15 07:30:14,464 INFO  outputs: D:\WoW Mods\addons\GoblinMind_Data\Data.lua ; E:\Battle.net\World of Warcraft\_forever_\Interface\AddOns\GoblinMind_Data\Data.lua
+2026-11-15 07:30:14,464 INFO  poll=5s settle=20s
+2026-11-15 07:30:14,465 INFO  AppData touched (mtime=07:23:19 size=579071) — settling
+2026-11-15 07:30:27,626 INFO  book emit 6339 items (1 sv) -> D:\WoW Mods\addons\GoblinMind_Data\Data.lua
+2026-11-15 07:30:27,643 INFO  book emit 6339 items (1 sv) -> E:\Battle.net\World of Warcraft\_forever_\Interface\AddOns\GoblinMind_Data\Data.lua
+2026-11-15 07:32:20,526 INFO  logging to D:\WoW Mods\brain\brain.log
+2026-11-15 07:32:37,854 INFO  book emit 6339 items (1 sv) -> D:/WoW Mods/addons/GoblinMind_Data/Data.lua
+2026-11-15 07:32:37,867 INFO  book emit 6339 items (1 sv) -> E:/Battle.net/World of Warcraft/_forever_/Interface/AddOns/GoblinMind_Data/Data.lua
