@@ -19,11 +19,14 @@ self-owned Blizzard-API pipeline later.
 - Live data source: `...\AddOns\TradeSkillMaster_AppHelper\AppData.lua`
   — line-per-chunk `LoadData(tag, scope, [[return {...}]])` format,
   base-36 encoded values, **non-atomic writes** (debounce before parse).
-- Brain sync: `python brain\goblin_brain.py emit <AppData.lua> <Data.lua>`
-  is manual; `scripts\brain-watch.bat` runs `watch` mode — polls mtime,
-  waits 20s for the non-atomic write to settle, then emits to BOTH the
-  repo copy and the deployed addon so `/reload` picks it up. Leave it
-  running while playing. **Auto-starts at login** via
+- Brain sync: `scripts\brain-watch.bat` runs `watch --feed book` —
+  the in-house feed. On each SavedVariables flush (/reload, logout)
+  it re-emits `GoblinMindDB` merged across every character's
+  `GoblinMind.lua` on the account (newest book wins per item, ledger
+  sums across chars) to BOTH the repo copy and the deployed addon.
+  `--feed tsm` switches back to the legacy AppData pipeline (20s
+  settle on non-atomic writes). `python brain\goblin_brain.py emit
+  <AppData.lua> <Data.lua>` remains as the manual TSM path. **Auto-starts at login** via
   `Startup\goblinmind-brain-watch.bat` (launches `pythonw`, no console);
   `pythonw` + `&`/`disown` also works for a session-local watcher.
   The watcher also scans `WTF\Account\*\SavedVariables\GoblinMind.lua`
@@ -33,17 +36,19 @@ self-owned Blizzard-API pipeline later.
   — no stored secret), records ids in `brain\filed_bugs.json`, and
   re-emits so `GoblinMindDB.filedBugs` lets the addon clear them.
   Manual one-shot: `python brain\goblin_brain.py bugs <AppData> <out...>`.
-- **In-house feed (Part 15, live)**: `python brain\goblin_brain.py book
-  <GoblinMind.lua SV> <out...>` emits `GoblinMindDB` from OUR data —
-  the persisted AH book (`GoblinMindSettings.book`, mb/mbx/sup/n) +
-  ledger sells (`GoblinMindLedger.byChar`, sell txns → `vel` = units/day
-  over 7d). The brain owns the time series in `brain\book_history.json`
-  (14d of book snapshots); `p`/`mkt` = median of recent min-buyouts
-  (needs ≥3 samples, else latest). `watch --feed book` switches the
-  watcher to re-emit on every SV flush instead of AppData changes —
-  emits `source="bookfeed"`, same schema, `vendorBuy` still scraped
-  from TSM's VendorSell table. Emits to all `out` paths given
-  (repo + deployed). Honest-nil: no samples → no price.
+- **In-house feed (Part 15, live — the watcher default)**: `python
+  brain\goblin_brain.py book <AppData-or-SV-path> <out...>` emits
+  `GoblinMindDB` from OUR data, merging every `GoblinMind.lua` under
+  `WTF\Account\*\SavedVariables\` when given the AppData path (or a
+  single file when given `...\GoblinMind.lua`). Sources: persisted AH
+  book (`GoblinMindSettings.book`, mb/mbx/sup/n) + ledger sells
+  (`GoblinMindLedger.byChar`, sell txns → `vel` = units/day over 7d).
+  The brain owns the time series in `brain\book_history.json` (14d of
+  snapshots, idempotent by book timestamp); `p`/`mkt` = weighted
+  trimmed mean — outliers outside [med/3, 3·med] dropped, survivors
+  recency-weighted (half-life ~4d), mean trimmed 10% each end.
+  Emits `source="bookfeed"`, same schema, `vendorBuy` still scraped
+  from TSM's VendorSell table. Honest-nil: no samples → no price.
 - Layout: `brain\` (Python emit/watch CLI) · `addons\GoblinMind\`
   (shim addon, scaffolded — TSM-styled UI) · `addons\GoblinMind_Data\`
   (generated-data addon — `GoblinMindDB` from `goblin_brain.py emit`) · `scripts\`

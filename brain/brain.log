@@ -1268,3 +1268,96 @@ ValueError: cannot convert float NaN to integer
 2026-11-15 06:09:38,209 DEBUG heartbeat — watching, last mtime=06:08:19
 2026-11-15 06:10:04,270 INFO  logging to D:\WoW Mods\brain\brain.log
 2026-11-15 06:10:19,176 INFO  book emit 6339 items -> D:/WoW Mods/addons/GoblinMind_Data/Data.lua
+2026-11-15 06:14:38,265 DEBUG heartbeat — watching, last mtime=06:08:19
+2026-11-15 06:18:28,306 INFO  AppData touched (mtime=06:18:24 size=579401) — settling
+2026-11-15 06:18:43,309 INFO  AppData touched (mtime=06:18:40 size=579409) — settling
+2026-11-15 06:19:03,314 INFO  AppData settled — emitting
+2026-11-15 06:19:04,017 INFO  emitted 7501 items -> D:\WoW Mods\addons\GoblinMind_Data\Data.lua (1017 KB)
+2026-11-15 06:19:04,017 DEBUG   8 chunks total, 7 AUCTIONDB, 42754 rows, 7501 priced (0 skipped no-price)
+2026-11-15 06:19:04,021 DEBUG   D:\WoW Mods\addons\GoblinMind_Data\Data.lua done in 0.7s
+2026-11-15 06:19:04,736 INFO  emitted 7501 items -> E:\Battle.net\World of Warcraft\_forever_\Interface\AddOns\GoblinMind_Data\Data.lua (1017 KB)
+2026-11-15 06:19:04,737 DEBUG   8 chunks total, 7 AUCTIONDB, 42754 rows, 7501 priced (0 skipped no-price)
+2026-11-15 06:19:04,741 DEBUG   E:\Battle.net\World of Warcraft\_forever_\Interface\AddOns\GoblinMind_Data\Data.lua done in 0.7s
+2026-11-15 06:19:39,750 DEBUG heartbeat — watching, last mtime=06:18:40
+2026-11-15 06:23:19,792 INFO  AppData touched (mtime=06:23:19 size=579409) — settling
+2026-11-15 06:23:39,795 INFO  AppData settled — emitting
+2026-11-15 06:23:40,484 INFO  emitted 7501 items -> D:\WoW Mods\addons\GoblinMind_Data\Data.lua (1017 KB)
+2026-11-15 06:23:40,484 DEBUG   8 chunks total, 7 AUCTIONDB, 42754 rows, 7501 priced (0 skipped no-price)
+2026-11-15 06:23:40,488 DEBUG   D:\WoW Mods\addons\GoblinMind_Data\Data.lua done in 0.7s
+2026-11-15 06:23:41,201 INFO  emitted 7501 items -> E:\Battle.net\World of Warcraft\_forever_\Interface\AddOns\GoblinMind_Data\Data.lua (1017 KB)
+2026-11-15 06:23:41,201 DEBUG   8 chunks total, 7 AUCTIONDB, 42754 rows, 7501 priced (0 skipped no-price)
+2026-11-15 06:23:41,206 DEBUG   E:\Battle.net\World of Warcraft\_forever_\Interface\AddOns\GoblinMind_Data\Data.lua done in 0.7s
+2026-11-15 06:24:41,216 DEBUG heartbeat — watching, last mtime=06:23:19
+2026-11-15 06:29:41,284 DEBUG heartbeat — watching, last mtime=06:23:19
+2026-11-15 06:34:13,243 INFO  stopped by user
+2026-11-15 06:34:14,940 INFO  logging to D:\WoW Mods\brain\brain.log
+2026-11-15 06:34:14,940 INFO  watching E:\Battle.net\World of Warcraft\_forever_\Interface\AddOns\TradeSkillMaster_AppHelper\AppData.lua
+2026-11-15 06:34:14,940 INFO  outputs: D:\WoW Mods\addons\GoblinMind_Data\Data.lua ; E:\Battle.net\World of Warcraft\_forever_\Interface\AddOns\GoblinMind_Data\Data.lua
+2026-11-15 06:34:14,940 INFO  poll=5s settle=20s
+2026-11-15 06:34:14,940 INFO  AppData touched (mtime=06:23:19 size=579409) — settling
+2026-11-15 06:34:34,955 INFO  AppData settled — emitting
+2026-11-15 06:34:35,488 INFO  emitted 7501 items -> D:\WoW Mods\addons\GoblinMind_Data\Data.lua (1019 KB)
+2026-11-15 06:34:35,489 DEBUG   8 chunks total, 7 AUCTIONDB, 42754 rows, 7501 priced (0 skipped no-price)
+2026-11-15 06:34:35,493 DEBUG   D:\WoW Mods\addons\GoblinMind_Data\Data.lua done in 0.5s
+2026-11-15 06:34:36,065 INFO  emitted 7501 items -> E:\Battle.net\World of Warcraft\_forever_\Interface\AddOns\GoblinMind_Data\Data.lua (1019 KB)
+2026-11-15 06:34:36,065 DEBUG   8 chunks total, 7 AUCTIONDB, 42754 rows, 7501 priced (0 skipped no-price)
+2026-11-15 06:34:36,069 DEBUG   E:\Battle.net\World of Warcraft\_forever_\Interface\AddOns\GoblinMind_Data\Data.lua done in 0.6s
+2026-11-15 06:38:21,105 INFO  AppData touched (mtime=06:38:19 size=579409) — settling
+2026-11-15 06:38:41,107 INFO  AppData settled — emitting
+2026-11-15 06:38:41,591 INFO  emitted 7501 items -> D:\WoW Mods\addons\GoblinMind_Data\Data.lua (1019 KB)
+2026-11-15 06:38:41,591 DEBUG   8 chunks total, 7 AUCTIONDB, 42754 rows, 7501 priced (0 skipped no-price)
+2026-11-15 06:38:41,595 DEBUG   D:\WoW Mods\addons\GoblinMind_Data\Data.lua done in 0.5s
+2026-11-15 06:38:42,076 INFO  emitted 7501 items -> E:\Battle.net\World of Warcraft\_forever_\Interface\AddOns\GoblinMind_Data\Data.lua (1019 KB)
+2026-11-15 06:38:42,077 DEBUG   8 chunks total, 7 AUCTIONDB, 42754 rows, 7501 priced (0 skipped no-price)
+2026-11-15 06:38:42,081 DEBUG   E:\Battle.net\World of Warcraft\_forever_\Interface\AddOns\GoblinMind_Data\Data.lua done in 0.5s
+2026-11-15 06:39:17,087 DEBUG heartbeat — watching, last mtime=06:38:19
+2026-11-15 06:44:17,134 DEBUG heartbeat — watching, last mtime=06:38:19
+2026-11-15 06:49:17,183 DEBUG heartbeat — watching, last mtime=06:38:19
+2026-11-15 06:53:22,229 INFO  AppData touched (mtime=06:53:19 size=579409) — settling
+2026-11-15 06:53:42,233 INFO  AppData settled — emitting
+2026-11-15 06:53:42,969 INFO  emitted 7501 items -> D:\WoW Mods\addons\GoblinMind_Data\Data.lua (1019 KB)
+2026-11-15 06:53:42,969 DEBUG   8 chunks total, 7 AUCTIONDB, 42754 rows, 7501 priced (0 skipped no-price)
+2026-11-15 06:53:42,975 DEBUG   D:\WoW Mods\addons\GoblinMind_Data\Data.lua done in 0.7s
+2026-11-15 06:53:43,723 INFO  emitted 7501 items -> E:\Battle.net\World of Warcraft\_forever_\Interface\AddOns\GoblinMind_Data\Data.lua (1019 KB)
+2026-11-15 06:53:43,723 DEBUG   8 chunks total, 7 AUCTIONDB, 42754 rows, 7501 priced (0 skipped no-price)
+2026-11-15 06:53:43,728 DEBUG   E:\Battle.net\World of Warcraft\_forever_\Interface\AddOns\GoblinMind_Data\Data.lua done in 0.8s
+2026-11-15 06:54:18,736 DEBUG heartbeat — watching, last mtime=06:53:19
+2026-11-15 06:59:18,791 DEBUG heartbeat — watching, last mtime=06:53:19
+2026-11-15 07:04:18,845 DEBUG heartbeat — watching, last mtime=06:53:19
+2026-11-15 07:08:23,890 INFO  AppData touched (mtime=07:08:19 size=579409) — settling
+2026-11-15 07:08:43,893 INFO  AppData settled — emitting
+2026-11-15 07:08:44,600 INFO  emitted 7501 items -> D:\WoW Mods\addons\GoblinMind_Data\Data.lua (1019 KB)
+2026-11-15 07:08:44,601 DEBUG   8 chunks total, 7 AUCTIONDB, 42754 rows, 7501 priced (0 skipped no-price)
+2026-11-15 07:08:44,606 DEBUG   D:\WoW Mods\addons\GoblinMind_Data\Data.lua done in 0.7s
+2026-11-15 07:08:45,343 INFO  emitted 7501 items -> E:\Battle.net\World of Warcraft\_forever_\Interface\AddOns\GoblinMind_Data\Data.lua (1019 KB)
+2026-11-15 07:08:45,343 DEBUG   8 chunks total, 7 AUCTIONDB, 42754 rows, 7501 priced (0 skipped no-price)
+2026-11-15 07:08:45,346 DEBUG   E:\Battle.net\World of Warcraft\_forever_\Interface\AddOns\GoblinMind_Data\Data.lua done in 0.7s
+2026-11-15 07:09:20,354 DEBUG heartbeat — watching, last mtime=07:08:19
+2026-11-15 07:14:20,413 DEBUG heartbeat — watching, last mtime=07:08:19
+2026-11-15 07:18:30,460 INFO  AppData touched (mtime=07:18:30 size=579060) — settling
+2026-11-15 07:18:50,463 INFO  AppData touched (mtime=07:18:46 size=579071) — settling
+2026-11-15 07:19:10,467 INFO  AppData settled — emitting
+2026-11-15 07:19:11,196 INFO  emitted 7501 items -> D:\WoW Mods\addons\GoblinMind_Data\Data.lua (1017 KB)
+2026-11-15 07:19:11,197 DEBUG   8 chunks total, 7 AUCTIONDB, 42739 rows, 7501 priced (0 skipped no-price)
+2026-11-15 07:19:11,201 DEBUG   D:\WoW Mods\addons\GoblinMind_Data\Data.lua done in 0.7s
+2026-11-15 07:19:11,926 INFO  emitted 7501 items -> E:\Battle.net\World of Warcraft\_forever_\Interface\AddOns\GoblinMind_Data\Data.lua (1017 KB)
+2026-11-15 07:19:11,926 DEBUG   8 chunks total, 7 AUCTIONDB, 42739 rows, 7501 priced (0 skipped no-price)
+2026-11-15 07:19:11,931 DEBUG   E:\Battle.net\World of Warcraft\_forever_\Interface\AddOns\GoblinMind_Data\Data.lua done in 0.7s
+2026-11-15 07:19:21,933 DEBUG heartbeat — watching, last mtime=07:18:46
+2026-11-15 07:23:21,977 INFO  AppData touched (mtime=07:23:19 size=579071) — settling
+2026-11-15 07:23:41,982 INFO  AppData settled — emitting
+2026-11-15 07:23:42,709 INFO  emitted 7501 items -> D:\WoW Mods\addons\GoblinMind_Data\Data.lua (1017 KB)
+2026-11-15 07:23:42,709 DEBUG   8 chunks total, 7 AUCTIONDB, 42739 rows, 7501 priced (0 skipped no-price)
+2026-11-15 07:23:42,713 DEBUG   D:\WoW Mods\addons\GoblinMind_Data\Data.lua done in 0.7s
+2026-11-15 07:23:43,426 INFO  emitted 7501 items -> E:\Battle.net\World of Warcraft\_forever_\Interface\AddOns\GoblinMind_Data\Data.lua (1017 KB)
+2026-11-15 07:23:43,427 DEBUG   8 chunks total, 7 AUCTIONDB, 42739 rows, 7501 priced (0 skipped no-price)
+2026-11-15 07:23:43,431 DEBUG   E:\Battle.net\World of Warcraft\_forever_\Interface\AddOns\GoblinMind_Data\Data.lua done in 0.7s
+2026-11-15 07:24:23,438 DEBUG heartbeat — watching, last mtime=07:23:19
+2026-11-15 07:26:47,168 INFO  logging to D:\WoW Mods\brain\brain.log
+2026-11-15 07:27:02,556 INFO  book emit 6339 items (1 sv) -> D:/WoW Mods/addons/GoblinMind_Data/Data.lua
+2026-11-15 07:27:02,574 INFO  book emit 6339 items (1 sv) -> E:/Battle.net/World of Warcraft/_forever_/Interface/AddOns/GoblinMind_Data/Data.lua
+2026-11-15 07:27:16,099 INFO  logging to D:\WoW Mods\brain\brain.log
+2026-11-15 07:27:16,099 INFO  watching E:\Battle.net\World of Warcraft\_forever_\Interface\AddOns\TradeSkillMaster_AppHelper\AppData.lua
+2026-11-15 07:27:16,100 INFO  outputs: D:\WoW Mods\addons\GoblinMind_Data\Data.lua ; E:\Battle.net\World of Warcraft\_forever_\Interface\AddOns\GoblinMind_Data\Data.lua
+2026-11-15 07:27:16,100 INFO  poll=5s settle=20s
+2026-11-15 07:27:16,100 INFO  AppData touched (mtime=07:23:19 size=579071) — settling

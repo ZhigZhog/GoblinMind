@@ -511,44 +511,100 @@ def _median(vals):
     return int((vals[mid] if n % 2 else (vals[mid - 1] + vals[mid]) / 2))
 
 
-def cmd_book(sv_path, out_paths):
-    """Emit GoblinMindDB from our own feeds: the persisted AH book +
-    ledger sales. Market value = median of recent min-buyout samples;
-    vel = ledger sells/day over VEL_DAYS. Missing data stays nil —
-    honest absence, never fabricated."""
-    sv = load_sv_tables(sv_path,
-                        ['GoblinMindSettings', 'GoblinMindLedger'])
-    book = ((sv.get('GoblinMindSettings') or {}).get('book')) or {}
-    raw = book.get('items') or {}
-    snap_t = int(book.get('t') or time.time())
+def _market_value(samples, now):
+    """Weighted trimmed mean of min-buyout samples [(ts, price), ...].
+
+    Model: drop samples outside [med/3, 3*med] (manipulation spikes
+    and dump listings), weight the survivors by recency (half-life
+    ~4 days), then take a weighted mean trimmed 10% off each end of
+    the price distribution. TSM's dbmarket is the same family —
+    recency-weighted, trimmed — so `mkt` stays meaningfully comparable
+    across the cutover. Returns int or None."""
+    vals = [p for _, p in samples if p and p > 0]
+    if not vals:
+        return None
+    med = _median(vals)
+    kept = [(t, p) for t, p in samples
+            if p and med / 3 <= p <= med * 3]
+    if not kept:
+        kept = [(t, p) for t, p in samples if p and p > 0]
+    w = sorted(
+        ((2.0 ** (-(now - t) / (4.0 * 86400)), p) for t, p in kept),
+        key=lambda x: x[1])
+    total = sum(x[0] for x in w)
+    if total <= 0:
+        return None
+    cum, lo, hi = 0.0, 0, len(w)
+    for i, (x, _) in enumerate(w):
+        cum += x
+        if cum <= total * 0.1:
+            lo = i + 1
+    cum = 0.0
+    for i in range(len(w) - 1, -1, -1):
+        cum += w[i][0]
+        if cum <= total * 0.1:
+            hi = i
+    mid = w[lo:hi] or w
+    return int(sum(x * p for x, p in mid) / sum(x for x, _ in mid))
+
+
+def cmd_book(sv_arg, out_paths):
+    """Emit GoblinMindDB from our own feeds. Merges every
+    GoblinMind.lua on the account: newest book snapshot wins per
+    item, all snapshots feed the history, and ledger sells sum
+    across characters. Missing data stays nil — honest absence,
+    never fabricated."""
+    if os.path.basename(sv_arg).lower() == 'goblinmind.lua':
+        paths = [sv_arg]
+    else:  # AppData path (or any path under the WoW root) — glob SVs
+        paths = sv_paths(sv_arg)
+    books, ledger_chars = [], []
+    for p in paths:
+        sv = load_sv_tables(p,
+                            ['GoblinMindSettings', 'GoblinMindLedger'])
+        b = (sv.get('GoblinMindSettings') or {}).get('book')
+        if b and b.get('items'):
+            books.append(b)
+        led = (sv.get('GoblinMindLedger') or {}).get('byChar') or {}
+        ledger_chars.extend(led.values())
     now = time.time()
 
     hist = load_book_hist()
-    for iid, e in raw.items():
-        rec = hist.setdefault(str(int(iid)), [])
-        rec.append([snap_t, e.get('mb'), e.get('sup'), e.get('n')])
-        hist[str(int(iid))] = [r for r in rec
-                               if r and r[0] and now - r[0] < HIST_KEEP]
+    for b in books:
+        snap_t = int(b.get('t') or now)
+        for iid, e in (b.get('items') or {}).items():
+            rec = hist.setdefault(str(int(iid)), [])
+            # idempotent — a re-run on the same flush must not
+            # double-count the snapshot
+            if not any(r and r[0] == snap_t for r in rec):
+                rec.append([snap_t, e.get('mb'), e.get('sup'),
+                            e.get('n')])
+            hist[str(int(iid))] = [
+                r for r in rec
+                if r and r[0] and now - r[0] < HIST_KEEP]
     save_book_hist(hist)
 
     vel = {}
-    ledger = (sv.get('GoblinMindLedger') or {}).get('byChar') or {}
-    for char in ledger.values():
+    for char in ledger_chars:
         for tx in (char.get('transactions') or {}).values():
             if (tx.get('ty') == 'sell'
                     and now - (tx.get('t') or 0) < VEL_DAYS * 86400):
                 vel[int(tx['i'])] = vel.get(int(tx['i']), 0) \
                     + int(tx.get('q') or 1)
 
+    # newest book per item defines the current listing picture
+    latest = {}
+    latest_t = 0
+    for b in sorted(books, key=lambda x: x.get('t') or 0):
+        latest_t = int(b.get('t') or latest_t)
+        for iid, e in (b.get('items') or {}).items():
+            latest[int(iid)] = e
+
     items = {}
-    for iid, e in raw.items():
-        iid = int(iid)
-        samples = [r[1] for r in hist.get(str(iid), [])
-                   if len(r) > 1 and r[1]]
-        # market value: median of recent min-buyouts — needs ≥3
-        # samples to resist one-off dumps; else latest sample
-        p = (_median(samples[-10:]) if len(samples) >= 3
-             else (samples[-1] if samples else None))
+    for iid, e in latest.items():
+        samples = [(r[0], r[1]) for r in hist.get(str(iid), [])
+                   if len(r) > 1 and r[0] and r[1]]
+        p = _market_value(samples, now)
         items[iid] = {
             'mb': e.get('mb'),
             'mbx': None if e.get('mbx') == -1 else e.get('mbx'),
@@ -564,16 +620,17 @@ def cmd_book(sv_path, out_paths):
         'filedBugs': [{'id': rid, 'url': url}
                       for rid, url in load_filed().items()],
         'generated': int(now),
-        'dataAge': int(now - snap_t),
+        'dataAge': int(now - latest_t) if latest_t else None,
         'items': items,
         'vendorBuy': load_vendor_buy(os.path.join(
-            os.path.dirname(sv_path), '..', '..', '..', '..',
-            'Interface', 'AddOns', 'TradeSkillMaster_AppHelper',
-            'AppData.lua')),
+            os.path.dirname(paths[0] if paths else sv_arg),
+            '..', '..', '..', '..', 'Interface', 'AddOns',
+            'TradeSkillMaster_AppHelper', 'AppData.lua')),
     }
     for out in out_paths:
         write_db(db, out)
-        LOG.info('book emit %d items -> %s', len(items), out)
+        LOG.info('book emit %d items (%d sv) -> %s',
+                 len(items), len(paths), out)
 
 
 # ---------- in-game bug reports -> GitHub ----------
@@ -742,11 +799,12 @@ def cmd_watch(appdata, outs, interval=5, settle=20, feed='tsm'):
                     newly = process_bugs(appdata)
                     if feed == 'book':
                         # a flush means the session wrote fresh book +
-                        # ledger data — re-emit from our own feed
+                        # ledger data — re-emit merged across every
+                        # character's SV
                         try:
-                            cmd_book(sv, outs)
+                            cmd_book(appdata, outs)
                         except Exception:
-                            LOG.exception('book emit %s failed', sv)
+                            LOG.exception('book emit failed')
                     elif newly:
                         LOG.info('re-emitting with filedBugs')
                         for out in outs:
