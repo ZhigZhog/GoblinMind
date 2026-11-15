@@ -548,7 +548,17 @@ def _market_value(samples, now):
     return int(sum(x * p for x, p in mid) / sum(x for x, _ in mid))
 
 
-def cmd_book(sv_arg, out_paths):
+def _sv_root(path, root=None):
+    """WoW install root: feeds.json `root` if given, else derived —
+    3 ups from an AppData.lua path, 4 from a SavedVariables file."""
+    if root:
+        return os.path.normpath(root)
+    n = 4 if os.path.basename(path).lower() == 'goblinmind.lua' else 3
+    return os.path.normpath(os.path.join(
+        os.path.dirname(path), *(['..'] * n)))
+
+
+def cmd_book(sv_arg, out_paths, root=None, feed=None):
     """Emit GoblinMindDB from our own feeds. Merges every
     GoblinMind.lua on the account: newest book snapshot wins per
     item, all snapshots feed the history, and ledger sells sum
@@ -556,8 +566,8 @@ def cmd_book(sv_arg, out_paths):
     never fabricated."""
     if os.path.basename(sv_arg).lower() == 'goblinmind.lua':
         paths = [sv_arg]
-    else:  # AppData path (or any path under the WoW root) — glob SVs
-        paths = sv_paths(sv_arg)
+    else:  # AppData path / feed root — glob SVs
+        paths = sv_paths(sv_arg, root)
     books, ledger_chars = [], []
     for p in paths:
         sv = load_sv_tables(p,
@@ -624,10 +634,13 @@ def cmd_book(sv_arg, out_paths):
         # TIMESTAMP (like the TSM emit's newest downloadTime), not
         # an age duration
         'dataAge': latest_t or None,
+        'feed': feed,
         'items': items,
+        # vendorBuy is static data scraped from TSM's own addon files —
+        # resolve under the feed's WoW root (feeds.json `root`, or the
+        # root derived from whichever path located the feed)
         'vendorBuy': load_vendor_buy(os.path.join(
-            os.path.dirname(paths[0] if paths else sv_arg),
-            '..', '..', '..', '..', 'Interface', 'AddOns',
+            _sv_root(sv_arg, root), 'Interface', 'AddOns',
             'TradeSkillMaster_AppHelper', 'AppData.lua')),
     }
     for out in out_paths:
@@ -649,11 +662,40 @@ FILED_PATH = os.path.join(os.path.dirname(
     os.path.abspath(__file__)), 'filed_bugs.json')
 
 
-def sv_paths(appdata):
-    """AppData lives at <root>/Interface/AddOns/<addon>/AppData.lua;
-    the SV file is under <root>/WTF/Account/*/SavedVariables/."""
-    root = os.path.normpath(os.path.join(
-        os.path.dirname(appdata), '..', '..', '..'))
+FEEDS_PATH = os.path.join(os.path.dirname(
+    os.path.abspath(__file__)), 'feeds.json')
+
+
+def load_feeds():
+    """Named feed registry — one entry per WoW install/feed:
+    {"forever": {"name": "WoW Forever", "appdata": ".../AppData.lua",
+    "root": ".../_forever_", "out": ["...Data.lua", "...Data.lua"]}}
+    Porting to another client = add an entry, no code change."""
+    try:
+        with open(FEEDS_PATH, encoding='utf-8') as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return {}
+
+
+def resolve_feed(arg, outs):
+    """arg is a feed name (feeds.json), an AppData.lua path, or a
+    GoblinMind.lua SV path. Returns (appdata, outs, feed_name, root).
+    Config outs are used when the CLI gives none."""
+    f = load_feeds().get(arg)
+    if f:
+        return (f['appdata'], list(outs) or f.get('out', []), arg,
+                f.get('root'))
+    return arg, outs, None, None
+
+
+def sv_paths(appdata, root=None):
+    """All GoblinMind.lua SavedVariables under the feed's
+    WTF/Account tree. root defaults to the path derived from the
+    AppData location; feeds.json may pin it explicitly."""
+    if not root:
+        root = os.path.normpath(os.path.join(
+            os.path.dirname(appdata), '..', '..', '..'))
     return sorted(glob.glob(os.path.join(
         root, 'WTF', 'Account', '*', 'SavedVariables',
         'GoblinMind.lua')))
@@ -703,13 +745,13 @@ def file_issue(token, title, body):
         return json.loads(r.read().decode())['html_url']
 
 
-def process_bugs(appdata):
+def process_bugs(appdata, root=None):
     """Scan the SV file(s) for staged reports, file anything new.
     Returns [(id, url)] newly filed this pass."""
     newly = []
     filed = load_filed()
     reports = []
-    for sv in sv_paths(appdata):
+    for sv in sv_paths(appdata, root):
         try:
             with open(sv, encoding='utf-8', errors='replace') as fh:
                 text = fh.read()
@@ -753,7 +795,8 @@ def cmd_bugs(appdata, outs):
 HEARTBEAT = 300  # verbose "still alive" line every 5 min
 
 
-def cmd_watch(appdata, outs, interval=5, settle=20, feed='tsm'):
+def cmd_watch(appdata, outs, interval=5, settle=20, feed='tsm',
+              root=None, feedname=None):
     """Poll AppData mtime; emit after the file goes quiet. The TSM
     desktop app rewrites chunks non-atomically, so a fresh mtime is
     only trusted once it stops moving for `settle` seconds."""
@@ -791,7 +834,7 @@ def cmd_watch(appdata, outs, interval=5, settle=20, feed='tsm'):
                         LOG.exception('emit %s failed', out)
         # staged bug reports ride the SavedVariables file — it only
         # flushes on /reload or logout, so check its mtime each poll
-        for sv in sv_paths(appdata):
+        for sv in sv_paths(appdata, root):
             try:
                 m = os.stat(sv).st_mtime
             except OSError:
@@ -799,13 +842,13 @@ def cmd_watch(appdata, outs, interval=5, settle=20, feed='tsm'):
             if sv_mtimes.get(sv) != m:
                 sv_mtimes[sv] = m
                 try:
-                    newly = process_bugs(appdata)
+                    newly = process_bugs(appdata, root)
                     if feed == 'book':
                         # a flush means the session wrote fresh book +
                         # ledger data — re-emit merged across every
                         # character's SV
                         try:
-                            cmd_book(appdata, outs)
+                            cmd_book(appdata, outs, root, feedname)
                         except Exception:
                             LOG.exception('book emit failed')
                     elif newly:
@@ -828,8 +871,10 @@ def cmd_watch(appdata, outs, interval=5, settle=20, feed='tsm'):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('cmd', choices=['dump', 'emit', 'watch', 'bugs',
-                                    'book'])
-    ap.add_argument('appdata')
+                                    'book', 'feeds'])
+    ap.add_argument('appdata', nargs='?',
+                    help='feed name from feeds.json, an AppData.lua '
+                         'path, or a GoblinMind.lua SV path')
     ap.add_argument('out', nargs='*')
     ap.add_argument('--interval', type=float, default=5)
     ap.add_argument('--settle', type=float, default=20)
@@ -845,17 +890,31 @@ def main():
                          'empty string disables)')
     a = ap.parse_args()
     setup_logging(a.verbose, a.log or None)
+    if a.cmd == 'feeds':
+        feeds = load_feeds()
+        if not feeds:
+            LOG.info('no feeds configured — create %s', FEEDS_PATH)
+        for name, f in feeds.items():
+            LOG.info('%s: %s', name, f.get('name', ''))
+            LOG.info('  appdata: %s', f.get('appdata'))
+            LOG.info('  root:    %s', f.get('root'))
+            for out in f.get('out', []):
+                LOG.info('  out:     %s', out)
+        return
+    if not a.appdata:
+        ap.error('%s needs a feed name or path' % a.cmd)
+    appdata, outs, feedname, root = resolve_feed(a.appdata, a.out)
     if a.cmd == 'dump':
-        cmd_dump(a.appdata)
+        cmd_dump(appdata)
     elif a.cmd == 'watch':
-        if not a.out:
-            ap.error('watch needs at least one output path')
+        if not outs:
+            ap.error('watch needs output paths (CLI or feeds.json)')
         # anything escaping the loop is a real crash — log the full
         # traceback, then come back up instead of dying silently
         while True:
             try:
-                cmd_watch(a.appdata, a.out, a.interval, a.settle,
-                          feed=a.feed)
+                cmd_watch(appdata, outs, a.interval, a.settle,
+                          feed=a.feed, root=root, feedname=feedname)
             except KeyboardInterrupt:
                 LOG.info('stopped by user')
                 return
@@ -863,17 +922,17 @@ def main():
                 LOG.exception('watcher crashed — restarting in 10s')
                 time.sleep(10)
     elif a.cmd == 'bugs':
-        if not a.out:
-            ap.error('bugs needs at least one output path')
-        cmd_bugs(a.appdata, a.out)
+        if not outs:
+            ap.error('bugs needs output paths (CLI or feeds.json)')
+        cmd_bugs(appdata, outs)
     elif a.cmd == 'book':
-        if not a.out:
-            ap.error('book needs at least one output path')
-        cmd_book(a.appdata, a.out)
+        if not outs:
+            ap.error('book needs output paths (CLI or feeds.json)')
+        cmd_book(appdata, outs, root, feedname)
     else:
-        if not a.out:
-            ap.error('emit needs an output path')
-        cmd_emit(a.appdata, a.out[0])
+        if not outs:
+            ap.error('emit needs an output path (CLI or feeds.json)')
+        cmd_emit(appdata, outs[0])
 
 
 if __name__ == '__main__':

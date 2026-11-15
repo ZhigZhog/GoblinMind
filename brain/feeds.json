@@ -1,0 +1,11 @@
+{
+  "forever": {
+    "name": "WoW Forever (1.60)",
+    "appdata": "E:/Battle.net/World of Warcraft/_forever_/Interface/AddOns/TradeSkillMaster_AppHelper/AppData.lua",
+    "root": "E:/Battle.net/World of Warcraft/_forever_",
+    "out": [
+      "D:/WoW Mods/addons/GoblinMind_Data/Data.lua",
+      "E:/Battle.net/World of Warcraft/_forever_/Interface/AddOns/GoblinMind_Data/Data.lua"
+    ]
+  }
+}

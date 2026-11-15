@@ -24,14 +24,24 @@ Primary data = the in-house book feed below.
 - Live data source: `...\AddOns\TradeSkillMaster_AppHelper\AppData.lua`
   — line-per-chunk `LoadData(tag, scope, [[return {...}]])` format,
   base-36 encoded values, **non-atomic writes** (debounce before parse).
-- Brain sync: `scripts\brain-watch.bat` runs `watch --feed book` —
-  the in-house feed. On each SavedVariables flush (/reload, logout)
-  it re-emits `GoblinMindDB` merged across every character's
-  `GoblinMind.lua` on the account (newest book wins per item, ledger
-  sums across chars) to BOTH the repo copy and the deployed addon.
-  `--feed tsm` switches back to the legacy AppData pipeline (20s
-  settle on non-atomic writes). `python brain\goblin_brain.py emit
-  <AppData.lua> <Data.lua>` remains as the manual TSM path. **Auto-starts at login** via
+- Brain sync: `scripts\brain-watch.bat` runs `watch forever -v
+  --feed book` — the in-house feed. On each SavedVariables flush
+  (/reload, logout) it re-emits `GoblinMindDB` merged across every
+  character's `GoblinMind.lua` on the account (newest book wins per
+  item, ledger sums across chars). `--feed tsm` switches back to the
+  legacy AppData pipeline (20s settle on non-atomic writes).
+  `python brain\goblin_brain.py emit <AppData.lua> <Data.lua>`
+  remains as the manual TSM path.
+- **Feed registry (`brain\feeds.json`)**: named feeds replace raw
+  paths — `{"forever": {appdata, root, out[]}}`. Any command arg
+  that resolves a feed name (`watch forever`, `book forever`,
+  `bugs forever`, `emit forever`) expands to that client's AppData
+  path, WTF SV glob, and output list; `python goblin_brain.py feeds`
+  lists them. Raw paths still work (backward compat). Emitted DBs
+  carry `feed="<name>"`. **Porting to another client/realm = one
+  feeds.json entry + one bat line — no code change.** Each feed's
+  watcher writes only its own outputs, so multiple watchers can run
+  in parallel (one per install). **Auto-starts at login** via
   `Startup\goblinmind-brain-watch.bat` (launches `pythonw`, no console);
   `pythonw` + `&`/`disown` also works for a session-local watcher.
   The watcher also scans `WTF\Account\*\SavedVariables\GoblinMind.lua`
