@@ -564,8 +564,8 @@ local function BuildUI()
 		ui.newBox:SetText("")
 		GU.Refresh()
 	end)
-	local renG = Btn(treeP, "REN", 38, 18)
-	renG:SetPoint("LEFT", addG, "RIGHT", 4, 0)
+	local renG = Btn(treeP, "REN", 28, 18)
+	renG:SetPoint("LEFT", addG, "RIGHT", 2, 0)
 	renG:SetScript("OnClick", function()
 		local v = strtrim(ui.newBox:GetText() or "")
 		if v == "" or v == "new group path…" or not ui.editPath then return end
@@ -574,8 +574,8 @@ local function BuildUI()
 		ui.newBox:SetText("")
 		GU.Refresh()
 	end)
-	local delG = Btn(treeP, "DEL", 38, 18)
-	delG:SetPoint("LEFT", renG, "RIGHT", 4, 0)
+	local delG = Btn(treeP, "DEL", 28, 18)
+	delG:SetPoint("LEFT", renG, "RIGHT", 2, 0)
 	delG:SetScript("OnClick", function(self)
 		if not ui.editPath or ui.editPath == "Base Group" then return end
 		if not ui.delArm then
@@ -592,8 +592,8 @@ local function BuildUI()
 	Tip(delG, function() return { "Delete group",
 		"Removes the group + subgroups; items become ungrouped",
 		"Click twice to confirm" } end)
-	local protG = Btn(treeP, "PROT", 38, 18)
-	protG:SetPoint("LEFT", delG, "RIGHT", 4, 0)
+	local protG = Btn(treeP, "PROT", 32, 18)
+	protG:SetPoint("LEFT", delG, "RIGHT", 2, 0)
 	protG:SetScript("OnClick", function()
 		if not ui.editPath then return end
 		local g = GM.Groups.db.groups[ui.editPath]
@@ -632,6 +632,9 @@ local function BuildUI()
 			GU.RefreshCatalogue(true)
 		end)
 	ui.catPanel, ui.catTitle, ui.catRows = catP, catT, catRows
+	catT:SetWidth(210)
+	catT:SetJustifyH("LEFT")
+	catT:SetWordWrap(false)
 	ui.search = EditBox(catP, 200)
 	ui.search:SetPoint("TOPLEFT", 8, -2)
 	ui.search:SetHeight(16)
@@ -840,14 +843,14 @@ local function BuildUI()
 		if mode == "export" then d.eb:SetFocus() d.eb:HighlightText() end
 	end
 
-	local impG = Btn(treeP, "IMP", 38, 18)
-	impG:SetPoint("LEFT", delG, "RIGHT", 4, 0)
+	local impG = Btn(treeP, "IMP", 28, 18)
+	impG:SetPoint("LEFT", protG, "RIGHT", 2, 0)
 	impG:SetScript("OnClick", function() ShowXfer("import") end)
 	Tip(impG, function() return { "Import groups",
 		"TSM exports, group: lists, or bare item ids",
 		"paste → IMPORT" } end)
-	local expG = Btn(treeP, "EXP", 38, 18)
-	expG:SetPoint("LEFT", impG, "RIGHT", 4, 0)
+	local expG = Btn(treeP, "EXP", 28, 18)
+	expG:SetPoint("LEFT", impG, "RIGHT", 2, 0)
 	expG:SetScript("OnClick", function() ShowXfer("export") end)
 	Tip(expG, function() return { "Export groups",
 		"TSM-compatible format — paste straight into TSM",
