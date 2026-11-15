@@ -4,7 +4,7 @@ A standalone auction-house intelligence addon for **World of Warcraft:
 Forever** (interface `16001`). TSM-styled dark UI, in-house price feed,
 click-per-step execution — no TSM required.
 
-**v0.1.0-alpha** — first public alpha. Expect rough edges; bug reports
+**v0.1.1-alpha** — first public alpha. Expect rough edges; bug reports
 file themselves to the private tracker (see below).
 
 ## Install
