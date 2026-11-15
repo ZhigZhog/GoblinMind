@@ -627,6 +627,16 @@ def cmd_book(sv_arg, out_paths, root=None, feed=None):
                 iid = int(tx['i'])
                 v[iid] = v.get(iid, 0) + int(tx.get('q') or 1)
 
+    # clobber guard: a parse that found no books while history is
+    # populated means the SV was read mid-write or the addon just
+    # migrated formats — refuse to overwrite a good DB with an empty
+    # one. Fresh installs (empty history) emit normally.
+    if not books_by_scope and any(hist.get(s) for s in hist):
+        LOG.warning('book emit skipped — no books parsed but history '
+                    'is non-empty (likely mid-write SV or format '
+                    'migration); keeping last good DB')
+        return
+
     realms = {}
     for scope, books in books_by_scope.items():
         # newest book per item defines the current listing picture
