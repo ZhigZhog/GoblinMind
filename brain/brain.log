@@ -1493,3 +1493,8 @@ ValueError: cannot convert float NaN to integer
 2026-11-15 09:00:44,904 INFO  book emit 1 scopes 4679 items (1 sv) -> E:/Battle.net/World of Warcraft/_forever_/Interface/AddOns/GoblinMind_Data/Data.lua
 2026-11-15 09:01:51,509 INFO  book emit 1 scopes 4679 items (1 sv) -> D:/WoW Mods/addons/GoblinMind_Data/Data.lua
 2026-11-15 09:01:51,539 INFO  book emit 1 scopes 4679 items (1 sv) -> E:/Battle.net/World of Warcraft/_forever_/Interface/AddOns/GoblinMind_Data/Data.lua
+2026-11-15 09:04:46,568 DEBUG heartbeat — watching, last mtime=08:18:32
+2026-11-15 09:08:52,423 INFO  filed gm-1794751723-578 -> https://github.com/ZhigZhog/GoblinMind/issues/1
+2026-11-15 09:09:03,544 INFO  book emit 1 scopes 4639 items (1 sv) -> D:/WoW Mods/addons/GoblinMind_Data/Data.lua
+2026-11-15 09:09:03,574 INFO  book emit 1 scopes 4639 items (1 sv) -> E:/Battle.net/World of Warcraft/_forever_/Interface/AddOns/GoblinMind_Data/Data.lua
+2026-11-15 09:09:48,584 DEBUG heartbeat — watching, last mtime=08:18:32

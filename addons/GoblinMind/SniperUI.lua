@@ -252,7 +252,8 @@ function SU.Refresh()
 			row:Show()
 			row.tipID = h.itemID
 			row.icon:SetTexture(h.itemID and GM.ItemIcon(h.itemID) or 134400)
-			row.name:SetText((h.name or GM.ItemName(h.itemID) or "?")
+			row.name:SetText((GM.ItemName(h.itemID) or h.name
+				or ("item " .. (h.itemID or "?")))
 				.. (h._n and h._n > 1
 					and GM.CC("textDim") .. " ×" .. h._n .. "|r" or ""))
 			row.qty:SetText("×" .. (h.qty or 1))
@@ -313,4 +314,12 @@ end
 function SU.Toggle()
 	Build()
 	if ui.frame:IsShown() then ui.frame:Hide() else SU.Show() end
+end
+
+-- repaint when async item names/icons land — hits snapshot before
+-- the cache warms so rows need a refresh on GET_ITEM_INFO_RECEIVED
+if GM.OnItemInfoLoaded then
+	GM.OnItemInfoLoaded(function()
+		if ui and ui.frame:IsShown() then SU.Refresh() end
+	end)
 end

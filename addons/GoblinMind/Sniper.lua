@@ -74,7 +74,9 @@ function N.Collect(rows)
 				local m = GM.Price("dbmarket", c.itemID)
 				c.cap = cap
 				c.pct = m and m > 0 and (c.unit / m * 100) or nil
-				c.name = GetInfo and GetInfo(c.itemID) or ("item " .. c.itemID)
+				-- don't freeze "item N" here — SniperUI re-resolves
+				-- live once the async item data lands
+				c.name = GetInfo and GetInfo(c.itemID)
 				c.hit = true
 				N.hits[#N.hits + 1] = c
 			end
