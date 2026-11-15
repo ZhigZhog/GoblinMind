@@ -137,6 +137,24 @@ function GM.Groups.Unassign(itemID)
 	for _, g in pairs(GM.Groups.db.groups) do g.items[itemID] = nil end
 end
 
+-- protected groups shield member items from sell/post plan steps —
+-- inherited down the tree like ops (a protected ancestor protects
+-- every descendant)
+function GM.Groups.SetProtected(path, flag)
+	local g = GM.Groups.db.groups[path]
+	if g then g.protected = flag or nil end
+end
+
+function GM.Groups.IsProtected(itemID)
+	local path = GroupFor(itemID)
+	while path do
+		local g = GM.Groups.db.groups[path]
+		if g and g.protected then return true end
+		path = path:match("^(.*)/[^/]+$")
+	end
+	return false
+end
+
 -- delete a group subtree — member items become ungrouped (TSM semantics)
 function GM.Groups.Delete(path)
 	if not path or path == "Base Group" then return end

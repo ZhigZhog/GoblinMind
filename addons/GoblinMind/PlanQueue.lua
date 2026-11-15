@@ -9,6 +9,7 @@ GM.PlanQueue = { plan = nil, stepIndex = 1, itemID = nil, item = nil }
 local PQ = GM.PlanQueue
 local ROWS = 6
 local ui = { art = {} }
+PQ.protectedOk = PQ.protectedOk or {}
 local GetInfo = C_Item and C_Item.GetItemInfo or GetItemInfo
 
 local sqrt = sqrt or math.sqrt
@@ -502,6 +503,7 @@ function PQ.ClearPlan()
 	PQ.plan = nil
 	PQ.stepIndex = 1
 	PQ.lossConfirm = nil
+	PQ.protectedOk = {}
 	PQ.Refresh()
 end
 
@@ -530,6 +532,7 @@ function PQ.SetScanPlan(plan)
 	PQ.budgetConfirm = nil
 	PQ.budgetWarn = nil
 	PQ.lossConfirm = nil
+	PQ.protectedOk = {}
 	PQ.Refresh()
 end
 
@@ -545,6 +548,7 @@ function PQ.SetItem(itemID, itemLink)
 	if not (PQ.plan and PQ.stepIndex <= #PQ.plan.steps) then
 		PQ.plan = nil
 		PQ.lossConfirm = nil
+		PQ.protectedOk = {}
 	end
 	PQ.Refresh()
 	if GM.GroupsUI and GM.GroupsUI.Retarget then GM.GroupsUI.Retarget() end
@@ -643,7 +647,68 @@ function PQ.Solve(asks, workID)
 	PQ.plan = plan
 	PQ.stepIndex = 1
 	PQ.lossConfirm = nil
+	PQ.protectedOk = {}
 	PQ.Refresh()
+end
+
+-- protected-group confirm: a small modal warning that this plan step
+-- would sell or post an item the user flagged protected via its group.
+-- One confirm per item per plan — HOLD leaves the step armed.
+local protD
+local function BuildProtDialog()
+	if protD then return protD end
+	local d = CreateFrame("Frame", "GoblinMindProtectDialog", UIParent)
+	d:SetSize(360, 170)
+	d:SetPoint("CENTER")
+	d:SetFrameStrata("FULLSCREEN_DIALOG")
+	d:SetToplevel(true)
+	d:EnableMouse(true)
+	d:SetMovable(true)
+	d:RegisterForDrag("LeftButton")
+	d:SetScript("OnDragStart", function(self) self:StartMoving() end)
+	d:SetScript("OnDragStop", function(self) self:StopMovingOrSizing() end)
+	d:SetClampedToScreen(true)
+	GM.Panel(d, "contLow", "outlineVar")
+	table.insert(UISpecialFrames, "GoblinMindProtectDialog")
+	d.title = GM.MakeFontString(d, GM.FONT_MED, 11, "warn")
+	d.title:SetPoint("TOPLEFT", 14, -12)
+	d.title:SetText("PROTECTED ITEM")
+	d.item = GM.MakeFontString(d, GM.FONT, 11, "text")
+	d.item:SetPoint("TOPLEFT", 14, -34)
+	d.item:SetWidth(332)
+	d.item:SetJustifyH("LEFT")
+	d.warn = GM.MakeFontString(d, GM.FONT, 10, "textDim")
+	d.warn:SetPoint("TOPLEFT", 14, -56)
+	d.warn:SetWidth(332)
+	d.warn:SetJustifyH("LEFT")
+	d.warn:SetText("its group is flagged protected — this plan step would "
+		.. "sell it. Confirm posts it anyway (once per plan); hold "
+		.. "keeps it in the queue untouched.")
+	d.act = GM.Widgets.Btn(d, 130, "POST ANYWAY", function()
+		if d._step then
+			PQ.protectedOk[d._step.itemID] = true
+			d:Hide()
+			PQ.ExecuteNext()
+		end
+	end)
+	d.act:SetPoint("BOTTOMRIGHT", -14, 12)
+	local hold = GM.Widgets.Btn(d, 70, "HOLD", function() d:Hide() end)
+	hold:SetPoint("RIGHT", d.act, "LEFT", -8, 0)
+	d:Hide()
+	protD = d
+	return d
+end
+
+function PQ.ProtectedConfirm(step)
+	local d = BuildProtDialog()
+	d._step = step
+	d.item:SetText((GM.ItemNameOr(step.itemID) or "item")
+		.. GM.CC("textDim") .. "  (protected group)|r")
+	d.act.text:SetText(step.kind == "post" and "POST ANYWAY"
+		or step.kind == "vendsell" and "SELL ANYWAY"
+		or "VENDOR ANYWAY")
+	d:Show()
+	d:Raise()
 end
 
 function PQ.ExecuteNext()
@@ -690,6 +755,16 @@ function PQ.ExecuteNext()
 			PQ.Refresh()
 			return
 		end
+	end
+	-- protected-group gate: sell/post steps on flagged items need one
+	-- explicit confirm per item per session — the step stays armed
+	if (step.kind == "post" or step.kind == "vendsell"
+			or step.kind == "destroy")
+			and step.itemID and GM.Groups
+			and GM.Groups.IsProtected(step.itemID)
+			and not PQ.protectedOk[step.itemID] then
+		PQ.ProtectedConfirm(step)
+		return
 	end
 	if step.kind == "note" and step.recipeID then
 		-- a real craft step: fire the remaining count — Blizzard's own

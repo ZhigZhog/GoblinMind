@@ -592,6 +592,19 @@ local function BuildUI()
 	Tip(delG, function() return { "Delete group",
 		"Removes the group + subgroups; items become ungrouped",
 		"Click twice to confirm" } end)
+	local protG = Btn(treeP, "PROT", 38, 18)
+	protG:SetPoint("LEFT", delG, "RIGHT", 4, 0)
+	protG:SetScript("OnClick", function()
+		if not ui.editPath then return end
+		local g = GM.Groups.db.groups[ui.editPath]
+		if not g then return end
+		GM.Groups.SetProtected(ui.editPath, not g.protected)
+		GU.RefreshTree()
+	end)
+	Tip(protG, function() return { "Protect group",
+		"Plan steps that would SELL or POST an item in this",
+		"group (or a subgroup) ask for confirmation first" } end)
+	ui.protBtn = protG
 
 	-- col B: members of selected group — also a drop target
 	local memP, memT, memRows = ListPanel(items, 194, 320, "ITEMS IN GROUP",
@@ -1002,6 +1015,14 @@ end
 local TREE_DEPTH_COLOR = { "text", "text", "textDim", "secondary" }
 
 function GU.RefreshTree()
+	-- PROT toggle mirrors the selected group's protected flag —
+	-- accent when the subtree shields its items from sell/post
+	if ui.protBtn then
+		local g = ui.editPath and GM.Groups.db.groups[ui.editPath]
+		local on = g and g.protected
+		ui.protBtn.text:SetText(on and "ON" or "PROT")
+		ui.protBtn.text:SetTextColor(GM.RGB(on and "accent" or "textDim"))
+	end
 	local groups = TreeList()
 	local maxOff = math.max(0, #groups - TREE_ROWS)
 	if ui.treeOff > maxOff then ui.treeOff = maxOff end

@@ -1438,3 +1438,7 @@ ValueError: cannot convert float NaN to integer
 2026-11-15 08:19:56,915 INFO  logging to D:\WoW Mods\brain\brain.log
 2026-11-15 08:20:11,181 INFO  book emit 1 scopes 6339 items (1 sv) -> D:/WoW Mods/addons/GoblinMind_Data/Data.lua
 2026-11-15 08:20:11,209 INFO  book emit 1 scopes 6339 items (1 sv) -> E:/Battle.net/World of Warcraft/_forever_/Interface/AddOns/GoblinMind_Data/Data.lua
+2026-11-15 08:21:07,368 INFO  book emit 6339 items (1 sv) -> D:/WoW Mods/addons/GoblinMind_Data/Data.lua
+2026-11-15 08:21:07,382 INFO  book emit 6339 items (1 sv) -> E:/Battle.net/World of Warcraft/_forever_/Interface/AddOns/GoblinMind_Data/Data.lua
+2026-11-15 08:22:07,393 DEBUG heartbeat — watching, last mtime=08:18:32
+2026-11-15 08:27:07,443 DEBUG heartbeat — watching, last mtime=08:18:32
