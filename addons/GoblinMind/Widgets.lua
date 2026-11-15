@@ -183,10 +183,41 @@ function W.AcctRow(parent, idx, compact)
 	local nameW = compact and 88 or 104
 	local grpW = compact and 100 or 120
 
-	row.name = GM.MakeFontString(row, GM.FONT, 10, "text")
-	row.name:SetPoint("LEFT", 2, 0)
+	-- name is clickable: swaps to an inline editbox, Enter commits
+	-- (B.Rename validates empty/dup), Esc cancels
+	local nameBtn = CreateFrame("Button", nil, row)
+	nameBtn:SetPoint("LEFT", 2, 0)
+	nameBtn:SetSize(nameW, 18)
+	row.name = GM.MakeFontString(nameBtn, GM.FONT, 10, "text")
+	row.name:SetPoint("LEFT", 0, 0)
 	row.name:SetWidth(nameW)
 	row.name:SetJustifyH("LEFT")
+	local eb = W.EditBox(row, nameW + 6)
+	eb:SetPoint("LEFT", 0, 0)
+	eb:SetHeight(18)
+	eb:Hide()
+	row.nameEdit = eb
+	nameBtn:SetScript("OnClick", function()
+		local a = GM.Budget.List()[idx]
+		if not a then return end
+		eb:SetText(a.name)
+		eb:SetTextColor(GM.RGB("text"))
+		eb:Show()
+		eb:SetFocus()
+		eb:HighlightText()
+	end)
+	W.Tip(nameBtn, function() return {
+		"Rename account", "click to edit the name" } end)
+	eb:SetScript("OnEnterPressed", function(self)
+		GM.Budget.Rename(idx, self:GetText())
+		self:Hide()
+		self:ClearFocus()
+		AcctRefresh()
+	end)
+	eb:SetScript("OnEscapePressed", function(self)
+		self:Hide()
+		self:ClearFocus()
+	end)
 
 	local kind = CreateFrame("Button", nil, row)
 	kind:SetSize(50, 20)

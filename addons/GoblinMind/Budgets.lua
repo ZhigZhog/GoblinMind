@@ -57,6 +57,19 @@ function B.Add(name, kind, alloc)
 end
 
 function B.Del(i) tremove(DB(), i) end
+
+-- rename keeps the account record (spent/income/group all survive) —
+-- rejects empty names and dupes
+function B.Rename(i, name)
+	local a = DB()[i]
+	name = type(name) == "string" and strtrim(name) or ""
+	if not (a and name ~= "") then return nil end
+	for j, o in ipairs(DB()) do
+		if j ~= i and o.name == name then return nil end
+	end
+	a.name = name
+	return a
+end
 function B.ResetSpent(i)
 	local a = DB()[i]
 	if a then a.spent, a.income = 0, 0 B.Sample() end
