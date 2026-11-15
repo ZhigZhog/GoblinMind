@@ -371,8 +371,12 @@ if GameTooltip then
 			local skin, shortSkill = Skinnable(tt)
 			if skin then
 				if not tt._gmSkinN or tt:NumLines() < tt._gmSkinN then
-					local okU, name, unit = pcall(tt.GetUnit, tt)
-					local lvl = okU and unit and UnitLevel(unit)
+					-- GetUnit/UnitLevel can hand back secrets under
+					-- taint — keep the whole read inside one pcall
+					local okU, name, lvl = pcall(function()
+						local n, u = tt:GetUnit()
+						return n, u and UnitLevel(u)
+					end)
 					FillSkin(tt, lvl, okU and name)
 					if shortSkill then
 						tt:AddLine(GM.CC("err")
