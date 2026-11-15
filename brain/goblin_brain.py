@@ -743,10 +743,39 @@ def load_feeds():
         return {}
 
 
+def self_feed():
+    """Zero-config feed for packaged releases: when the script lives
+    inside a WoW install (Interface/AddOns/<addon>/brain/), root and
+    out derive from __file__ — no feeds.json needed. Returns None
+    when run from a dev tree or anywhere else."""
+    here = os.path.dirname(os.path.abspath(__file__))      # .../brain
+    addon_dir = os.path.dirname(here)                      # .../GoblinMind
+    addons_dir = os.path.dirname(addon_dir)                # .../AddOns
+    interface = os.path.dirname(addons_dir)                # .../Interface
+    root = os.path.dirname(interface)                      # .../_forever_
+    if os.path.basename(interface).lower() != 'interface':
+        return None
+    if not os.path.isdir(os.path.join(root, 'WTF')):
+        return None
+    # the book feed never reads AppData — watch the script itself so
+    # the stat path is always valid and quiet
+    return {'appdata': os.path.abspath(__file__),
+            'root': root,
+            'out': [os.path.join(addons_dir, 'GoblinMind_Data',
+                                 'Data.lua')]}
+
+
 def resolve_feed(arg, outs):
     """arg is a feed name (feeds.json), an AppData.lua path, or a
     GoblinMind.lua SV path. Returns (appdata, outs, feed_name, root).
     Config outs are used when the CLI gives none."""
+    if arg == 'self':
+        f = self_feed()
+        if not f:
+            raise SystemExit(
+                "'self' feed: script is not inside a WoW install "
+                "(expected .../Interface/AddOns/<addon>/brain/)")
+        return f['appdata'], list(outs) or f['out'], 'self', f['root']
     f = load_feeds().get(arg)
     if f:
         return (f['appdata'], list(outs) or f.get('out', []), arg,

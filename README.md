@@ -12,10 +12,15 @@ file themselves to the private tracker (see below).
 1. Extract the zip into `Interface/AddOns/` — you should end up with
    `Interface/AddOns/GoblinMind/` and `Interface/AddOns/GoblinMind_Data/`.
 2. Enable both addons at the character select screen.
-3. `/reload` (or relog), then open the auction house once — GoblinMind
+3. **Run the brain watcher** — double-click
+   `Interface/AddOns/GoblinMind/brain/goblin-watch.bat` and leave the
+   window open while you play (needs Python 3.x on PATH). It keeps your
+   price data fresh and files bug reports. Without it the addon still
+   runs, but prices stay frozen at whatever shipped in the zip.
+4. `/reload` (or relog), then open the auction house once — GoblinMind
    builds its own price book from the live AH (FULL SCAN button in the
    AH window, or it collects passively in the background).
-4. Prices populate as the book fills. Until the first scan completes,
+5. Prices populate as the book fills. Until the first scan completes,
    price fields show `—` / `?` — that's normal.
 
 The shipped `GoblinMind_Data` includes a starter price book for
