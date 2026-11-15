@@ -546,10 +546,32 @@ end
 local f = CreateFrame("Frame")
 pcall(f.RegisterEvent, f, "MAIL_SHOW")
 pcall(f.RegisterEvent, f, "MAIL_CLOSED")
+pcall(f.RegisterEvent, f, "PLAYER_INTERACTION_MANAGER_FRAME_SHOW")
+pcall(f.RegisterEvent, f, "PLAYER_INTERACTION_MANAGER_FRAME_HIDE")
 f:SetScript("OnEvent", function(_, e)
 	if e == "MAIL_SHOW" then
 		MU.OnMailOpen()
+	elseif e == "PLAYER_INTERACTION_MANAGER_FRAME_SHOW" then
+		if MailFrame and MailFrame:IsShown() then MU.OnMailOpen() end
 	elseif ui and ui.frame then
+		ui.frame:Hide()
+	end
+end)
+-- poller: MAIL_CLOSED may not fire on this client (the gbank had the
+-- same gap) — when the native frame leaves, ours goes with it; and a
+-- shown native frame + hidden ours means take over regardless of
+-- which event path opened it
+local pollT = 0
+f:SetScript("OnUpdate", function(_, e)
+	pollT = pollT + e
+	if pollT < 0.5 then return end
+	pollT = 0
+	if MailFrame and MailFrame:IsShown() then
+		if not (ui and ui.frame and ui.frame:IsShown())
+			and not (ui and ui.wantDefault) then
+			MU.OnMailOpen()
+		end
+	elseif ui and ui.frame and ui.frame:IsShown() then
 		ui.frame:Hide()
 	end
 end)

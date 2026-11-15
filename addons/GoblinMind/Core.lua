@@ -170,6 +170,10 @@ SlashCmdList.GOBLINMIND = function(msg)
 		GM.SniperUI.Toggle()
 		return
 	end
+	if msg:sub(1, 5) == "tasks" then
+		GM.TaskListUI.Toggle()
+		return
+	end
 	if msg:sub(1, 6) == "uidump" then
 		local function FrameFor(v)
 			if type(v) == "table" then return v end

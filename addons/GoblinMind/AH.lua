@@ -66,9 +66,8 @@ f:SetScript("OnEvent", function(_, event, ...)
 		GM.AH.open = false
 		GM.AH.asks = nil
 		GM.AH.pendingConfirm = nil
-		-- our windows show AH data — they leave with it
-		GM.PlanQueue.Hide()
-		if GM.Shopping and GM.Shopping.Hide then GM.Shopping.Hide() end
+		-- peers stay open and degrade to their AH-closed states —
+		-- only the session takeover (AHUI) closes with the frame
 	elseif event == "REPLICATE_ITEM_LIST_UPDATE" or event == "AUCTION_ITEM_LIST_UPDATE" then
 		if GM.AH.dbgEvents then GM.AH.dbgEvents[event] = true end
 		-- either name may carry the replicate result on this client, but

@@ -22,10 +22,10 @@ local TABS = {
 	{ key = "settings", label = "SETTINGS", short = "SET" },
 }
 
--- window classes: the planner + auctions + crafting + destroy are
--- peers — opening one never hides another. The rest swap one-for-one.
--- (vendor is a contextual takeover window, not a tab — it hides with
--- the exclusive set in the block below.)
+-- window classes: the planner is a peer of every window — tabbing
+-- never closes it. auctions/crafting/destroy also keep each other
+-- open; the rest swap one-for-one. (vendor is a contextual takeover
+-- window, not a tab — it hides with the exclusive set below.)
 local PEERS = { auctions = true, crafting = true, destroy = true }
 
 function DB.Switch(key)
@@ -36,10 +36,9 @@ function DB.Switch(key)
 		GM.PlanQueue.Show()
 		return
 	end
-	-- peers keep the planner and each other open; everything exclusive
-	-- still goes away
+	-- the planner is a peer of everything — tabbing never closes it.
+	-- Exclusive/session windows still go away on a non-peer switch.
 	if not PEERS[key] then
-		GM.PlanQueue.Hide()
 		if GM.MyAuctions then GM.MyAuctions.Hide() end
 		if GM.CraftingUI then GM.CraftingUI.Hide() end
 		if GM.DestroyingUI then GM.DestroyingUI.Hide() end

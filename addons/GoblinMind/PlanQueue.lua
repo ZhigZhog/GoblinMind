@@ -323,6 +323,14 @@ local function Build()
 	ui.list:SetHeight(ROWS * 22 + 8)
 	GM.Panel(ui.list, "contLowest")
 	if GM.ChromePanel then GM.ChromePanel(ui.list) end
+	ui.list:EnableMouseWheel(true)
+	ui.list:SetScript("OnMouseWheel", function(_, d)
+		local maxOff = math.max(0,
+			(PQ.plan and #PQ.plan.steps or 0) - ROWS)
+		ui.manualOff = math.min(math.max(
+			(ui.stepOff or 0) - d * 2, 0), maxOff)
+		PQ.Refresh()
+	end)
 	ui.rows = {}
 	for i = 1, ROWS do ui.rows[i] = BuildRow(ui.list, i) end
 
@@ -1000,6 +1008,27 @@ function PQ.Refresh()
 		if itemType then tinsert(sub, itemType) end
 	end
 	if dispID then tinsert(sub, "id " .. dispID) end
+	-- unsellable flag: soulbound by type (BoP/quest), or the bag
+	-- stack fails the client's own sell check
+	if dispID then
+		local flag
+		local bind = GetInfo and select(14, GetInfo(dispID))
+		if bind == 1 or bind == 4 then flag = "soulbound" end
+		local loc = not flag and GM.AH.FindInBags
+			and GM.AH.FindInBags(dispID)
+		if loc and C_AuctionHouse
+			and C_AuctionHouse.IsSellItemValid then
+			local ok, valid = pcall(C_AuctionHouse.IsSellItemValid, loc)
+			if ok and valid == false then flag = "not sellable" end
+		elseif loc and C_Item and C_Item.IsBound then
+			local ok, bound = pcall(C_Item.IsBound, loc)
+			if ok and bound then flag = "soulbound" end
+		end
+		if flag then
+			tinsert(sub, GM.CC("err")
+				.. "NOT AUCTIONABLE — " .. flag .. "|r")
+		end
+	end
 	if entry and entry.vel then
 		tinsert(sub, "region sales ~" .. (entry.vel >= 1000
 			and format("%.0fk", entry.vel / 1000) or entry.vel) .. "/day")
@@ -1042,11 +1071,18 @@ function PQ.Refresh()
 
 	DrawChart(entry, dispID)
 
-	-- plan rows — a window into steps that follows the active step
-	local off = 0
-	if PQ.plan and #PQ.plan.steps > ROWS then
-		off = math.min(math.max(PQ.stepIndex - 1, 0), #PQ.plan.steps - ROWS)
+	-- plan rows — a window into steps. The active step recenters to
+	-- row 3 (two finished steps of context above) whenever it changes;
+	-- mousewheel scrolls manually until the next step advance
+	local nSteps = PQ.plan and #PQ.plan.steps or 0
+	local maxOff = math.max(0, nSteps - ROWS)
+	if ui.lastStep ~= PQ.stepIndex then
+		ui.lastStep = PQ.stepIndex
+		ui.manualOff = nil
+		ui.stepOff = math.min(math.max(PQ.stepIndex - 3, 0), maxOff)
 	end
+	local off = math.min(ui.manualOff or ui.stepOff or 0, maxOff)
+	ui.stepOff = off
 	for i = 1, ROWS do
 		local row = ui.rows[i]
 		local n = i + off

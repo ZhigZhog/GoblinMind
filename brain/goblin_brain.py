@@ -17,13 +17,18 @@ Format notes (verified against the live file):
               tokens like 9C / 1JI are base-36 encoded copper (or counts).
 """
 import argparse
+import glob
+import json
 import logging
+import math
 import logging.handlers
 import os
 import re
+import subprocess
 import sys
 import tempfile
 import time
+import urllib.request
 
 LOG = logging.getLogger('goblin_brain')
 
@@ -73,7 +78,13 @@ def _atom(s, i):
     except ValueError:
         pass
     try:
-        return float(tok), i
+        v = float(tok)
+        # nan/inf leak in from the TSM app (division by zero in its
+        # aggregates) — they're not data; treat as absent so emit
+        # math and the Lua file never see a non-finite float
+        if not math.isfinite(v):
+            return None, i
+        return v, i
     except ValueError:
         pass
     return tok, i  # bare letter-tokens like 1JI land here as strings
@@ -301,6 +312,8 @@ def cmd_emit(path, out_path):
 
     db = {
         'version': 2,
+        'filedBugs': [
+            {'id': rid, 'url': url} for rid, url in load_filed().items()],
         'generated': int(time.time()),
         'dataAge': data_age,      # newest downloadTime across all chunks
         'realmAge': realm_age,    # realm-scope chunks only (≈ TSM "Realm Data")
@@ -312,7 +325,14 @@ def cmd_emit(path, out_path):
         if isinstance(v, dict):
             return '{' + ','.join(
                 (f'[{k}]={enc(x)}' if isinstance(k, int) else f'{k}={enc(x)}')
-                for k, x in v.items() if x is not None) + '}'
+                for k, x in v.items() if x is not None
+                and not (isinstance(x, float) and not math.isfinite(x))) + '}'
+        # a bare nan/inf would emit 'inf'/'nan' — invalid Lua that
+        # breaks the whole generated file at load
+        if isinstance(v, float) and not math.isfinite(v):
+            return 'nil'
+        if isinstance(v, (list, tuple)):
+            return '{' + ','.join(enc(x) for x in v) + '}'
         if isinstance(v, str):
             return '"' + v + '"'
         if v is True:
@@ -335,6 +355,120 @@ def cmd_emit(path, out_path):
     return len(items)
 
 
+# ---------- in-game bug reports -> GitHub ----------
+# The addon stages reports in the GoblinMindSettings SavedVariable as
+# "id|hex" strings (SV only flushes on /reload or logout). We regex
+# them out of the SV file, file each to GitHub via REST using the git
+# credential manager's token, and echo filed ids back to the addon
+# through the emitted GoblinMindDB.filedBugs so it clears them.
+
+REPO = os.environ.get('GOBLINMIND_REPO', 'ZhigZhog/GoblinMind')
+REPORT_RE = re.compile(r'"(gm-[^"|]+)\|([0-9a-fA-F]+)"')
+FILED_PATH = os.path.join(os.path.dirname(
+    os.path.abspath(__file__)), 'filed_bugs.json')
+
+
+def sv_paths(appdata):
+    """AppData lives at <root>/Interface/AddOns/<addon>/AppData.lua;
+    the SV file is under <root>/WTF/Account/*/SavedVariables/."""
+    root = os.path.normpath(os.path.join(
+        os.path.dirname(appdata), '..', '..', '..'))
+    return sorted(glob.glob(os.path.join(
+        root, 'WTF', 'Account', '*', 'SavedVariables',
+        'GoblinMind.lua')))
+
+
+def load_filed():
+    try:
+        with open(FILED_PATH, encoding='utf-8') as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return {}
+
+
+def save_filed(filed):
+    tmp = FILED_PATH + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as fh:
+        json.dump(filed, fh, indent=1)
+    os.replace(tmp, FILED_PATH)
+
+
+def gh_token():
+    """Pull the github.com token git already has (credential manager
+    / .git-credentials) — no secret stored in the repo."""
+    p = subprocess.run(
+        ['git', 'credential', 'fill'],
+        input='protocol=https\nhost=github.com\n\n',
+        capture_output=True, text=True,
+        timeout=15)
+    for line in p.stdout.splitlines():
+        if line.startswith('password='):
+            return line.split('=', 1)[1].strip()
+    return None
+
+
+def file_issue(token, title, body):
+    req = urllib.request.Request(
+        f'https://api.github.com/repos/{REPO}/issues',
+        data=json.dumps({'title': title, 'body': body}).encode(),
+        method='POST',
+        headers={
+            'Authorization': f'Bearer {token}',
+            'Accept': 'application/vnd.github+json',
+            'User-Agent': 'goblinmind-brain',
+            'Content-Type': 'application/json',
+        })
+    with urllib.request.urlopen(req, timeout=20) as r:
+        return json.loads(r.read().decode())['html_url']
+
+
+def process_bugs(appdata):
+    """Scan the SV file(s) for staged reports, file anything new.
+    Returns [(id, url)] newly filed this pass."""
+    newly = []
+    filed = load_filed()
+    reports = []
+    for sv in sv_paths(appdata):
+        try:
+            with open(sv, encoding='utf-8', errors='replace') as fh:
+                text = fh.read()
+        except OSError:
+            continue
+        for rid, hexbody in REPORT_RE.findall(text):
+            if rid not in filed:
+                reports.append((rid, hexbody))
+    if not reports:
+        return newly
+    token = gh_token()
+    if not token:
+        LOG.warning('bug reports staged but no github.com credential '
+                    'in git — reports held for next pass')
+        return newly
+    for rid, hexbody in reports:
+        try:
+            payload = bytes.fromhex(hexbody).decode('utf-8')
+            title, _, body = payload.partition('\n')
+            title = ('[in-game] ' + (title or 'bug report'))[:120]
+            url = file_issue(token, title, body or title)
+            filed[rid] = url
+            newly.append((rid, url))
+            LOG.info('filed %s -> %s', rid, url)
+        except Exception:
+            LOG.exception('filing %s failed — will retry', rid)
+    if newly:
+        save_filed(filed)
+    return newly
+
+
+def cmd_bugs(appdata, outs):
+    """One-shot: file staged reports, then emit so filedBugs reaches
+    the addon on its next load."""
+    n = process_bugs(appdata)
+    LOG.info('bug pass: %d filed', len(n))
+    for out in outs:
+        cmd_emit(appdata, out)
+
+
 HEARTBEAT = 300  # verbose "still alive" line every 5 min
 
 
@@ -345,6 +479,7 @@ def cmd_watch(appdata, outs, interval=5, settle=20):
     last_mtime = 0
     quiet_since = None
     last_beat = time.time()
+    sv_mtimes = {}
     LOG.info('watching %s', appdata)
     LOG.info('outputs: %s', ' ; '.join(outs))
     LOG.info('poll=%ss settle=%ss', interval, settle)
@@ -372,7 +507,27 @@ def cmd_watch(appdata, outs, interval=5, settle=20):
                     LOG.debug('  %s done in %.1fs', out, time.time() - t0)
                 except Exception:  # never die on a mid-write file
                     LOG.exception('emit %s failed', out)
-        elif now - last_beat >= HEARTBEAT:
+        # staged bug reports ride the SavedVariables file — it only
+        # flushes on /reload or logout, so check its mtime each poll
+        for sv in sv_paths(appdata):
+            try:
+                m = os.stat(sv).st_mtime
+            except OSError:
+                continue
+            if sv_mtimes.get(sv) != m:
+                sv_mtimes[sv] = m
+                try:
+                    newly = process_bugs(appdata)
+                    if newly:
+                        LOG.info('re-emitting with filedBugs')
+                        for out in outs:
+                            try:
+                                cmd_emit(appdata, out)
+                            except Exception:
+                                LOG.exception('emit %s failed', out)
+                except Exception:
+                    LOG.exception('bug pass failed')
+        if now - last_beat >= HEARTBEAT:
             last_beat = now
             LOG.debug('heartbeat — watching, last mtime=%s',
                       time.strftime('%H:%M:%S', time.localtime(last_mtime))
@@ -382,7 +537,7 @@ def cmd_watch(appdata, outs, interval=5, settle=20):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('cmd', choices=['dump', 'emit', 'watch'])
+    ap.add_argument('cmd', choices=['dump', 'emit', 'watch', 'bugs'])
     ap.add_argument('appdata')
     ap.add_argument('out', nargs='*')
     ap.add_argument('--interval', type=float, default=5)
@@ -412,6 +567,10 @@ def main():
             except Exception:
                 LOG.exception('watcher crashed — restarting in 10s')
                 time.sleep(10)
+    elif a.cmd == 'bugs':
+        if not a.out:
+            ap.error('bugs needs at least one output path')
+        cmd_bugs(a.appdata, a.out)
     else:
         if not a.out:
             ap.error('emit needs an output path')

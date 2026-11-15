@@ -622,12 +622,27 @@ end
 -- GoblinMindCrafting.queue[recipeID] = qty — survives reload, drives
 -- the queue manager window and the aggregated emit plan.
 
+-- queueOrder tracks insertion order — the queue is a hash map, so
+-- without it the list renders alphabetically and new recipes land
+-- mid-list instead of appending at the bottom
+local function OrderIndex(id)
+	for i, v in ipairs(GoblinMindCrafting.queueOrder or {}) do
+		if v == id then return i end
+	end
+end
+
 function C.QueueSet(recipeID, qty)
 	if not GoblinMindCrafting.recipes[recipeID] then return end
 	if qty and qty > 0 then
 		GoblinMindCrafting.queue[recipeID] = floor(qty)
+		GoblinMindCrafting.queueOrder = GoblinMindCrafting.queueOrder or {}
+		if not OrderIndex(recipeID) then
+			tinsert(GoblinMindCrafting.queueOrder, recipeID)
+		end
 	else
 		GoblinMindCrafting.queue[recipeID] = nil
+		local i = OrderIndex(recipeID)
+		if i then tremove(GoblinMindCrafting.queueOrder, i) end
 	end
 end
 
@@ -638,6 +653,7 @@ end
 
 function C.QueueClear()
 	wipe(GoblinMindCrafting.queue)
+	wipe(GoblinMindCrafting.queueOrder or {})
 end
 
 function C.QueueCount()
@@ -649,20 +665,37 @@ end
 -- queued recipes with the same computed fields as List()
 function C.QueueList()
 	local out = {}
-	for id, qty in pairs(GoblinMindCrafting.queue) do
+	-- insertion order first; legacy entries with no order record go
+	-- last, alphabetically so they at least group predictably
+	local seen, tail = {}, {}
+	local function emit(id, qty)
 		local r = GoblinMindCrafting.recipes[id]
-		if r then
-			local profit, p, cost = C.Profit(id)
-			tinsert(out, {
-				recipeID = id, qty = qty, itemID = r.itemID,
-				name = r.name, prof = r.prof, mats = r.mats,
-				cost = cost, price = p, profit = profit,
-				craftable = C.Craftable(id),
-				craftableAll = C.CraftableAll(id),
-			})
+		if not r then return end
+		local profit, p, cost = C.Profit(id)
+		return {
+			recipeID = id, qty = qty, itemID = r.itemID,
+			name = r.name, prof = r.prof, mats = r.mats,
+			cost = cost, price = p, profit = profit,
+			craftable = C.Craftable(id),
+			craftableAll = C.CraftableAll(id),
+		}
+	end
+	for _, id in ipairs(GoblinMindCrafting.queueOrder or {}) do
+		local qty = GoblinMindCrafting.queue[id]
+		if qty then
+			seen[id] = true
+			local row = emit(id, qty)
+			if row then tinsert(out, row) end
 		end
 	end
-	sort(out, function(a, b) return (a.name or "") < (b.name or "") end)
+	for id, qty in pairs(GoblinMindCrafting.queue) do
+		if not seen[id] then
+			local row = emit(id, qty)
+			if row then tinsert(tail, row) end
+		end
+	end
+	sort(tail, function(a, b) return (a.name or "") < (b.name or "") end)
+	for _, row in ipairs(tail) do tinsert(out, row) end
 	return out
 end
 

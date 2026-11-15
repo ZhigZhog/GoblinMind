@@ -60,6 +60,12 @@ end
 
 -- hover tooltip: linesFn() returns {title, line, line…} or nil
 function W.Tip(f, linesFn)
+	-- accepts a fn returning lines, a plain string, or nil (no tip)
+	if type(linesFn) == "string" then
+		local s = linesFn
+		linesFn = function() return { s } end
+	end
+	if type(linesFn) ~= "function" then return end
 	f:HookScript("OnEnter", function()
 		local lines = linesFn()
 		if not lines then return end

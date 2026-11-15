@@ -35,6 +35,28 @@ local EditBox = GM.Widgets.EditBox
 
 local Tip = GM.Widgets.Tip
 
+local GetInfo = C_Item and C_Item.GetItemInfo or GetItemInfo
+
+-- browse filters — all client-side post-filtering, so they apply
+-- instantly to whatever the shared array holds and never depend on
+-- the client's native filter support
+local function PassFilters(id, unit)
+	local flt = ui.filters
+	if not flt then return true end
+	if flt.minC and (not unit or unit < flt.minC) then return false end
+	if flt.maxC and unit and unit > flt.maxC then return false end
+	if flt.rarity or flt.classID or flt.minIlvl or flt.maxIlvl then
+		if not GetInfo then return false end
+		local _, _, q, ilvl, _, _, _, _, _, _, _, classID = GetInfo(id)
+		if not q then return false end -- uncached: can't verify
+		if flt.rarity and q < flt.rarity then return false end
+		if flt.classID and classID ~= flt.classID then return false end
+		if flt.minIlvl and (not ilvl or ilvl < flt.minIlvl) then return false end
+		if flt.maxIlvl and ilvl and ilvl > flt.maxIlvl then return false end
+	end
+	return true
+end
+
 local function AHOpen()
 	return C_AuctionHouse and GM.AH.open
 end
@@ -88,7 +110,7 @@ local function Results()
 	for i = 1, math.min(#rs, RESULT_CAP) do
 		local r = rs[i]
 		local id = r.itemKey and r.itemKey.itemID
-		if id then
+		if id and PassFilters(id, r.minPrice) then
 			local e = GM.ItemEntry(id)
 			local mkt = (e and e.p) or GM.TSMMarket and GM.TSMMarket(id)
 			rows[#rows + 1] = {
@@ -308,6 +330,17 @@ local function Build()
 	ui.lHead:SetPoint("TOPLEFT", 8, -6)
 	ui.lCount = GM.MakeFontString(lp, GM.FONT, 9, "textDim")
 	ui.lCount:SetPoint("TOPRIGHT", -8, -7)
+	ui.fltBtn = Btn(lp, 44, "FILTER", function()
+		ui.filterBox:SetShown(not ui.filterBox:IsShown())
+	end)
+	ui.fltBtn:SetSize(44, 14)
+	ui.fltBtn:SetPoint("TOPRIGHT", -52, -4)
+	ui.saveBtn = Btn(lp, 42, "SAVED", function()
+		BuildSavedBox()
+		ui.savedBox:SetShown(not ui.savedBox:IsShown())
+	end)
+	ui.saveBtn:SetSize(42, 14)
+	ui.saveBtn:SetPoint("TOPRIGHT", -6, -4)
 	lp:EnableMouseWheel(true)
 	lp:SetScript("OnMouseWheel", function(_, d)
 		ui.scroll = math.max(0, ui.scroll - d * 3)
@@ -490,6 +523,268 @@ local function Build()
 
 	ui.foot = GM.MakeFontString(f, GM.FONT, 9, "textDim")
 	ui.foot:SetPoint("BOTTOMLEFT", 14, 10)
+
+	-- ============ filter popover ============
+	-- client-side filters over the shared browse array — changes
+	-- re-render instantly, no re-query
+	local fb = CreateFrame("Frame", nil, f)
+	fb:SetSize(216, 150)
+	fb:SetPoint("TOPLEFT", 12, -58)
+	fb:SetFrameStrata("DIALOG")
+	GM.Panel(fb, "contHigh", "outlineVar")
+	fb:Hide()
+	ui.filterBox = fb
+	ui.filters = ui.filters or {}
+	local fltT = GM.MakeFontString(fb, GM.FONT_BOLD, 9, "accent")
+	fltT:SetPoint("TOPLEFT", 8, -6)
+	fltT:SetText("FILTERS (apply to results)")
+
+	local RARITIES = { "any", "uncommon+", "rare+", "epic+" }
+	local RARITY_VAL = { nil, 2, 3, 4 }
+	ui.rarIx = 1
+	local rar = Btn(fb, 96, "rarity: any", function()
+		ui.rarIx = ui.rarIx % #RARITIES + 1
+		ui.filters.rarity = RARITY_VAL[ui.rarIx]
+		AU.Refresh()
+	end)
+	rar:SetSize(96, 18)
+	rar:SetPoint("TOPLEFT", 8, -24)
+
+	local CLASSES = { "any", "weapon", "armor", "consumable",
+		"tradeskill", "recipe", "misc" }
+	local CLASS_VAL = { nil, 2, 4, 0, 7, 9, 15 }
+	ui.clsIx = 1
+	local cls = Btn(fb, 108, "class: any", function()
+		ui.clsIx = ui.clsIx % #CLASSES + 1
+		ui.filters.classID = CLASS_VAL[ui.clsIx]
+		AU.Refresh()
+	end)
+	cls:SetSize(108, 18)
+	cls:SetPoint("TOPLEFT", 8, -48)
+	ui.fltBtns = { rar, cls }
+
+	local function Lab(txt, y)
+		local fs = GM.MakeFontString(fb, GM.FONT, 9, "textDim")
+		fs:SetPoint("TOPLEFT", 8, y)
+		fs:SetText(txt)
+	end
+	Lab("ilvl", -74)
+	ui.minIlvl = EditBox(fb, 36, "")
+	ui.minIlvl:SetPoint("TOPLEFT", 34, -72)
+	ui.maxIlvl = EditBox(fb, 36, "")
+	ui.maxIlvl:SetPoint("LEFT", ui.minIlvl, "RIGHT", 6, 0)
+	Lab("price", -96)
+	ui.minC = EditBox(fb, 56, "")
+	ui.minC:SetPoint("TOPLEFT", 42, -94)
+	ui.maxC = EditBox(fb, 56, "")
+	ui.maxC:SetPoint("LEFT", ui.minC, "RIGHT", 6, 0)
+	local function ApplyTextFilters()
+		ui.filters.minIlvl = tonumber(ui.minIlvl:GetText())
+		ui.filters.maxIlvl = tonumber(ui.maxIlvl:GetText())
+		ui.filters.minC = GM.Budget
+			and GM.Budget.ParseMoney(ui.minC:GetText())
+			or tonumber(ui.minC:GetText())
+		ui.filters.maxC = GM.Budget
+			and GM.Budget.ParseMoney(ui.maxC:GetText())
+			or tonumber(ui.maxC:GetText())
+		AU.Refresh()
+	end
+	for _, eb in ipairs({ ui.minIlvl, ui.maxIlvl, ui.minC, ui.maxC }) do
+		eb:SetScript("OnEnterPressed", function(self)
+			self:ClearFocus()
+			ApplyTextFilters()
+		end)
+	end
+	local clr = Btn(fb, 60, "CLEAR", function()
+		ui.filters = {}
+		ui.rarIx, ui.clsIx = 1, 1
+		ui.minIlvl:SetText("") ui.maxIlvl:SetText("")
+		ui.minC:SetText("") ui.maxC:SetText("")
+		AU.Refresh()
+	end)
+	clr:SetSize(60, 18)
+	clr:SetPoint("BOTTOMRIGHT", -8, 8)
+
+	-- ============ saved searches ============
+	-- name prompt — {name, q, f} goes into GM.db.ahSearches
+	local nb = CreateFrame("Frame", nil, f)
+	nb:SetSize(216, 44)
+	nb:SetPoint("TOPLEFT", 12, -58)
+	nb:SetFrameStrata("DIALOG")
+	GM.Panel(nb, "contHigh", "outlineVar")
+	nb:Hide()
+	ui.nameBox = nb
+	local nbT = GM.MakeFontString(nb, GM.FONT_BOLD, 9, "accent")
+	nbT:SetPoint("TOPLEFT", 8, -6)
+	nbT:SetText("SAVE SEARCH AS")
+	nb.eb = EditBox(nb, 140, "name…")
+	nb.eb:SetPoint("TOPLEFT", 8, -20)
+	nb.ok = Btn(nb, 40, "OK", function()
+		local name = strtrim(nb.eb:GetText() or "")
+		if name ~= "" and name ~= "name…" then
+			GM.db.ahSearches = GM.db.ahSearches or {}
+			local flt = {}
+			for k, v in pairs(ui.filters or {}) do flt[k] = v end
+			tinsert(GM.db.ahSearches, {
+				name = name,
+				q = strtrim(ui.search:GetText() or ""),
+				f = flt,
+			})
+		end
+		nb.eb:SetText("")
+		nb:Hide()
+		BuildSavedBox()
+	end)
+	nb.ok:SetSize(40, 16)
+	nb.ok:SetPoint("LEFT", nb.eb, "RIGHT", 6, 0)
+	nb.eb:SetScript("OnEnterPressed", function()
+		nb.ok:GetScript("OnClick")(nb.ok)
+		nb.eb:ClearFocus()
+	end)
+
+	-- ============ post dialog ============
+	local pd = CreateFrame("Frame", nil, f)
+	pd:SetSize(250, 176)
+	pd:SetPoint("CENTER", 0, 30)
+	pd:SetFrameStrata("FULLSCREEN_DIALOG")
+	GM.Panel(pd, "contHigh", "outlineVar")
+	pd:Hide()
+	ui.postD = pd
+	local pdT = GM.MakeFontString(pd, GM.FONT_BOLD, 11, "accent")
+	pdT:SetPoint("TOPLEFT", 10, -8)
+	pdT:SetText("POST")
+	pd.name = GM.MakeFontString(pd, GM.FONT_BOLD, 10, "text")
+	pd.name:SetPoint("TOPLEFT", 10, -28)
+	pd.name:SetWidth(230)
+	pd.name:SetJustifyH("LEFT")
+	pd.have = GM.MakeFontString(pd, GM.FONT, 9, "textDim")
+	pd.have:SetPoint("TOPLEFT", 10, -44)
+	local qtyL = GM.MakeFontString(pd, GM.FONT, 9, "textDim")
+	qtyL:SetPoint("TOPLEFT", 10, -66)
+	qtyL:SetText("qty")
+	pd.qty = EditBox(pd, 48, "")
+	pd.qty:SetPoint("TOPLEFT", 34, -64)
+	local prL = GM.MakeFontString(pd, GM.FONT, 9, "textDim")
+	prL:SetPoint("TOPLEFT", 92, -66)
+	prL:SetText("unit price")
+	pd.price = EditBox(pd, 90, "")
+	pd.price:SetPoint("TOPLEFT", 148, -64)
+	local durL = GM.MakeFontString(pd, GM.FONT, 9, "textDim")
+	durL:SetPoint("TOPLEFT", 10, -92)
+	durL:SetText("duration")
+	local DURS = { "12h", "24h", "48h" }
+	pd.durIx = 2
+	pd.dur = Btn(pd, 56, "24h", function()
+		pd.durIx = pd.durIx % 3 + 1
+		pd.dur.text:SetText(DURS[pd.durIx])
+	end)
+	pd.dur:SetSize(56, 18)
+	pd.dur:SetPoint("TOPLEFT", 64, -90)
+	pd.msg = GM.MakeFontString(pd, GM.FONT, 9, "textDim")
+	pd.msg:SetPoint("TOPLEFT", 10, -116)
+	pd.msg:SetWidth(230)
+	pd.msg:SetJustifyH("LEFT")
+	pd.post = Btn(pd, 70, "POST", function()
+		local id = pd.itemID
+		local qty = tonumber(pd.qty:GetText()) or 1
+		local unit = GM.Budget
+			and GM.Budget.ParseMoney(pd.price:GetText())
+			or tonumber(pd.price:GetText())
+		if not (id and unit and unit > 0) then
+			pd.msg:SetText(GM.CC("warn") .. "need a valid price|r")
+			return
+		end
+		GM.AH.Execute({ kind = "post", itemID = id, qty = qty,
+			unit = unit, duration = pd.durIx })
+		GM.After(0.3, function()
+			pd.have:SetText(format("%d in bags", GM.BagCount(id) or 0))
+			if (GM.BagCount(id) or 0) < 1 then pd:Hide() end
+		end)
+	end)
+	pd.post:SetSize(70, 20)
+	pd.post:SetPoint("BOTTOMRIGHT", -10, 10)
+	pd.close = Btn(pd, 60, "DONE", function() pd:Hide() end)
+	pd.close:SetSize(60, 20)
+	pd.close:SetPoint("RIGHT", pd.post, "LEFT", -6, 0)
+end
+
+-- open the post dialog for a result item — PreviewPost fills the
+-- suggested unit; qty defaults to the first stack in bags
+function AU.OpenPost(id)
+	Build()
+	local pd = ui.postD
+	pd.itemID = id
+	pd.name:SetText((GM.ItemName and GM.ItemName(id)) or ("item " .. id))
+	local loc, stack = GM.AH.FindInBags(id)
+	pd.have:SetText(format("%d in bags%s", GM.BagCount(id) or 0,
+		not loc and " (none unlocked)" or ""))
+	pd.qty:SetText(tostring(stack or 1))
+	local unit = GM.Auctioning and GM.Auctioning.PreviewPost
+		and GM.Auctioning.PreviewPost(id)
+	pd.price:SetText(unit and format("%dg", floor(unit / 10000 + 0.5)) or "")
+	pd.msg:SetText(unit and ""
+		or GM.CC("warn") .. "no price verdict — set one manually|r")
+	pd:Show()
+end
+
+-- saved-searches dropdown — rebuilt each open so deletions vanish
+function BuildSavedBox()
+	if not ui.savedBox then
+		local sb = CreateFrame("Frame", nil, ui.frame)
+		sb:SetSize(216, 8 + 8 * 18)
+		sb:SetPoint("TOPLEFT", 12, -58)
+		sb:SetFrameStrata("DIALOG")
+		GM.Panel(sb, "contHigh", "outlineVar")
+		sb.rows = {}
+		for i = 1, 8 do
+			local b = Btn(sb, 168, "", nil)
+			b:SetPoint("TOPLEFT", 6, -6 - (i - 1) * 18)
+			b.text:SetJustifyH("LEFT")
+			b.text:SetWidth(160)
+			local x = CreateFrame("Button", nil, sb)
+			x:SetSize(14, 15)
+			x:SetPoint("LEFT", b, "RIGHT", 4, 0)
+			x.text = GM.MakeFontString(x, GM.FONT_BOLD, 10, "textDim")
+			x.text:SetPoint("CENTER")
+			x.text:SetText("x")
+			sb.rows[i] = { b = b, x = x }
+		end
+		local add = Btn(sb, 120, "+ SAVE CURRENT", function()
+			ui.nameBox:Show()
+		end)
+		add:SetSize(120, 16)
+		add:SetPoint("BOTTOMLEFT", 6, 6)
+		sb.empty = GM.MakeFontString(sb, GM.FONT, 9, "textDim")
+		sb.empty:SetPoint("TOPLEFT", 8, -8)
+		sb.empty:SetText("no saved searches")
+		ui.savedBox = sb
+	end
+	local sb = ui.savedBox
+	local list = (GM.db and GM.db.ahSearches) or {}
+	sb.empty:SetShown(#list == 0)
+	for i, r in ipairs(sb.rows) do
+		local sv = list[i]
+		if sv then
+			r.b:Show() r.x:Show()
+			r.b.text:SetText(sv.name or "?")
+			local q, f = sv.q, sv.f
+			r.b:SetScript("OnClick", function()
+				ui.search:SetText(q or "")
+				ui.filters = {}
+				for k, v in pairs(f or {}) do ui.filters[k] = v end
+				ui.scroll = 0
+				sb:Hide()
+				DoSearch()
+			end)
+			local ix = i
+			r.x:SetScript("OnClick", function()
+				tremove(GM.db.ahSearches, ix)
+				BuildSavedBox()
+			end)
+		else
+			r.b:Hide() r.x:Hide()
+		end
+	end
 end
 
 -- ============ refresh ============
@@ -525,7 +820,19 @@ function AU.Refresh()
 				row.c1:SetText(r.unit and GM.Money(r.unit) or "—")
 				row.c2:SetText("×" .. (r.qty or 1)
 					.. (r.mkt and " · mkt " .. GM.Money(r.mkt) or ""))
-				row.act:Hide()
+				-- POST appears when bags hold the item — opens the
+				-- post dialog (qty/price/duration, one call per click)
+				if r.id and (GM.BagCount(r.id) or 0) > 0 then
+					row.act:Show()
+					row.act.text:SetText("POST")
+					row.act.text:SetTextColor(GM.RGB("accent"))
+					local pid = r.id
+					row.act:SetScript("OnClick", function()
+						AU.OpenPost(pid)
+					end)
+				else
+					row.act:Hide()
+				end
 				local sel = r
 				row:SetScript("OnClick", function()
 					ui.askScroll = 0

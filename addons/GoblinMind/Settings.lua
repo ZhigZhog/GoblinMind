@@ -13,6 +13,127 @@ local ui
 -- "reload required" prompt rather than pretending they're live
 local RELOAD_KEYS = { embeddedTooltip = true, minimapAngle = true }
 
+-- ============ bug reports ============
+-- In-game addons can't reach the network, so reports stage into the
+-- GoblinMindSettings SavedVariable as "id|hex" strings; the brain
+-- watcher reads the SV file after the next /reload and files each
+-- one to GitHub, then echoes filed ids back through GoblinMindDB.
+
+-- ring-buffer the last Lua errors for the diagnostic bundle — wrap
+-- once and chain to the previous handler so error addons still work
+if seterrorhandler and geterrorhandler then
+	local prev = geterrorhandler()
+	seterrorhandler(function(msg, ...)
+		if GM.db then
+			GM.db.errLog = GM.db.errLog or {}
+			local log = GM.db.errLog
+			log[#log + 1] = date("%H:%M:%S") .. " " .. tostring(msg)
+			while #log > 20 do tremove(log, 1) end
+		end
+		if prev then return prev(msg, ...) end
+	end)
+end
+
+local function ClearFiledBugs()
+	local filed = GoblinMindDB and GoblinMindDB.filedBugs
+	if not filed or not (GM.db and GM.db.bugReports) then return end
+	local urls = {}
+	for _, f in ipairs(filed) do urls[f.id] = f.url end
+	local announced = GM.db.bugsAnnounced or {}
+	for i = #GM.db.bugReports, 1, -1 do
+		local rid = GM.db.bugReports[i]:match("^(gm%-%d+%-%d+)|")
+		if rid and urls[rid] then
+			if not announced[rid] then
+				announced[rid] = true
+				GM.Print("bug report filed — " .. urls[rid])
+			end
+			tremove(GM.db.bugReports, i)
+		end
+	end
+	GM.db.bugsAnnounced = announced
+end
+
+local bugEv = CreateFrame("Frame")
+pcall(bugEv.RegisterEvent, bugEv, "PLAYER_LOGIN")
+bugEv:SetScript("OnEvent", ClearFiledBugs)
+
+-- the report dialog — a description box + FILE; diagnostics attach
+-- automatically. StageReport is forward-declared: its body sits past
+-- the HexEnc codec it uses.
+local StageReport
+local bugD
+local function BuildBugDialog()
+	if bugD then return end
+	local d = CreateFrame("Frame", nil, UIParent)
+	d:SetSize(440, 300)
+	d:SetPoint("CENTER", 0, 40)
+	d:SetFrameStrata("FULLSCREEN_DIALOG")
+	d:SetToplevel(true)
+	d:SetMovable(true)
+	d:EnableMouse(true)
+	d:RegisterForDrag("LeftButton")
+	d:SetScript("OnDragStart", d.StartMoving)
+	d:SetScript("OnDragStop", d.StopMovingOrSizing)
+	GM.Panel(d, "contLow", "outlineVar")
+	bugD = d
+
+	local t = GM.MakeFontString(d, GM.FONT_BOLD, 13, "accent")
+	t:SetPoint("TOPLEFT", 12, -10)
+	t:SetText("FILE A BUG REPORT")
+
+	local desc = CreateFrame("EditBox", nil, d)
+	desc:SetPoint("TOPLEFT", 12, -34)
+	desc:SetSize(416, 170)
+	desc:SetAutoFocus(false)
+	desc:SetMultiLine(true)
+	desc:SetMaxLetters(4000)
+	desc:SetFont(GM.FONT, 10, "")
+	desc:SetTextColor(GM.RGB("text"))
+	desc:SetTextInsets(6, 6, 6, 6)
+	local bg = desc:CreateTexture(nil, "BACKGROUND")
+	bg:SetAllPoints()
+	bg:SetColorTexture(GM.RGB("contLowest"))
+	desc:SetScript("OnEscapePressed", function() d:Hide() end)
+	d.desc = desc
+
+	local note = GM.MakeFontString(d, GM.FONT, 9, "textDim")
+	note:SetPoint("TOPLEFT", desc, "BOTTOMLEFT", 2, -6)
+	note:SetWidth(416)
+	note:SetJustifyH("LEFT")
+	note:SetText("attaches client build, addon version, AH book age, and "
+		.. "the last Lua errors. The brain watcher files it to GitHub "
+		.. "after your next /reload.")
+
+	local file = CreateFrame("Button", nil, d)
+	file:SetSize(120, 22)
+	file:SetPoint("BOTTOMRIGHT", -12, 10)
+	GM.Panel(file, "accent")
+	file.text = GM.MakeFontString(file, GM.FONT_BOLD, 10, "contLowest")
+	file.text:SetPoint("CENTER")
+	file.text:SetText("FILE REPORT")
+	file:SetScript("OnClick", function()
+		local txt = strtrim(desc:GetText() or "")
+		if txt == "" then
+			GM.Print(GM.CC("warn") .. "describe the bug first|r")
+			return
+		end
+		local id = StageReport(txt)
+		desc:SetText("")
+		d:Hide()
+		GM.Print("bug report staged (" .. id .. ") — /reload to send "
+			.. "(the brain watcher files it to GitHub)")
+	end)
+
+	local cancel = CreateFrame("Button", nil, d)
+	cancel:SetSize(70, 22)
+	cancel:SetPoint("RIGHT", file, "LEFT", -8, 0)
+	GM.Panel(cancel, "contHigh")
+	cancel.text = GM.MakeFontString(cancel, GM.FONT_BOLD, 10, "text")
+	cancel.text:SetPoint("CENTER")
+	cancel.text:SetText("CANCEL")
+	cancel:SetScript("OnClick", function() d:Hide() end)
+end
+
 function S.FlagReload()
 	S.needReload = true
 	if ui then
@@ -174,6 +295,38 @@ local PROFILE_KEYS = {
 	"riskBudget", "minProfitMargin", "maxDaysToClear", "dataMaxAge",
 	"minimapAngle", "minimapHide", "tooltip",
 }
+
+-- stage: build the report body (description + diagnostics), hex it
+-- with the profile codec, store "id|hex" so the brain can regex it
+-- straight out of the SavedVariables file
+function StageReport(desc)
+	local id = format("gm-%d-%d", time(), math.random(100, 999))
+	local _, _, _, build = GetBuildInfo()
+	local ver = GetAddOnMetadata
+		and GetAddOnMetadata("GoblinMind", "Version") or "?"
+	local body = {
+		desc, "", "---", "### diagnostics",
+		"- addon: GoblinMind " .. tostring(ver),
+		"- client build: " .. tostring(build or "?"),
+		"- interface: 16001 (Forever)",
+		"- AH book: " .. (GM.AH and GM.AH.BookAge
+			and (GM.AH.BookAge() .. "s old") or "none"),
+		"- sniper hits: " .. #(GM.Sniper and GM.Sniper.hits or {}),
+		"", "recent lua errors:",
+	}
+	for _, e in ipairs(GM.db.errLog or {}) do
+		body[#body + 1] = "- " .. e
+	end
+	local payload = table.concat(body, "\n")
+	local title = strtrim(desc:gsub("\n.*", ""))
+	if title == "" then title = "In-game bug report" end
+	if #title > 80 then title = title:sub(1, 77) .. "..." end
+	GM.db.bugReports = GM.db.bugReports or {}
+	GM.db.bugReports[#GM.db.bugReports + 1] =
+		id .. "|" .. HexEnc(title .. "\n" .. payload)
+	return id
+end
+
 
 local function ExportProfile()
 	local t = {}
@@ -481,6 +634,18 @@ local function Build()
 	local hint = GM.MakeFontString(prof, GM.FONT, 9, "secondary")
 	hint:SetPoint("BOTTOMLEFT", 12, 6)
 	hint:SetText("export → copy the string · import → paste + IMPORT")
+
+	local bug = CreateFrame("Button", nil, prof)
+	bug:SetSize(110, 22)
+	bug:SetPoint("BOTTOMRIGHT", -12, 6)
+	GM.Panel(bug, "contHigh")
+	bug.text = GM.MakeFontString(bug, GM.FONT_BOLD, 10, "accent")
+	bug.text:SetPoint("CENTER")
+	bug.text:SetText("BUG REPORT")
+	bug:SetScript("OnClick", function()
+		BuildBugDialog()
+		bugD:Show()
+	end)
 
 	S.Relayout()
 end

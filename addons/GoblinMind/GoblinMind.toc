@@ -43,4 +43,6 @@ SniperUI.lua
 Settings.lua
 ItemInput.lua
 Tooltip.lua
+Gathering.lua
+TaskListUI.lua
 Minimap.lua

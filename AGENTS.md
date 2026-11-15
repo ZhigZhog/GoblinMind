@@ -9,7 +9,10 @@ self-owned Blizzard-API pipeline later.
   is the complete v0.1 functional map; `WoWVault\tsm-subsumption-plan.md`
   is the 14-part path to full TSM replacement; `WoWVault\phase-1-implementation.md`
   is the Phase-1 (spine) megaplan; theme reference is
-  `WoWVault\tsm-theme-palette.md`.
+  `WoWVault\tsm-theme-palette.md`; `WoWVault\gm-api-reference.md`
+  is the internal helper/widget API surface — CHECK SIGNATURES THERE
+  before calling shared helpers (`GM.Label` does NOT exist; it's
+  `GM.MakeFontString(parent, template, size, colorKey)`).
 - Target client: `E:\Battle.net\World of Warcraft\_forever_`
   ("Forever" flavor, **interface `16001`** — 1.60.x; modern-era API set:
   AppData `NON_COMMODITY` tags confirm `C_AuctionHouse` exists).
@@ -23,6 +26,13 @@ self-owned Blizzard-API pipeline later.
   running while playing. **Auto-starts at login** via
   `Startup\goblinmind-brain-watch.bat` (launches `pythonw`, no console);
   `pythonw` + `&`/`disown` also works for a session-local watcher.
+  The watcher also scans `WTF\Account\*\SavedVariables\GoblinMind.lua`
+  each poll for staged bug reports (`gm-<ts>-<n>|<hex>` strings in
+  `GoblinMindSettings.bugReports`), files them to GitHub issues
+  (repo `ZhigZhog/GoblinMind`; token pulled from `git credential fill`
+  — no stored secret), records ids in `brain\filed_bugs.json`, and
+  re-emits so `GoblinMindDB.filedBugs` lets the addon clear them.
+  Manual one-shot: `python brain\goblin_brain.py bugs <AppData> <out...>`.
 - Layout: `brain\` (Python emit/watch CLI) · `addons\GoblinMind\`
   (shim addon, scaffolded — TSM-styled UI) · `addons\GoblinMind_Data\`
   (generated-data addon — `GoblinMindDB` from `goblin_brain.py emit`) · `scripts\`
