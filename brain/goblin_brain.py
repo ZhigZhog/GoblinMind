@@ -354,10 +354,25 @@ def cmd_emit(path, out_path):
     return len(items)
 
 
+_IDENT = re.compile(r'[A-Za-z_][A-Za-z0-9_]*\Z')
+
+
+def _enc_key(k):
+    # numeric keys index directly; identifier-safe names go bare;
+    # anything else ("Realm-Faction" scopes, hyphens, spaces) must
+    # be bracket-quoted — a bare CAMWOWUS1Realm5PvE-Alliance= breaks
+    # the whole generated file at load
+    if isinstance(k, int):
+        return f'[{k}]'
+    if _IDENT.fullmatch(str(k)):
+        return str(k)
+    return '["%s"]' % str(k).replace('\\', '\\\\').replace('"', '\\"')
+
+
 def _enc(v):
     if isinstance(v, dict):
         return '{' + ','.join(
-            (f'[{k}]={_enc(x)}' if isinstance(k, int) else f'{k}={_enc(x)}')
+            _enc_key(k) + '=' + _enc(x)
             for k, x in v.items() if x is not None
             and not (isinstance(x, float) and not math.isfinite(x))) + '}'
     # a bare nan/inf would emit 'inf'/'nan' — invalid Lua that
