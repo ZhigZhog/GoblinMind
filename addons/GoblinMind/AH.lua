@@ -299,7 +299,11 @@ function GM.AH.FullScan()
 	if not (C_AuctionHouse and C_AuctionHouse.ReplicateItems) then return end
 	-- never stack a second replicate pass on an in-flight collect —
 	-- a parallel Poll chain doubles the frame work the loop below does
-	if GM.AH.wantBook or GM.AH.collecting then return end
+	if GM.AH.wantBook or GM.AH.collecting then
+		GM.PlanQueue.ScanStatus(GM.CC("textDim")
+			.. "book collect already running|r")
+		return
+	end
 	-- ReplicateItems is heavy: this client enforces a script execution
 	-- limit AND TSM hook-processes every replicate scan too — 30s floor
 	if GM.AH.BookAge() < 30 then
@@ -539,7 +543,7 @@ function GM.AH.CollectBook()
 		GM.AH.lastBookN = n
 		GM.AH.bookKind = "replicate"
 		GM.AH.book, GM.AH.bookT = book, time()
-		GM.AH.SaveBook()
+		pcall(GM.AH.SaveBook) -- persistence failure must not kill completion
 		local items = 0
 		for _ in pairs(book) do items = items + 1 end
 		GM.PlanQueue.Progress(nil)
@@ -548,6 +552,50 @@ function GM.AH.CollectBook()
 		for _, cb in ipairs(GM.AH.bookSubs) do pcall(cb, rows, book) end
 		GM.PlanQueue.Refresh()
 	end
+	local function ProcessRow(idx)
+		local link = C_AuctionHouse.GetReplicateItemLink(idx)
+		-- one API call per row — the tuple serves stackSize, buyout
+		-- AND the field-map detection (was 3 calls/row before)
+		local t = { C_AuctionHouse.GetReplicateItemInfo(idx) }
+		local stackSize = t[3]
+		if link and not buyIdx then
+			-- Forever's tuple carries an extra field early on, so
+			-- buyout sits one slot past the retail map (11 vs 10).
+			-- Instead of hardcoding, find the itemID field — it is
+			-- always buyoutIndex + 7 in both layouts.
+			local id = tonumber(link:match("item:(%d+)"))
+			for j = #t, 11, -1 do
+				if id and t[j] == id then buyIdx = j - 7 break end
+			end
+			buyIdx = buyIdx or 10
+			GM.Print(GM.CC("textDim") ..
+				format("book field map: buyout at index %d|r", buyIdx))
+		end
+		local buyout = buyIdx and t[buyIdx] or nil
+		if link and stackSize and stackSize > 0 and buyout and buyout > 0 then
+			local id = tonumber(link:match("item:(%d+)"))
+			-- Forever convention is per-item buyout everywhere
+			-- (verified in item-search: qty=147 buyout=200 = 2s/bag);
+			-- replicate follows the same server store — do NOT
+			-- divide by stackSize or multi-stack items underprice
+			local unit = buyout
+			local own = id and ownSet[id .. ":" .. stackSize .. ":" .. buyout] or false
+			rows[#rows + 1] = { id = id, link = link, qty = stackSize, unit = unit,
+				buyout = buyout, key = link .. ":" .. stackSize .. ":" .. buyout, own = own }
+			if id then
+				local e = book[id]
+				if not e then
+					book[id] = { mb = unit, mbx = own and math.huge or unit, sup = stackSize, n = 1 }
+				else
+					if unit < e.mb then e.mb = unit end
+					if not own and unit < e.mbx then e.mbx = unit end
+					e.sup = e.sup + stackSize
+					e.n = e.n + 1
+				end
+			end
+		end
+	end
+	local lastI, stalled = 0, 0
 	local function Chunk()
 		if gen ~= collectGen then return end -- superseded by a newer collect
 		-- time-budgeted, not row-budgeted: a fixed chunk either froze
@@ -557,47 +605,10 @@ function GM.AH.CollectBook()
 		-- of seconds under AUTO.
 		local t0 = Now()
 		while i < n and Now() - t0 < 5 do
-			local link = C_AuctionHouse.GetReplicateItemLink(i)
-			-- one API call per row — the tuple serves stackSize, buyout
-			-- AND the field-map detection (was 3 calls/row before)
-			local t = { C_AuctionHouse.GetReplicateItemInfo(i) }
-			local stackSize = t[3]
-			if link and not buyIdx then
-				-- Forever's tuple carries an extra field early on, so
-				-- buyout sits one slot past the retail map (11 vs 10).
-				-- Instead of hardcoding, find the itemID field — it is
-				-- always buyoutIndex + 7 in both layouts.
-				local id = tonumber(link:match("item:(%d+)"))
-				for j = #t, 11, -1 do
-					if id and t[j] == id then buyIdx = j - 7 break end
-				end
-				buyIdx = buyIdx or 10
-				GM.Print(GM.CC("textDim") ..
-					format("book field map: buyout at index %d|r", buyIdx))
-			end
-			local buyout = buyIdx and t[buyIdx] or nil
-			if link and stackSize and stackSize > 0 and buyout and buyout > 0 then
-				local id = tonumber(link:match("item:(%d+)"))
-				-- Forever convention is per-item buyout everywhere
-				-- (verified in item-search: qty=147 buyout=200 = 2s/bag);
-				-- replicate follows the same server store — do NOT
-				-- divide by stackSize or multi-stack items underprice
-				local unit = buyout
-				local own = id and ownSet[id .. ":" .. stackSize .. ":" .. buyout] or false
-				rows[#rows + 1] = { id = id, link = link, qty = stackSize, unit = unit,
-					buyout = buyout, key = link .. ":" .. stackSize .. ":" .. buyout, own = own }
-				if id then
-					local e = book[id]
-					if not e then
-						book[id] = { mb = unit, mbx = own and math.huge or unit, sup = stackSize, n = 1 }
-					else
-						if unit < e.mb then e.mb = unit end
-						if not own and unit < e.mbx then e.mbx = unit end
-						e.sup = e.sup + stackSize
-						e.n = e.n + 1
-					end
-				end
-			end
+			-- a throwing row (bad index, transient buffer state) must
+			-- not kill the chain — the next chunk only schedules at
+			-- the bottom of this function
+			pcall(ProcessRow, i)
 			i = i + 1
 		end
 		if i < n then
@@ -614,6 +625,30 @@ function GM.AH.CollectBook()
 		end
 	end
 	Chunk()
+	-- watchdog: if the chunk chain died silently (i stops advancing),
+	-- restart it rather than leaving collect stuck forever
+	GM.After(3, function()
+		if gen ~= collectGen or not GM.AH.collecting then return end
+		local function Dog()
+			if gen ~= collectGen or not GM.AH.collecting then return end
+			if i == lastI then
+				stalled = stalled + 1
+				if stalled == 2 then
+					-- 10s no progress — revive the chain where it stopped
+					stalled = 0
+					GM.Print(GM.CC("warn") ..
+						format("book collect stalled at %d/%d — resuming|r", i, n))
+					Chunk()
+					return
+				end
+			else
+				lastI, stalled = i, 0
+			end
+			GM.After(5, Dog)
+		end
+		lastI = i
+		GM.After(5, Dog)
+	end)
 end
 
 -- Browse-all book build — the fallback when ReplicateItems is silently
@@ -660,7 +695,7 @@ local function FinishBrowse(b)
 	if GM.AH.BookAge() < 60 and GM.AH.bookKind == "replicate" then return end
 	GM.AH.bookKind = "browse"
 	GM.AH.book, GM.AH.bookT = b.book, time()
-	GM.AH.SaveBook()
+	pcall(GM.AH.SaveBook) -- persistence failure must not kill completion
 	local items = 0
 	for _ in pairs(b.book) do items = items + 1 end
 	GM.PlanQueue.Progress(nil)

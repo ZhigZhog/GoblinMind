@@ -303,8 +303,10 @@ end
 
 -- Realm key matching AppData scopes, e.g. "Normal-Alliance"
 function GM.Scope()
-	local realm = GetNormalizedRealmName() or GetRealmName()
-	local faction = UnitFactionGroup("player")
+	local realm = (GetNormalizedRealmName and GetNormalizedRealmName())
+		or (GetRealmName and GetRealmName()) or "Realm"
+	local faction = (UnitFactionGroup
+		and UnitFactionGroup("player")) or "?"
 	return realm .. "-" .. faction
 end
 
