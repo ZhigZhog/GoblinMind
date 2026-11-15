@@ -252,11 +252,17 @@ end
 local function Skinnable(tt)
 	for i = 1, tt:NumLines() do
 		local fs = _G["GameTooltipTextLeft" .. i]
-		local ok, lt = pcall(function() return fs and fs:GetText() end)
-		if ok and lt then
-			if lt:find("Requires Skinning") then return true, true end
-			if lt:find("Skinnable") then return true, false end
-		end
+		-- the text AND its indexing both live inside the pcall —
+		-- secret strings throw on :find, not just on read
+		local ok, hit = pcall(function()
+			local lt = fs and fs:GetText()
+			if not lt then return 0 end
+			if lt:find("Requires Skinning") then return 2 end
+			if lt:find("Skinnable") then return 1 end
+			return 0
+		end)
+		if ok and hit == 2 then return true, true end
+		if ok and hit == 1 then return true, false end
 	end
 	return false
 end
