@@ -173,9 +173,7 @@ end
 
 -- ============ pages: content builders ============
 
-local function ItemName(id)
-	return (GM.ItemName and GM.ItemName(id)) or ("item " .. id)
-end
+local ItemName = GM.ItemNameOr
 
 -- INVENTORY: owned items by value
 local function BuildInventory()
@@ -183,7 +181,7 @@ local function BuildInventory()
 	for id in pairs(GM.Inventory.Owned()) do
 		local c = GM.Inventory.Count(id)
 		local e = GM.ItemEntry(id)
-		local p = e and (e.mkt or e.p) or GM.TSMMarket(id)
+		local p = GM.Price("dbmarket", id)
 		local v = p and p * c.total or 0
 		total = total + v
 		tinsert(out, { id = id, v = v, cells = {
@@ -712,7 +710,7 @@ local function RefreshItem()
 		or "Interface\\Icons\\INV_Misc_QuestionMark")
 	itP.name:SetText(ItemName(id))
 	local e = GM.ItemEntry(id)
-	local m = e and (e.mkt or e.p) or GM.TSMMarket(id)
+	local m = GM.Price("dbmarket", id)
 	itP.mkt:SetText(m and ("market " .. GM.Money(m)) or "no market data")
 
 	-- account-global aggregates (itemStats is shared by design)

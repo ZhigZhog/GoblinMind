@@ -418,6 +418,15 @@ function GM.ItemIcon(id)
 	return icon
 end
 
+function GM.ItemNameOr(id)
+	return GM.ItemName(id) or ("item " .. id)
+end
+
+function GM.ItemLink(id)
+	if not id then return end
+	return select(2, GetInfo(id)) or nil
+end
+
 function GM.OnItemInfoLoaded(fn) tinsert(GM.itemWatch.cbs, fn) end
 
 local iw = CreateFrame("Frame")

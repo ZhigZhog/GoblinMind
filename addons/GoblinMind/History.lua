@@ -32,7 +32,7 @@ function GM.History.Snapshot()
 	if not items then return end
 	db.lastT = now
 	for id, e in pairs(items) do
-		local p = e.mkt or e.p
+		local p = GM.Price("dbmarket", id)
 		if p then
 			local s = db.items[id]
 			db.items[id] = GM.History.Prune(

@@ -232,15 +232,10 @@ local function DragonScaleID(ln)
 end
 
 local function Price(id)
-	local e = GM.ItemEntry and GM.ItemEntry(id)
-	local m = e and (e.mkt or e.p) or nil
-	if not m and GM.TSMMarket then m = GM.TSMMarket(id) end
-	return m
+	return GM.Price("dbmarket", id)
 end
 
-local function Name(id)
-	return (GM.ItemName and GM.ItemName(id)) or ("item " .. id)
-end
+local Name = GM.ItemNameOr
 
 -- append drop lines + node EV to a tooltip for a known node name
 local function Fill(tt, node)

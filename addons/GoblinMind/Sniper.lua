@@ -30,7 +30,7 @@ local function PriceCap(itemID, ops)
 	if cap and cap > 1e10 then return nil end
 	if cap then return cap end
 	local e = GM.ItemEntry(itemID)
-	local m = (e and (e.mkt or e.p)) or GM.TSMMarket(itemID)
+	local m = GM.Price("dbmarket", itemID)
 	local pct = tonumber(ops.belowPct) or 20
 	return m and floor(m * (1 - pct / 100)) or nil
 end
@@ -71,7 +71,7 @@ function N.Collect(rows)
 			end
 			if cap and c.unit <= cap then
 				local e = GM.ItemEntry(c.itemID)
-				local m = (e and (e.mkt or e.p)) or GM.TSMMarket(c.itemID)
+				local m = GM.Price("dbmarket", c.itemID)
 				c.cap = cap
 				c.pct = m and m > 0 and (c.unit / m * 100) or nil
 				c.name = GetInfo and GetInfo(c.itemID) or ("item " .. c.itemID)

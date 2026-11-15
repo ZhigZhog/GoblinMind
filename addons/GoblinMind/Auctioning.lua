@@ -136,10 +136,9 @@ end
 -- fresh (<300s). Returns unit or nil,reason + the inputs for display.
 function A.PreviewPost(id)
 	local aOps = GM.Groups.GetOps(id, "auctioning")
-	local entry = GM.ItemEntry(id)
-	if not (entry or GM.TSMMarket(id)) then return nil, "no price" end
+	if not GM.Price("dbmarket", id) then return nil, "no price" end
 	local normal = GM.Groups.EvalOp(aOps, "normal", id)
-		or (entry and entry.p) or GM.TSMMarket(id)
+		or GM.Price("dbmarket", id)
 	local cheapest = (GM.AH.BookAge() < 300)
 		and GM.AH.BookCheapest(id) or nil
 	local unit, why = A.PriceFor(aOps, id, normal, cheapest)
@@ -157,14 +156,8 @@ end
 
 -- ============ post scan ============
 
-local function ShortName(id)
-	local n = GetInfo and GetInfo(id)
-	return n or ("item " .. id)
-end
-
-local function ItemLink(id)
-	return select(2, GetInfo(id)) or nil
-end
+local ShortName = GM.ItemNameOr
+local ItemLink = GM.ItemLink
 
 -- `only` (optional): set of itemIDs to include — the bag-table page
 -- uses it to post a checked subset instead of every bag item
@@ -187,7 +180,7 @@ function A.PostScan(only)
 			-- unchecked on the bag table — not a skip, just excluded
 		elseif e.bound then
 			skipped[id] = "soulbound"
-		elseif not (GM.ItemEntry(id) or GM.TSMMarket(id)) then
+		elseif not GM.Price("dbmarket", id) then
 			skipped[id] = "no price"
 		else
 			tinsert(items, { id = id, qty = e.total, stacks = e.stacks })
@@ -214,9 +207,8 @@ function A.PostScan(only)
 	-- shared per-item decision → post steps appended to `steps`
 	local function ProcessItem(steps, it, cheapest)
 		local aOps = GM.Groups.GetOps(it.id, "auctioning")
-		local entry = GM.ItemEntry(it.id)
 		local normal = GM.Groups.EvalOp(aOps, "normal", it.id)
-			or (entry and entry.p) or GM.TSMMarket(it.id)
+			or GM.Price("dbmarket", it.id)
 		local unit, why = A.PriceFor(aOps, it.id, normal, cheapest)
 		if not unit then return nil, why or "?" end
 		local isComm = GM.AH.IsCommodity(it.id)

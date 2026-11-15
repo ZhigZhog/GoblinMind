@@ -112,7 +112,7 @@ local function Results()
 		local id = r.itemKey and r.itemKey.itemID
 		if id and PassFilters(id, r.minPrice) then
 			local e = GM.ItemEntry(id)
-			local mkt = (e and e.p) or GM.TSMMarket and GM.TSMMarket(id)
+			local mkt = GM.Price("dbmarket", id)
 			rows[#rows + 1] = {
 				id = id, name = GM.ItemName(id) or ("item " .. id),
 				qty = r.totalQuantity or 1, unit = r.minPrice,
@@ -140,7 +140,7 @@ local function MineRows()
 	for aid, a in pairs(GM.Inventory.auctions or {}) do
 		if a.itemID then
 			local e = GM.ItemEntry(a.itemID)
-			local mkt = (e and e.p) or GM.TSMMarket and GM.TSMMarket(a.itemID)
+			local mkt = GM.Price("dbmarket", a.itemID)
 			local cheap = GM.AH.BookCheapest
 				and GM.AH.BookCheapest(a.itemID)
 			local undercut = cheap and a.buyout and cheap < a.buyout or nil

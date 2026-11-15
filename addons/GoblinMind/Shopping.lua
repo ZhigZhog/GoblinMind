@@ -56,7 +56,7 @@ local function BuildRow(parent, i)
 		GameTooltip:SetOwner(row, "ANCHOR_RIGHT")
 		GameTooltip:SetItemByID(d.itemID)
 		local e = GM.ItemEntry(d.itemID)
-		local m = e and (e.mkt or e.p) or GM.TSMMarket(d.itemID)
+		local m = GM.Price("dbmarket", d.itemID)
 		if m and d.unit then
 			local pct = d.unit / m * 100
 			GameTooltip:AddLine(format("unit %s · %s of ref %s (%d%%)",
@@ -475,8 +475,7 @@ function S.Refresh()
 			row.icon:Hide()
 			row.name:SetPoint("LEFT", 42, 0)
 			row.buy:Show()
-			local m = S.itemID and ((GM.ItemEntry(S.itemID) or {}).mkt
-				or (GM.ItemEntry(S.itemID) or {}).p or GM.TSMMarket(S.itemID))
+			local m = S.itemID and GM.Price("dbmarket", S.itemID)
 			local cap = S.itemID and GM.Groups.EvalOp(
 				GM.Groups.GetOps(S.itemID, "shopping"), "maxPrice", S.itemID)
 			row.name:SetText("")
