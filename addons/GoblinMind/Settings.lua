@@ -62,6 +62,7 @@ bugEv:SetScript("OnEvent", ClearFiledBugs)
 -- the HexEnc codec it uses.
 local StageReport
 local bugD
+local ShowProfDialog
 local function BuildBugDialog()
 	if bugD then return end
 	local d = CreateFrame("Frame", nil, UIParent)
@@ -350,6 +351,131 @@ local function MergeInto(dst, src)
 	end
 end
 
+-- shared import path — panel feedback goes to ui.profMsg when the
+-- settings window exists; the dialog also shows inline errors
+local function ApplyImport(str)
+	-- snapshot reload-gated values so an import that changes them
+	-- surfaces the reload prompt
+	local before = {
+		embeddedTooltip = GM.db.tooltip and GM.db.tooltip.embeddedTooltip,
+		minimapAngle = GM.db.minimapAngle,
+	}
+	local ok, err = ImportProfile(str)
+	if ui and ui.profMsg then
+		ui.profMsg:SetText(ok
+			and GM.CC("pos") .. "applied — settings live now|r"
+			or GM.CC("err") .. (err or "import failed") .. "|r")
+	end
+	if ok then
+		S.Refresh()
+		if GM.minimapBtn then
+			GM.minimapBtn:SetShown(not GM.db.minimapHide)
+		end
+		for k, v in pairs(before) do
+			local now = k == "embeddedTooltip"
+				and GM.db.tooltip and GM.db.tooltip.embeddedTooltip
+				or GM.db[k]
+			if now ~= v then S.FlagReload() break end
+		end
+	end
+	return ok, err
+end
+
+-- profile string dialog — a real multiline box in a modal, not the
+-- cramped inline field. mode "export" shows the string (copy out),
+-- "import" evaluates the pasted text on IMPORT.
+local profD
+local function BuildProfDialog()
+	if profD then return end
+	local d = CreateFrame("Frame", "GoblinMindProfileDialog", UIParent)
+	d:SetSize(480, 330)
+	d:SetPoint("CENTER", 0, 40)
+	d:SetFrameStrata("FULLSCREEN_DIALOG")
+	d:SetToplevel(true)
+	d:SetMovable(true)
+	d:EnableMouse(true)
+	d:RegisterForDrag("LeftButton")
+	d:SetScript("OnDragStart", d.StartMoving)
+	d:SetScript("OnDragStop", d.StopMovingOrSizing)
+	GM.Panel(d, "contLow", "outlineVar")
+	tinsert(UISpecialFrames, "GoblinMindProfileDialog")
+	profD = d
+
+	d.title = GM.MakeFontString(d, GM.FONT_BOLD, 13, "accent")
+	d.title:SetPoint("TOPLEFT", 12, -10)
+
+	local eb = CreateFrame("EditBox", nil, d)
+	eb:SetPoint("TOPLEFT", 12, -34)
+	eb:SetSize(456, 230)
+	eb:SetAutoFocus(false)
+	eb:SetMultiLine(true)
+	eb:SetMaxLetters(0)
+	eb:SetFont(GM.FONT, 10, "")
+	eb:SetTextColor(GM.RGB("text"))
+	eb:SetTextInsets(6, 6, 6, 6)
+	local bg = eb:CreateTexture(nil, "BACKGROUND")
+	bg:SetAllPoints()
+	bg:SetColorTexture(GM.RGB("contLowest"))
+	eb:SetScript("OnEscapePressed", function() d:Hide() end)
+	d.eb = eb
+
+	d.msg = GM.MakeFontString(d, GM.FONT, 9, "textDim")
+	d.msg:SetPoint("TOPLEFT", eb, "BOTTOMLEFT", 2, -6)
+	d.msg:SetWidth(456)
+	d.msg:SetJustifyH("LEFT")
+
+	local ok = CreateFrame("Button", nil, d)
+	ok:SetSize(110, 22)
+	ok:SetPoint("BOTTOMRIGHT", -12, 10)
+	GM.Panel(ok, "accent")
+	ok.text = GM.MakeFontString(ok, GM.FONT_BOLD, 10, "contLowest")
+	ok.text:SetPoint("CENTER")
+	d.ok = ok
+	ok:SetScript("OnClick", function()
+		if d.mode == "export" then
+			d.eb:HighlightText()
+			d.eb:SetFocus()
+			return
+		end
+		local good, err = ApplyImport(d.eb:GetText() or "")
+		if good then
+			d:Hide()
+		else
+			d.msg:SetText(GM.CC("err")
+				.. (err or "import failed") .. "|r")
+		end
+	end)
+
+	local cancel = CreateFrame("Button", nil, d)
+	cancel:SetSize(80, 22)
+	cancel:SetPoint("BOTTOMRIGHT", ok, "BOTTOMLEFT", -8, 0)
+	GM.Panel(cancel, "contHigh")
+	cancel.text = GM.MakeFontString(cancel, GM.FONT_BOLD, 10, "text")
+	cancel.text:SetPoint("CENTER")
+	cancel.text:SetText("CANCEL")
+	cancel:SetScript("OnClick", function() d:Hide() end)
+end
+
+ShowProfDialog = function(mode)
+	BuildProfDialog()
+	local d = profD
+	d.mode = mode
+	if mode == "export" then
+		d.title:SetText("EXPORT PROFILE")
+		d.eb:SetText(ExportProfile())
+		d.eb:HighlightText()
+		d.ok.text:SetText("SELECT ALL")
+		d.msg:SetText("Ctrl+C copies — share the whole string")
+	else
+		d.title:SetText("IMPORT PROFILE")
+		d.eb:SetText("")
+		d.ok.text:SetText("IMPORT")
+		d.msg:SetText("paste a profile string, then IMPORT")
+	end
+	d:Show()
+	d.eb:SetFocus()
+end
+
 local function ImportProfile(str)
 	local raw = HexDec(str and str:gsub("%s", ""))
 	if not raw or raw:sub(1, 1) ~= "{" or raw:find("[%(]") then
@@ -586,15 +712,8 @@ local function Build()
 	expBtn.text = GM.MakeFontString(expBtn, GM.FONT_BOLD, 10, "contLowest")
 	expBtn.text:SetPoint("CENTER")
 	expBtn.text:SetText("EXPORT")
-	ui.profBox = EditBox(prof, 400)
-	ui.profBox:SetPoint("TOPLEFT", 12, -54)
-	ui.profBox:SetMultiLine(true)
-	ui.profBox:SetMaxLetters(0)
-	ui.profBox:SetHeight(52)
 	expBtn:SetScript("OnClick", function()
-		ui.profBox:SetText(ExportProfile())
-		ui.profBox:HighlightText()
-		ui.profBox:SetFocus()
+		ShowProfDialog("export")
 	end)
 	local impBtn = CreateFrame("Button", nil, prof)
 	impBtn:SetSize(90, 22)
@@ -608,32 +727,11 @@ local function Build()
 	ui.profMsg:SetWidth(180)
 	ui.profMsg:SetJustifyH("LEFT")
 	impBtn:SetScript("OnClick", function()
-		-- snapshot reload-gated values so an import that changes them
-		-- surfaces the reload prompt
-		local before = {
-			embeddedTooltip = GM.db.tooltip and GM.db.tooltip.embeddedTooltip,
-			minimapAngle = GM.db.minimapAngle,
-		}
-		local ok, err = ImportProfile(ui.profBox:GetText())
-		ui.profMsg:SetText(ok
-			and GM.CC("pos") .. "applied — settings live now|r"
-			or GM.CC("err") .. (err or "import failed") .. "|r")
-		if ok then
-			S.Refresh()
-			if GM.minimapBtn then
-				GM.minimapBtn:SetShown(not GM.db.minimapHide)
-			end
-			for k, v in pairs(before) do
-				local now = k == "embeddedTooltip"
-					and GM.db.tooltip and GM.db.tooltip.embeddedTooltip
-					or GM.db[k]
-				if now ~= v then S.FlagReload() break end
-			end
-		end
+		ShowProfDialog("import")
 	end)
 	local hint = GM.MakeFontString(prof, GM.FONT, 9, "secondary")
 	hint:SetPoint("BOTTOMLEFT", 12, 6)
-	hint:SetText("export → copy the string · import → paste + IMPORT")
+	hint:SetText("export → opens the string · import → paste in the dialog")
 
 	local bug = CreateFrame("Button", nil, prof)
 	bug:SetSize(110, 22)
