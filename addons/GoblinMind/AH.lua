@@ -267,11 +267,20 @@ function GM.AH.SaveBook()
 			mbx = e.mbx == math.huge and -1 or e.mbx,
 			sup = e.sup, n = e.n }
 	end
-	GM.db.book = { t = GM.AH.bookT, kind = GM.AH.bookKind, items = items }
+	-- books are keyed by realm-faction scope — a char on another
+	-- realm must not clobber this realm's AH picture
+	GM.db.books = GM.db.books or {}
+	local scope = GM.Scope()
+	GM.db.books[scope] = { t = GM.AH.bookT,
+		kind = GM.AH.bookKind, scope = scope, items = items }
+	-- migrate legacy flat book once, then drop it
+	GM.db.book = nil
 end
 
 function GM.AH.RestoreBook()
-	local s = GM.db and GM.db.book
+	local s = GM.db and (
+		(GM.db.books and GM.db.books[GM.Scope()])
+		or GM.db.book) -- legacy flat book: no scope = accept once
 	if not (s and s.items) then return end
 	local book = {}
 	for id, e in pairs(s.items) do

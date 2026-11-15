@@ -310,9 +310,11 @@ end
 
 -- Seconds since the newest upstream data the generated file used; nil if none.
 function GM.DataAge()
-	if GoblinMindDB and GoblinMindDB.dataAge then
-		return time() - GoblinMindDB.dataAge
-	end
+	local db = GoblinMindDB
+	if not db then return nil end
+	local r = db.realms and db.realms[GM.Scope()]
+	local t = (r and r.dataAge) or db.dataAge
+	if t then return time() - t end
 end
 
 -- Three separate clocks (matches TSM's desktop-status tooltip):
@@ -337,8 +339,14 @@ function GM.RegionAge()
 	end
 end
 
+-- realm-scoped items win; flat `items` is the single-realm/legacy
+-- fallback the brain also fills with the primary scope
 function GM.ItemEntry(itemID)
-	return GoblinMindDB and GoblinMindDB.items and GoblinMindDB.items[itemID]
+	local db = GoblinMindDB
+	if not db then return nil end
+	local r = db.realms and db.realms[GM.Scope()]
+	local t = (r and r.items) or db.items
+	return t and t[itemID]
 end
 
 -- TSM fallback price (copper) — the shim's honest baseline before the model lands.

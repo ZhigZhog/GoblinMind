@@ -568,64 +568,101 @@ def cmd_book(sv_arg, out_paths, root=None, feed=None):
         paths = [sv_arg]
     else:  # AppData path / feed root — glob SVs
         paths = sv_paths(sv_arg, root)
-    books, ledger_chars = [], []
+    # scope = addon's "Realm-Faction" — books merge only within the
+    # same scope; legacy flat books land under 'default'
+    books_by_scope, ledger_bychar = {}, {}
     for p in paths:
         sv = load_sv_tables(p,
                             ['GoblinMindSettings', 'GoblinMindLedger'])
-        b = (sv.get('GoblinMindSettings') or {}).get('book')
+        gms = sv.get('GoblinMindSettings') or {}
+        for scope, b in (gms.get('books') or {}).items():
+            if b and b.get('items'):
+                books_by_scope.setdefault(
+                    str(scope), []).append(b)
+        b = gms.get('book')
         if b and b.get('items'):
-            books.append(b)
-        led = (sv.get('GoblinMindLedger') or {}).get('byChar') or {}
-        ledger_chars.extend(led.values())
+            books_by_scope.setdefault(
+                str(b.get('scope') or 'default'), []).append(b)
+        ledger_bychar.update(
+            (sv.get('GoblinMindLedger') or {}).get('byChar') or {})
     now = time.time()
 
-    hist = load_book_hist()
-    for b in books:
-        snap_t = int(b.get('t') or now)
-        for iid, e in (b.get('items') or {}).items():
-            rec = hist.setdefault(str(int(iid)), [])
-            # idempotent — a re-run on the same flush must not
-            # double-count the snapshot
-            if not any(r and r[0] == snap_t for r in rec):
-                rec.append([snap_t, e.get('mb'), e.get('sup'),
-                            e.get('n')])
-            hist[str(int(iid))] = [
-                r for r in rec
-                if r and r[0] and now - r[0] < HIST_KEEP]
+    hist = load_book_hist()  # {scope: {iid: [[ts,mb,sup,n],...]}}
+    # migrate pre-scope history into 'default'
+    if hist and not any(isinstance(v, dict) for v in hist.values()):
+        hist = {'default': hist}
+    for scope, books in books_by_scope.items():
+        sh = hist.setdefault(scope, {})
+        for b in books:
+            snap_t = int(b.get('t') or now)
+            for iid, e in (b.get('items') or {}).items():
+                rec = sh.setdefault(str(int(iid)), [])
+                # idempotent — a re-run on the same flush must not
+                # double-count the snapshot
+                if not any(r and r[0] == snap_t for r in rec):
+                    rec.append([snap_t, e.get('mb'), e.get('sup'),
+                                e.get('n')])
+                sh[str(int(iid))] = [
+                    r for r in rec
+                    if r and r[0] and now - r[0] < HIST_KEEP]
     save_book_hist(hist)
 
+    def _norm(s):
+        return re.sub(r'[^a-z0-9]', '', s.lower())
+
+    # velocity per scope — a char's sells attribute to the scope whose
+    # realm matches their char key ("Name-Realm" display form)
     vel = {}
-    for char in ledger_chars:
+    for ck, char in ledger_bychar.items():
+        crealm = ck.rsplit('-', 1)[-1] if '-' in ck else ''
         for tx in (char.get('transactions') or {}).values():
-            if (tx.get('ty') == 'sell'
-                    and now - (tx.get('t') or 0) < VEL_DAYS * 86400):
-                vel[int(tx['i'])] = vel.get(int(tx['i']), 0) \
-                    + int(tx.get('q') or 1)
+            if (tx.get('ty') != 'sell'
+                    or now - (tx.get('t') or 0) >= VEL_DAYS * 86400):
+                continue
+            targets = [s for s in books_by_scope
+                       if _norm(s.rsplit('-', 1)[0])
+                       == _norm(crealm)] or list(books_by_scope)
+            for s in targets:
+                v = vel.setdefault(s, {})
+                iid = int(tx['i'])
+                v[iid] = v.get(iid, 0) + int(tx.get('q') or 1)
 
-    # newest book per item defines the current listing picture
-    latest = {}
-    latest_t = 0
-    for b in sorted(books, key=lambda x: x.get('t') or 0):
-        latest_t = int(b.get('t') or latest_t)
-        for iid, e in (b.get('items') or {}).items():
-            latest[int(iid)] = e
-
-    items = {}
-    for iid, e in latest.items():
-        samples = [(r[0], r[1]) for r in hist.get(str(iid), [])
-                   if len(r) > 1 and r[0] and r[1]]
-        p = _market_value(samples, now)
-        items[iid] = {
-            'mb': e.get('mb'),
-            'mbx': None if e.get('mbx') == -1 else e.get('mbx'),
-            'sup': e.get('sup'),
-            'n': e.get('n'),
-            'p': p, 'mkt': p,
-            'vel': vel.get(iid),
+    realms = {}
+    for scope, books in books_by_scope.items():
+        # newest book per item defines the current listing picture
+        latest, latest_t = {}, 0
+        for b in sorted(books, key=lambda x: x.get('t') or 0):
+            latest_t = int(b.get('t') or latest_t)
+            for iid, e in (b.get('items') or {}).items():
+                latest[int(iid)] = e
+        items = {}
+        for iid, e in latest.items():
+            samples = [(r[0], r[1])
+                       for r in hist.get(scope, {}).get(str(iid), [])
+                       if len(r) > 1 and r[0] and r[1]]
+            p = _market_value(samples, now)
+            items[iid] = {
+                'mb': e.get('mb'),
+                'mbx': None if e.get('mbx') == -1 else e.get('mbx'),
+                'sup': e.get('sup'),
+                'n': e.get('n'),
+                'p': p, 'mkt': p,
+                'vel': vel.get(scope, {}).get(iid),
+            }
+        realms[scope] = {
+            'items': items,
+            'dataAge': latest_t or None,
+            'generated': int(now),
         }
 
+    # flat top-level mirror of the primary scope — keeps pre-realm
+    # consumers working (largest scope wins)
+    primary = max(realms, key=lambda s: len(realms[s]['items']),
+                  default=None)
+    flat = realms[primary] if primary else {}
+
     db = {
-        'version': 2,
+        'version': 3,
         'source': 'bookfeed',
         'filedBugs': [{'id': rid, 'url': url}
                       for rid, url in load_filed().items()],
@@ -633,9 +670,10 @@ def cmd_book(sv_arg, out_paths, root=None, feed=None):
         # client computes time() - dataAge — must be the snapshot
         # TIMESTAMP (like the TSM emit's newest downloadTime), not
         # an age duration
-        'dataAge': latest_t or None,
+        'dataAge': flat.get('dataAge'),
         'feed': feed,
-        'items': items,
+        'realms': realms,
+        'items': flat.get('items', {}),
         # vendorBuy is static data scraped from TSM's own addon files —
         # resolve under the feed's WoW root (feeds.json `root`, or the
         # root derived from whichever path located the feed)
@@ -645,8 +683,10 @@ def cmd_book(sv_arg, out_paths, root=None, feed=None):
     }
     for out in out_paths:
         write_db(db, out)
-        LOG.info('book emit %d items (%d sv) -> %s',
-                 len(items), len(paths), out)
+        LOG.info('book emit %d scopes %d items (%d sv) -> %s',
+                 len(realms), sum(len(r['items'])
+                                for r in realms.values()),
+                 len(paths), out)
 
 
 # ---------- in-game bug reports -> GitHub ----------
