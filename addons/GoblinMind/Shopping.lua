@@ -251,7 +251,11 @@ end
 -- ============ shop scan ============
 
 function S.ShopScan()
+	-- the plan window targets items two ways: SetItem puts it on
+	-- PQ.itemID, SetScanPlan (post/cancel/craft plans) carries it on
+	-- plan.itemID — accept either or the scan looks dead
 	local id = GM.PlanQueue.itemID
+		or (GM.PlanQueue.plan and GM.PlanQueue.plan.itemID)
 	if not id then
 		S.Status(GM.CC("warn") .. "target an item first — /goblin [item]|r")
 		return
