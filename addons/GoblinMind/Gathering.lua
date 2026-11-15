@@ -169,6 +169,68 @@ local SKIN_BANDS = {
 	}},
 }
 
+-- family specials: name-pattern matched ADDITIVE rolls on top of the
+-- level band (scales roll alongside the leather). First match wins.
+-- minLvl/maxLvl gate level-split items; id="color" resolves a
+-- dragonscale color off the creature name at render time.
+local SKIN_SPECIALS = {
+	{ pats = { "deviate" }, drops = {
+		{ id = 6470, lo = 1, hi = 2, pct = 35 },  -- Deviate Scale
+		{ id = 6471, lo = 1, hi = 1, pct = 6 },   -- Perfect Deviate
+	}},
+	{ pats = { "devilsaur", "king mosh", "tyrant" }, drops = {
+		{ id = 15417, lo = 1, hi = 2, pct = 50 }, -- Devilsaur Leather
+	}},
+	{ pats = { "core hound", "corehound", "magmadar" }, drops = {
+		{ id = 17012, lo = 1, hi = 1, pct = 50 }, -- Core Leather
+	}},
+	{ pats = { "scorpid", "scorpion", "scorpashi", "scorpok" }, drops = {
+		{ id = 8154, lo = 1, hi = 2, pct = 15 },  -- Scorpid Scale
+	}},
+	{ pats = { "turtle", "snapjaw", "tortoise", "scaleback" }, drops = {
+		{ id = 8167, lo = 1, hi = 2, pct = 12 },  -- Turtle Scale
+	}},
+	{ pats = { "murloc", "gorloc" }, drops = {
+		{ id = 5784, lo = 1, hi = 2, pct = 12, maxLvl = 29 }, -- Slimy
+		{ id = 5785, lo = 1, hi = 2, pct = 15, minLvl = 30 }, -- Thick
+	}},
+	{ pats = { "raptor", "lashtail", "razormaw" }, drops = {
+		{ id = 4461, lo = 1, hi = 1, pct = 15 },  -- Raptor Hide
+	}},
+	{ pats = { "whelp", "drake", "dragon", "drakonid", "proto" },
+	  drops = {
+		{ id = 8165, lo = 1, hi = 1, pct = 15 },  -- Worn Dragonscale
+		{ id = "color", lo = 1, hi = 1, pct = 20 },
+	}},
+}
+
+local DRAGON_COLORS = {
+	{ "green", 15412 }, { "black", 15416 }, { "blue", 15415 },
+	{ "azure", 15415 }, { "red", 15414 }, { "chrom", 15467 },
+}
+
+-- name may arrive as a secret string under taint — all indexing
+-- stays inside the pcall
+local function SpecialFor(name)
+	if not name then return nil end
+	local ok, idx, ln = pcall(function()
+		local l = name:lower()
+		for i, s in ipairs(SKIN_SPECIALS) do
+			for _, p in ipairs(s.pats) do
+				if l:find(p, 1, true) then return i, l end
+			end
+		end
+	end)
+	if ok and idx then return idx, ln end
+	return nil
+end
+
+local function DragonScaleID(ln)
+	for _, c in ipairs(DRAGON_COLORS) do
+		if ln:find(c[1], 1, true) then return c[2] end
+	end
+end
+
 local function Price(id)
 	local e = GM.ItemEntry and GM.ItemEntry(id)
 	local m = e and (e.mkt or e.p) or nil
@@ -217,30 +279,43 @@ local function Fill(tt, node)
 	tt:Show()
 end
 
--- append the level-banded skin table to a corpse tooltip
-local function FillSkin(tt, lvl)
+-- append the level-banded skin table to a corpse tooltip; family
+-- specials (additive extra rolls) render above the band, EV sums both
+local function FillSkin(tt, lvl, name)
 	local band = SKIN_BANDS[#SKIN_BANDS]
 	for _, b in ipairs(SKIN_BANDS) do
 		if (lvl or 999) <= b.max then band = b break end
 	end
+	local specIdx, ln = SpecialFor(name)
 	local total, anyPrice = 0, false
 	tt:AddLine(" ")
 	tt:AddLine(GM.CC("secondary") .. "skinning"
 		.. (lvl and lvl > 0 and (" — lvl " .. lvl) or " yields")
 		.. "|r")
-	for _, d in ipairs(band.drops) do
-		local p = Price(d.id)
+	local function Row(d, mark)
+		local id = d.id == "color" and (ln and DragonScaleID(ln))
+			or d.id
+		if not id then return end
+		if (d.minLvl and lvl and lvl < d.minLvl)
+			or (d.maxLvl and lvl and lvl > d.maxLvl) then return end
+		local p = Price(id)
 		anyPrice = anyPrice or p ~= nil
 		local qty = (d.lo + d.hi) / 2
 		total = total + (p or 0) * qty * d.pct / 100
 		local range = d.lo == d.hi and ("×" .. d.lo)
 			or format("×%d–%d", d.lo, d.hi)
 		tt:AddLine(
-			GM.CC("text") .. Name(d.id) .. "|r "
+			GM.CC(mark or "text") .. Name(id) .. "|r "
 			.. GM.CC("textDim") .. range
 			.. (d.pct < 100 and (" ~" .. d.pct .. "%") or "") .. "|r"
 			.. (p and ("  " .. GM.Money(p) .. " ea") or ""))
 	end
+	if specIdx then
+		for _, d in ipairs(SKIN_SPECIALS[specIdx].drops) do
+			Row(d, "accent")
+		end
+	end
+	for _, d in ipairs(band.drops) do Row(d) end
 	tt:AddLine(GM.CC("accent") .. "skin EV ≈ "
 		.. (total > 0 and GM.Money(total) or "?")
 		.. (anyPrice and "" or " (no price data)") .. "|r")
@@ -301,9 +376,9 @@ if GameTooltip then
 			local skin, shortSkill = Skinnable(tt)
 			if skin then
 				if not tt._gmSkinN or tt:NumLines() < tt._gmSkinN then
-					local okU, _, unit = pcall(tt.GetUnit, tt)
+					local okU, name, unit = pcall(tt.GetUnit, tt)
 					local lvl = okU and unit and UnitLevel(unit)
-					FillSkin(tt, lvl)
+					FillSkin(tt, lvl, okU and name)
 					if shortSkill then
 						tt:AddLine(GM.CC("err")
 							.. "skinning skill too low|r")
