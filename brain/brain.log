@@ -1470,3 +1470,22 @@ ValueError: cannot convert float NaN to integer
 2026-11-15 08:50:55,656 INFO  logging to D:\WoW Mods\brain\brain.log
 2026-11-15 08:51:06,754 INFO  book emit 1 scopes 4679 items (1 sv) -> D:/WoW Mods/addons/GoblinMind_Data/Data.lua
 2026-11-15 08:51:06,785 INFO  book emit 1 scopes 4679 items (1 sv) -> E:/Battle.net/World of Warcraft/_forever_/Interface/AddOns/GoblinMind_Data/Data.lua
+2026-11-15 08:51:22,487 DEBUG heartbeat — watching, last mtime=08:18:32
+2026-11-15 08:52:15,703 DEBUG heartbeat — watching, last mtime=08:18:32
+2026-11-15 08:52:37,612 INFO  book emit 0 items (1 sv) -> D:/WoW Mods/addons/GoblinMind_Data/Data.lua
+2026-11-15 08:52:37,613 INFO  book emit 0 items (1 sv) -> E:/Battle.net/World of Warcraft/_forever_/Interface/AddOns/GoblinMind_Data/Data.lua
+2026-11-15 08:52:38,851 INFO  book emit 1 scopes 4679 items (1 sv) -> D:/WoW Mods/addons/GoblinMind_Data/Data.lua
+2026-11-15 08:52:38,870 INFO  book emit 1 scopes 4679 items (1 sv) -> E:/Battle.net/World of Warcraft/_forever_/Interface/AddOns/GoblinMind_Data/Data.lua
+2026-11-15 08:56:23,907 DEBUG heartbeat — watching, last mtime=08:18:32
+2026-11-15 08:57:17,656 DEBUG heartbeat — watching, last mtime=08:18:32
+2026-11-15 08:59:05,684 INFO  book emit 1 scopes 4679 items (1 sv) -> D:/WoW Mods/addons/GoblinMind_Data/Data.lua
+2026-11-15 08:59:05,709 INFO  book emit 1 scopes 4679 items (1 sv) -> E:/Battle.net/World of Warcraft/_forever_/Interface/AddOns/GoblinMind_Data/Data.lua
+2026-11-15 08:59:09,881 INFO  book emit 0 items (1 sv) -> D:/WoW Mods/addons/GoblinMind_Data/Data.lua
+2026-11-15 08:59:09,882 INFO  book emit 0 items (1 sv) -> E:/Battle.net/World of Warcraft/_forever_/Interface/AddOns/GoblinMind_Data/Data.lua
+2026-11-15 08:59:45,211 INFO  logging to D:\WoW Mods\brain\brain.log
+2026-11-15 08:59:45,211 INFO  watching E:/Battle.net/World of Warcraft/_forever_/Interface/AddOns/TradeSkillMaster_AppHelper/AppData.lua
+2026-11-15 08:59:45,211 INFO  outputs: D:/WoW Mods/addons/GoblinMind_Data/Data.lua ; E:/Battle.net/World of Warcraft/_forever_/Interface/AddOns/GoblinMind_Data/Data.lua
+2026-11-15 08:59:45,211 INFO  poll=5s settle=20s
+2026-11-15 08:59:45,211 INFO  AppData touched (mtime=08:18:32 size=578812) — settling
+2026-11-15 08:59:57,622 INFO  book emit 1 scopes 4679 items (1 sv) -> D:/WoW Mods/addons/GoblinMind_Data/Data.lua
+2026-11-15 08:59:57,654 INFO  book emit 1 scopes 4679 items (1 sv) -> E:/Battle.net/World of Warcraft/_forever_/Interface/AddOns/GoblinMind_Data/Data.lua

@@ -40,10 +40,10 @@ function W.EditBox(parent, w, hint)
 	eb:SetTextColor(GM.RGB("text"))
 	eb:SetTextInsets(6, 4, 0, 0)
 	GM.Panel(eb, "contLowest")
-	eb:SetText(hint)
-	eb:SetTextColor(GM.RGB("textDim"))
+	eb:SetText(hint or "")
+	eb:SetTextColor(GM.RGB(hint and "textDim" or "text"))
 	eb:SetScript("OnEditFocusGained", function()
-		if eb:GetText() == hint then
+		if hint and eb:GetText() == hint then
 			eb:SetText("")
 			eb:SetTextColor(GM.RGB("text"))
 		end
