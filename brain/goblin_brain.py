@@ -222,6 +222,27 @@ def _first(rows, *keys):
                 return r[k]
 
 
+def load_vendor_buy(path):
+    """TSM ships a static vendor-sell table — items vendors stock with
+    their buy cost. vendorbuy isn't a registered TSM custom-price
+    source, so we can't query it through TSMAPI_FOUR; parse the Retail
+    table (Forever branch) straight out of LibTSMData instead."""
+    addons = os.path.dirname(os.path.dirname(path))
+    f = os.path.join(addons, 'TradeSkillMaster', 'LibTSMData',
+                     'Item', 'VendorSell.lua')
+    out = {}
+    try:
+        src = open(f, encoding='utf-8', errors='replace').read()
+    except OSError:
+        return out
+    m = re.search(r'VendorSell\.Retail\s*=\s*\{(.*?)\n\}', src, re.S)
+    if not m:
+        return out
+    for iid, cost in re.findall(r'\["i:(\d+)"\]\s*=\s*(\d+)', m.group(1)):
+        out[int(iid)] = int(cost)
+    return out
+
+
 def cmd_emit(path, out_path):
     chunks = read_chunks(path)
     items = {}          # itemID -> record
@@ -319,6 +340,7 @@ def cmd_emit(path, out_path):
         'realmAge': realm_age,    # realm-scope chunks only (≈ TSM "Realm Data")
         'regionAge': region_age,  # region-scope chunks only (≈ TSM "Region Data")
         'items': items,
+        'vendorBuy': load_vendor_buy(path),  # TSM VendorSell.Retail → id=cost
     }
 
     def enc(v):

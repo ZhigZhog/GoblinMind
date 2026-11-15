@@ -57,6 +57,7 @@ local function BuyData()
 			local e = id and GM.ItemEntry(id)
 			local mkt = (e and e.p) or (id and GM.TSMMarket and GM.TSMMarket(id))
 			local flip = unit and mkt and not info.hasExtendedCost
+				and info.numAvailable ~= -1 and info.numAvailable ~= 0
 				and unit < mkt * 0.85
 			rows[#rows + 1] = {
 				index = i, id = id,
@@ -84,7 +85,8 @@ local function SellData()
 	for _, s in ipairs(GM.Banking.BagSlots()) do
 		if s.itemID and info then
 			local _, _, q, _, _, _, _, _, _, _, sell = info(s.itemID)
-			if q == 0 and sell and sell > 0 then
+			if q == 0 and sell and sell > 0
+				and not GM.Vendoring.IsBlacklisted(s.itemID) then
 				rows[#rows + 1] = {
 					bag = s.bag, slot = s.slot, id = s.itemID,
 					qty = s.count, val = sell * s.count,
@@ -251,6 +253,7 @@ local function Build()
 	ui.rows = {}
 	for i = 1, VISIBLE do
 		local row = CreateFrame("Button", nil, host)
+		row:RegisterForClicks("AnyUp")
 		row:SetSize(528, ROW_H - 2)
 		row:SetPoint("TOPLEFT", 0, -((i - 1) * ROW_H))
 		row.bg = row:CreateTexture(nil, "BACKGROUND")
@@ -335,7 +338,7 @@ function VU.Refresh()
 	ui.empty:SetShown(#rows == 0)
 	ui.foot:SetText(ui.page == "buy"
 		and "flips sort first — vendor price < 85% of market · click BUY = one stack"
-		or ui.page == "sell" and "one stack per SELL click — click-per-step"
+		or ui.page == "sell" and "one stack per SELL click · right-click row = blacklist"
 		or "sold items can be bought back until you log out")
 
 	local maxScroll = math.max(0, #rows - VISIBLE)
@@ -377,6 +380,12 @@ function VU.Refresh()
 				row.act:SetScript("OnClick", function()
 					if MerchantOpen() and UseItem then
 						pcall(UseItem, bag, slot)
+						VU.Refresh()
+					end
+				end)
+				row:SetScript("OnClick", function(_, btn)
+					if btn == "RightButton" then
+						GM.Vendoring.BlacklistToggle(r.id)
 						VU.Refresh()
 					end
 				end)

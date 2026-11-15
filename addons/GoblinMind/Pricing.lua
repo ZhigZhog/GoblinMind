@@ -28,6 +28,12 @@ function GM.Price(key, itemID)
 	if key == "dbregionsalepercent" then
 		return entry and entry.rsalep and entry.rsalep / 1000 or nil
 	end
+	if key == "vendorbuy" then
+		-- lives on the DB, not per-item — emitted from TSM's
+		-- VendorSell.Retail table
+		local vb = GoblinMindDB and GoblinMindDB.vendorBuy
+		return vb and vb[itemID] or nil
+	end
 	local field = KEYMAP[key]
 	local v = entry and field and entry[field]
 	if v == nil and (key == "dbmarket" or key == "marketvalue") then
@@ -60,7 +66,12 @@ local SRC = {
 	dbregionsalepercent = function(id) return GM.Price("dbregionsalepercent", id) end,
 	numauctions         = function(id) return ef(id, "sup") end,
 	vendorsell          = function(id) return GetInfo and select(11, GetInfo(id)) or nil end,
-	vendorbuy           = function() return nil end, -- no reliable source on Forever
+	vendorbuy           = function(id)
+		-- emitted by the brain from TSM's VendorSell.Retail table —
+		-- the TSM4 custom-price API doesn't register 'vendorbuy'
+		local vb = GoblinMindDB and GoblinMindDB.vendorBuy
+		return vb and vb[id] or nil
+	end,
 	numinventory        = function(id) return GM.Inventory.Count(id).total end,
 	-- accounting-derived — real values arrive with the ledger (M1.B)
 	avgbuy              = function(id) return GM.Ledger and GM.Ledger.Avg(id, "buy") end,

@@ -40,7 +40,8 @@ function V.BuyScan()
 			local unit = info and info.stackCount and info.stackCount > 0
 				and info.price and info.price / info.stackCount
 			if unit and not info.hasExtendedCost
-				and info.numAvailable ~= 0 and unit < e.p * 0.85 then
+				and info.numAvailable ~= 0 and info.numAvailable ~= -1
+				and unit < e.p * 0.85 then
 				local qty = info.stackCount
 				-- sub-copper units (arrows etc.) floor to 0c — show
 				-- stack-vs-stack instead: honest at every price level
@@ -56,6 +57,23 @@ function V.BuyScan()
 	return steps
 end
 
+-- user-managed sell blacklist: /goblin vendor blacklist <item>, or
+-- right-click a row on the vendor window's SELL tab
+function V.IsBlacklisted(itemID)
+	local bl = GoblinMindSettings and GoblinMindSettings.vendorBlacklist
+	return bl and bl[itemID] or false
+end
+
+function V.BlacklistToggle(itemID)
+	GoblinMindSettings.vendorBlacklist =
+		GoblinMindSettings.vendorBlacklist or {}
+	local bl = GoblinMindSettings.vendorBlacklist
+	bl[itemID] = not bl[itemID] or nil
+	GM.Print((bl[itemID] and "vendor blacklist: +" or "vendor blacklist: -")
+		.. GM.ItemName(itemID))
+	return bl[itemID]
+end
+
 -- scan bags: poor-quality items in groups flagged autoSell
 function V.SellScan()
 	local steps = {}
@@ -68,7 +86,8 @@ function V.SellScan()
 					local info = C_Item and C_Item.GetItemInfo or GetItemInfo
 					local _, _, quality, _, _, _, _, _, _, _, sell =
 						info and info(s.itemID)
-					if quality == 0 and sell and sell > 0 then
+					if quality == 0 and sell and sell > 0
+						and not V.IsBlacklisted(s.itemID) then
 						tinsert(steps, { kind = "vendsell",
 							itemID = s.itemID, qty = s.count,
 							name = GM.ItemName(s.itemID),
@@ -100,7 +119,18 @@ end
 
 local function DoBuy(step)
 	if not MerchantOpen() then return nil, "merchant closed" end
-	BuyMerchantItem(step.index, step.qty)
+	local idx = step.index
+	if not idx and step.itemID then
+		-- plan-emitted steps carry no slot — find it live
+		for i = 1, GetMerchantNumItems() do
+			local link = GetMerchantItemLink(i)
+			if link and tonumber(link:match("item:(%d+)")) == step.itemID then
+				idx = i break
+			end
+		end
+	end
+	if not idx then return nil, "vendor doesn't stock it" end
+	BuyMerchantItem(idx, step.qty)
 	return true -- one purchase per click
 end
 

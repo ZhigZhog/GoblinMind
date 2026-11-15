@@ -1119,12 +1119,13 @@ function PQ.Refresh()
 				or step.kind == "mailcollect" and "COLLECT"
 				or step.kind == "destroy" and "VENDOR"
 				or step.kind == "vendsell" and "SELL"
-				or step.kind == "vendbuy" and "BUY" or "BUY")
+				or step.kind == "vendbuy" and "VENDOR" or "BUY")
 			if active then
 				row.act:SetText(GM.CC("accent") .. verb .. " ▶|r")
 			else
 				row.act:SetText(GM.CC(step.kind == "post" and "pos"
 					or step.kind == "cancel" and "warn"
+					or step.kind == "vendbuy" and "accent"
 					or step.kind == "skip" and "textDim" or "text") .. verb .. "|r")
 			end
 			if PQ.plan.mode then
@@ -1236,7 +1237,7 @@ function PQ.Refresh()
 				or kind == "mailcollect" and "COLLECT NEXT"
 				or kind == "destroy" and "VENDOR NEXT"
 				or kind == "vendsell" and "SELL NEXT"
-				or kind == "vendbuy" and "BUY NEXT"
+				or kind == "vendbuy" and "VENDOR NEXT"
 				or kind == "buy" and "BUY NEXT" or "EXECUTE NEXT STEP"
 			ui.exec.text:SetText(verb)
 		end

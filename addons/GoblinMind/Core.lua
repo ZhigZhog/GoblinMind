@@ -151,6 +151,24 @@ SlashCmdList.GOBLINMIND = function(msg)
 		return
 	end
 	if msg:sub(1, 6) == "vendor" then
+		local sub = strtrim(msg:sub(7))
+		if sub:sub(1, 9) == "blacklist" then
+			local arg = strtrim(sub:sub(10))
+			if arg == "" then
+				local n = 0
+				for id in pairs(GoblinMindSettings
+					and GoblinMindSettings.vendorBlacklist or {}) do
+					n = n + 1
+					GM.Print("  " .. GM.ItemName(id))
+				end
+				if n == 0 then GM.Print("vendor blacklist is empty") end
+			else
+				local pid = ParseItemRef(arg)
+				if pid then GM.Vendoring.BlacklistToggle(pid)
+				else GM.Print("usage: /goblin vendor blacklist [item|i:id|link]") end
+			end
+			return
+		end
 		GM.VendoringUI.Toggle()
 		return
 	end
