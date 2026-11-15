@@ -528,6 +528,21 @@ end
 
 -- ============ refresh ============
 
+-- professions THIS character knows — the recipe DB is account-wide
+-- so an alt's tradeskills otherwise masquerade as local. nil when
+-- the client can't answer (Forever API gaps) → show all as local.
+local function MyProfs()
+	if not (GetProfessions and GetProfessionInfo) then return nil end
+	local set = {}
+	for _, idx in ipairs({ GetProfessions() }) do
+		local name = GetProfessionInfo(idx)
+		if type(name) == "string" and name ~= "" then
+			set[name] = true
+		end
+	end
+	return set
+end
+
 local function ProfList()
 	-- distinct professions with recipe counts, "ALL" first — C.Prof
 	-- resolves via the recipe's category root, which also heals stored
@@ -538,13 +553,20 @@ local function ProfList()
 		counts[p] = (counts[p] or 0) + 1
 		total = total + 1
 	end
+	local mine = MyProfs()
 	local out = { { prof = nil, label = "ALL", n = total } }
 	for p, n in pairs(counts) do
-		tinsert(out, { prof = p, label = p, n = n })
+		-- alt-profession recipes stay browsable (account planning)
+		-- but sorted after the char's own and marked
+		local alt = mine and not mine[p]
+		tinsert(out, { prof = p, n = n, alt = alt,
+			label = p .. (alt and
+				(GM.CC("textDim") .. " · alt|r") or "") })
 	end
 	sort(out, function(a, b)
 		if a.prof == nil then return true end
 		if b.prof == nil then return false end
+		if (a.alt or false) ~= (b.alt or false) then return not a.alt end
 		return a.label < b.label
 	end)
 	-- user categories ride under the professions, TSM-group style
@@ -604,7 +626,9 @@ function CU.Refresh()
 			r._gmBg:SetColorTexture(GM.RGB(sel and "contHighest" or "contLowest"))
 			r.text:SetText(p.label)
 			r.text:SetTextColor(GM.RGB(p.cat
-				and (sel and "accent" or "warn") or (sel and "accent" or "text")))
+				and (sel and "accent" or "warn")
+				or (p.alt and not sel and "textDim")
+				or (sel and "accent" or "text")))
 			r.sub:SetText(p.n)
 			local key, cat = p.prof, p.cat
 			r:SetScript("OnClick", function(_, btn)
