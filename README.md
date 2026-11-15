@@ -1,100 +1,98 @@
 # GoblinMind
 
-An auction-house intelligence addon for **World of Warcraft: Forever**
-(client flavor `WOW_PROJECT_CAMELOT`, interface `16001`), currently riding
-on TradeSkillMaster's data feed while it grows toward full TSM replacement.
+A standalone auction-house intelligence addon for **World of Warcraft:
+Forever** (interface `16001`). TSM-styled dark UI, in-house price feed,
+click-per-step execution — no TSM required.
 
-**v0.1 (first alpha)** — phase 1: TSM AppData → generated price DB →
-plan window + side tooltip + click-per-step buyout/relist executor.
+**v0.1.0-alpha** — first public alpha. Expect rough edges; bug reports
+file themselves to the private tracker (see below).
+
+## Install
+
+1. Extract the zip into `Interface/AddOns/` — you should end up with
+   `Interface/AddOns/GoblinMind/` and `Interface/AddOns/GoblinMind_Data/`.
+2. Enable both addons at the character select screen.
+3. `/reload` (or relog), then open the auction house once — GoblinMind
+   builds its own price book from the live AH (FULL SCAN button in the
+   AH window, or it collects passively in the background).
+4. Prices populate as the book fills. Until the first scan completes,
+   price fields show `—` / `?` — that's normal.
+
+The shipped `GoblinMind_Data` includes a starter price book for
+**CAMWOWUS1Realm5PvE-Alliance**. Players on other realms/factions will
+build their own book on first use — books are stored per
+realm+faction and never mix.
 
 ## What it does
 
-- **Minimap button + plan window** — left-click the coin button (or
-  `/goblinmind`) to open a TSM-styled window: item header with icon, a
-  price/volume chart, a grouped stats column (value, trend, market,
-  signal, account), a step table, and a verdict summary strip.
-- **Price estimates in a side tooltip** — a Blizzard-styled tooltip
-  anchors beside the native item tooltip with the estimate, p10–p90 band,
-  deltas vs TSM market, historical trend, sells/day, supply, and
-  reset-opportunity signals.
-- **Deterministic solver** — reads the live auction book plus your bag
-  and bank contents, then emits a plan: buy the cheap asks, post
-  everything you own at the target price. Deposit fees, the AH cut, risk
-  budget, and sell velocity are all priced in. No profitable path → the
-  summary says *why* (empty book, cheapest ask above the ceiling, or the
-  risk budget can't cover the cheapest lot).
-- **Click-per-step execution** — EXECUTE performs one action, SKIP drops
-  a step (shrinking the post leg and repricing it to the AH's cheapest
-  ask), RESCAN re-reads the book. Commodity buys go through the staged
-  quote flow with an automatic per-lot buyout fallback. Nothing is
-  automated — every protected call is a hardware click.
+- **Plan window** (`/goblin`) — target an item by `/goblin [link]`,
+  drag-and-drop, or Alt-click. Price/volume chart, market stats, and a
+  step-by-step plan: buy cheap asks, post your stock at the target
+  price. EXECUTE performs one action per click — nothing is automated.
+- **Price tooltips** — market estimate, sell velocity, and supply on
+  every item tooltip.
+- **Sniper** (`/goblin snipe`) — one-click snapshots of the AH tail,
+  hits sorted by %-of-market, scan-then-buy flow.
+- **Shopping** (`/goblin shop`) — per-item ask books, grouped hits,
+  commodity multi-quantity buys, scan from the sniper.
+- **Crafting planner** — replaces the professions frame: searchable
+  recipes, material locations across bags/bank/mail/gbank/AH/alts,
+  craftable counts, profit vs buying the mats, queues and stock plans.
+- **Groups & operations** (`/goblin groups`, `/goblin ops`) —
+  TSM-style group trees with inheritable operations, protected groups
+  (warns before selling/posting their contents), TSM import/export.
+- **Ledger** (`/goblin ledger`) — buys/sells/cancels history, account
+  budgets with balance trends and income/spend pie charts.
+- **Session takeovers** — merchant, mail, bank, guild bank, AH, and
+  professions frames get GoblinMind surfaces (with a BLIZZARD UI button
+  to go back). Vendor buy/sell, OPEN ALL mail with COD protection,
+  permission-aware bank/gbank transfers, posting/cancelling with
+  unit/lot prices and undercut checks.
+- **Gathering tooltips** — mining/herb nodes show drop tables, per-drop
+  AH prices, gem probabilities, and expected node value. Skinnable
+  corpses show level-banded leather yields and family specials.
+- **Task list** (`/goblin tasks`) — floating to-do tracker for restock
+  and craft reminders.
 
-## Repository layout
+## Commands
+
+| Command | Opens |
+|---|---|
+| `/goblin` | plan window (also the minimap button) |
+| `/goblin shop` / `market` | shopping + my auctions |
+| `/goblin snipe` | sniper |
+| `/goblin crafts` | crafting planner |
+| `/goblin groups` / `ops` | group tree / operations |
+| `/goblin ledger` | accounts, charts, history |
+| `/goblin tasks` | task list float |
+| `/goblin bank` / `gbank` / `mail` / `vendor` / `ah` | session surfaces |
+| `/goblin settings` | profiles, import/export, bug reports |
+| `/goblin minimap` | toggle the minimap button |
+
+## Rules of the road
+
+- **Click-per-step only** — every protected Blizzard API call is bound
+  to a hardware click. No automation, no afk loops. That's a ToS
+  boundary we hold on purpose.
+- **Books are per realm+faction** — data from another scope never leaks
+  into your prices.
+- **Bug reports** — Settings has a report button; it stages a report in
+  SavedVariables (diagnostics + recent Lua errors) and the external
+  brain files it to the private issue tracker automatically.
+
+## For hackers (private repo)
 
 ```
 addons/GoblinMind/        the in-game addon (Lua)
 addons/GoblinMind_Data/   generated price database addon (Data.lua is emitted)
-brain/goblin_brain.py     AppData parser + emitter (stdlib-only Python)
+brain/goblin_brain.py     SV watcher + book emitter + bug-report filer
 scripts/                  deploy helpers (sync-addons.bat copies into AddOns)
-WoWVault/                 design notes — phase-1 architecture, Forever API
-                          surface, TSM theme palette, alpha code notes
+WoWVault/                 design notes — architecture, Forever API surface,
+                          TSM theme palette, code notes
 AGENTS.md                 project conventions + client quirks
 ```
 
-## Data pipeline
-
-```
-TSM AppHelper → AppData.lua (base-36 chunks)
-    → python brain/goblin_brain.py emit <AppData.lua> addons/GoblinMind_Data/Data.lua
-    → /reload → GoblinMind reads the generated DB
-```
-
-## Usage
-
-- `/goblinmind` or `/goblin` — toggle the plan window
-- `/goblin minimap` — show/hide the minimap button
-- `/goblin 1206` or `/goblin [item link]` — target an item
-- **Drag-and-drop** an item onto the header strip, or **Alt-click** one
-  (Alt is currently claimed by TSM — re-test at the replacement milestone)
-- **RESCAN** reads the live book · **EXECUTE** runs one step ·
-  **SKIP** drops a step (post leg shrinks and reprices to the AH)
-
-### Group import / export
-
-`/goblin groups` → ITEMS page → **IMP** / **EXP** (bottom of the GROUPS
-column). Import understands:
-
-- **TradeSkillMaster v4 group exports** — both the compressed
-  `TSM_EXPORT` string (decoded via TSM's embedded LibDeflate/LibSerialize
-  while TSM is installed) and the legacy comma format
-  (`group:Tailoring`Bags,i:4238,…`). Backtick path separators and ````
-  comma-escapes are converted to GoblinMind `a/b` paths automatically.
-- **Generic item lists** — comma/semicolon-separated `i:id` itemstrings
-  or bare itemIDs (`4238,2592,…`), the shape most addon and spreadsheet
-  exports produce. `p:` battle-pet strings are skipped.
-
-Export always emits the TSM-legacy format — paste it straight into
-TSM's group import and it round-trips. Operations are not exchanged
-(the TSM op schema doesn't map onto ours); Base Group items export as
-ungrouped.
-
-## Deploy
-
-`scripts\sync-addons.bat` — robocopies `addons\*` into the Forever
-client's `Interface\AddOns`. Junctions/symlinks are **not** honored for
-Lua loading — always copy.
-
-## Roadmap
-
-- **M1** — snapshot/watch pipeline → real time-series charts + volume
-- **M2** — LightGBM quantile baseline model (currently TSM market anchors)
-- **M3** — replace the TSM desktop/data pipeline with an in-house feed
-- **Later** — full TSM feature parity
-
-## Hard rules
-
-- One protected auction mutation per hardware click — Blizzard ToS
-  boundary.
-- Never guess retail API signatures; the Forever client's
-  `C_AuctionHouse` surface differs (`WoWVault/forever-auction-api.md` is
-  the verified map).
+Watcher: `python brain\goblin_brain.py watch forever -v --feed book`
+(feeds defined in `brain\feeds.json`). See `AGENTS.md` for the client
+quirks list — no `SetBackdrop`, secret strings under taint, non-retail
+price-field semantics, and more.
