@@ -35,12 +35,12 @@ local function Panel(f, x, y, w, h, title)
 	return p, t
 end
 
--- rotated-texture line segment (chart series)
-local function Line(parent, x1, y1, x2, y2, key)
+-- rotated-texture line segment (chart series / pie spokes)
+local function Line(parent, x1, y1, x2, y2, key, thick)
 	local t = parent:CreateTexture(nil, "ARTWORK")
 	local dx, dy = x2 - x1, y2 - y1
 	local len = math.max(1, sqrt(dx * dx + dy * dy))
-	t:SetSize(len, 1.5)
+	t:SetSize(len, thick or 1.5)
 	t:SetPoint("CENTER", parent, "BOTTOMLEFT", (x1 + x2) / 2, (y1 + y2) / 2)
 	t:SetRotation(atan2(dy, dx))
 	t:SetColorTexture(GM.RGB(key))
@@ -318,7 +318,11 @@ function OV.RefreshChart()
 	for _, a in ipairs(ui.art) do a:Hide() end
 	wipe(ui.art)
 	local chart = ui.chart
-	local w, h = chart:GetWidth() - 20, chart:GetHeight() - 46
+	-- plot inset: left gutter for money labels, bottom for the legend,
+	-- top clears the panel title — keeps every annotation in bounds
+	local gx, gy = 56, 24
+	local w = chart:GetWidth() - gx - 14
+	local h = chart:GetHeight() - gy - 30
 	local series = {}
 	series[#series + 1] = { name = "free", color = "textDim",
 		hist = GM.db.budgetFree }
@@ -349,36 +353,113 @@ function OV.RefreshChart()
 	end
 	ui.chartMsg:SetText("")
 	tMax = math.max(tMax, tMin + 600)
-	local zeroY = 30
-	tinsert(ui.art, Line(chart, 0, zeroY, w, zeroY, "outlineVar"))
-	-- axis labels: value scale on the left, time range underneath
-	local function AxisLabel(txt, x, y)
+	-- gridlines at ¼-steps with right-justified money labels in the
+	-- gutter — the eye gets scale anchors instead of one floating max
+	local function AxisLabel(txt, x, y, anchor)
 		local fs = GM.MakeFontString(chart, GM.FONT, 8, "secondary")
-		fs:SetPoint("BOTTOMLEFT", x, y)
+		fs:SetPoint(anchor or "BOTTOMLEFT", chart, "BOTTOMLEFT", x, y)
+		fs:SetJustifyH("LEFT")
 		fs:SetText(txt)
 		tinsert(ui.art, fs)
 	end
-	AxisLabel(GM.Money(vMax), 4, zeroY + h + 2)
-	AxisLabel(GM.Money(vMax / 2), 4, zeroY + h / 2 + 2)
-	AxisLabel(date("%H:%M", tMin), 4, 2)
-	local endTs = GM.MakeFontString(chart, GM.FONT, 8, "secondary")
-	endTs:SetPoint("BOTTOMRIGHT", -8, 2)
-	endTs:SetText(date("%H:%M", tMax))
-	tinsert(ui.art, endTs)
-	for _, s in ipairs(series) do
-		local hist = s.hist or {}
-		for i = 2, #hist do
-			local x1 = (hist[i - 1].t - tMin) / (tMax - tMin) * w
-			local y1 = zeroY + hist[i - 1].v / vMax * h
-			local x2 = (hist[i].t - tMin) / (tMax - tMin) * w
-			local y2 = zeroY + hist[i].v / vMax * h
-			tinsert(ui.art, Line(chart, x1, y1, x2, y2, s.color))
+	for i = 0, 4 do
+		local y = gy + h * i / 4
+		tinsert(ui.art, Line(chart, gx, y, gx + w, y,
+			i == 0 and "outlineVar" or "outline", 1))
+		if i > 0 then
+			AxisLabel(GM.Money(vMax * i / 4), gx - 4, y - 4, "BOTTOMRIGHT")
 		end
 	end
-	local hi = GM.MakeFontString(chart, GM.FONT, 8, "secondary")
-	hi:SetPoint("TOPRIGHT", -8, -16)
-	hi:SetText(GM.Money(vMax))
-	tinsert(ui.art, hi)
+	AxisLabel(date("%H:%M", tMin), gx, 4)
+	AxisLabel(date("%H:%M", tMax), gx + w, 4, "BOTTOMRIGHT")
+	-- step interpolation: balance is constant between samples, so draw
+	-- flat runs then vertical jumps — honest to the data and far
+	-- cleaner than diagonals slashing across empty time gaps
+	for _, s in ipairs(series) do
+		local hist = s.hist or {}
+		local px, py
+		for _, p in ipairs(hist) do
+			local x = gx + (p.t - tMin) / (tMax - tMin) * w
+			local y = gy + p.v / vMax * h
+			if px then
+				tinsert(ui.art, Line(chart, px, py, x, py, s.color))
+				if y ~= py then
+					tinsert(ui.art, Line(chart, x, py, x, y, s.color))
+				end
+			end
+			px, py = x, y
+		end
+	end
+end
+
+-- ============ flow pies ============
+
+-- sector fill: radial spokes at ~3px arc pitch — reads as a solid
+-- pie slice at these radii and needs no wedge textures
+local function PieSlice(parent, cx, cy, r, a1, a2, key, pool)
+	local step = 3 / math.max(1, r)
+	for a = a1, a2, step do
+		local c, s = cos(a), sin(a)
+		tinsert(pool, Line(parent, cx, cy, cx + c * r, cy + s * r, key, 4))
+	end
+end
+
+local function Pie(parent, cx, cy, r, title, entries, pool)
+	local fs = GM.MakeFontString(parent, GM.FONT_MED, 9, "secondary")
+	fs:SetPoint("CENTER", parent, "BOTTOMLEFT", cx, cy + r + 12)
+	local total = 0
+	for _, e in ipairs(entries) do total = total + e.v end
+	if total <= 0 then
+		fs:SetText(title .. " — none yet")
+		return
+	end
+	fs:SetText(title .. "  " .. GM.CC("textDim") .. GM.Money(total) .. "|r")
+	local a = math.pi / 2 -- start at 12 o'clock, sweep clockwise
+	for i, e in ipairs(entries) do
+		local a2 = a - e.v / total * 2 * math.pi
+		PieSlice(parent, cx, cy, r, a2, a, e.color, pool)
+		a = a2
+	end
+	-- labels right of the pie: color swatch, name, share + amount
+	local ly = cy + r - 8
+	for i, e in ipairs(entries) do
+		if e.v / total >= 0.015 then
+			local sw = parent:CreateTexture(nil, "ARTWORK")
+			sw:SetSize(7, 7)
+			sw:SetPoint("BOTTOMLEFT", parent, "BOTTOMLEFT", cx + r + 14, ly)
+			sw:SetColorTexture(GM.RGB(e.color))
+			tinsert(pool, sw)
+			local fs = GM.MakeFontString(parent, GM.FONT, 8, "text")
+			fs:SetPoint("BOTTOMLEFT", parent, "BOTTOMLEFT", cx + r + 26, ly)
+			fs:SetJustifyH("LEFT")
+			fs:SetText(format("%s  %s%s|r %s", e.name:sub(1, 10),
+				GM.CC("secondary"),
+				format("%.0f%%", e.v / total * 100),
+				GM.Money(e.v)))
+			tinsert(pool, fs)
+			ly = ly - 13
+		end
+	end
+end
+
+-- spending + income share per account — same color per account as
+-- the trend series so the legend reads across both visualizations
+function OV.RefreshPie()
+	if not ui or not ui.pieHost then return end
+	for _, a in ipairs(ui.pieArt) do a:Hide() end
+	wipe(ui.pieArt)
+	local spends, earns = {}, {}
+	for i, a in ipairs(GM.Budget.List()) do
+		local col = SERIES_COLORS[(i % #SERIES_COLORS) + 1]
+		if (a.spent or 0) > 0 then
+			spends[#spends + 1] = { name = a.name, v = a.spent, color = col }
+		end
+		if (a.income or 0) > 0 then
+			earns[#earns + 1] = { name = a.name, v = a.income, color = col }
+		end
+	end
+	Pie(ui.pieHost, 60, 164, 38, "INCOME", earns, ui.pieArt)
+	Pie(ui.pieHost, 60, 56, 38, "SPEND", spends, ui.pieArt)
 end
 
 -- ============ accounts ============
@@ -407,7 +488,7 @@ end
 
 local function Build()
 	if ui then return end
-	ui = { scroll = 0, art = {}, page = "activity", tables = {} }
+	ui = { scroll = 0, art = {}, pieArt = {}, page = "activity", tables = {} }
 	local f = CreateFrame("Frame", "GoblinMindOverview", UIParent)
 	f:SetSize(860, 560)
 	f:SetPoint("CENTER", 60, 20)
@@ -556,7 +637,7 @@ local function Build()
 	ui.legend = {}
 	for i = 1, 7 do
 		local fs = GM.MakeFontString(chart, GM.FONT, 9, "textDim")
-		fs:SetPoint("BOTTOMLEFT", 10 + (i - 1) * 58, 6)
+		fs:SetPoint("TOPLEFT", 58 + (i - 1) * 62, -20)
 		fs:SetJustifyH("LEFT")
 		ui.legend[i] = fs
 	end
@@ -641,6 +722,11 @@ local function Build()
 	ui.acctHint:SetPoint("BOTTOMLEFT", 10, 6)
 	ui.acctHint:SetText(
 		"kind: spend pool / reserve · group: items route to this account")
+
+	-- right column: income/spend share pies (rows stop at ~x=450)
+	ui.pieHost = CreateFrame("Frame", nil, accts)
+	ui.pieHost:SetPoint("TOPLEFT", 470, -8)
+	ui.pieHost:SetSize(234, 244)
 
 	-- ---- page: item detail (drill-in) ----
 	local itP = Panel(host, 0, 0, 724, 516, "ITEM")
@@ -815,6 +901,7 @@ function OV.Refresh()
 		ui.tFailed.paint()
 	elseif ui.page == "accounts" then
 		OV.RefreshChart()
+		OV.RefreshPie()
 		RefreshAccounts()
 	elseif ui.page == "item" then
 		RefreshItem()
