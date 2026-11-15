@@ -195,6 +195,10 @@ SlashCmdList.GOBLINMIND = function(msg)
 		GM.SniperUI.Toggle()
 		return
 	end
+	if msg:sub(1, 5) == "intel" then
+		GM.Intel.Dump()
+		return
+	end
 	if msg:sub(1, 5) == "tasks" then
 		GM.TaskListUI.Toggle()
 		return

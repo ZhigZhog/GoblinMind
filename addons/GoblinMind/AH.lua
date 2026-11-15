@@ -580,8 +580,18 @@ function GM.AH.CollectBook()
 			-- divide by stackSize or multi-stack items underprice
 			local unit = buyout
 			local own = id and ownSet[id .. ":" .. stackSize .. ":" .. buyout] or false
+			-- seller name for intel marks: the owner is the last
+			-- non-empty non-link string in the tuple (highestBidder
+			-- sits earlier and is usually empty on buyout lots)
+			local seller
+			for _, v in ipairs(t) do
+				if type(v) == "string" and v ~= "" and v ~= link then
+					seller = v
+				end
+			end
 			rows[#rows + 1] = { id = id, link = link, qty = stackSize, unit = unit,
-				buyout = buyout, key = link .. ":" .. stackSize .. ":" .. buyout, own = own }
+				buyout = buyout, key = link .. ":" .. stackSize .. ":" .. buyout, own = own,
+				seller = seller }
 			if id then
 				local e = book[id]
 				if not e then
