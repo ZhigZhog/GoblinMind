@@ -353,18 +353,57 @@ function C.MatPrice(itemID)
 		or (GetInfo and select(11, GetInfo(itemID)))
 end
 
--- cost to craft ONE output item (÷ numMade); nil if unknown recipe
-function C.MatCost(recipeID)
+-- SINGLE execution path for craft economics — every surface that
+-- answers "is this craft worth it" (market rows, craft window,
+-- task list, suggest qty) derives from this one calculation, so
+-- owned-mat coverage can't drift between windows.
+--
+-- Two costs per output unit:
+--   fullCost — buy EVERY mat (the old MatCost).
+--   effCost  — buy only what's missing after bags/bank/mail/gbank/
+--              owned auctions/alts (C.Available). With 80% coverage
+--              a buy-all loss can still be a real profit.
+-- profit/effProfit are per output unit; nil when unpriced (honest
+-- "no data", never fabricated).
+function C.Economics(recipeID, qty)
 	local r = GoblinMindCrafting and GoblinMindCrafting.recipes
 		and GoblinMindCrafting.recipes[recipeID]
 	if not r or not r.mats then return nil end
-	local total = 0
+	qty = max(1, qty or 1)
+	local numMade = r.numMade or 1
+	local units = qty * numMade
+	local price = GM.Price("dbmarket", r.itemID)
+	local priced, full, buy, owned, needT = true, 0, 0, 0, 0
+	local mats = {}
 	for _, m in ipairs(r.mats) do
 		local p = C.MatPrice(m.id)
-		if not p then return nil end -- unknown mat price → honest nil
-		total = total + p * m.qty
+		local need = (m.qty or 1) * qty
+		local have = C.Available(m.id)
+		local miss = max(0, need - have)
+		if not p then priced = false end
+		full = full + (p or 0) * need
+		buy = buy + (p or 0) * miss
+		owned = owned + min(need, have)
+		needT = needT + need
+		mats[#mats + 1] = { id = m.id, need = need, have = have,
+			miss = miss, price = p }
 	end
-	return floor(total / (r.numMade or 1))
+	local fullU = priced and floor(full / units) or nil
+	local effU = priced and floor(buy / units) or nil
+	return {
+		qty = qty, units = units, mats = mats, priced = priced,
+		price = price,
+		fullCost = fullU, effCost = effU,
+		profit = (priced and price) and price - fullU or nil,
+		effProfit = (priced and price) and price - effU or nil,
+		coverage = needT > 0 and owned / needT or 0,
+	}
+end
+
+-- cost to craft ONE output item (÷ numMade); nil if unknown recipe
+function C.MatCost(recipeID)
+	local e = C.Economics(recipeID, 1)
+	return e and e.fullCost
 end
 
 function C.RecipeForItem(itemID)
@@ -377,9 +416,8 @@ end
 function C.Profit(recipeID)
 	local r = GoblinMindCrafting.recipes[recipeID]
 	if not r then return nil end
-	local cost = C.MatCost(recipeID)
-	local p = GM.Price("dbmarket", r.itemID)
-	if cost and p then return p - cost, p, cost end
+	local e = C.Economics(recipeID, 1)
+	if e then return e.profit, e.price, e.fullCost end
 end
 
 -- mats a crafter can actually use RIGHT NOW: carried bags + live bank.
@@ -529,13 +567,14 @@ end
 function C.List()
 	local out = {}
 	for id, r in pairs(GoblinMindCrafting and GoblinMindCrafting.recipes or {}) do
-		local profit, p, cost = C.Profit(id)
+		local e = C.Economics(id, 1) or {}
 		local craftable = C.Craftable(id)
 		-- suggested queue qty: restock ops target a stock level; otherwise
 		-- profitable recipes queue what inventory covers (floor 1 — mats
-		-- can be bought, the queue emits the buy steps)
+		-- can be bought, the queue emits the buy steps). Effective profit
+		-- (owned-mat coverage applied) is the decision number.
 		local suggest = 0
-		if profit and profit > 0 then
+		if e.effProfit and e.effProfit > 0 then
 			local ops = GM.Groups.GetOps and GM.Groups.GetOps(r.itemID, "crafting") or {}
 			if ops.restock and (ops.restockQty or 0) > 0 then
 				suggest = max(0, ops.restockQty - C.Owned(r.itemID))
@@ -547,14 +586,17 @@ function C.List()
 			recipeID = id, itemID = r.itemID, name = r.name,
 			prof = r.prof, mats = r.mats, diff = r.diff,
 			nup = r.nup,
-			cost = cost, price = p, profit = profit,
+			cost = e.fullCost, price = e.price, profit = e.profit,
+			effCost = e.effCost, effProfit = e.effProfit,
+			coverage = e.coverage, eco = e,
 			craftable = craftable, craftableAll = C.CraftableAll(id),
 			suggest = suggest,
 		})
 	end
 	sort(out, function(a, b)
-		if (a.profit ~= nil) ~= (b.profit ~= nil) then return a.profit ~= nil end
-		if a.profit and b.profit and a.profit ~= b.profit then return a.profit > b.profit end
+		local ap, bp = a.effProfit, b.effProfit
+		if (ap ~= nil) ~= (bp ~= nil) then return ap ~= nil end
+		if ap and bp and ap ~= bp then return ap > bp end
 		return (a.name or "") < (b.name or "")
 	end)
 	return out

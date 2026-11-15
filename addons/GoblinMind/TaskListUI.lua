@@ -98,7 +98,7 @@ local function Tasks()
 	-- profitable craftable recipes
 	local crafts = 0
 	for _, r in ipairs(GM.Crafting.List()) do
-		if r.profit and r.profit > 0 and r.craftable and r.craftable > 0 then
+		if r.effProfit and r.effProfit > 0 and r.craftable and r.craftable > 0 then
 			crafts = crafts + 1
 		end
 	end

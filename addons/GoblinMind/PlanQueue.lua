@@ -417,6 +417,21 @@ local function Build()
 		GM.Panel(ui.skip, ui.skip:IsEnabled() and "contMedium" or "contLowest")
 	end)
 
+	ui.clear = CreateFrame("Button", nil, frame)
+	ui.clear:SetSize(64, 30)
+	ui.clear:SetPoint("RIGHT", ui.skip, "LEFT", -GAP, 0)
+	GM.Panel(ui.clear, "contMedium")
+	ui.clear.text = GM.MakeFontString(ui.clear, GM.FONT_MED, 11, "textDim")
+	ui.clear.text:SetAllPoints()
+	ui.clear.text:SetText("CLEAR")
+	ui.clear:SetScript("OnClick", function() PQ.ClearPlan() end)
+	ui.clear:SetScript("OnEnter", function()
+		if ui.clear:IsEnabled() then GM.Panel(ui.clear, "contHigh") end
+	end)
+	ui.clear:SetScript("OnLeave", function()
+		GM.Panel(ui.clear, ui.clear:IsEnabled() and "contMedium" or "contLowest")
+	end)
+
 	-- home overlay: the dashboard lives INSIDE this window — covers
 	-- the whole content region when home mode is on
 	ui.home = CreateFrame("Frame", nil, frame)
@@ -485,6 +500,8 @@ end
 -- isn't left showing rows/buttons for something already finished
 function PQ.ClearPlan()
 	PQ.plan = nil
+	PQ.stepIndex = 1
+	PQ.lossConfirm = nil
 	PQ.Refresh()
 end
 
@@ -1246,10 +1263,12 @@ function PQ.Refresh()
 		local canSkip = GM.AH.pendingConfirm ~= nil or PQ.stepIndex <= #PQ.plan.steps
 		ui.skip:SetEnabled(canSkip)
 		GM.Panel(ui.skip, canSkip and "contMedium" or "contLowest")
+		ui.clear:Show()
 	else
 		ui.sumEdge:SetColorTexture(GM.RGB("outlineVar"))
 		ui.summary2:SetText("")
 		ui.exec:Hide()
 		ui.skip:Hide()
+		ui.clear:Hide()
 	end
 end

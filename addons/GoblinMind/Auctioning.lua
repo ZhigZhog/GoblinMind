@@ -23,13 +23,20 @@ local function Pump()
 	local job = tremove(scanQ, 1)
 	if not job then return end
 	scanning = job
-	GM.AH.ScanItem(job.itemID, job.name, function(asks)
-		if scanning ~= job then return end -- stale callback
-		scanning = nil
-		job.done(asks)
-		Pump()
-	end)
-	-- no response within 5s: treat as an empty book and keep moving
+	-- SendSearchQuery can throw synchronously on Forever — pcall so the
+	-- watchdog below still fires and the queue doesn't jam on scanning
+	local ok, err = pcall(GM.AH.ScanItem, job.itemID, job.name,
+		function(asks)
+			if scanning ~= job then return end -- stale callback
+			scanning = nil
+			local ok, err = pcall(job.done, asks)
+			if not ok then
+				GM.Print(GM.CC("warn") .. "scan callback failed: "
+					.. tostring(err) .. "|r")
+			end
+			Pump()
+		end)
+	-- no response (or a thrown call) within 5s: empty book, keep moving
 	GM.After(5, function()
 		if scanning == job then
 			scanning = nil
@@ -37,6 +44,10 @@ local function Pump()
 			Pump()
 		end
 	end)
+	if not ok then
+		GM.Print(GM.CC("warn") .. "scan query failed: "
+			.. tostring(err) .. "|r")
+	end
 end
 
 local function ScanQueued(itemID, done)

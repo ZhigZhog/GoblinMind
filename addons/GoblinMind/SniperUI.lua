@@ -200,8 +200,8 @@ local function Build()
 
 	ui.foot = GM.MakeFontString(f, GM.FONT, 9, "textDim")
 	ui.foot:SetPoint("BOTTOMLEFT", 14, 10)
-	ui.foot:SetText("SCAN re-checks the item live, BUY/CONFIRM purchases "
-		.. "· x dismisses · deepest discount sorts first")
+	ui.foot:SetText("click row = scan/buy · shift-click = plan · x dismisses · "
+		.. "deepest discount sorts first")
 end
 
 -- ============ refresh ============
@@ -216,9 +216,20 @@ function SU.Refresh()
 	ui.auto.text:SetTextColor(GM.RGB(
 		(ui.autoOn or autoLive) and "accent" or "textDim"))
 
-	local hits = {}
+	-- collapse same-item listings into one row — hits are sorted
+	-- cheapest-first, so the first per itemID is the representative;
+	-- siblings count toward the ×N badge and resurface after it clears
+	local hits, seen = {}, {}
 	for _, h in ipairs(GM.Sniper.hits or {}) do
-		if not h.done then hits[#hits + 1] = h end
+		if not h.done then
+			local id = h.itemID or h.name
+			if seen[id] then
+				seen[id]._n = (seen[id]._n or 1) + 1
+			else
+				seen[id] = h
+				hits[#hits + 1] = h
+			end
+		end
 	end
 	local last = GM.Sniper.lastT
 	ui.status:SetText(format("%d hit%s%s%s", #hits, #hits == 1 and "" or "s",
@@ -241,7 +252,9 @@ function SU.Refresh()
 			row:Show()
 			row.tipID = h.itemID
 			row.icon:SetTexture(h.itemID and GM.ItemIcon(h.itemID) or 134400)
-			row.name:SetText(h.name or GM.ItemName(h.itemID) or "?")
+			row.name:SetText((h.name or GM.ItemName(h.itemID) or "?")
+				.. (h._n and h._n > 1
+					and GM.CC("textDim") .. " ×" .. h._n .. "|r" or ""))
 			row.qty:SetText("×" .. (h.qty or 1))
 			row.unit:SetText(SM(h.unit or 0))
 			row.cap:SetText(SM(h.cap))
@@ -265,8 +278,15 @@ function SU.Refresh()
 				hit.done = true
 				SU.Refresh()
 			end)
-			row:SetScript("OnClick", function()
-				if h.itemID then GM.TargetItem(h.itemID) end
+			row:SetScript("OnClick", function(_, btn)
+				-- plain click runs the snipe flow — the hit exists to
+				-- be bought. Shift/right-click targets the planner.
+				if btn == "RightButton" or IsShiftKeyDown() then
+					if h.itemID then GM.TargetItem(h.itemID) end
+				else
+					GM.Shopping.BuyHit(hit)
+					SU.Refresh()
+				end
 			end)
 		else
 			row:Hide()

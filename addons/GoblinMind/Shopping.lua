@@ -294,6 +294,10 @@ end
 -- sniper hit: click 1 re-queries the item's book; click 2 buys the
 -- matching listing — the two clicks keep purchases hardware-driven
 function S.BuyHit(h)
+	if not GM.AH.open then
+		GM.Print(GM.CC("warn") .. "sniper needs the auction house open|r")
+		return
+	end
 	-- commodity hits stage a quote — the next click confirms it, but
 	-- only if the pending quote still belongs to this hit
 	if h.state == "staged" then
@@ -428,16 +432,19 @@ function S.Refresh()
 			row.name:SetPoint("LEFT", 26, 0)
 			row.name:SetText(((GM.ItemName and GM.ItemName(r.itemID)) or r.name or "?"))
 			-- profitable + mats on hand = the actionable rows
+			local ep = r.effProfit or r.profit
 			row.name:SetTextColor(GM.RGB(
-				r.profit and r.profit > 0 and (r.craftable > 0 and "accent" or "pos")
-				or r.profit and "err" or "textDim"))
+				ep and ep > 0 and (r.craftable > 0 and "accent" or "pos")
+				or ep and "err" or "textDim"))
 			row.qty:SetText(r.craftable and r.craftable > 0 and ("×" .. r.craftable) or "")
 			row.qty:SetTextColor(GM.RGB(r.craftable and r.craftable > 0 and "accent" or "textDim"))
-			row.unit:SetText(r.cost and GM.Money(r.cost) or "—")
-			row.pct:SetText(r.profit and format("%s %s%d%%|r",
-				GM.Money(r.profit), GM.CC("textDim"),
-				r.price and r.price > 0 and floor(r.profit / r.price * 100 + 0.5) or 0) or "—")
-			row.pct:SetTextColor(GM.RGB(r.profit and (r.profit >= 0 and "pos" or "err") or "textDim"))
+			-- effective cost: only the mats you'd still buy
+			row.unit:SetText((r.effCost or r.cost) and
+				GM.Money(r.effCost or r.cost) or "—")
+			row.pct:SetText(ep and format("%s %s%d%%|r",
+				GM.Money(ep), GM.CC("textDim"),
+				r.price and r.price > 0 and floor(ep / r.price * 100 + 0.5) or 0) or "—")
+			row.pct:SetTextColor(GM.RGB(ep and (ep >= 0 and "pos" or "err") or "textDim"))
 			row.seller:SetText(r.prof or "")
 			row.buy:Show()
 			row.buy.text:SetText(r.suggest and r.suggest > 0

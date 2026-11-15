@@ -655,15 +655,17 @@ function CU.Refresh()
 			else
 				r.skill:Hide()
 			end
-			-- verdict color: can-craft accent, profitable green, loss red
-			local nc = row.profit and (row.profit > 0
+			-- verdict color: can-craft accent, profitable green, loss red —
+			-- on EFFECTIVE profit (mats you already own don't count as cost)
+			local ep = row.effProfit or row.profit
+			local nc = ep and (ep > 0
 				and ((row.craftable or 0) > 0 and "accent" or "pos") or "err")
 				or "textDim"
 			r.name:SetTextColor(GM.RGB(nc))
-			r.profit:SetText(row.profit and
-				(row.profit > 0 and "+" or "") .. GM.Money(row.profit) or "—")
+			r.profit:SetText(ep and
+				(ep > 0 and "+" or "") .. GM.Money(ep) or "—")
 			r.profit:SetTextColor(GM.RGB(
-				row.profit and (row.profit > 0 and "pos" or "err") or "textDim"))
+				ep and (ep > 0 and "pos" or "err") or "textDim"))
 			-- on-hand vs raid-everything: bags 2 +5 = 2 craftable now,
 			-- +5 more's worth fetchable from bank/alts
 			local extra = (row.craftableAll or 0) - (row.craftable or 0)
@@ -699,8 +701,14 @@ function CU.Refresh()
 					row.cost and GM.Money(row.cost) or "?",
 					row.price and GM.Money(row.price) or "?",
 					row.profit and GM.Money(row.profit) or "?"))
+				if row.effProfit ~= row.profit then
+					tinsert(lines, format("with owned mats: cost %s · profit %s (%d%% covered)",
+						row.effCost and GM.Money(row.effCost) or "?",
+						row.effProfit and GM.Money(row.effProfit) or "?",
+						floor((row.coverage or 0) * 100)))
+				end
 				for _, m in ipairs(row.mats or {}) do
-					local have = GM.Crafting.Owned(m.id)
+					local have = GM.Crafting.Available(m.id)
 					tinsert(lines, format("  %s ×%d  have %d  @%s",
 						GM.ItemName(m.id) or ("item " .. m.id), m.qty, have,
 						GM.Money(GM.Crafting.MatPrice(m.id) or 0)))

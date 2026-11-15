@@ -106,6 +106,7 @@ local NODES = {
 	["Goldthorn"]        = { { id = 3821, lo = 1, hi = 4, pct = 100 } },
 	["Khadgar's Whisker"] = { { id = 3358, lo = 1, hi = 4, pct = 100 } },
 	["Wintersbite"]      = { { id = 3819, lo = 1, hi = 4, pct = 100 } },
+	["Dragon's Teeth"]  = { { id = 3819, lo = 1, hi = 4, pct = 100 } },
 	["Firebloom"]        = { { id = 4625, lo = 1, hi = 4, pct = 100 } },
 	["Purple Lotus"] = {
 		{ id = 8831, lo = 1, hi = 4, pct = 100 },
