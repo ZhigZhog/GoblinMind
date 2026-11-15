@@ -1489,3 +1489,5 @@ ValueError: cannot convert float NaN to integer
 2026-11-15 08:59:45,211 INFO  AppData touched (mtime=08:18:32 size=578812) — settling
 2026-11-15 08:59:57,622 INFO  book emit 1 scopes 4679 items (1 sv) -> D:/WoW Mods/addons/GoblinMind_Data/Data.lua
 2026-11-15 08:59:57,654 INFO  book emit 1 scopes 4679 items (1 sv) -> E:/Battle.net/World of Warcraft/_forever_/Interface/AddOns/GoblinMind_Data/Data.lua
+2026-11-15 09:00:44,873 INFO  book emit 1 scopes 4679 items (1 sv) -> D:/WoW Mods/addons/GoblinMind_Data/Data.lua
+2026-11-15 09:00:44,904 INFO  book emit 1 scopes 4679 items (1 sv) -> E:/Battle.net/World of Warcraft/_forever_/Interface/AddOns/GoblinMind_Data/Data.lua

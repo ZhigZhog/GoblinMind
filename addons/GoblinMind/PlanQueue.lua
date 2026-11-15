@@ -72,7 +72,7 @@ end
 -- grouped label/value rows for the stats column. Labels are dynamic
 -- where the source varies (live book vs DB snapshot) — ui.statLabel.
 local STAT_SECTIONS = {
-	{ "VALUE",   { "ref price", "ref ±15%", "vs TSM" } },
+	{ "VALUE",   { "ref price", "ref ±15%" } },
 	{ "TREND",   { "hist", "recent" } },
 	{ "MARKET",  { "min buy", "region/day", "units" } },
 	{ "SIGNAL",  { "reset" } },
@@ -1141,7 +1141,6 @@ function PQ.Refresh()
 	end
 	set("ref price", p and GM.Money(p))
 	set("ref ±15%", (entry and entry.p10 and entry.p90) and (GM.Money(entry.p10) .. "–" .. GM.Money(entry.p90)))
-	set("vs TSM", entry and pct(entry.p, market))
 	set("hist", (entry and entry.hist)
 		and (GM.Money(entry.hist) .. " " .. (pct(p, entry.hist) or "")))
 	set("recent", entry and pct(entry.recent, p))
