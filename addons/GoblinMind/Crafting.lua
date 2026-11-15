@@ -196,8 +196,25 @@ function C.CraftProbe(match)
 	end
 end
 
+-- linked/guild/NPC tradeskill frames show someone ELSE's recipes
+-- with learned=true — scanning one poisons the DB with professions
+-- nobody on the account has
+local function ForeignTradeskill()
+	if not C_TradeSkillUI then return false end
+	for _, n in ipairs({ "IsTradeSkillLinked", "IsNPCCrafting",
+						 "IsTradeSkillGuild" }) do
+		local f = C_TradeSkillUI[n]
+		if f then
+			local ok, v = pcall(f)
+			if ok and v then return true end
+		end
+	end
+	return false
+end
+
 local function Scan()
 	if not (C_TradeSkillUI and C_TradeSkillUI.GetFilteredRecipeIDs) then return end
+	if ForeignTradeskill() then return end
 	local ok, ids = pcall(C_TradeSkillUI.GetFilteredRecipeIDs)
 	if not ok or type(ids) ~= "table" then return end
 	-- GetBaseProfessionInfo LAGS the recipe list — at event time it
@@ -254,6 +271,22 @@ local function Scan()
 		end
 	end
 	if n > 0 then GM.Crafting.dirty = true end
+end
+
+-- drop every recipe tagged with a profession — repair tool for
+-- pre-guard captures (linked tradeskills) and abandoned alts
+function C.PurgeProf(name)
+	if not name or name == "" then return 0 end
+	local n = 0
+	for id, r in pairs(GoblinMindCrafting.recipes or {}) do
+		if type(r.prof) == "string"
+			and r.prof:lower() == name:lower() then
+			GoblinMindCrafting.recipes[id] = nil
+			n = n + 1
+		end
+	end
+	if n > 0 then C.dirty = true end
+	return n
 end
 
 -- craft bookkeeping: UNIT_SPELLCAST_* events are the truth. Each

@@ -108,6 +108,13 @@ SlashCmdList.GOBLINMIND = function(msg)
 		GM.Crafting.Debug(strtrim(msg:sub(11)))
 		return
 	end
+	if msg:sub(1, 10) == "craftpurge" then
+		local n = GM.Crafting.PurgeProf(strtrim(msg:sub(11)))
+		GM.Print(n > 0 and ("purged " .. n .. " recipes")
+			or "nothing purged — no recipes with that profession")
+		if GM.CraftingUI and GM.CraftingUI.Refresh then GM.CraftingUI.Refresh() end
+		return
+	end
 	if msg:sub(1, 10) == "craftprobe" then
 		GM.Crafting.CraftProbe(strtrim(msg:sub(11)))
 		return
