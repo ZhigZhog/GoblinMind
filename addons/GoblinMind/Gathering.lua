@@ -128,6 +128,47 @@ local NODES = {
 
 G.nodes = NODES
 
+-- skinning yields are level-banded, not per-mob: a corpse's tooltip
+-- says "Skinnable" (or "Requires Skinning (N)" when the skill is
+-- short) and the band table approximates the classic loot table.
+-- {id, lo, hi, pct} — same shape as node drops; pct is the share of
+-- total skin volume for that item.
+local SKIN_BANDS = {
+	{ max = 9, drops = {
+		{ id = 2934, lo = 1, hi = 3, pct = 65 },  -- Ruined Scraps
+		{ id = 2318, lo = 1, hi = 2, pct = 35 },  -- Light Leather
+		{ id = 783,  lo = 1, hi = 1, pct = 2 },   -- Light Hide
+	}},
+	{ max = 19, drops = {
+		{ id = 2318, lo = 1, hi = 3, pct = 80 },
+		{ id = 2319, lo = 1, hi = 2, pct = 15 },  -- Medium Leather
+		{ id = 783,  lo = 1, hi = 1, pct = 3 },
+	}},
+	{ max = 29, drops = {
+		{ id = 2319, lo = 1, hi = 3, pct = 60 },
+		{ id = 2318, lo = 1, hi = 2, pct = 30 },
+		{ id = 4234, lo = 1, hi = 2, pct = 10 },  -- Heavy Leather
+		{ id = 4232, lo = 1, hi = 1, pct = 3 },   -- Medium Hide
+	}},
+	{ max = 39, drops = {
+		{ id = 4234, lo = 1, hi = 3, pct = 65 },
+		{ id = 2319, lo = 1, hi = 2, pct = 25 },
+		{ id = 4304, lo = 1, hi = 2, pct = 10 },  -- Thick Leather
+		{ id = 4235, lo = 1, hi = 1, pct = 3 },   -- Heavy Hide
+	}},
+	{ max = 49, drops = {
+		{ id = 4304, lo = 1, hi = 3, pct = 65 },
+		{ id = 4234, lo = 1, hi = 2, pct = 25 },
+		{ id = 8170, lo = 1, hi = 2, pct = 10 },  -- Rugged Leather
+		{ id = 8169, lo = 1, hi = 1, pct = 3 },   -- Thick Hide
+	}},
+	{ max = 999, drops = {
+		{ id = 8170, lo = 1, hi = 3, pct = 65 },
+		{ id = 4304, lo = 1, hi = 2, pct = 30 },
+		{ id = 8171, lo = 1, hi = 1, pct = 4 },   -- Rugged Hide
+	}},
+}
+
 local function Price(id)
 	local e = GM.ItemEntry and GM.ItemEntry(id)
 	local m = e and (e.mkt or e.p) or nil
@@ -176,6 +217,50 @@ local function Fill(tt, node)
 	tt:Show()
 end
 
+-- append the level-banded skin table to a corpse tooltip
+local function FillSkin(tt, lvl)
+	local band = SKIN_BANDS[#SKIN_BANDS]
+	for _, b in ipairs(SKIN_BANDS) do
+		if (lvl or 999) <= b.max then band = b break end
+	end
+	local total, anyPrice = 0, false
+	tt:AddLine(" ")
+	tt:AddLine(GM.CC("secondary") .. "skinning"
+		.. (lvl and lvl > 0 and (" — lvl " .. lvl) or " yields")
+		.. "|r")
+	for _, d in ipairs(band.drops) do
+		local p = Price(d.id)
+		anyPrice = anyPrice or p ~= nil
+		local qty = (d.lo + d.hi) / 2
+		total = total + (p or 0) * qty * d.pct / 100
+		local range = d.lo == d.hi and ("×" .. d.lo)
+			or format("×%d–%d", d.lo, d.hi)
+		tt:AddLine(
+			GM.CC("text") .. Name(d.id) .. "|r "
+			.. GM.CC("textDim") .. range
+			.. (d.pct < 100 and (" ~" .. d.pct .. "%") or "") .. "|r"
+			.. (p and ("  " .. GM.Money(p) .. " ea") or ""))
+	end
+	tt:AddLine(GM.CC("accent") .. "skin EV ≈ "
+		.. (total > 0 and GM.Money(total) or "?")
+		.. (anyPrice and "" or " (no price data)") .. "|r")
+	tt:Show()
+end
+
+-- a corpse tooltip is skinnable when any line carries the client's
+-- marker text; returns true plus whether the skill is short
+local function Skinnable(tt)
+	for i = 1, tt:NumLines() do
+		local fs = _G["GameTooltipTextLeft" .. i]
+		local ok, lt = pcall(function() return fs and fs:GetText() end)
+		if ok and lt then
+			if lt:find("Requires Skinning") then return true, true end
+			if lt:find("Skinnable") then return true, false end
+		end
+	end
+	return false
+end
+
 -- game-object tooltips have no data-type event — poll the first
 -- line on a throttle and inject once per node-text change
 if GameTooltip then
@@ -203,9 +288,30 @@ if GameTooltip then
 				Fill(tt, text)
 				tt._gmNodeN = tt:NumLines()
 			end
+			tt._gmSkinN = nil
 		else
 			tt._gmNodeN = nil
+			-- not a node — check for a skinnable corpse (unit tooltip)
+			local skin, shortSkill = Skinnable(tt)
+			if skin then
+				if not tt._gmSkinN or tt:NumLines() < tt._gmSkinN then
+					local okU, _, unit = pcall(tt.GetUnit, tt)
+					local lvl = okU and unit and UnitLevel(unit)
+					FillSkin(tt, lvl)
+					if shortSkill then
+						tt:AddLine(GM.CC("err")
+							.. "skinning skill too low|r")
+						tt:Show()
+					end
+					tt._gmSkinN = tt:NumLines()
+				end
+			else
+				tt._gmSkinN = nil
+			end
 		end
 	end)
-	GameTooltip:HookScript("OnHide", function(tt) tt._gmNodeN = nil end)
+	GameTooltip:HookScript("OnHide", function(tt)
+		tt._gmNodeN = nil
+		tt._gmSkinN = nil
+	end)
 end
