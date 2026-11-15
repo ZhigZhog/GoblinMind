@@ -1,11 +1,14 @@
 ## Interface: 16001
 ## Title: |cffe1ba00GoblinMind|r
-## Notes: Model-driven price estimates in tooltips and a guided, click-per-step auction plan queue. Phase 1: rides TradeSkillMaster data.
+## Notes: Model-driven price estimates in tooltips and a guided, click-per-step auction plan queue. Standalone — in-house book feed via the GoblinMind brain.
 ## Author: ZhigZhog
 ## Version: 0.1.0-alpha
 ## SavedVariables: GoblinMindSettings, GoblinMindPrices, GoblinMindLedger, GoblinMindGroups, GoblinMindHistory, GoblinMindCrafting
-## Dependencies: TradeSkillMaster, GoblinMind_Data
+## Dependencies: GoblinMind_Data
 
+Libs\LibStub.lua
+Libs\LibDeflate.lua
+Libs\LibSerialize.lua
 Theme.lua
 Core.lua
 FramePark.lua

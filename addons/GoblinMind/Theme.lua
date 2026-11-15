@@ -25,11 +25,11 @@ GM.C = {
 	warn           = "ff9707",
 }
 
--- TSM ships Montserrat in its Media folder; GoblinMind hard-depends on TSM,
--- so referencing the same files keeps typography identical with no copied assets.
-GM.FONT      = "Interface\\Addons\\TradeSkillMaster\\Media\\Montserrat-Regular.ttf"
-GM.FONT_MED  = "Interface\\Addons\\TradeSkillMaster\\Media\\Montserrat-Medium.ttf"
-GM.FONT_BOLD = "Interface\\Addons\\TradeSkillMaster\\Media\\Montserrat-SemiBold.ttf"
+-- Montserrat is vendored in Media/ (copied from TSM — same license,
+-- SIL OFL) so the addon renders with or without TSM installed.
+GM.FONT      = "Interface\\Addons\\GoblinMind\\Media\\Montserrat-Regular.ttf"
+GM.FONT_MED  = "Interface\\Addons\\GoblinMind\\Media\\Montserrat-Medium.ttf"
+GM.FONT_BOLD = "Interface\\Addons\\GoblinMind\\Media\\Montserrat-SemiBold.ttf"
 
 function GM.RGB(key)
 	local hex = GM.C[key] or GM.C.text

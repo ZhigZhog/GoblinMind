@@ -1,8 +1,13 @@
 # WoW Mods — agent notes
 
-Workspace for **GoblinMind**: an out-of-game price model + in-game
-shim addon riding on TradeSkillMaster in phase 1, migrating to a
-self-owned Blizzard-API pipeline later.
+Workspace for **GoblinMind**: a standalone price-model + in-game
+auction/crafting addon. Phase 1 rode TradeSkillMaster; **Part 14
+cutover (done 2026-11-15) removed the hard dependency** — addon loads
+with or without TSM. Fonts vendored in `addons\GoblinMind\Media\`
+(Montserrat), LibStub/LibDeflate/LibSerialize vendored in `Libs\` for
+group import/export. Guarded `TSMAPI_FOUR` calls remain as optional
+fallbacks (`GM.TSMMarket`, `destroy` source) and go nil without TSM.
+Primary data = the in-house book feed below.
 
 - **All notes live in `WoWVault\`** (Obsidian vault). Read
   `WoWVault\phase-1-architecture.md` first; `WoWVault\code-notes-alpha.md`
