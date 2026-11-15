@@ -471,13 +471,7 @@ local function RefreshAccounts()
 		local a = list[i]
 		if a then
 			row:Show()
-			row.name:SetText(a.name)
-			row.kind.text:SetText(GM.Budget.KINDS[a.kind])
-			row.grp.text:SetText(a.group or "—")
-			row.grp.text:SetTextColor(GM.RGB(a.group and "accent" or "textDim"))
-			row.left:SetText(GM.Money(GM.Budget.Remaining(a)))
-			row.left:SetTextColor(GM.RGB(
-				a.kind == "save" and "accent" or "textDim"))
+			W.PaintAcctRow(row, a)
 		else
 			row:Hide()
 		end
@@ -645,79 +639,14 @@ local function Build()
 	ui.acctRows = {}
 	local ACCT_ROWS = 7
 	for i = 1, ACCT_ROWS do
-		local row = CreateFrame("Frame", nil, accts)
-		row:SetSize(404, 26)
+		local row = W.AcctRow(accts, i, true)
 		row:SetPoint("TOPLEFT", 8, -20 - (i - 1) * 26)
-		row.name = GM.MakeFontString(row, GM.FONT, 10, "text")
-		row.name:SetPoint("LEFT", 2, 0)
-		row.name:SetWidth(110)
-		row.name:SetJustifyH("LEFT")
-
-		local kind = CreateFrame("Button", nil, row)
-		kind:SetSize(52, 20)
-		kind:SetPoint("LEFT", 114, 0)
-		GM.Panel(kind, "contHigh")
-		kind.text = GM.MakeFontString(kind, GM.FONT_MED, 9, "secondary")
-		kind.text:SetPoint("CENTER")
-		local idx = i
-		kind:SetScript("OnClick", function()
-			local order = GM.Budget.KIND_ORDER
-			local a = GM.Budget.List()[idx]
-			if not a then return end
-			for j, k in ipairs(order) do
-				if k == a.kind then
-					GM.Budget.SetKind(idx, order[j % #order + 1])
-					break
-				end
-			end
-			OV.Refresh()
-		end)
-		kind:SetScript("OnEnter", function()
-			GameTooltip:SetOwner(kind, "ANCHOR_TOP")
-			GameTooltip:SetText("account function — click to cycle", 1, 1, 1)
-			GameTooltip:Show()
-		end)
-		kind:SetScript("OnLeave", function() GameTooltip:Hide() end)
-		row.kind = kind
-
-		local grp = CreateFrame("Button", nil, row)
-		grp:SetSize(120, 20)
-		grp:SetPoint("LEFT", kind, "RIGHT", 6, 0)
-		GM.Panel(grp, "contMedium")
-		grp.text = GM.MakeFontString(grp, GM.FONT, 9, "textDim")
-		grp.text:SetPoint("LEFT", 5, 0)
-		grp.text:SetPoint("RIGHT", -4, 0)
-		grp.text:SetJustifyH("LEFT")
-		grp:SetScript("OnClick", function()
-			local a = GM.Budget.List()[idx]
-			if not a then return end
-			local paths = GM.Budget.GroupPaths()
-			local cur, nextPath = a.group, nil
-			if not cur then
-				nextPath = paths[1]
-			else
-				for j, p in ipairs(paths) do
-					if p == cur then nextPath = paths[j + 1] break end
-				end
-			end
-			GM.Budget.SetGroup(idx, nextPath)
-			OV.Refresh()
-		end)
-		grp:SetScript("OnEnter", function()
-			GameTooltip:SetOwner(grp, "ANCHOR_TOP")
-			GameTooltip:SetText(
-				"bind to a group — its spends/sales route here", 1, 1, 1)
-			GameTooltip:Show()
-		end)
-		grp:SetScript("OnLeave", function() GameTooltip:Hide() end)
-		row.grp = grp
-
-		row.left = GM.MakeFontString(row, GM.FONT, 10, "textDim")
-		row.left:SetPoint("LEFT", grp, "RIGHT", 8, 0)
-		row.left:SetWidth(100)
-		row.left:SetJustifyH("LEFT")
+		row:SetWidth(440)
 		ui.acctRows[i] = row
 	end
+	-- same add-row contract as the dashboard BUDGETS panel
+	ui.acctAdd = W.AcctAdd(accts)
+	ui.acctAdd:SetPoint("BOTTOMLEFT", 10, 26)
 	ui.acctHint = GM.MakeFontString(accts, GM.FONT, 9, "secondary")
 	ui.acctHint:SetPoint("BOTTOMLEFT", 10, 6)
 	ui.acctHint:SetText(

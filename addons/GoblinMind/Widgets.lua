@@ -158,3 +158,222 @@ function W.Chrome(f, name, titleText)
 	W.Tip(close, function() return { "Close", "ESC also closes" } end)
 	return title
 end
+
+-- ============ budget account controls (shared) ============
+-- One row contract for every surface that lists budget accounts —
+-- dashboard BUDGETS and overview ACCOUNTS both build rows through
+-- W.AcctRow and paint through W.PaintAcctRow, so add/cycle/bind/
+-- reset/delete behave identically on either window.
+
+local function AcctRefresh()
+	-- repaint every surface that might show this account
+	if GM.PlanQueue and GM.PlanQueue.Refresh then
+		GM.PlanQueue.Refresh()
+	end
+	if GM.Overview and GM.Overview.Refresh then
+		GM.Overview.Refresh()
+	end
+end
+
+-- row: name · kind cycle · group bind · alloc · remaining · reset · del
+-- compact drops the alloc column so remaining keeps readable width
+function W.AcctRow(parent, idx, compact)
+	local row = CreateFrame("Frame", nil, parent)
+	row:SetHeight(24)
+	local nameW = compact and 88 or 104
+	local grpW = compact and 100 or 120
+
+	row.name = GM.MakeFontString(row, GM.FONT, 10, "text")
+	row.name:SetPoint("LEFT", 2, 0)
+	row.name:SetWidth(nameW)
+	row.name:SetJustifyH("LEFT")
+
+	local kind = CreateFrame("Button", nil, row)
+	kind:SetSize(50, 20)
+	kind:SetPoint("LEFT", nameW + 6, 0)
+	GM.Panel(kind, "contHigh")
+	kind.text = GM.MakeFontString(kind, GM.FONT_MED, 9, "secondary")
+	kind.text:SetPoint("CENTER")
+	kind:SetScript("OnClick", function()
+		local a = GM.Budget.List()[idx]
+		if not a then return end
+		local order = GM.Budget.KIND_ORDER
+		for j, k in ipairs(order) do
+			if k == a.kind then
+				GM.Budget.SetKind(idx, order[j % #order + 1])
+				break
+			end
+		end
+		AcctRefresh()
+	end)
+	W.Tip(kind, function() return {
+		"Account function",
+		"craft: mat/craft spends · ah: auction spends",
+		"save: reserve that never leaves",
+		"click to cycle" } end)
+	row.kind = kind
+
+	local grp = CreateFrame("Button", nil, row)
+	grp:SetSize(grpW, 20)
+	grp:SetPoint("LEFT", kind, "RIGHT", 6, 0)
+	GM.Panel(grp, "contMedium")
+	grp.text = GM.MakeFontString(grp, GM.FONT, 9, "textDim")
+	grp.text:SetPoint("LEFT", 5, 0)
+	grp.text:SetPoint("RIGHT", -4, 0)
+	grp.text:SetJustifyH("LEFT")
+	grp:SetScript("OnClick", function()
+		local a = GM.Budget.List()[idx]
+		if not a then return end
+		local paths = GM.Budget.GroupPaths()
+		local cur, nextPath = a.group, nil
+		if not cur then
+			nextPath = paths[1]
+		else
+			for j, p in ipairs(paths) do
+				if p == cur then nextPath = paths[j + 1] break end
+			end
+		end
+		GM.Budget.SetGroup(idx, nextPath)
+		AcctRefresh()
+	end)
+	W.Tip(grp, function() return {
+		"Group binding",
+		"items in this group route their",
+		"spends and sales to this account",
+		"click to cycle · wraps to unbound" } end)
+	row.grp = grp
+
+	row.alloc = GM.MakeFontString(row, GM.FONT, 10, "text")
+	row.alloc:SetPoint("LEFT", grp, "RIGHT", 8, 0)
+	row.alloc:SetWidth(90)
+	row.alloc:SetJustifyH("LEFT")
+	if compact then row.alloc:Hide() end
+
+	row.left = GM.MakeFontString(row, GM.FONT, 10, "textDim")
+	row.left:SetPoint("LEFT",
+		compact and grp or row.alloc, "RIGHT", 6, 0)
+	row.left:SetJustifyH("LEFT")
+
+	local del = CreateFrame("Button", nil, row)
+	del:SetSize(16, 16)
+	del:SetPoint("RIGHT", 0, 0)
+	del.text = GM.MakeFontString(del, GM.FONT_BOLD, 10, "textDim")
+	del.text:SetPoint("CENTER")
+	del.text:SetText("x")
+	del:SetScript("OnClick", function()
+		GM.Budget.Del(idx)
+		AcctRefresh()
+	end)
+	W.Tip(del, function() return { "Delete account" } end)
+	row.del = del
+
+	local rst = CreateFrame("Button", nil, row)
+	rst:SetSize(16, 16)
+	rst:SetPoint("RIGHT", del, "LEFT", -4, 0)
+	rst.text = GM.MakeFontString(rst, GM.FONT_BOLD, 9, "textDim")
+	rst.text:SetPoint("CENTER")
+	rst.text:SetText("r")
+	rst:SetScript("OnClick", function()
+		GM.Budget.ResetSpent(idx)
+		AcctRefresh()
+	end)
+	W.Tip(rst, function() return { "Reset spent to zero" } end)
+	row.rst = rst
+
+	-- left text stops before the reset/del buttons
+	row.left:SetPoint("RIGHT", rst, "LEFT", -6, 0)
+	return row
+end
+
+-- unified paint: alloc text per kind, save accounts show "reserved",
+-- spend accounts show left + spent (red when overdrawn)
+function W.PaintAcctRow(row, a)
+	row.name:SetText(a.name)
+	row.kind.text:SetText(GM.Budget.KINDS[a.kind])
+	row.grp.text:SetText(a.group or "—")
+	row.grp.text:SetTextColor(GM.RGB(a.group and "accent" or "textDim"))
+	row.alloc:SetText(GM.Budget.AllocText(a))
+	local rem = GM.Budget.Remaining(a)
+	if a.kind == "save" then
+		row.left:SetText("reserved " .. GM.Money(rem))
+		row.left:SetTextColor(GM.RGB("accent"))
+	else
+		row.left:SetText("left " .. GM.Money(rem)
+			.. " · spent " .. GM.Money(a.spent or 0))
+		row.left:SetTextColor(GM.RGB(rem > 0 and "textDim" or "err"))
+	end
+end
+
+-- add-row: name box · kind cycle · amount box · + button.
+-- Returns the container; parent anchors it where it wants.
+-- parse: bare number = gold for craft/ah budgets, % for saves.
+function W.AcctAdd(parent)
+	local f = CreateFrame("Frame", nil, parent)
+	f:SetHeight(22)
+
+	local name = W.EditBox(f, 130, "name")
+	name:SetPoint("LEFT", 0, 0)
+
+	local addKind = "craft"
+	local kindBtn = CreateFrame("Button", nil, f)
+	kindBtn:SetSize(56, 20)
+	kindBtn:SetPoint("LEFT", name, "RIGHT", 6, 0)
+	GM.Panel(kindBtn, "contHigh")
+	kindBtn.text = GM.MakeFontString(kindBtn, GM.FONT_MED, 9, "secondary")
+	kindBtn.text:SetPoint("CENTER")
+	local function PaintKind()
+		kindBtn.text:SetText(GM.Budget.KINDS[addKind])
+	end
+	PaintKind()
+	kindBtn:SetScript("OnClick", function()
+		local order = GM.Budget.KIND_ORDER
+		for i, k in ipairs(order) do
+			if k == addKind then
+				addKind = order[i % #order + 1]
+				break
+			end
+		end
+		PaintKind()
+	end)
+	W.Tip(kindBtn, function() return {
+		"New account's function", "click to cycle" } end)
+
+	local amt = W.EditBox(f, 80, "0g")
+	amt:SetPoint("LEFT", kindBtn, "RIGHT", 6, 0)
+
+	local btn = CreateFrame("Button", nil, f)
+	btn:SetSize(26, 20)
+	btn:SetPoint("LEFT", amt, "RIGHT", 6, 0)
+	GM.Panel(btn, "accent")
+	btn.text = GM.MakeFontString(btn, GM.FONT_BOLD, 11, "contLowest")
+	btn.text:SetPoint("CENTER")
+	btn.text:SetText("+")
+
+	local hint = GM.MakeFontString(f, GM.FONT, 9, "textDim")
+	hint:SetPoint("LEFT", btn, "RIGHT", 8, 0)
+	hint:SetJustifyH("LEFT")
+	hint:SetText("craft/ah: gold (500 or 10g50s) · save: %")
+
+	btn:SetScript("OnClick", function()
+		local n = name:GetText()
+		if n == "name" then n = "" end
+		local a = amt:GetText()
+		local alloc = addKind == "save"
+			and tonumber((a or ""):gsub("%%", ""))
+			or (tonumber(a) and floor(tonumber(a) * 10000)
+				or GM.Budget.ParseMoney(a))
+		local acct = alloc and GM.Budget.Add(n, addKind, alloc)
+		AcctRefresh()
+		if acct then
+			name:SetText("")
+			amt:SetText(addKind == "save" and "30" or "0g")
+			hint:SetText("craft/ah: gold (500 or 10g50s) · save: %")
+		else
+			hint:SetText(GM.CC("err")
+				.. (addKind == "save" and "need a % (0-100)"
+					or "bad amount — try 10g, 5s, 2500c") .. "|r")
+		end
+	end)
+	f.hint = hint
+	return f
+end

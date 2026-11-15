@@ -194,20 +194,6 @@ local function TaskLines()
 	return out
 end
 
-local function EditBox(parent, w)
-	local eb = CreateFrame("EditBox", nil, parent)
-	eb:SetSize(w, 20)
-	eb:SetAutoFocus(false)
-	eb:SetFont(GM.FONT, 10, "")
-	eb:SetTextColor(GM.RGB("text"))
-	eb:SetTextInsets(5, 4, 0, 0)
-	local bg = eb:CreateTexture(nil, "BACKGROUND")
-	bg:SetAllPoints()
-	bg:SetColorTexture(GM.RGB("contLowest"))
-	eb:SetScript("OnEscapePressed", function() eb:ClearFocus() end)
-	return eb
-end
-
 -- Mounts the dashboard panels into a host frame (the plan window's
 -- home overlay) and returns a refresh function.
 function DB.MountHome(host)
@@ -259,121 +245,18 @@ function DB.MountHome(host)
 	toLedger:SetScript("OnLeave", function()
 		toLedger.text:SetTextColor(GM.RGB("textDim"))
 	end)
+	-- account rows share the overview's control set — W.AcctRow +
+	-- W.AcctAdd keep kind/group/reset/delete identical on both windows
+	local Wd = GM.Widgets
 	local bRows = {}
 	for i = 1, 5 do
-		local row = CreateFrame("Frame", nil, bud)
-		row:SetSize(w - 16, 22)
+		local row = Wd.AcctRow(bud, i)
 		row:SetPoint("TOPLEFT", 8, -20 - (i - 1) * 22)
-		row.name = GM.MakeFontString(row, GM.FONT, 10, "text")
-		row.name:SetPoint("LEFT", 4, 0)
-		row.name:SetWidth(170)
-		row.name:SetJustifyH("LEFT")
-		row.kind = GM.MakeFontString(row, GM.FONT_MED, 9, "secondary")
-		row.kind:SetPoint("LEFT", 180, 0)
-		row.alloc = GM.MakeFontString(row, GM.FONT, 10, "text")
-		row.alloc:SetPoint("LEFT", 240, 0)
-		row.left = GM.MakeFontString(row, GM.FONT, 10, "textDim")
-		row.left:SetPoint("LEFT", 370, 0)
-		row.left:SetWidth(240)
-		row.left:SetJustifyH("LEFT")
-		local rst = CreateFrame("Button", nil, row)
-		rst:SetSize(18, 18)
-		rst:SetPoint("RIGHT", -22, 0)
-		rst.text = GM.MakeFontString(rst, GM.FONT_BOLD, 9, "textDim")
-		rst.text:SetPoint("CENTER")
-		rst.text:SetText("r")
-		local idx = i
-		rst:SetScript("OnClick", function()
-			if GM.Budget then GM.Budget.ResetSpent(idx) end
-			GM.PlanQueue.Refresh()
-		end)
-		rst:SetScript("OnEnter", function()
-			GameTooltip:SetOwner(rst, "ANCHOR_TOP")
-			GameTooltip:SetText("reset spent to zero", 1, 1, 1)
-			GameTooltip:Show()
-		end)
-		rst:SetScript("OnLeave", function() GameTooltip:Hide() end)
-		row.rst = rst
-		local del = CreateFrame("Button", nil, row)
-		del:SetSize(18, 18)
-		del:SetPoint("RIGHT", -2, 0)
-		del.text = GM.MakeFontString(del, GM.FONT_BOLD, 10, "textDim")
-		del.text:SetPoint("CENTER")
-		del.text:SetText("x")
-		del:SetScript("OnClick", function()
-			if GM.Budget then GM.Budget.Del(idx) end
-			GM.PlanQueue.Refresh()
-		end)
-		row.del = del
+		row:SetWidth(w - 16)
 		bRows[i] = row
 	end
-
-	-- add row: name · kind toggle · amount · +
-	local addName = EditBox(bud, 150)
-	addName:SetPoint("BOTTOMLEFT", 12, 8)
-	addName:SetText("name")
-	addName:SetTextColor(GM.RGB("textDim"))
-	addName:SetScript("OnEditFocusGained", function()
-		if addName:GetText() == "name" then
-			addName:SetText("")
-			addName:SetTextColor(GM.RGB("text"))
-		end
-	end)
-	local kindBtn = CreateFrame("Button", nil, bud)
-	kindBtn:SetSize(56, 20)
-	kindBtn:SetPoint("LEFT", addName, "RIGHT", 8, 0)
-	GM.Panel(kindBtn, "contHigh")
-	kindBtn.text = GM.MakeFontString(kindBtn, GM.FONT_MED, 9, "secondary")
-	kindBtn.text:SetPoint("CENTER")
-	local addKind = "craft"
-	local function PaintKind()
-		kindBtn.text:SetText(GM.Budget.KINDS[addKind])
-	end
-	PaintKind()
-	kindBtn:SetScript("OnClick", function()
-		local order = GM.Budget.KIND_ORDER
-		for i, k in ipairs(order) do
-			if k == addKind then
-				addKind = order[i % #order + 1]
-				break
-			end
-		end
-		PaintKind()
-	end)
-	local addAmt = EditBox(bud, 90)
-	addAmt:SetPoint("LEFT", kindBtn, "RIGHT", 8, 0)
-	addAmt:SetText("0g")
-	local addBtn = CreateFrame("Button", nil, bud)
-	addBtn:SetSize(26, 20)
-	addBtn:SetPoint("LEFT", addAmt, "RIGHT", 8, 0)
-	GM.Panel(addBtn, "accent")
-	addBtn.text = GM.MakeFontString(addBtn, GM.FONT_BOLD, 11, "contLowest")
-	addBtn.text:SetPoint("CENTER")
-	addBtn.text:SetText("+")
-	local addHint = GM.MakeFontString(bud, GM.FONT, 9, "textDim")
-	addHint:SetPoint("LEFT", addBtn, "RIGHT", 8, 0)
-	addHint:SetJustifyH("LEFT")
-	addBtn:SetScript("OnClick", function()
-		local name = addName:GetText()
-		if name == "name" then name = "" end
-		local amt = addAmt:GetText()
-		-- bare number = gold for budgets (500 → 500g), % for saves
-		local alloc = addKind == "save" and tonumber(amt:gsub("%%", ""))
-			or (tonumber(amt) and floor(tonumber(amt) * 10000)
-				or GM.Budget.ParseMoney(amt))
-		local a = alloc and GM.Budget.Add(name, addKind, alloc)
-		GM.PlanQueue.Refresh()
-		if a then
-			addName:SetText("")
-			addAmt:SetText(addKind == "save" and "30" or "0g")
-			addHint:SetText("craft/ah: gold (500 or 10g50s) · save: %")
-		else
-			addHint:SetText(GM.CC("err") ..
-				(addKind == "save" and "need a % (0-100)"
-					or "bad amount — try 10g, 5s, 2500c") .. "|r")
-		end
-	end)
-	addHint:SetText("craft/ah: gold (500 or 10g50s) · save: %")
+	local addRow = Wd.AcctAdd(bud)
+	addRow:SetPoint("BOTTOMLEFT", 12, 8)
 
 	local recent = Panel(host, { "TOPLEFT", 0, -348 }, w, 118, "RECENT LEDGER")
 	local recentRows = {}
@@ -399,31 +282,21 @@ function DB.MountHome(host)
 					row:Show()
 					row.rst:Show()
 					row.del:Show()
-					row.name:SetText(a.name ..
-						(a.group and (GM.CC("secondary") .. "·" ..
-							a.group .. "|r") or ""))
-					row.kind:SetText(GM.Budget.KINDS[a.kind])
-					row.alloc:SetText(GM.Budget.AllocText(a))
-					local rem = GM.Budget.Remaining(a)
-					if a.kind == "save" then
-						row.left:SetText("reserved " .. GM.Money(rem))
-						row.left:SetTextColor(GM.RGB("accent"))
-					else
-						row.left:SetText("left " .. GM.Money(rem)
-							.. " · spent " .. GM.Money(a.spent or 0))
-						row.left:SetTextColor(GM.RGB(rem > 0 and "textDim" or "err"))
-					end
+					row.kind:Show()
+					row.grp:Show()
+					Wd.PaintAcctRow(row, a)
 				else
 					row:Hide()
 				end
 			end
 			if #list == 0 then
 				bRows[1]:Show()
-				bRows[1].rst:Hide()
-				bRows[1].del:Hide()
+				for _, k in ipairs({ "rst", "del", "kind", "grp" }) do
+					bRows[1][k]:Hide()
+				end
 				bRows[1].name:SetText("no accounts — add below")
 				bRows[1].name:SetTextColor(GM.RGB("textDim"))
-				for _, k in ipairs({ "kind", "alloc", "left" }) do
+				for _, k in ipairs({ "alloc", "left" }) do
 					bRows[1][k]:SetText("")
 				end
 			else
