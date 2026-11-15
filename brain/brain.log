@@ -1256,3 +1256,15 @@ ValueError: cannot convert float NaN to integer
 2026-11-15 05:53:41,754 DEBUG   E:\Battle.net\World of Warcraft\_forever_\Interface\AddOns\GoblinMind_Data\Data.lua done in 0.7s
 2026-11-15 05:54:36,766 DEBUG heartbeat — watching, last mtime=05:53:18
 2026-11-15 05:59:36,829 DEBUG heartbeat — watching, last mtime=05:53:18
+2026-11-15 06:04:36,887 DEBUG heartbeat — watching, last mtime=05:53:18
+2026-11-15 06:08:21,935 INFO  AppData touched (mtime=06:08:19 size=579882) — settling
+2026-11-15 06:08:41,938 INFO  AppData settled — emitting
+2026-11-15 06:08:42,573 INFO  emitted 7501 items -> D:\WoW Mods\addons\GoblinMind_Data\Data.lua (1019 KB)
+2026-11-15 06:08:42,573 DEBUG   8 chunks total, 7 AUCTIONDB, 42775 rows, 7501 priced (0 skipped no-price)
+2026-11-15 06:08:42,577 DEBUG   D:\WoW Mods\addons\GoblinMind_Data\Data.lua done in 0.6s
+2026-11-15 06:08:43,195 INFO  emitted 7501 items -> E:\Battle.net\World of Warcraft\_forever_\Interface\AddOns\GoblinMind_Data\Data.lua (1019 KB)
+2026-11-15 06:08:43,195 DEBUG   8 chunks total, 7 AUCTIONDB, 42775 rows, 7501 priced (0 skipped no-price)
+2026-11-15 06:08:43,198 DEBUG   E:\Battle.net\World of Warcraft\_forever_\Interface\AddOns\GoblinMind_Data\Data.lua done in 0.6s
+2026-11-15 06:09:38,209 DEBUG heartbeat — watching, last mtime=06:08:19
+2026-11-15 06:10:04,270 INFO  logging to D:\WoW Mods\brain\brain.log
+2026-11-15 06:10:19,176 INFO  book emit 6339 items -> D:/WoW Mods/addons/GoblinMind_Data/Data.lua

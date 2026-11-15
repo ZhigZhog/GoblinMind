@@ -12,3 +12,4 @@ __pycache__/
 nul
 brain/brain.log
 brain/brain.log
+brain/book_history.json

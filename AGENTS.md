@@ -33,6 +33,17 @@ self-owned Blizzard-API pipeline later.
   — no stored secret), records ids in `brain\filed_bugs.json`, and
   re-emits so `GoblinMindDB.filedBugs` lets the addon clear them.
   Manual one-shot: `python brain\goblin_brain.py bugs <AppData> <out...>`.
+- **In-house feed (Part 15, live)**: `python brain\goblin_brain.py book
+  <GoblinMind.lua SV> <out...>` emits `GoblinMindDB` from OUR data —
+  the persisted AH book (`GoblinMindSettings.book`, mb/mbx/sup/n) +
+  ledger sells (`GoblinMindLedger.byChar`, sell txns → `vel` = units/day
+  over 7d). The brain owns the time series in `brain\book_history.json`
+  (14d of book snapshots); `p`/`mkt` = median of recent min-buyouts
+  (needs ≥3 samples, else latest). `watch --feed book` switches the
+  watcher to re-emit on every SV flush instead of AppData changes —
+  emits `source="bookfeed"`, same schema, `vendorBuy` still scraped
+  from TSM's VendorSell table. Emits to all `out` paths given
+  (repo + deployed). Honest-nil: no samples → no price.
 - Layout: `brain\` (Python emit/watch CLI) · `addons\GoblinMind\`
   (shim addon, scaffolded — TSM-styled UI) · `addons\GoblinMind_Data\`
   (generated-data addon — `GoblinMindDB` from `goblin_brain.py emit`) · `scripts\`
