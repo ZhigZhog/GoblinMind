@@ -16,3 +16,6 @@ brain/book_history.json
 brain/feeds.json
 brain/filed_bugs.json
 dist/
+
+# offline lua test scratch — local only
+tmp/
