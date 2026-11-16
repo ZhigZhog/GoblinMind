@@ -1614,6 +1614,10 @@ def cmd_watch(appdata, outs, interval=5, settle=20, feed='tsm',
     last_emit = time.time()  # the startup settle always emits once;
                              # the floor clock starts there
     sv_mtimes = {}
+    # self-restart on deploy: a copied-over goblin_brain.py never
+    # reloads in a live process — a stale watcher once kept emitting
+    # with the pre-fix code for a whole day. Re-exec same argv.
+    own_mtime = os.path.getmtime(os.path.abspath(__file__))
     api_cfg_raw = _api_cfg() if feed == 'book' else {}
     api_poll_secs = float(api_cfg_raw.get('poll_minutes', 30)) * 60
     last_api_poll = time.time()  # first poll after one full interval
@@ -1725,6 +1729,14 @@ def cmd_watch(appdata, outs, interval=5, settle=20, feed='tsm',
             LOG.debug('heartbeat — watching, last mtime=%s',
                       time.strftime('%H:%M:%S', time.localtime(last_mtime))
                       if last_mtime else 'none yet')
+        try:
+            if os.path.getmtime(os.path.abspath(__file__)) != own_mtime:
+                LOG.info('goblin_brain.py changed on disk — restarting')
+                subprocess.Popen([sys.executable] + sys.argv,
+                                 cwd=os.getcwd())
+                os._exit(0)
+        except OSError:
+            pass
         time.sleep(interval)
 
 
