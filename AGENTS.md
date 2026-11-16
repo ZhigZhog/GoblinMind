@@ -116,13 +116,22 @@ Primary data = the in-house book feed below.
   needs a firewall rule for TCP 8765). Endpoints: `/v1/register`,
   `/v1/upload`, `/v1/book?scope=`, `/v1/health`. SQLite beside the
   script; newest-upload-wins per item, 200 uploads/install/scope,
-  10 uploads/10min rate limit, 7-day staleness cutoff + hourly GC.
-  Auto-starts via `Startup\goblinmind-server.bat` from the installed
-  brain dir. The watcher pulls it on a 15m cadence (remote books
-  marked `remote: True` — never re-uploaded) and uploads only
-  genuinely newer local books. Peer upload → merge → pull → emitted
-  DB verified end-to-end. Config: `feeds.json` `backend` block
-  (`url`, `name`, `scope`, `poll_minutes`, `upload`).
+  10 uploads/10min rate limit, 7-day staleness cutoff + hourly GC,
+  client-claimed `t` clamped at `now` (can't pin the book with a
+  future date). Auto-starts via `Startup\goblinmind-server.bat`
+  from the installed brain dir; **self-restarts on file change**
+  like the watcher. The watcher pulls on a 15m cadence (remote
+  books marked `remote: True` — never re-uploaded) and uploads
+  only genuinely newer local books. Peer upload → merge → pull →
+  emitted DB verified end-to-end. Config: `feeds.json` `backend`
+  block (`url`, `name`, `scopes`, `poll_minutes`, `upload`, `key`).
+  **Trust model**: `goblin_server.json` beside the server holds
+  `install_secret` — when set, `/v1/register` requires it as
+  `key` in the body (constant-time compare, lazy-read so rotation
+  needs no restart); absent = open registration (trusted LAN).
+  Re-registering an existing name re-keys that row (no zombie
+  installs on reinstall). The host hands the secret to trusted
+  installs out-of-band; installer flag is `--key`.
   The watcher also scans `WTF\Account\*\SavedVariables\GoblinMind.lua`
   each poll for staged bug reports (`gm-<ts>-<n>|<hex>` strings in
   `GoblinMindSettings.bugReports`), files them to GitHub issues

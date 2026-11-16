@@ -865,10 +865,12 @@ def _backend_token(cfg):
     tok = st.get('backend_token')
     if tok:
         return tok
+    body = {'name': cfg.get('name') or 'goblinmind'}
+    if cfg.get('key'):
+        body['key'] = cfg['key']  # shared install secret (server-gated)
     req = urllib.request.Request(
         cfg['url'].rstrip('/') + '/v1/register',
-        data=json.dumps(
-            {'name': cfg.get('name') or 'goblinmind'}).encode(),
+        data=json.dumps(body).encode(),
         headers={'Content-Type': 'application/json'}, method='POST')
     resp = json.load(urllib.request.urlopen(req, timeout=30))
     st['backend_token'] = resp['token']

@@ -65,7 +65,7 @@ def ask(prompt, default=None):
     return ans or default
 
 
-def write_feeds(url, name, scopes):
+def write_feeds(url, name, scopes, key=None):
     cfg = {}
     if os.path.isfile(FEEDS):
         try:
@@ -75,6 +75,8 @@ def write_feeds(url, name, scopes):
     cfg['backend'] = {'url': url.rstrip('/'), 'name': name,
                       'scopes': scopes, 'poll_minutes': 15,
                       'upload': True}
+    if key:
+        cfg['backend']['key'] = key
     with open(FEEDS, 'w', encoding='utf-8') as fh:
         json.dump(cfg, fh, indent=1)
         fh.write('\n')
@@ -117,6 +119,9 @@ def main():
     ap.add_argument('--name', help='this install\'s name in the backend')
     ap.add_argument('--scope', action='append',
                     help='realm-faction scope(s), e.g. MyRealm-Alliance')
+    ap.add_argument('--key',
+                    help='shared install secret if the backend gates '
+                         'registration (blank = open backend)')
     ap.add_argument('--host', action='store_true',
                     help='also run the backend server here + firewall rule')
     ap.add_argument('--dev', action='store_true',
@@ -155,9 +160,11 @@ def main():
     scopes = [s for s in scopes if s]
     if not scopes:
         sys.exit('at least one scope is required')
+    key = a.key or ask('Shared install key (leave blank if the '
+                       'backend has none)')
 
     print('GoblinMind install:')
-    write_feeds(url, name, scopes)
+    write_feeds(url, name, scopes, key)
     if addon_root():
         write_bat(WATCH_BAT, 'GoblinMind Brain',
                   'python goblin_brain.py watch self -v --feed book')

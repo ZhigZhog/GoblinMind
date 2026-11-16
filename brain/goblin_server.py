@@ -29,6 +29,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 DB_PATH = os.path.join(os.path.dirname(
     os.path.abspath(__file__)), 'goblin_backend.db')
+CFG_PATH = os.path.join(os.path.dirname(
+    os.path.abspath(__file__)), 'goblin_server.json')
 SCOPE_RE = re.compile(r'^[\w \'\-()]{1,64}$')
 MAX_ITEMS = 400000        # sanity cap — a realm AH won't exceed this
 MAX_PRICE = 10 ** 12      # copper; rejects poisoned/bugged payloads
@@ -37,6 +39,17 @@ MERGE_MAX_AGE = 7 * 86400  # uploads older than the stat window are
                            # corpse data — a dead install's week-old
                            # book merged under a fresh scope t looks
                            # current. Age it out of both merge and db.
+
+
+def _server_cfg():
+    """Machine-local server config (never shipped): {"install_secret":
+    "..."}. Read lazily so key rotation needs no restart. Missing or
+    empty secret = open registration (trusted-LAN mode)."""
+    try:
+        with open(CFG_PATH, encoding='utf-8') as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return {}
 
 
 def db():
@@ -192,12 +205,29 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if u.path == '/v1/register':
                 body = self._body() or {}
+                secret = _server_cfg().get('install_secret')
+                if secret and not secrets.compare_digest(
+                        str(body.get('key') or ''), secret):
+                    self._send(403, {'error': 'key'})
+                    return
+                name = str(body.get('name') or 'install')[:64]
+                row = conn.execute(
+                    'SELECT id FROM installs WHERE name=?',
+                    (name,)).fetchone()
                 tok = secrets.token_urlsafe(24)
+                if row:
+                    # re-register = re-key the existing install (lost
+                    # api_state / reinstall) — no zombie rows per name
+                    conn.execute(
+                        'UPDATE installs SET token=? WHERE id=?',
+                        (tok, row[0]))
+                    conn.commit()
+                    self._send(200, {'install_id': row[0],
+                                     'token': tok})
+                    return
                 cur = conn.execute(
                     'INSERT INTO installs(name, token, created) '
-                    'VALUES(?,?,?)',
-                    (str(body.get('name') or 'install')[:64],
-                     tok, time.time()))
+                    'VALUES(?,?,?)', (name, tok, time.time()))
                 conn.commit()
                 self._send(200, {'install_id': cur.lastrowid,
                                  'token': tok})
