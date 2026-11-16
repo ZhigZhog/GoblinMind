@@ -9,6 +9,57 @@ local _, GM = ...
 GM.Sniper = { hits = {}, snapshot = nil, lastT = 0 }
 local N = GM.Sniper
 
+-- shared filter state — SniperUI toggles these, task surfaces read
+-- them through PendingCount so "N sniper hits" always means the
+-- actionable feed, not the raw row dump. SOON defaults on: sniping
+-- targets listings expiring inside 2h, not the whole book.
+N.filters = { soon = true }
+
+-- cheapest actionable price for a hit: a +1c bid when the listing
+-- carries bid data, else the lot buyout
+local function ActionCost(h)
+	local live = h.live or {}
+	local bid = (live.bid and live.bid > 0 and live.bid + 1)
+		or live.minBid
+		or (h.bid and h.bid > 0 and h.bid + 1)
+	local lot = live.total or ((h.unit or math.huge) * (h.qty or 1))
+	return math.min(bid or math.huge, lot or math.huge)
+end
+
+function N.PassFilters(h)
+	local f = N.filters
+	if not f then return true end
+	-- biddable = the listing has a bid path: live data confirmed an
+	-- auctionID, or the snapshot carried a bid field at all
+	if f.bid and not ((h.live and h.live.id) or h.bid ~= nil
+			or (h.live and h.live.minBid)) then
+		return false
+	end
+	if f.gold then
+		local money = GetMoney and GetMoney() or 0
+		if ActionCost(h) > money then return false end
+	end
+	-- soon = expiring inside 2h. Estimates count (transition-pinned
+	-- or midpoint); a 0 tl means "field unpopulated" — not
+	-- "expires now" — and nil means no data (commodities) — both
+	-- can never be "expiring", so they hide.
+	if f.soon then
+		local tl = (h.live and h.live.tl and h.live.tl > 0 and h.live.tl)
+			or (h.tlex and h.tlex > GetTime() and (h.tlex - GetTime()))
+			or (h.tl and h.tl > 0 and h.tl)
+		if not tl or tl > 7200 then return false end
+	end
+	return true
+end
+
+function N.PendingCount()
+	local n = 0
+	for _, h in ipairs(N.hits) do
+		if not h.done and N.PassFilters(h) then n = n + 1 end
+	end
+	return n
+end
+
 local GetInfo = C_Item and C_Item.GetItemInfo or GetItemInfo
 local Now = debugprofilestop or function() return GetTime() * 1000 end
 local CAP = 50
@@ -44,6 +95,7 @@ function N.Collect(rows)
 		if r.id and not r.own and (not N.snapshot or not N.snapshot[r.key]) then
 			fresh[#fresh + 1] = {
 				itemID = r.id, qty = r.qty, unit = r.unit, key = r.key,
+				bid = r.bid, tl = r.tl, tlex = r.tlex,
 			}
 		end
 	end

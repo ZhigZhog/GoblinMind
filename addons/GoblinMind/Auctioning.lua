@@ -139,8 +139,12 @@ function A.PreviewPost(id)
 	if not GM.Price("dbmarket", id) then return nil, "no price" end
 	local normal = GM.Groups.EvalOp(aOps, "normal", id)
 		or GM.Price("dbmarket", id)
-	local cheapest = (GM.AH.BookAge() < 300)
-		and GM.AH.BookCheapest(id) or nil
+	-- freshest listing source: live book when it outranks the
+	-- backend, else the merged DB's cheapest (mbx excl. ours, mb
+	-- incl.) — never a stale scan over a fresher feed
+	local e0 = GM.ItemEntry(id)
+	local cheapest = GM.AH.BookLive() and GM.AH.BookCheapest(id)
+		or (e0 and (e0.mbx or e0.mb))
 	local unit, why = A.PriceFor(aOps, id, normal, cheapest)
 	if not unit then return nil, why or "?", normal, cheapest end
 	-- vendor floor: net after 5% cut + deposit must beat vendoring
@@ -192,7 +196,7 @@ function A.PostScan(only)
 		return (GM.ItemName(a.id) or "") < (GM.ItemName(b.id) or "")
 	end)
 	if #items == 0 then
-		GM.PlanQueue.ScanStatus(GM.CC("warn") .. "nothing postable — bags empty or no price data|r")
+		GM.PlanQueue.ScanStatus(GM.CC("warn") .. "nothing to post — bags are empty or prices are missing|r")
 		return
 	end
 
@@ -255,8 +259,8 @@ function A.PostScan(only)
 	end
 
 	local steps, postedItems = {}, 0
-	-- a fresh shared book makes the whole scan synchronous
-	if GM.AH.BookAge() < 300 then
+	-- a live shared book makes the whole scan synchronous
+	if GM.AH.BookLive() then
 		for _, it in ipairs(items) do
 			local ok, why = ProcessItem(steps, it, GM.AH.BookCheapest(it.id))
 			if ok then postedItems = postedItems + 1 else skipped[it.id] = why end
@@ -266,13 +270,13 @@ function A.PostScan(only)
 	end
 
 	local remaining = #items
-	GM.PlanQueue.ScanStatus(GM.CC("textDim") .. format("post scan — 0/%d items|r", #items))
+	GM.PlanQueue.ScanStatus(GM.CC("textDim") .. format("post scan — checking 0/%d bag items|r", #items))
 	for pos, it in ipairs(items) do
 		ScanQueued(it.id, function(asks)
 			local ok, why = ProcessItem(steps, it, A.Cheapest(asks))
 			if ok then postedItems = postedItems + 1 else skipped[it.id] = why end
 			remaining = remaining - 1
-			GM.PlanQueue.ScanStatus(GM.CC("textDim") .. format("post scan — %d/%d items|r",
+			GM.PlanQueue.ScanStatus(GM.CC("textDim") .. format("post scan — checking %d/%d bag items|r",
 				#items - remaining, #items))
 			if remaining == 0 then
 				A.FinishPostScan(steps, skipped, postedItems)
@@ -288,7 +292,7 @@ function A.FinishPostScan(steps, skipped, itemCount)
 			tinsert(reasons, ShortName(id) .. " (" .. why .. ")")
 		end
 		GM.PlanQueue.ClearPlan()
-		GM.PlanQueue.ScanStatus(GM.CC("warn") .. "post scan: nothing to post — "
+		GM.PlanQueue.ScanStatus(GM.CC("warn") .. "post scan done — nothing to post: "
 			.. table.concat(reasons, ", ") .. "|r")
 		return
 	end
@@ -356,12 +360,14 @@ end
 function A.CancelScanNow()
 	local owned = GM.Inventory.auctions or {}
 	local byItem = {}
-	for aid, a in pairs(owned) do
+	for fp, a in pairs(owned) do
 		local e = byItem[a.itemID] or { aids = {}, minUnit = math.huge }
 		-- owned buyout is per-item on Forever (same convention as
 		-- item-search results — see AH.lua note) — no /qty
 		local unit = a.buyout and a.qty > 0 and a.buyout or nil
-		tinsert(e.aids, { aid = aid, qty = a.qty, unit = unit })
+		-- the map key is a listing fingerprint — CancelAuction needs
+		-- the snapshot's real auctionID (enum index fallback)
+		tinsert(e.aids, { aid = a.aid or a.idx or fp, qty = a.qty, unit = unit })
 		if unit and unit < e.minUnit then e.minUnit = unit end
 		byItem[a.itemID] = e
 	end
@@ -374,8 +380,8 @@ function A.CancelScanNow()
 	end
 
 	local steps, undercutItems = {}, 0
-	-- fresh shared book → synchronous pass, same as the post scan
-	if GM.AH.BookAge() < 300 then
+	-- live shared book → synchronous pass, same as the post scan
+	if GM.AH.BookLive() then
 		for _, id in ipairs(items) do
 			local e = byItem[id]
 			local cheapest = GM.AH.BookCheapest(id)
@@ -393,7 +399,7 @@ function A.CancelScanNow()
 		return
 	end
 	local remaining = #items
-	GM.PlanQueue.ScanStatus(GM.CC("textDim") .. format("cancel scan — 0/%d items|r", #items))
+	GM.PlanQueue.ScanStatus(GM.CC("textDim") .. format("cancel scan — checking 0/%d posted items|r", #items))
 	for _, id in ipairs(items) do
 		ScanQueued(id, function(asks)
 			local e = byItem[id]
@@ -409,7 +415,7 @@ function A.CancelScanNow()
 			end
 			if cheapest and cheapest < e.minUnit then undercutItems = undercutItems + 1 end
 			remaining = remaining - 1
-			GM.PlanQueue.ScanStatus(GM.CC("textDim") .. format("cancel scan — %d/%d items|r",
+			GM.PlanQueue.ScanStatus(GM.CC("textDim") .. format("cancel scan — checking %d/%d posted items|r",
 				#items - remaining, #items))
 			if remaining == 0 then
 				A.FinishCancelScan(steps, undercutItems)
@@ -422,8 +428,8 @@ function A.FinishCancelScan(steps, undercutItems)
 	if #steps == 0 then
 		GM.PlanQueue.ClearPlan()
 		GM.PlanQueue.ScanStatus(GM.CC("textDim") .. (undercutItems == 0
-			and "cancel scan: no undercut auctions|r"
-			or format("cancel scan: %d undercut item%s — set cancelUndercut=true in the group's auctioning ops|r",
+			and "cancel scan done — no undercut auctions|r"
+			or format("cancel scan done — %d undercut item%s (cancel-undercut is off in group ops)|r",
 				undercutItems, undercutItems == 1 and "" or "s")))
 		return
 	end

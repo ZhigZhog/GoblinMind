@@ -109,7 +109,7 @@ local function BuildStats(parent)
 	end
 	local hint = GM.MakeFontString(parent, GM.FONT, 10, "textDim")
 	hint:SetPoint("BOTTOMLEFT", 10, 8)
-	hint:SetText("drop · alt-click · /goblin [link]")
+	hint:SetText("drop · shift-click · /goblin [link]")
 end
 
 local PAD, GAP = 10, 8
@@ -283,7 +283,11 @@ local function Build()
 	end
 	ui.item:SetScript("OnReceiveDrag", DropItem)
 	ui.item:SetScript("OnClick", function()
-		if CursorHasItem() then DropItem() end
+		if IsShiftKeyDown() then
+			GM.ModifiedItemClick(ui.iconBtn and ui.iconBtn.itemID)
+		elseif CursorHasItem() then
+			DropItem()
+		end
 	end)
 
 	-- Trend chart region
@@ -555,16 +559,31 @@ function PQ.SetItem(itemID, itemLink)
 end
 
 function PQ.Rescan()
+	-- craft plans re-emit, not re-solve: fresh inventory + prices
+	-- re-evaluate fetch/alt/buy and sub-craft choices — no AH needed
+	if PQ.plan and PQ.plan.mode == "craft" then
+		if PQ.plan.recipeID then
+			GM.Crafting.Queue(PQ.plan.recipeID, PQ.plan.qty)
+		else
+			local ok, err = GM.Crafting.QueueEmit()
+			if not ok then
+				ui.summary:SetText(GM.CC("warn") .. (err or "queue is empty") .. "|r")
+			end
+		end
+		return
+	end
 	if not GM.AH.open then
 		ui.summary:SetText(GM.CC("warn") .. "auction house is not open|r")
 		return
 	end
 	if PQ.plan and PQ.plan.mode == "postscan" then GM.Auctioning.PostScan() return end
 	if PQ.plan and PQ.plan.mode == "cancelscan" then GM.Auctioning.CancelScan() return end
-	-- a live plan owns its item — inspecting another item must not
-	-- retarget the rescan (SetItem deliberately preserves live plans)
-	local workID = (PQ.plan and PQ.stepIndex <= #PQ.plan.steps
-		and PQ.plan.itemID) or PQ.itemID
+	-- rescan always re-solves the DISPLAYED target — a retargeted item
+	-- gets its own fresh plan (a live plan only wins by default when
+	-- nothing else is targeted)
+	local workID = PQ.itemID
+		or (PQ.plan and PQ.stepIndex <= #PQ.plan.steps
+			and PQ.plan.itemID)
 	if not workID then
 		ui.summary:SetText(GM.CC("textDim") .. "pick an item first — drop one in the header|r")
 		return
@@ -704,6 +723,7 @@ function PQ.ProtectedConfirm(step)
 	d._step = step
 	d.item:SetText((GM.ItemNameOr(step.itemID) or "item")
 		.. GM.CC("textDim") .. "  (protected group)|r")
+	d.item:SetTextColor(GM.NameColor(step.itemID))
 	d.act.text:SetText(step.kind == "post" and "POST ANYWAY"
 		or step.kind == "vendsell" and "SELL ANYWAY"
 		or "VENDOR ANYWAY")
@@ -1085,8 +1105,9 @@ function PQ.Refresh()
 		or dispLink
 		or (dispID and ("item " .. dispID))
 		or "no item")
+	ui.item.name:SetTextColor(GM.NameColor(dispID))
 	if not dispID then
-		ui.item.name:SetText(GM.CC("textDim") .. "drop item here · alt-click one · /goblin [link]|r")
+		ui.item.name:SetText(GM.CC("textDim") .. "drop item here · shift-click one · /goblin [link]|r")
 	end
 	local icon = dispID and C_Item and C_Item.GetItemIconByID and C_Item.GetItemIconByID(dispID)
 	if not icon and dispID and GetInfo then
@@ -1207,7 +1228,8 @@ function PQ.Refresh()
 					or (step.itemID and GM.ItemName and GM.ItemName(step.itemID))
 					or ""
 				if #nm > 16 then nm = nm:sub(1, 15) .. "…" end
-				row.qty:SetText(nm .. " ×" .. step.qty)
+				row.qty:SetText((GM.QHex(step.itemID) or "")
+					.. nm .. "|r ×" .. step.qty)
 			else
 				row.qty:SetText(step.qty .. (step.kind == "post" and " (relist)" or ""))
 			end

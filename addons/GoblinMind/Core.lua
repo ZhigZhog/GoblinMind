@@ -37,12 +37,20 @@ GM.frame:SetScript("OnEvent", function(_, event, arg1)
 		-- and paying that at first AH open reads as a multi-second
 		-- stall. Build hides the frame — visibility follows the AH.
 		if GM.PlanQueue and GM.PlanQueue.Prewarm then pcall(GM.PlanQueue.Prewarm) end
-		GM.Print("loaded — /gm for the plan window")
+		GM.Print("loaded — /goblin for the plan window")
 	end
 end)
 
+GM.log = {}
 function GM.Print(...)
 	print(GM.CC("accent") .. "GoblinMind|r:", ...)
+	-- color-stripped ring buffer — /goblin bug packs the tail into
+	-- the report so a stranger sees what the addon just did
+	local parts = {}
+	for i = 1, select("#", ...) do parts[i] = tostring(select(i, ...)) end
+	GM.log[#GM.log + 1] = table.concat(parts, " ")
+		:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+	if #GM.log > 40 then table.remove(GM.log, 1) end
 end
 
 -- Item-arg parse shared by price/inv: accepts real chat links
@@ -79,11 +87,15 @@ SlashCmdList.GOBLINMIND = function(msg)
 	msg = strtrim(msg or "")
 	if msg == "plan" then
 		if not GM.lastTooltipItemID then
-			GM.Print("hover an item first, then /gm plan")
+			GM.Print("hover an item first, then /goblin plan")
 			return
 		end
 		GM.PlanQueue.SetItem(GM.lastTooltipItemID, GM.lastTooltipLink)
 		GM.PlanQueue.Show()
+		return
+	end
+	if msg == "bug" then
+		if GM.BugReport then GM.BugReport.Show() end
 		return
 	end
 	if msg == "minimap" then
@@ -441,6 +453,68 @@ end
 
 function GM.ItemNameOr(id)
 	return GM.ItemName(id) or ("item " .. id)
+end
+
+function GM.ItemQuality(id)
+	if not id then return end
+	local q = GetInfo and select(3, GetInfo(id))
+	if not q and ReqLoad then pcall(ReqLoad, id) end
+	return q
+end
+
+-- rarity rgb for a FontString; nil -> caller's fallback
+local GetQColor = C_Item and C_Item.GetItemQualityColor
+function GM.QualityColor(q)
+	if q and GetQColor then
+		local ok, r, g, b = pcall(GetQColor, q)
+		if ok and r then return r, g, b end
+	end
+	local c = q and ITEM_QUALITY_COLORS and ITEM_QUALITY_COLORS[q]
+	if c then return c.r, c.g, c.b end
+end
+
+-- name-column color: rarity when known, theme key otherwise.
+-- One call returns the full r,g,b triple for SetTextColor.
+function GM.NameColor(id, fallbackKey)
+	local r, g, b = GM.QualityColor(id and GM.ItemQuality(id))
+	if r then return r, g, b end
+	return GM.RGB(fallbackKey or "text")
+end
+
+-- "|cffrrggbb" embed for quality-colored names inside strings;
+-- nil when quality unknown so callers can fall back to GM.CC
+function GM.QHex(id)
+	local r, g, b = GM.QualityColor(id and GM.ItemQuality(id))
+	if not r then return end
+	return format("|cff%02x%02x%02x",
+		floor(r * 255 + 0.5), floor(g * 255 + 0.5), floor(b * 255 + 0.5))
+end
+
+-- Blizzard's default modified-click chain for an item: whatever
+-- binding resolves first (CHATLINK/dressup/compare/questwatch)
+-- via HandleModifiedItemClick, then the context transfer — bank
+-- deposit, vendor sell, mail attach, gbank deposit — when the
+-- matching frame is open and the item is in bags. The context
+-- path is gated on a frame being open because bare
+-- UseContainerItem would otherwise USE the item. Returns true
+-- when something fired.
+function GM.ModifiedItemClick(id)
+	local link = id and GM.ItemLink(id)
+	if link and HandleModifiedItemClick
+		and HandleModifiedItemClick(link) then
+		return true
+	end
+	local open = (BankFrame and BankFrame:IsShown())
+		or (MerchantFrame and MerchantFrame:IsShown())
+		or (MailFrame and MailFrame:IsShown())
+		or (GuildBankFrame and GuildBankFrame:IsShown())
+	if not open then return end
+	local loc = GM.AH and GM.AH.FindInBags and GM.AH.FindInBags(id)
+	if loc and loc.GetBagAndSlot then
+		local Use = C_Container and C_Container.UseContainerItem
+			or UseContainerItem
+		if Use then Use(loc:GetBagAndSlot()) return true end
+	end
 end
 
 function GM.ItemLink(id)

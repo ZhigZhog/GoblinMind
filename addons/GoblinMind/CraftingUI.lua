@@ -43,8 +43,8 @@ end
 
 -- ============ window ============
 
-local WIN_W, WIN_H = 860, 560
-local PROF_W, REC_W = 140, 330
+local WIN_W, WIN_H = 970, 560
+local PROF_W, REC_W = 140, 440
 local PROF_ROWS, LIST_ROWS = 16, 22
 
 local function Panel(parent, x, w, title)
@@ -285,14 +285,21 @@ local function BuildUI()
 		r.skill:Hide()
 		r.name = GM.MakeFontString(r, GM.FONT, 10, "text")
 		r.name:SetPoint("LEFT", 18, 0)
-		r.name:SetWidth(156)
+		r.name:SetWidth(168)
 		r.name:SetJustifyH("LEFT")
 		r.profit = GM.MakeFontString(r, GM.FONT, 9, "textDim")
-		r.profit:SetPoint("LEFT", 178, 0)
-		r.profit:SetWidth(66)
+		r.profit:SetPoint("LEFT", 190, 0)
+		r.profit:SetWidth(68)
 		r.profit:SetJustifyH("LEFT")
+		r.sale = GM.MakeFontString(r, GM.FONT, 9, "textDim")
+		r.sale:SetPoint("LEFT", 262, 0)
+		r.sale:SetWidth(44) -- "999/d" fits; clips before `can`
+		r.sale:SetJustifyH("LEFT")
 		r.can = GM.MakeFontString(r, GM.FONT_MED, 9, "textDim")
-		r.can:SetPoint("LEFT", 246, 0)
+		r.can:SetPoint("LEFT", 310, 0)
+		r.can:SetWidth(58) -- clipped so "bags 99 +99" can't reach qbtn
+		r.can:SetJustifyH("LEFT")
+		r.can:SetWordWrap(false)
 		r.qbtn = CreateFrame("Button", nil, r)
 		r.qbtn:SetSize(40, ROW_H - 2)
 		r.qbtn:SetPoint("RIGHT", -2, 0)
@@ -303,11 +310,13 @@ local function BuildUI()
 		ui.recRows[i] = r
 	end
 	-- paging buttons in the panel header + mouse-wheel scrolling —
-	-- the bottom pair overlapped the list's last row
+	-- the bottom pair overlapped the list's last row. Left of the
+	-- count zone (TOPRIGHT owns ~100px) so the count can't sit
+	-- under the buttons.
 	local recUp = Btn(recP, "▲", 22, 14)
-	recUp:SetPoint("TOPRIGHT", -28, -4)
+	recUp:SetPoint("TOPRIGHT", -124, -4)
 	local recDn = Btn(recP, "▼", 22, 14)
-	recDn:SetPoint("TOPRIGHT", -4, -4)
+	recDn:SetPoint("TOPRIGHT", -100, -4)
 	recUp:SetScript("OnClick", function()
 		ui.recOff = math.max(0, (ui.recOff or 0) - LIST_ROWS)
 		CU.Refresh()
@@ -493,15 +502,21 @@ local function BuildUI()
 	GM.Panel(emit, "accent")
 	emit.text:SetTextColor(GM.RGB("contLowest"))
 	emit:SetScript("OnClick", function()
-		local ok, err = GM.Crafting.QueueEmit()
-		CU.Refresh()
-		if ok then
+		-- pcall: a math/UI error in the emit path must surface in the
+		-- footer, not die silently inside the click handler — and the
+		-- plan window opens before Refresh so a refresh fault can't
+		-- hide an emitted plan
+		local ok, res, err = pcall(GM.Crafting.QueueEmit)
+		if not ok then
+			Footer("emit error: " .. tostring(res), true)
+		elseif res then
 			GM.PlanQueue.SetHome(false)
 			GM.PlanQueue.Show()
 			Footer("plan emitted — plan window has the steps")
 		else
-			Footer(err, true)
+			Footer(err or "queue is empty", true)
 		end
+		CU.Refresh()
 	end)
 	local clear = Btn(qP, "CLEAR", 60)
 	clear:SetPoint("RIGHT", emit, "LEFT", -6, 0)
@@ -685,11 +700,16 @@ function CU.Refresh()
 			local nc = ep and (ep > 0
 				and ((row.craftable or 0) > 0 and "accent" or "pos") or "err")
 				or "textDim"
-			r.name:SetTextColor(GM.RGB(nc))
+			r.name:SetTextColor(GM.NameColor(row.itemID, nc))
 			r.profit:SetText(ep and
 				(ep > 0 and "+" or "") .. GM.Money(ep) or "—")
 			r.profit:SetTextColor(GM.RGB(
 				ep and (ep > 0 and "pos" or "err") or "textDim"))
+			-- sale volume: ledger feed's units/day for the product
+			local vel = row.itemID
+				and GM.Price("dbregionsalerate", row.itemID)
+			r.sale:SetText(vel and vel > 0 and
+				(format("%g", vel) .. "/d") or "—")
 			-- on-hand vs raid-everything: bags 2 +5 = 2 craftable now,
 			-- +5 more's worth fetchable from bank/alts
 			local extra = (row.craftableAll or 0) - (row.craftable or 0)
@@ -710,7 +730,9 @@ function CU.Refresh()
 			end)
 			r:SetScript("OnClick", function(_, btn)
 				-- right-click in a category view pulls the recipe out
-				if btn == "RightButton" and ui.selCat then
+				if IsShiftKeyDown() and row.itemID then
+					GM.ModifiedItemClick(row.itemID)
+				elseif btn == "RightButton" and ui.selCat then
 					GM.Crafting.CatUnassign(ui.selCat, id)
 					Footer("removed from '" .. ui.selCat .. "'")
 				else
@@ -734,7 +756,9 @@ function CU.Refresh()
 				for _, m in ipairs(row.mats or {}) do
 					local have = GM.Crafting.Available(m.id)
 					tinsert(lines, format("  %s ×%d  have %d  @%s",
-						GM.ItemName(m.id) or ("item " .. m.id), m.qty, have,
+						(GM.QHex(m.id) or "")
+							.. (GM.ItemName(m.id) or ("item " .. m.id))
+							.. "|r", m.qty, have,
 						GM.Money(GM.Crafting.MatPrice(m.id) or 0)))
 				end
 				return lines
@@ -755,6 +779,7 @@ function CU.Refresh()
 		if q then
 			r:Show()
 			r.name:SetText((q.name or "?") )
+			r.name:SetTextColor(GM.NameColor(q.itemID))
 			r.qty._id, r.qty._q = q.recipeID, q.qty
 			if not r.qty:HasFocus() then r.qty:SetText("×" .. q.qty) end
 			local p = q.profit and q.profit * q.qty
@@ -786,7 +811,11 @@ function CU.Refresh()
 				CU.Refresh()
 			end)
 			r:SetScript("OnClick", function()
-				ui.sel = id
+				if IsShiftKeyDown() and q.itemID then
+					GM.ModifiedItemClick(q.itemID)
+				else
+					ui.sel = id
+				end
 				CU.Refresh()
 			end)
 			local short = q.qty - (q.craftable or 0)
@@ -829,6 +858,7 @@ function CU.Refresh()
 		ui.detIcon:SetTexture(GM.ItemIcon(dr.itemID) or 134400)
 		ui.detIconBtn.itemID = dr.itemID
 		ui.detName:SetText(GM.ItemName(dr.itemID) or dr.name or "?")
+		ui.detName:SetTextColor(GM.NameColor(dr.itemID))
 		local profit, price, cost = GM.Crafting.Profit(ui.sel)
 		local sub = {}
 		if (dr.numMade or 1) > 1 then tinsert(sub, "makes ×" .. dr.numMade) end
@@ -842,6 +872,11 @@ function CU.Refresh()
 			cost and GM.Money(cost) or "?",
 			price and GM.Money(price) or "?",
 			profit and (profit > 0 and "+" or "") .. GM.Money(profit) or "?"))
+		local vel = dr.itemID
+			and GM.Price("dbregionsalerate", dr.itemID)
+		if vel and vel > 0 then
+			tinsert(sub, "sells ~" .. format("%g", vel) .. "/day")
+		end
 		ui.detSub:SetText(table.concat(sub, " · "))
 		local craftable = GM.Crafting.Craftable(ui.sel)
 		for i, m in ipairs(ui.detMats) do
@@ -858,7 +893,9 @@ function CU.Refresh()
 				m.have:SetText(have .. " / " .. mat.qty
 					.. (all > have and " +" .. (all - have) or ""))
 				m.have:SetTextColor(GM.RGB(have >= mat.qty and "pos" or "err"))
-				m.name:SetTextColor(GM.RGB(have >= mat.qty and "text" or "warn"))
+				m.name:SetTextColor(GM.NameColor(
+					have >= mat.qty and mat.id,
+					have >= mat.qty and "text" or "warn"))
 				Tip(m.hit, function()
 					return { GM.ItemName(mat.id) or ("item " .. mat.id),
 						format("bags+bank %d · mail/gbank/ah/alts %d · total %d",

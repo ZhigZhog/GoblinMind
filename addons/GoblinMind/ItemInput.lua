@@ -16,41 +16,45 @@ function GM.TargetItem(itemID, link)
 	if GM.AH.open then GM.PlanQueue.Rescan() end
 end
 
--- Alt-click always targets; Shift-click targets only while the plan
--- window is open (shift has native meanings — chat paste, stack
--- split — that still fire alongside; secure hooks can't suppress
--- them, and shouldn't).
+-- Shift+click = Blizzard's fill-the-slot gesture (the native AH sell
+-- slot works exactly this way). Native meaning is untouched — links
+-- still paste, stacks still split — and while the plan window is open
+-- the clicked item also becomes its target. Gated on IsShown so a
+-- bare shift+click for chat-linking never pops the planner.
 local function Capture()
-	if IsAltKeyDown() then return true end
-	return IsShiftKeyDown() and GM.PlanQueue.IsShown()
+	return IsShiftKeyDown and IsShiftKeyDown()
+		and GM.PlanQueue.IsShown()
 end
 
--- Modified-click a bag slot.
-if ContainerFrameItemButton_OnModifiedClick then
-	hooksecurefunc("ContainerFrameItemButton_OnModifiedClick", function(self)
-		if not Capture() then return end
-		local bag = self:GetParent():GetID()
-		local slot = self:GetID()
-		local info = C_Container and C_Container.GetContainerItemInfo(bag, slot)
-		if info and info.itemID then GM.TargetItem(info.itemID, info.hyperlink) end
-	end)
+-- The shared funnel every container/click path delegates to on this
+-- client: Blizzard's own handlers plus Baganator and EllesmereUIBags
+-- (the per-handler globals like ContainerFrameItemButton_OnModifiedClick
+-- don't reliably exist or fire here — Baganator replaces the buttons).
+--
+-- REPLACED, not post-hooked: claiming the click must return true so the
+-- caller skips its native follow-through — Baganator's item buttons
+-- check the return before opening StackSplitFrame, Blizzard's modified-
+-- click path does the same. Unclaimed clicks run the original verbatim.
+local origHMI = HandleModifiedItemClick
+if origHMI then
+	HandleModifiedItemClick = function(link)
+		if Capture() then
+			local id = link and tonumber(link:match("item:(%d+)"))
+			if id then
+				GM.TargetItem(id, link)
+				return true
+			end
+		end
+		return origHMI(link)
+	end
 end
 
--- Modified-click a chat link.
+-- Chat links — SetItemRef may not delegate to the funnel on this
+-- client; TargetItem is idempotent if it does.
 if SetItemRef then
 	hooksecurefunc("SetItemRef", function(link)
 		if not Capture() then return end
 		local id = link and tonumber(link:match("item:(%d+)"))
 		if id then GM.TargetItem(id) end
-	end)
-end
-
--- Modified-click an equipped slot.
-if PaperDollItemSlotButton_OnModifiedClick then
-	hooksecurefunc("PaperDollItemSlotButton_OnModifiedClick", function(self)
-		if not Capture() then return end
-		local link = GetInventoryItemLink("player", self:GetID())
-		local id = link and GetIDByInfo and GetIDByInfo(link)
-		if id then GM.TargetItem(id, link) end
 	end)
 end

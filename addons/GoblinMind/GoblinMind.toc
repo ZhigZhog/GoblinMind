@@ -49,4 +49,5 @@ ItemInput.lua
 Tooltip.lua
 Gathering.lua
 TaskListUI.lua
+BugReport.lua
 Minimap.lua

@@ -20,6 +20,7 @@ local _, GM = ...
 GM.VendoringUI = {}
 local VU = GM.VendoringUI
 local ui
+local EditBox = GM.Widgets.EditBox
 
 local ROW_H = 26
 local VISIBLE = 13
@@ -131,7 +132,7 @@ local function Build()
 	if ui then return end
 	ui = { page = "buy", scroll = 0 }
 	local f = CreateFrame("Frame", "GoblinMindVendor", UIParent)
-	f:SetSize(560, 430)
+	f:SetSize(560, 450)
 	f:SetPoint("CENTER", -80, -20)
 	f:SetFrameStrata("HIGH")
 	f:SetToplevel(true)
@@ -283,6 +284,27 @@ local function Build()
 		act.text = GM.MakeFontString(act, GM.FONT_BOLD, 8, "accent")
 		act.text:SetPoint("CENTER")
 		row.act = act
+		-- shift-click swaps the action button for a qty prompt:
+		-- Enter buys N items, Escape / click-away restores the button
+		local qb = EditBox(row, 46)
+		qb:SetPoint("RIGHT", -4, 0)
+		if qb.SetNumeric then qb:SetNumeric(true) end
+		qb:Hide()
+		qb:SetScript("OnEnterPressed", function(eb)
+			local n = math.floor(tonumber(eb:GetText()) or 0)
+			local idx = eb.buyIdx
+			eb:ClearFocus()
+			if idx and n > 0 then
+				pcall(BuyMerchantItem, idx, n)
+			end
+			VU.Refresh()
+		end)
+		qb:SetScript("OnEscapePressed", function(eb) eb:ClearFocus() end)
+		qb:HookScript("OnEditFocusLost", function(eb)
+			eb:Hide()
+			row.act:Show()
+		end)
+		row.qtyBox = qb
 		-- item tooltips on the row body, not over the action button
 		row:SetScript("OnEnter", function(self)
 			if self.tip then
@@ -337,7 +359,8 @@ function VU.Refresh()
 		or "nothing to buy back")
 	ui.empty:SetShown(#rows == 0)
 	ui.foot:SetText(ui.page == "buy"
-		and "flips sort first — vendor price < 85% of market · click BUY = one stack"
+		and "flips sort first — vendor price < 85% of market · "
+			.. "BUY = one stack · shift-click = pick qty"
 		or ui.page == "sell" and "one stack per SELL click · right-click row = blacklist"
 		or "sold items can be bought back until you log out")
 
@@ -350,8 +373,11 @@ function VU.Refresh()
 		if r then
 			row:Show()
 			row.tip, row.tipIdx, row.tipID = nil, nil, nil
+			row.act:Show()
+			row.qtyBox:Hide()
 			row.icon:SetTexture(r.id and GM.ItemIcon(r.id) or 134400)
 			row.name:SetText(r.name or "?")
+			row.name:SetTextColor(GM.NameColor(r.id))
 			row.c1:SetText("×" .. (r.qty or 1))
 			if ui.page == "buy" then
 				row.c2:SetText(r.ext and "alt cost"
@@ -364,10 +390,17 @@ function VU.Refresh()
 				row.tip, row.tipIdx = "buy", r.index
 				local idx = r.index
 				row.act:SetScript("OnClick", function()
-					if not r.out then
-						pcall(BuyMerchantItem, idx, r.qty or 1)
-						VU.Refresh()
+					if r.out then return end
+					if IsShiftKeyDown() then
+						row.act:Hide()
+						row.qtyBox:SetText("")
+						row.qtyBox.buyIdx = idx
+						row.qtyBox:Show()
+						row.qtyBox:SetFocus()
+						return
 					end
+					pcall(BuyMerchantItem, idx, r.qty or 1)
+					VU.Refresh()
 				end)
 			elseif ui.page == "sell" then
 				row.c2:SetText(GM.Money(r.val))
@@ -387,6 +420,8 @@ function VU.Refresh()
 					if btn == "RightButton" then
 						GM.Vendoring.BlacklistToggle(r.id)
 						VU.Refresh()
+					elseif IsShiftKeyDown() and r.id then
+						GM.ModifiedItemClick(r.id)
 					end
 				end)
 			else
@@ -403,7 +438,7 @@ function VU.Refresh()
 				end)
 			end
 			if r.flip then
-				row.name:SetText(GM.CC("pos") .. "▸ |r" .. (r.name or "?"))
+				row.name:SetText(GM.CC("pos") .. "▶ |r" .. (r.name or "?"))
 			end
 		else
 			row:Hide()

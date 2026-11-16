@@ -149,7 +149,12 @@ f:SetScript("OnEvent", function(_, event, ...)
 			GM.Print(GM.CC("pos") .. "buyout confirmed|r")
 		end
 	elseif event == "AUCTION_CANCELED" then
-		if GM.AH.open then
+		-- a replicate stream fires this once per listing it replaces —
+		-- thousands of lines of churn noise during a scan we asked
+		-- for. Suppress while a book build is in flight plus a short
+		-- tail so lagging events after Finish() don't leak through.
+		if GM.AH.open and not GM.AH.Busy()
+			and GetTime() >= (GM.AH.cancelMute or 0) then
 			GM.Print(GM.CC("textDim") .. "auction canceled|r")
 		end
 	elseif event == "UI_ERROR_MESSAGE" then
@@ -207,6 +212,35 @@ function GM.AH.ScanItem(itemID, itemName, done)
 	C_AuctionHouse.SendSearchQuery(GM.AH.scanItemKey, EMPTY_SORTS, true)
 end
 
+-- Time-left arrives in two shapes on Forever: real seconds on
+-- item-search results (timeLeftSeconds) and a 0–3 bucket enum on
+-- replicate rows (Short/Medium/Long/VeryLong — the same field
+-- GetReplicateItemTimeLeft echoes). Small whole numbers are buckets;
+-- map them to representative seconds so every consumer formats
+-- seconds only. Anything past the 48h duration cap is a misread
+-- field, not a time — nil it rather than show nonsense.
+local TL_BUCKETS = { 1800, 7200, 43200, 172800, 172800 }
+local function NormTl(v)
+	if type(v) == "number" then
+		if v >= 0 and v <= 4 and v % 1 == 0 then
+			return TL_BUCKETS[v + 1] -- 30m / 2h / 12h / 48h
+		end
+		return v > 0 and v <= 172800 and v or nil
+	end
+	if type(v) == "table" then
+		return NormTl(v.seconds or v.timeLeftSeconds or v.timeLeft)
+	end
+end
+
+-- expiry estimation: the bucket enum is coarse, but a listing that
+-- CROSSES a bucket boundary between scans pins its expiry exactly
+-- (flipping to Long = 12h left at that moment); each later crossing
+-- refines the countdown. Until a transition lands, a bucket midpoint
+-- stands in — the UI marks estimated times with '~'.
+-- key -> { lastB, seen, exp, est } — absolute GetTime expiry guesses
+local TL_MID = { 900, 4500, 25200, 108000 } -- 15m / 75m / 7h / 30h
+GM.AH.tlEst = GM.AH.tlEst or {}
+
 function GM.AH.CollectCommodityAsks(itemID)
 	local asks = {}
 	for i = 1, C_AuctionHouse.GetNumCommoditySearchResults(itemID) do
@@ -224,18 +258,34 @@ end
 function GM.AH.CollectItemAsks()
 	local key = GM.AH.scanItemKey
 	local asks = {}
+	local me, meGUID = UnitName("player"),
+		UnitGUID and UnitGUID("player")
 	for i = 1, C_AuctionHouse.GetNumItemSearchResults(key) do
 		local r = C_AuctionHouse.GetItemSearchResultInfo(key, i)
 		if r and r.auctionID then
 			local price = r.buyoutAmount or r.buyout or r.minBid or r.minPrice
 			local qty = r.quantity or r.totalQuantity or 1
 			if price and qty > 0 then
+				-- owners[] uses sentinels on Forever: "player" = our own
+				-- listing, "" = redacted — TSM's wrapper translates the
+				-- same way (player→UnitName, ""→"?")
 				local seller = (r.owners and r.owners[1]) or r.owner or r.ownerName
+				local ownSeller = seller == "player"
+				if ownSeller then seller = me
+				elseif seller == "" then seller = "?" end
 				-- Forever returns buyoutAmount PER ITEM, not the lot
 				-- total (verified: qty=147 buyout=200 = 2s/bag lot 2g94s).
 				-- unit is the price directly; total is the lot cost.
 				tinsert(asks, { id = r.auctionID, qty = qty, unit = price, total = price * qty,
-					own = (r.containsOwnerItem or r.isOwned) or nil,
+					bid = r.bidAmount, minBid = r.minBid,
+					-- timeLeftSeconds arrives 0 (unpopulated) on this
+					-- client — 0 is truthy in Lua, so without the >0
+					-- guard it shadows the real bucket/estimate with
+					-- a fake "expires now" everywhere downstream
+					tl = (r.timeLeftSeconds and r.timeLeftSeconds > 0
+						and r.timeLeftSeconds) or NormTl(r.timeLeft),
+					own = (r.containsOwnerItem or r.isOwned or ownSeller) or nil,
+					highBidder = (meGUID and r.bidder == meGUID) or nil,
 					seller = seller })
 			end
 		end
@@ -301,16 +351,16 @@ function GM.AH.FullScan()
 	-- a parallel Poll chain doubles the frame work the loop below does
 	if GM.AH.wantBook or GM.AH.collecting then
 		GM.PlanQueue.ScanStatus(GM.CC("textDim")
-			.. "book collect already running|r")
+			.. "a full scan is already running|r")
 		return
 	end
 	-- ReplicateItems is heavy: this client enforces a script execution
 	-- limit AND TSM hook-processes every replicate scan too — 30s floor
 	if GM.AH.BookAge() < 30 then
-		GM.Print(GM.CC("textDim") .. "book scanned recently — give it a moment|r")
+		GM.Print(GM.CC("textDim") .. "full scan ran a moment ago — give it a few seconds|r")
 		return
 	end
-	local msg = GM.CC("textDim") .. "replicating full book…|r"
+	local msg = GM.CC("textDim") .. "starting full scan…|r"
 	GM.PlanQueue.ScanStatus(msg)
 	if GM.Shopping and GM.Shopping.Status then GM.Shopping.Status(msg) end
 	local prevT = GM.AH.bookT
@@ -318,7 +368,7 @@ function GM.AH.FullScan()
 	local ok, err = pcall(C_AuctionHouse.ReplicateItems)
 	if not ok then
 		GM.AH.wantBook = nil
-		GM.PlanQueue.ScanStatus(GM.CC("warn") .. "ReplicateItems error: " .. tostring(err) .. "|r")
+		GM.PlanQueue.ScanStatus(GM.CC("warn") .. "full scan failed: " .. tostring(err) .. "|r")
 		GM.PlanQueue.Refresh()
 		return
 	end
@@ -339,32 +389,30 @@ function GM.AH.FullScan()
 			else
 				lastN, stable = n, 0
 				GM.PlanQueue.ScanStatus(GM.CC("textDim") ..
-					format("book streaming — %d auctions…|r", n))
+					format("receiving auctions — %d so far…|r", n))
 			end
 		else
 			-- replicate is being silently dropped (server throttle) —
 			-- after ~5s fall back to a browse-all book build in parallel
 			if polls == 10 and not GM.AH.browse then
 				GM.PlanQueue.ScanStatus(GM.CC("textDim") ..
-					"replicate silent — browsing book instead…|r")
+					"full scan unanswered — switching to browse mode…|r")
 				GM.AH.BrowseBook()
 			end
-			-- debug surface: poll count, buffer size, which events fired
-			local ev = ""
-			for k in pairs(eventsSeen) do ev = ev .. " " .. k end
+			-- debug surface stays in GM.AH.dbgEvents (poll count,
+			-- buffer size, fired events) — the status line only needs
+			-- to tell the player the server is slow to answer
 			GM.PlanQueue.ScanStatus(GM.CC("textDim") ..
-				format("replicating… poll %d · buffer %d%s|r", polls, n, ev))
+				format("waiting for the auction house… (%ds)|r",
+					floor(polls / 2)))
 		end
 		if polls < 40 then
 			GM.After(0.5, Poll)
 		else
 			GM.AH.wantBook = nil
 			if GM.AH.bookT == prevT and GM.AH.open and not GM.AH.browse then
-				local ev = ""
-				for k in pairs(eventsSeen) do ev = ev .. " " .. k end
 				local warn = GM.CC("warn") ..
-					format("no book response — buffer stayed 0 · events:%s|r",
-						ev ~= "" and ev or " none")
+					"the auction house didn't answer — try again|r"
 				GM.PlanQueue.ScanStatus(warn)
 				if GM.Shopping and GM.Shopping.Status then GM.Shopping.Status(warn) end
 				GM.PlanQueue.Progress(nil)
@@ -378,6 +426,13 @@ end
 
 function GM.AH.BookAge()
 	return GM.AH.bookT > 0 and (time() - GM.AH.bookT) or math.huge
+end
+
+-- freshest source wins: the live book is the authority only while
+-- its snapshot is newer than the backend's upstream data. No DB →
+-- the book always wins; no book → never live.
+function GM.AH.BookLive()
+	return GM.AH.BookAge() < (GM.DataAge() or math.huge)
 end
 
 -- a full scan of either kind is in flight — used to disable the button
@@ -540,15 +595,21 @@ function GM.AH.CollectBook()
 	local function Finish()
 		GM.AH.collecting = nil
 		GM.AH.wantBook = nil
+		GM.AH.cancelMute = GetTime() + 8
 		GM.AH.lastBookN = n
 		GM.AH.bookKind = "replicate"
 		GM.AH.book, GM.AH.bookT = book, time()
 		pcall(GM.AH.SaveBook) -- persistence failure must not kill completion
+		-- drop expiry estimates for listings that left this scan —
+		-- dead or relisted, either way the anchor is stale
+		for k, e in pairs(GM.AH.tlEst) do
+			if (e.seen or 0) < gen then GM.AH.tlEst[k] = nil end
+		end
 		local items = 0
 		for _ in pairs(book) do items = items + 1 end
 		GM.PlanQueue.Progress(nil)
-		GM.PlanQueue.ScanStatus(GM.CC("textDim") .. format("book: %d auctions · %d items|r", n, items))
-		GM.Print(GM.CC("textDim") .. format("book: %d auctions · %d items|r", n, items))
+		GM.PlanQueue.ScanStatus(GM.CC("textDim") .. format("full scan complete — %d auctions · %d items priced|r", n, items))
+		GM.Print(GM.CC("textDim") .. format("full scan complete — %d auctions · %d items priced|r", n, items))
 		for _, cb in ipairs(GM.AH.bookSubs) do pcall(cb, rows, book) end
 		GM.PlanQueue.Refresh()
 	end
@@ -589,9 +650,52 @@ function GM.AH.CollectBook()
 					seller = v
 				end
 			end
+			-- bid sits right after buyout in the replicate tuple
+			-- (retail map: buyoutPrice=10, bidAmount=11 — Forever's
+			-- shift moves both). Number-typed only; a wrong index is
+			-- a string/flag and fails the check.
+			local bid = type(t[buyIdx + 1]) == "number" and t[buyIdx + 1] or nil
+			local rawTl
+			if type(C_AuctionHouse.GetReplicateItemTimeLeft) == "function" then
+				local ok, s = pcall(C_AuctionHouse.GetReplicateItemTimeLeft, idx)
+				if ok then rawTl = s end
+			end
+			if rawTl == nil and buyIdx and buyIdx > 3 then
+				-- the replicate tuple itself carries timeLeft three
+				-- slots before buyoutPrice in both known layouts
+				-- (buyout 11→tl 8 on Forever, 10→7 on retail) —
+				-- read it straight when the dedicated API is absent
+				-- or returns nothing NormTl can use
+				rawTl = t[buyIdx - 3]
+			end
+			local tl = NormTl(rawTl)
+			local key = link .. ":" .. stackSize .. ":" .. buyout
+			-- raw enum bucket (0-3) feeds the transition tracker —
+			-- crossings between CONSECUTIVE scans pin the expiry;
+			-- a gap means the row vanished and may be a relist
+			local tlb = type(rawTl) == "number" and rawTl >= 0
+				and rawTl <= 4 and rawTl % 1 == 0 and rawTl or nil
+			local gennow = GetTime()
+			local est = GM.AH.tlEst[key]
+			if tlb then
+				if not est or est.seen ~= gen - 1 then
+					est = { lastB = tlb, seen = gen,
+						est = gennow + TL_MID[tlb + 1] }
+					GM.AH.tlEst[key] = est
+				else
+					if tlb < est.lastB then
+						est.exp, est.est =
+							gennow + TL_BUCKETS[tlb + 1], nil
+					elseif tlb > est.lastB then
+						est.exp, est.est = nil, nil -- relisted — reset
+					end
+					est.lastB, est.seen = tlb, gen
+				end
+			end
 			rows[#rows + 1] = { id = id, link = link, qty = stackSize, unit = unit,
-				buyout = buyout, key = link .. ":" .. stackSize .. ":" .. buyout, own = own,
-				seller = seller }
+				buyout = buyout, bid = bid, tl = tl,
+				tlex = est and (est.exp or est.est) or nil,
+				key = key, own = own, seller = seller }
 			if id then
 				local e = book[id]
 				if not e then
@@ -627,7 +731,7 @@ function GM.AH.CollectBook()
 				lastReport = Now()
 				GM.PlanQueue.Progress(i / n)
 				GM.PlanQueue.ScanStatus(GM.CC("textDim") ..
-					format("collecting book — %d/%d auctions|r", i, n))
+					format("processing results — %d/%d|r", i, n))
 			end
 			GM.After(0.03, Chunk)
 		else
@@ -683,7 +787,7 @@ function GM.AH.BrowseBook()
 	})
 	if not ok then
 		GM.AH.browse = nil
-		GM.PlanQueue.ScanStatus(GM.CC("warn") .. "SendBrowseQuery error: " .. tostring(err) .. "|r")
+		GM.PlanQueue.ScanStatus(GM.CC("warn") .. "browse query failed: " .. tostring(err) .. "|r")
 		GM.PlanQueue.Refresh()
 		return false
 	end
@@ -691,7 +795,7 @@ function GM.AH.BrowseBook()
 	GM.After(6, function()
 		if GM.AH.browse == b and b.seen == 0 then
 			GM.AH.browse = nil
-			GM.PlanQueue.ScanStatus(GM.CC("warn") .. "browse returned no results either|r")
+			GM.PlanQueue.ScanStatus(GM.CC("warn") .. "the auction house isn't responding — try again later|r")
 			GM.PlanQueue.Refresh()
 		end
 	end)
@@ -701,6 +805,7 @@ end
 
 local function FinishBrowse(b)
 	GM.AH.browse = nil
+	GM.AH.cancelMute = GetTime() + 8
 	-- a fresh replicate book beats aggregate data — don't clobber it
 	if GM.AH.BookAge() < 60 and GM.AH.bookKind == "replicate" then return end
 	GM.AH.bookKind = "browse"
@@ -709,7 +814,7 @@ local function FinishBrowse(b)
 	local items = 0
 	for _ in pairs(b.book) do items = items + 1 end
 	GM.PlanQueue.Progress(nil)
-	local msg = GM.CC("textDim") .. format("book: %d items (browse — no per-auction rows)|r", items)
+	local msg = GM.CC("textDim") .. format("scan complete — %d items priced (browse mode)|r", items)
 	GM.PlanQueue.ScanStatus(msg)
 	GM.Print(msg)
 	for _, cb in ipairs(GM.AH.bookSubs) do pcall(cb, b.rows, b.book) end
@@ -747,7 +852,7 @@ function GM.AH.OnBrowseResults()
 		b.seen = i
 	end
 	GM.PlanQueue.ScanStatus(GM.CC("textDim") ..
-		format("browsing book — %d items…|r", b.seen))
+		format("browsing the auction house — %d items…|r", b.seen))
 	if C_AuctionHouse.HasFullBrowseResults and C_AuctionHouse.HasFullBrowseResults() then
 		FinishBrowse(b)
 	else
@@ -762,7 +867,7 @@ function GM.AH.OnBrowseResults()
 					pcall(C_AuctionHouse.RequestMoreBrowseResults)
 				else
 					GM.PlanQueue.ScanStatus(GM.CC("warn") ..
-						format("browse stalled at %d items|r", mySeen))
+						format("scan stalled at %d items — try again|r", mySeen))
 					GM.AH.browse = nil
 					GM.PlanQueue.Refresh()
 				end
@@ -852,6 +957,15 @@ function GM.AH.Execute(step)
 		GM.AH.pendingBuy = { itemID = step.itemID, qty = step.qty, total = total }
 		C_AuctionHouse.PlaceBid(step.auctionID, total)
 		return true
+	elseif step.kind == "bid" then
+		-- a real bid, not a buyout — total is the lot bid amount
+		if not step.auctionID then
+			GM.Print(GM.CC("err") .. "missing auction id — rescan first|r")
+			return false
+		end
+		GM.Print(format("bidding %s…", GM.Money(step.total)))
+		C_AuctionHouse.PlaceBid(step.auctionID, step.total)
+		return true
 	elseif step.kind == "confirm" then
 		if not GM.AH.pendingConfirm then return false end
 		GM.Print("confirming purchase…")
@@ -896,8 +1010,14 @@ function GM.AH.Execute(step)
 		return true
 	elseif step.kind == "cancel" then
 		GM.Inventory.recentCancels[step.auctionID] = time()
-		local a = GM.Inventory.auctions and GM.Inventory.auctions[step.auctionID]
-		if a then GM.Ledger.Add("cancel", a.itemID, a.qty, a.buyout) end
+		local a = GM.Inventory.OwnedByKey
+			and GM.Inventory.OwnedByKey(step.auctionID)
+		if a then
+			-- suppress by fingerprint too — the owned list can rekey
+			-- the listing on the next snapshot
+			if a.fp then GM.Inventory.recentCancels[a.fp] = time() end
+			GM.Ledger.Add("cancel", a.itemID, a.qty, a.buyout)
+		end
 		C_AuctionHouse.CancelAuction(step.auctionID)
 		GM.After(2, GM.Inventory.QueryOwned)
 		return true

@@ -70,7 +70,9 @@ local function BuildRow(parent, i)
 				local have = GM.Crafting.Owned(m.id)
 				local p = GM.Crafting.MatPrice(m.id)
 				GameTooltip:AddLine(format("  %s ×%d — have %d @ %s",
-					(GM.ItemName and GM.ItemName(m.id)) or ("item " .. m.id),
+					(GM.QHex(m.id) or "")
+						.. ((GM.ItemName and GM.ItemName(m.id))
+							or ("item " .. m.id)) .. "|r",
 					m.qty, have, p and GM.Money(p) or "?"),
 					have >= m.qty and 0.5 or 1,
 					have >= m.qty and 0.9 or 0.6,
@@ -92,6 +94,10 @@ local function BuildRow(parent, i)
 	-- keep mouse free for the buy button and tooltip only
 	row:SetScript("OnMouseUp", function()
 		local d = row.data
+		if IsShiftKeyDown() then
+			if d and d.itemID then GM.ModifiedItemClick(d.itemID) end
+			return
+		end
 		if d and d.header then
 			S.expanded[d.itemID] = not d.open
 			S.Refresh()
@@ -178,6 +184,7 @@ local function Build()
 	header:SetPoint("TOPRIGHT", -10, -68)
 	header:SetHeight(18)
 	GM.Panel(header, "contHigh")
+	ui.hdrFs = {}
 	for _, h in ipairs({
 		{ "ITEM", "LEFT", 8 }, { "QTY", "LEFT", 182 }, { "UNIT", "LEFT", 240 },
 		{ "%MKT", "LEFT", 320 }, { "SELLER", "LEFT", 382 },
@@ -185,6 +192,7 @@ local function Build()
 		local fs = GM.MakeFontString(header, GM.FONT_MED, 10, "primary")
 		fs:SetPoint(h[2], h[3], 0)
 		fs:SetText(h[1])
+		ui.hdrFs[#ui.hdrFs + 1] = fs
 	end
 
 	ui.list = CreateFrame("Frame", nil, f)
@@ -347,7 +355,9 @@ function S.BuyHit(h)
 		end
 		if cheapest and cheapest.unit <= ceil(h.unit * 1.02) then
 			h.live = { id = cheapest.id, qty = cheapest.qty,
-				unit = cheapest.unit, total = cheapest.total or cheapest.unit * cheapest.qty }
+				unit = cheapest.unit, total = cheapest.total or cheapest.unit * cheapest.qty,
+				bid = cheapest.bid, minBid = cheapest.minBid,
+				tl = cheapest.tl }
 			h.state = "ready"
 		else
 			GM.Print(format("sniper: %s gone — cheapest now %s",
@@ -358,10 +368,77 @@ function S.BuyHit(h)
 	end)
 end
 
+-- sniper bid: double-click places a +1c bid over the current bid (or
+-- the listing's minimum when nobody's bid yet). auctionID needs the
+-- live re-query — without h.live the first double-click arms the row
+-- and scans; the next click fires PlaceBid (protected calls stay on
+-- hardware clicks).
+function S.BidHit(h)
+	if not GM.AH.open then
+		GM.Print(GM.CC("warn") .. "sniper needs the auction house open|r")
+		return
+	end
+	-- a staged commodity quote keeps its confirm path — a double-click
+	-- here confirms, it doesn't arm a bid that could never fire
+	if h.state == "staged" then S.BuyHit(h) return end
+	if h.state == "ready" and h.live and h.live.id then
+		local a = h.live
+		-- +1c above the current lot bid; no bids yet → the server's
+		-- required minimum. Below it the call is rejected anyway.
+		local amt = (a.bid and a.bid > 0 and a.bid + 1) or a.minBid
+		if not (amt and amt > 0) then
+			GM.Print(GM.CC("warn") .. "no bid price on this listing|r")
+			return
+		end
+		GM.AH.Execute({ kind = "bid", itemID = h.itemID,
+			auctionID = a.id, total = amt })
+		h.done = true
+		h.state = nil
+		h.wantBid = nil
+		S.Refresh()
+		return
+	end
+	-- arm the bid intent even while a BuyHit scan is in flight — its
+	-- completion lands h.live and the next click bids
+	h.wantBid = true
+	if h.state then return end
+	h.state = "scanning"
+	S.Refresh()
+	GM.Auctioning.QueueScan(h.itemID, function(asks)
+		h.state = nil
+		local cheapest
+		for _, a in ipairs(asks) do
+			if not a.own then cheapest = a break end
+		end
+		if cheapest then
+			h.live = { id = cheapest.id, qty = cheapest.qty,
+				unit = cheapest.unit, total = cheapest.total or cheapest.unit * cheapest.qty,
+				bid = cheapest.bid, minBid = cheapest.minBid,
+				tl = cheapest.tl }
+			h.state = "ready"
+			GM.Print(GM.CC("textDim") .. "bid armed — click the row to place +1c|r")
+		else
+			GM.Print(format("sniper: %s gone", h.name or h.itemID))
+			h.done = true
+			h.wantBid = nil
+		end
+		S.Refresh()
+	end)
+end
+
 -- ============ refresh ============
+
+-- header labels follow the mode — craft rows carry cost/profit/prof,
+-- not qty/unit/%mkt/seller, and shared labels made them read as shifted
+local HDR_LABELS = {
+	shop = { "ITEM", "QTY", "UNIT", "%MKT", "SELLER" },
+	craft = { "ITEM", "CAN", "COST", "PROFIT", "PROF" },
+}
 
 function S.Refresh()
 	if not ui then return end
+	local labels = HDR_LABELS[ui.mode] or HDR_LABELS.shop
+	for i, fs in ipairs(ui.hdrFs or {}) do fs:SetText(labels[i] or "") end
 	GM.Panel(ui.shopBtn, ui.mode == "shop" and "accent" or "contMedium")
 	GM.Panel(ui.snipeBtn,
 		(GM.SniperUI and GM.SniperUI.IsOpen and GM.SniperUI.IsOpen())
@@ -437,9 +514,8 @@ function S.Refresh()
 			row.name:SetText(((GM.ItemName and GM.ItemName(r.itemID)) or r.name or "?"))
 			-- profitable + mats on hand = the actionable rows
 			local ep = r.effProfit or r.profit
-			row.name:SetTextColor(GM.RGB(
-				ep and ep > 0 and (r.craftable > 0 and "accent" or "pos")
-				or ep and "err" or "textDim"))
+			row.name:SetTextColor(GM.NameColor(r.itemID,
+				ep and ep > 0 and "text" or "textDim"))
 			row.qty:SetText(r.craftable and r.craftable > 0 and ("×" .. r.craftable) or "")
 			row.qty:SetTextColor(GM.RGB(r.craftable and r.craftable > 0 and "accent" or "textDim"))
 			-- effective cost: only the mats you'd still buy
@@ -463,7 +539,8 @@ function S.Refresh()
 			row.arrow:SetText(e.open and "▼" or "▶")
 			row.name:SetPoint("LEFT", 26, 0)
 			local nm = (GM.ItemName and GM.ItemName(g.itemID)) or ("item " .. g.itemID)
-			row.name:SetText(GM.CC("text") .. nm .. "|r" .. GM.CC("textDim")
+			row.name:SetText((GM.QHex(g.itemID) or GM.CC("text"))
+				.. nm .. "|r" .. GM.CC("textDim")
 				.. "  · " .. g.count .. (g.count == 1 and " listing" or " listings") .. "|r")
 			row.qty:SetText("×" .. g.totalQty)
 			row.unit:SetText(g.cheapest < math.huge and GM.Money(g.cheapest) or "—")

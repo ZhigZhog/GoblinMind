@@ -1,0 +1,12 @@
+{
+  "forever": {
+    "name": "WoW Forever (1.60)",
+    "realm": "YOURREALM-Faction",
+    "appdata": "C:/path/to/WoW/_forever_/Interface/AddOns/TradeSkillMaster_AppHelper/AppData.lua",
+    "root": "C:/path/to/WoW/_forever_",
+    "out": [
+      "C:/path/to/repo/addons/GoblinMind_Data/Data.lua",
+      "C:/path/to/WoW/_forever_/Interface/AddOns/GoblinMind_Data/Data.lua"
+    ]
+  }
+}

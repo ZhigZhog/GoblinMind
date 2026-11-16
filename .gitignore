@@ -11,6 +11,8 @@ __pycache__/
 # stray file from `2> nul` redirects (Git Bash makes a real file)
 nul
 brain/brain.log
-brain/brain.log
 brain/book_history.json
+# local machine state — feeds.example.json is the shipped template
+brain/feeds.json
+brain/filed_bugs.json
 dist/

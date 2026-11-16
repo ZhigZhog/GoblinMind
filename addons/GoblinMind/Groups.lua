@@ -228,11 +228,32 @@ function GM.Groups.EvalOp(ops, field, itemID)
 	return v
 end
 
+-- ids with no explicit group — the Base Group's implicit members.
+-- Universe is the DB's item set (realm-scoped, flat fallback like
+-- GM.ItemEntry): everything it prices that isn't assigned anywhere.
+function GM.Groups.UngroupedIds()
+	local out = {}
+	local db = GoblinMindDB
+	if not db then return out end
+	local r = db.realms and db.realms[GM.Scope()]
+	local t = (r and r.items) or db.items
+	if not t then return out end
+	for id in pairs(t) do
+		if not GroupFor(id) then out[#out + 1] = id end
+	end
+	return out
+end
+
 function GM.Groups.List()
 	local out = {}
 	for path, g in pairs(GM.Groups.db.groups) do
 		local n = 0
 		for _ in pairs(g.items) do n = n + 1 end
+		-- Base Group's members are the ungrouped set — count the
+		-- implicit side too so the tree badge matches MemberList
+		if path == "Base Group" then
+			n = n + #GM.Groups.UngroupedIds()
+		end
 		out[#out + 1] = { path = path, n = n }
 	end
 	table.sort(out, function(a, b) return a.path < b.path end)

@@ -412,7 +412,7 @@ function C.Economics(recipeID, qty)
 	local price = GM.Price("dbmarket", r.itemID)
 	local priced, full, buy, owned, needT = true, 0, 0, 0, 0
 	local mats = {}
-	for _, m in ipairs(r.mats) do
+	for _, m in ipairs(r.mats or {}) do
 		local p = C.MatPrice(m.id)
 		local need = (m.qty or 1) * qty
 		local have = C.Available(m.id)
@@ -479,7 +479,7 @@ function C.Missing(recipeID, qty)
 	local r = GoblinMindCrafting.recipes[recipeID]
 	if not r then return {} end
 	local out = {}
-	for _, m in ipairs(r.mats) do
+	for _, m in ipairs(r.mats or {}) do
 		local need = m.qty * qty - C.Available(m.id)
 		if need > 0 then tinsert(out, { id = m.id, qty = need }) end
 	end
@@ -494,7 +494,7 @@ function C.MatSources(recipeID, qty)
 	local r = GoblinMindCrafting.recipes[recipeID]
 	if not r then return {} end
 	local out = {}
-	for _, m in ipairs(r.mats) do
+	for _, m in ipairs(r.mats or {}) do
 		local need = (m.qty or 1) * qty
 		local c = GM.Inventory.Count(m.id)
 		local short = need - (c.bags or 0)
@@ -583,21 +583,143 @@ local function MatSteps(steps, s)
 	end
 end
 
--- Emit a plan: fetch/alt/buy missing mats, then a craft step.
+-- shared resolution for a set of {recipeID, qty[, itemID, name,
+-- prof]} entries — single-recipe Queue AND whole-queue QueueEmit run
+-- the same math: aggregate mat coverage, recurse buy-shortfalls into
+-- sub-crafts when crafting beats buying (owned-mat coverage is
+-- C.Economics' effCost, the single math path). Returns the aggregated
+-- coverage map, craft order (subs before dependents), sub-craft
+-- counts, and the queued-entry index.
+local function ResolveSources(entries)
+	local agg = {}        -- itemID → {fetch,alt,buy} across everything
+	local craftOrder = {} -- recipeIDs, subs appended before dependents
+	local orderSet = {}
+	local subCrafts = {}  -- rid → crafts needed (non-queued recipes)
+	local queuedQty = {}  -- rid → entry (queued demand)
+
+	local function AddAgg(id, f, a, b)
+		local t = agg[id] or { fetch = 0, alt = 0, buy = 0 }
+		t.fetch, t.alt, t.buy = t.fetch + f, t.alt + a, t.buy + b
+		agg[id] = t
+	end
+
+	-- satisfy `need` units of itemID: craft when cheaper, else buy
+	local ResolveMat
+	ResolveMat = function(itemID, need, inPath)
+		local rid, r = C.RecipeForItem(itemID)
+		if rid and not inPath[rid] then
+			local crafts = ceil(need / (r.numMade or 1))
+			local e = C.Economics(rid, crafts)
+			local buyU = C.MatPrice(itemID)
+			if e and e.effCost and buyU and e.effCost < buyU then
+				inPath[rid] = true -- cycle guard: A→B→A buys the mat
+				for _, s2 in ipairs(C.MatSources(rid, crafts)) do
+					AddAgg(s2.id, s2.fetch, s2.alt, 0)
+					if s2.buy > 0 then ResolveMat(s2.id, s2.buy, inPath) end
+				end
+				inPath[rid] = nil
+				subCrafts[rid] = (subCrafts[rid] or 0) + crafts
+				if not orderSet[rid] then
+					orderSet[rid] = true
+					tinsert(craftOrder, rid)
+				end
+				return
+			end
+		end
+		AddAgg(itemID, 0, 0, need)
+	end
+
+	for _, q in ipairs(entries) do
+		queuedQty[q.recipeID] = q
+		local inPath = { [q.recipeID] = true }
+		for _, s in ipairs(C.MatSources(q.recipeID, q.qty)) do
+			AddAgg(s.id, s.fetch, s.alt, 0)
+			if s.buy > 0 then ResolveMat(s.id, s.buy, inPath) end
+		end
+		if not orderSet[q.recipeID] then
+			orderSet[q.recipeID] = true
+			tinsert(craftOrder, q.recipeID)
+		end
+	end
+	return agg, craftOrder, subCrafts, queuedQty
+end
+
+local function BuildPlanSteps(entries)
+	local steps = {}
+	local agg, craftOrder, subCrafts, queuedQty = ResolveSources(entries)
+	local ids = {}
+	for id in pairs(agg) do ids[#ids + 1] = id end
+	-- plan order: all fetches first (bank trip), then buys (AH trip)
+	for _, id in ipairs(ids) do
+		MatSteps(steps, { id = id, fetch = agg[id].fetch,
+			alt = agg[id].alt, buy = 0 })
+	end
+	sort(ids, function(a, b)
+		return ((C.MatPrice(a) or 0) * agg[a].buy)
+			> ((C.MatPrice(b) or 0) * agg[b].buy)
+	end)
+	for _, id in ipairs(ids) do
+		local s = agg[id]
+		if s.buy > 0 then
+			local nm = (GM.ItemName and GM.ItemName(id)) or ("item " .. id)
+			-- raw AH price — MatPrice already folds in vendorbuy,
+			-- which would make the vb<ahU test compare vb to itself
+			local ahU = GM.Price("dbmarket", id) or 0
+			local vb = GM.Price("vendorbuy", id)
+			if vb and vb > 0 and vb < ahU then
+				-- vendor stocks it cheaper than the AH — say so on the
+				-- step so it doesn't read as "go to the auction house"
+				tinsert(steps, { kind = "vendbuy", itemID = id,
+					qty = s.buy, unit = vb, name = nm,
+					desc = format("vendor %s/ea · AH %s",
+						GM.Money(vb), GM.Money(ahU)),
+					btag = "craft" })
+			else
+				tinsert(steps, { kind = "buy", itemID = id, qty = s.buy,
+					name = nm, unit = ahU, commodity = true,
+					btag = "craft" })
+			end
+		end
+	end
+	-- craft steps in dependency order — sub-crafts precede their
+	-- dependents by construction (post-order append in ResolveMat)
+	for _, rid in ipairs(craftOrder) do
+		local q = queuedQty[rid]
+		local crafts, itemID, nm, prof
+		if q then
+			-- queued demand + any sub-craft demand other recipes added
+			crafts, itemID, nm, prof = q.qty + (subCrafts[rid] or 0),
+				q.itemID,
+				(GM.ItemName and GM.ItemName(q.itemID)) or q.name or "item",
+				q.prof
+		else
+			local r = GoblinMindCrafting.recipes[rid]
+			crafts, itemID = subCrafts[rid] or 1, r and r.itemID
+			nm = (GM.ItemName and GM.ItemName(itemID))
+				or (r and r.name) or "item"
+			prof = (r and r.prof and r.prof .. " · sub-craft")
+				or "sub-craft"
+		end
+		tinsert(steps, { kind = "note", verb = "CRAFT", itemID = itemID,
+			qty = crafts, recipeID = rid, name = nm,
+			desc = prof or "tradeskill" })
+	end
+	return steps
+end
+
+-- Emit a plan: fetch/alt/buy missing mats, then a craft step — with
+-- the same sub-craft resolution QueueEmit runs (a short mat that's
+-- cheaper to make than buy becomes its own fetch/buy/craft chain).
 function C.Queue(recipeID, qty)
 	local r = GoblinMindCrafting.recipes[recipeID]
 	if not r then return end
 	qty = max(1, qty or 1)
-	local steps = {}
-	for _, s in ipairs(C.MatSources(recipeID, qty)) do
-		MatSteps(steps, s)
-	end
-	local nm = (GM.ItemName and GM.ItemName(r.itemID)) or r.name or "item"
-	tinsert(steps, { kind = "note", verb = "CRAFT", itemID = r.itemID,
-		qty = qty, recipeID = recipeID, name = nm,
-		desc = r.prof or "tradeskill" })
+	local steps = BuildPlanSteps({ {
+		recipeID = recipeID, qty = qty, itemID = r.itemID,
+		name = r.name, prof = r.prof } })
 	GM.PlanQueue.SetScanPlan({ steps = steps, itemID = r.itemID,
-		mode = "craft", source = "craft:" .. recipeID })
+		mode = "craft", source = "craft:" .. recipeID,
+		recipeID = recipeID, qty = qty })
 end
 
 -- list for the market window CRAFT mode
@@ -643,7 +765,7 @@ function C.Craftable(recipeID)
 	local r = GoblinMindCrafting.recipes[recipeID]
 	if not r then return 0 end
 	local n = math.huge
-	for _, m in ipairs(r.mats) do
+	for _, m in ipairs(r.mats or {}) do
 		n = min(n, floor(C.Owned(m.id) / m.qty))
 	end
 	return n == math.huge and 0 or n
@@ -655,7 +777,7 @@ function C.CraftableAll(recipeID)
 	local r = GoblinMindCrafting.recipes[recipeID]
 	if not r then return 0 end
 	local n = math.huge
-	for _, m in ipairs(r.mats) do
+	for _, m in ipairs(r.mats or {}) do
 		n = min(n, floor(C.Available(m.id) / m.qty))
 	end
 	return n == math.huge and 0 or n
@@ -778,13 +900,15 @@ function C.QueueList()
 	return out
 end
 
--- aggregated missing mats across the whole queue: itemID → qty short
+-- aggregated missing mats across the whole queue: itemID → qty still
+-- needed after every tracked location AND after cheap sub-crafts are
+-- resolved (a craftable shortfall counts its OWN buy shortfall, not
+-- the finished item). Same ResolveSources math the plan emits.
 function C.QueueMissing()
 	local need = {}
-	for id, qty in pairs(GoblinMindCrafting.queue) do
-		for _, m in ipairs(C.Missing(id, qty)) do
-			need[m.id] = (need[m.id] or 0) + m.qty
-		end
+	local agg = ResolveSources(C.QueueList())
+	for id, s in pairs(agg) do
+		if s.buy > 0 then need[id] = (need[id] or 0) + s.buy end
 	end
 	return need
 end
@@ -796,116 +920,7 @@ end
 -- single math path), the plan recurses into ITS mats and emits a
 -- sub-craft step instead of a buy.
 function C.QueueEmit()
-	local steps = {}
-	local ql = C.QueueList()
-	local agg = {}        -- itemID → {fetch,alt,buy} across everything
-	local craftOrder = {} -- recipeIDs, subs appended before dependents
-	local orderSet = {}
-	local subCrafts = {}  -- rid → crafts needed (non-queued recipes)
-
-	local function AddAgg(id, f, a, b)
-		local t = agg[id] or { fetch = 0, alt = 0, buy = 0 }
-		t.fetch, t.alt, t.buy = t.fetch + f, t.alt + a, t.buy + b
-		agg[id] = t
-	end
-
-	-- satisfy `need` units of itemID: craft when cheaper, else buy
-	local ResolveMat
-	ResolveMat = function(itemID, need, inPath)
-		local rid, r = C.RecipeForItem(itemID)
-		if rid and not inPath[rid] then
-			local crafts = ceil(need / (r.numMade or 1))
-			local e = C.Economics(rid, crafts)
-			local buyU = C.MatPrice(itemID)
-			if e and e.effCost and buyU and e.effCost < buyU then
-				inPath[rid] = true -- cycle guard: A→B→A buys the mat
-				for _, s2 in ipairs(C.MatSources(rid, crafts)) do
-					AddAgg(s2.id, s2.fetch, s2.alt, 0)
-					if s2.buy > 0 then ResolveMat(s2.id, s2.buy, inPath) end
-				end
-				inPath[rid] = nil
-				subCrafts[rid] = (subCrafts[rid] or 0) + crafts
-				if not orderSet[rid] then
-					orderSet[rid] = true
-					tinsert(craftOrder, rid)
-				end
-				return
-			end
-		end
-		AddAgg(itemID, 0, 0, need)
-	end
-
-	for _, q in ipairs(ql) do
-		local inPath = { [q.recipeID] = true }
-		for _, s in ipairs(C.MatSources(q.recipeID, q.qty)) do
-			AddAgg(s.id, s.fetch, s.alt, 0)
-			if s.buy > 0 then ResolveMat(s.id, s.buy, inPath) end
-		end
-		if not orderSet[q.recipeID] then
-			orderSet[q.recipeID] = true
-			tinsert(craftOrder, q.recipeID)
-		end
-	end
-
-	local ids = {}
-	for id in pairs(agg) do ids[#ids + 1] = id end
-	-- plan order: all fetches first (bank trip), then buys (AH trip)
-	for _, id in ipairs(ids) do
-		MatSteps(steps, { id = id, fetch = agg[id].fetch,
-			alt = agg[id].alt, buy = 0 })
-	end
-	sort(ids, function(a, b)
-		return ((C.MatPrice(a) or 0) * agg[a].buy)
-			> ((C.MatPrice(b) or 0) * agg[b].buy)
-	end)
-	for _, id in ipairs(ids) do
-		local s = agg[id]
-		if s.buy > 0 then
-			local nm = (GM.ItemName and GM.ItemName(id)) or ("item " .. id)
-			-- raw AH price — MatPrice already folds in vendorbuy,
-			-- which would make the vb<ahU test compare vb to itself
-			local ahU = GM.Price("dbmarket", id) or 0
-			local vb = GM.Price("vendorbuy", id)
-			if vb and vb > 0 and vb < ahU then
-				-- vendor stocks it cheaper than the AH — say so on the
-				-- step so it doesn't read as "go to the auction house"
-				tinsert(steps, { kind = "vendbuy", itemID = id,
-					qty = s.buy, unit = vb, name = nm,
-					desc = format("vendor %s/ea · AH %s",
-						GM.Money(vb), GM.Money(ahU)),
-					btag = "craft" })
-			else
-				tinsert(steps, { kind = "buy", itemID = id, qty = s.buy,
-					name = nm, unit = ahU, commodity = true,
-					btag = "craft" })
-			end
-		end
-	end
-	-- craft steps in dependency order — sub-crafts precede their
-	-- dependents by construction (post-order append in ResolveMat)
-	local queuedQty = {}
-	for _, q in ipairs(ql) do queuedQty[q.recipeID] = q end
-	for _, rid in ipairs(craftOrder) do
-		local q = queuedQty[rid]
-		local crafts, itemID, nm, prof
-		if q then
-			-- queued demand + any sub-craft demand other recipes added
-			crafts, itemID, nm, prof = q.qty + (subCrafts[rid] or 0),
-				q.itemID,
-				(GM.ItemName and GM.ItemName(q.itemID)) or q.name or "item",
-				q.prof
-		else
-			local r = GoblinMindCrafting.recipes[rid]
-			crafts, itemID = subCrafts[rid] or 1, r and r.itemID
-			nm = (GM.ItemName and GM.ItemName(itemID))
-				or (r and r.name) or "item"
-			prof = (r and r.prof and r.prof .. " · sub-craft")
-				or "sub-craft"
-		end
-		tinsert(steps, { kind = "note", verb = "CRAFT", itemID = itemID,
-			qty = crafts, recipeID = rid, name = nm,
-			desc = prof or "tradeskill" })
-	end
+	local steps = BuildPlanSteps(C.QueueList())
 	if #steps == 0 then return nil, "queue is empty" end
 	GM.PlanQueue.SetScanPlan({ steps = steps, mode = "craft",
 		source = "craft:queue" })

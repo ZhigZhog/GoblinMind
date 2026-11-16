@@ -23,15 +23,68 @@ Primary data = the in-house book feed below.
   AppData `NON_COMMODITY` tags confirm `C_AuctionHouse` exists).
 - Live data source: `...\AddOns\TradeSkillMaster_AppHelper\AppData.lua`
   — line-per-chunk `LoadData(tag, scope, [[return {...}]])` format,
-  base-36 encoded values, **non-atomic writes** (debounce before parse).
+  base-32 encoded values (NOT 36 — see the decoder note below), **non-atomic writes** (debounce before parse).
 - Brain sync: `scripts\brain-watch.bat` runs `watch forever -v
-  --feed book` — the in-house feed. On each SavedVariables flush
-  (/reload, logout) it re-emits `GoblinMindDB` merged across every
-  character's `GoblinMind.lua` on the account (newest book wins per
-  item, ledger sums across chars). `--feed tsm` switches back to the
-  legacy AppData pipeline (20s settle on non-atomic writes).
+  --feed book` — the in-house feed. It re-emits `GoblinMindDB` on
+  BOTH triggers: SavedVariables flush (/reload, logout → newest book
+  wins per item, ledger sums across chars) AND settled AppData
+  writes (TSM desktop push → backend refresh folds into the merge —
+  see TSM-merge rule below). `--feed tsm` switches back to the
+  legacy AppData-only pipeline (20s settle on non-atomic writes).
   `python brain\goblin_brain.py emit <AppData.lua> <Data.lua>`
   remains as the manual TSM path.
+- **Realm config**: each feed in `feeds.json` can pin
+  `"realm": "Normal-Alliance"` — the TSM AppData scope to consume.
+  `tsm_items(chunks, realm)` filters non-region chunks to that scope
+  (cross-realm pollution guard); `Forever-US` region chunks always
+  pass. Scope names DON'T match the addon's `GM.Scope()` — TSM
+  normalizes realm names its own way (`Normal-Alliance` vs
+  `CAMWOWUS1Realm5PvE-Alliance`); `cmd_book` folds the configured TSM
+  scope into every book scope sharing its **faction suffix**, and a
+  TSM scope with no same-faction book still emits under its own
+  name (reachable via the flat top-level `items` mirror).
+- **TSM-backend merge precedence** (per scope, inside `cmd_book`):
+  TSM-only fields (`hist`/`recent`/`rmkt`/`rhist`/`rsale`/`rsalep`/
+  `reset`) always come from the feed; book-only fields (`mbx`/`n`)
+  always come from scans; shared fields (`mb`/`sup`/`p`/`mkt`/`vel`)
+  follow freshness — fresher **book** (`latest_t >= realmAge`) wins
+  them outright, fresher **feed** wins but book values still fill
+  gaps where the feed has nothing for that item. Scope `dataAge` =
+  `max(book t, realmAge)`. This is what the user meant by "backend =
+  source of truth when most current, active full scan = authority
+  when current."
+- **Panel header collisions**: `ColPanel`/`Panel` put a `count`
+  fontstring at TOPRIGHT — anything else anchored TOPRIGHT (paging
+  buttons, a title repositioned to share a search row) sits ON it.
+  Recipe/member/category stats belong on the panel's bottom hint
+  line when the header is crowded; member titles get a width cap
+  (`SetWidth` + `SetWordWrap(false)`) so long text clips instead of
+  overrunning the count. CraftingUI recipe rows: name 18..186,
+  profit 190..258, `can` 262..320, qbtn right-anchored — don't
+  shrink these gaps.
+- **Base Group = implicit container**: `GetOps` resolves ungrouped
+  items through `Merged("Base Group")` (ops coverage is automatic —
+  default Default ops apply to everything). The GroupsUI members
+  panel lists ungrouped items under Base Group as VIEW-layer only —
+  never write 7000 implicit members into the SV; `IterateItems`
+  stays explicit-only (ExportString/Banking loops depend on it).
+  Implicit member rows hide the x — removal = catalogue assign.
+- **Ship boundary**: `brain/feeds.json`, `brain/brain.log`,
+  `brain/filed_bugs.json`, `brain/book_history.json` are local-only
+  (untracked + ignored). `feeds.example.json` is the template.
+  SavedVariables live in WTF — never inside the addon folder — so
+  personal groups/settings can't ship by construction.
+  `addons/GoblinMind_Data/Data.lua` IS tracked on purpose: it's the
+  generated data payload, not personal settings.
+- **`GM.AH.BookLive()`** (AH.lua) is the in-game half of that rule:
+  `BookAge() < DataAge()` — freshest source wins. Every "is the book
+  fresh enough" decision gate goes through it (tooltip source labels
+  + `BookMin`, auctioning `cheapest` + sync-scan fast paths,
+  MyAuctions stale warning). Do NOT write `BookAge() < 300`-style
+  fixed thresholds for source selection — a 40m backend beat a 7h
+  book and the fixed gate still picked the book (the bug that
+  prompted this). Dedup gates like `BookAge() < 30` ("don't rebuild
+  a just-built book") are a different semantic — keep them fixed.
 - **Feed registry (`brain\feeds.json`)**: named feeds replace raw
   paths — `{"forever": {appdata, root, out[]}}`. Any command arg
   that resolves a feed name (`watch forever`, `book forever`,
@@ -51,6 +104,11 @@ Primary data = the in-house book feed below.
   — no stored secret), records ids in `brain\filed_bugs.json`, and
   re-emits so `GoblinMindDB.filedBugs` lets the addon clear them.
   Manual one-shot: `python brain\goblin_brain.py bugs <AppData> <out...>`.
+  In-game entry: `/goblin bug` AND the settings BUG REPORT button
+  both open the one window (`BugReport.lua` — diagnostics block +
+  SELECT ALL / SCREENSHOT / FILE REPORT / ISSUES↗). FILE REPORT
+  stages via `GM.StageReport` (exported from Settings.lua — hex `title|payload` into `GoblinMindSettings.bugReports`). There is
+  no second dialog; keep it that way.
 - **In-house feed (Part 15, live — the watcher default)**: `python
   brain\goblin_brain.py book <AppData-or-SV-path> <out...>` emits
   `GoblinMindDB` from OUR data, merging every `GoblinMind.lua` under
@@ -64,6 +122,13 @@ Primary data = the in-house book feed below.
   recency-weighted (half-life ~4d), mean trimmed 10% each end.
   Emits `source="bookfeed"`, same schema, `vendorBuy` still scraped
   from TSM's VendorSell table. Honest-nil: no samples → no price.
+  **Cross-source sanity bound (book merge)**: a book-computed
+  `p`/`mkt` diverging >25x from the TSM feed's `mkt`/`hist` for
+  the same item is treated as a poisoned/stale sample and
+  dropped (TSM's number kept). Found when item 8120 emitted
+  p=8e9 copper from a stale mean while mb/hist/recent were
+  sane — divergence that large is a data bug, never a market.
+
 - Layout: `brain\` (Python emit/watch CLI) · `addons\GoblinMind\`
   (shim addon, scaffolded — TSM-styled UI) · `addons\GoblinMind_Data\`
   (generated-data addon — `GoblinMindDB` from `goblin_brain.py emit`) · `scripts\`
@@ -112,6 +177,11 @@ Primary data = the in-house book feed below.
     `CraftSalvage`/`IsRecipeRepeating`/`RecraftRecipe` also exist in
     the namespace; classic `DoTradeSkill`/`DoCraft`/`GetCraftInfo`
     globals are all nil — the client is purely retail-shaped here.
+
+    `AUCTION_CANCELED` fires once PER LISTING a
+    `ReplicateItems` stream replaces — a full scan = thousands
+    of events. Never surface it raw; gate on `GM.AH.Busy()` +
+    `GM.AH.cancelMute` (8s tail set in both book-finish paths).
     `GetTradeSkillLineForRecipe(recipeID)` exists (TSM marks it
     retail-only and never calls it on Forever) and returns
     `(skillLineID, "Profession Name", rootSkillLine)` — the
@@ -135,6 +205,22 @@ Primary data = the in-house book feed below.
     nil for uncached items — use `GM.ItemName`/`GM.ItemIcon`
     (Core.lua) which call `RequestLoadItemDataByID`, and refresh via
     `GM.OnItemInfoLoaded(fn)` on `GET_ITEM_INFO_RECEIVED`.
+  - **AppData value encoding is BASE-32, not 36** (verified against
+    TSM's own `UnpackData` — `tonumber(v,32)`, >6-char tokens split as
+    `hi*2^30 + lo` since Lua's tonumber tops out at 32 bits). All
+    non-itemString row fields decode this way, INCLUDING digit-only
+    tokens ('13' = 35, not thirteen); `itemString` itself is decimal.
+    `_atom` must keep `[0-9A-Z]+` tokens as strings — `float()` reads
+    '6E8' as 6e8 scientific notation, which was the source of the
+    billion-scale tooltip prices. `b32()` in the brain decodes; never
+    reintroduce an int()/float() fast-path for bare tokens.
+  - **Replicate time-left**: `C_AuctionHouse.GetReplicateItemTimeLeft`
+    isn't trustworthy on Forever — `NormTl` (AH.lua) normalizes all
+    shapes: small ints 0-4 are the bucket enum (Short/Medium/Long/
+    VeryLong -> 30m/2h/12h/48h seconds), numbers past the 48h cap are
+    misreads -> nil, tables get probed for `seconds`/`timeLeftSeconds`/
+    `timeLeft`. Fallback: the tuple itself carries timeLeft at
+    `buyIdx - 3` in both known layouts.
   - **The AH book persists** in `GoblinMindSettings.book` (aggregate
     mb/mbx/sup/n only; `math.huge` round-trips through -1). Rows stay
     session-only. `AH.RestoreBook` runs on `PLAYER_LOGIN`.
@@ -151,13 +237,55 @@ Primary data = the in-house book feed below.
       `ReplicateItems` + the list-update event. Replicate buyout is
       also **per-item** (unit = buyout, no `/stackSize`) — same
       convention as item-search results and owned auctions
-      (`GetOwnedAuctionInfo.buyout` per-item too).
+      (`GetOwnedAuctionInfo.buyout` per-item too). Replicate `bid`
+      is inferred at `buyIdx+1` (same +1 shift) — number-typed
+      guard drops it if the layout differs; `GetReplicateItemTimeLeft`
+      is guarded (may not exist). Item-search asks carry
+      `bid`/`minBid`/`tl` (`timeLeftSeconds`). `Execute kind="bid"`
+      fires `PlaceBid(auctionID, lotBid)` — a buy is just
+      bid-at-buyout. SniperUI: clicks defer 0.35s so a second tap
+      upgrades to the +1c `BidHit` before protected calls fire;
+      `h.wantBid` survives an in-flight BuyHit scan.
     - Owned-auction `buyout` is **per-item** (Inventory.auctions) —
       never divide by `a.qty`; the Dashboard undercut check and
       CancelScan compare it directly against per-item `mbx`/cheapest.
+    - **`QueryOwnedAuctions` takes a sorts table** — TSM passes
+      OWNER_SORTS_TABLE ({Name,Price} via Enum.AuctionHouseSortOrder),
+      Syndicator passes {}. A BARE call inside pcall fails silently →
+      OWNED_AUCTIONS_UPDATED never fires → "no auctions up". Same for
+      `QueryBids(sorts)` → `BIDS_UPDATED`. Owned-auction info table:
+      itemKey.itemID/auctionID/quantity/bidAmount/buyoutAmount/bidder
+      (GUID)/status/timeLeftSeconds. `GetAuctionInfoByID(auctionID)`
+      exists (Syndicator uses it post-PlaceBid). Bids results API
+      (GetNumBids/GetBidInfo) is probed at runtime — unverified.
+      `AUCTION_HOUSE_SHOW_FORMATTED_NOTIFICATION` delivers
+      (notification, _, auctionID); Enum.AuctionHouseNotification has
+      AuctionOutbid/AuctionWon/BidPlaced/AuctionRemoved/AuctionSold/
+      AuctionExpired. Item-search `owners[]` sentinels: "player" = own
+      listing, "" = redacted — translate (TSM: player→UnitName, ""→"?").
+    - **Owned-auction identity is unstable**: `GetOwnedAuctionInfo`'s
+      `auctionID` churns across enumerations and is sometimes absent —
+      keying `auctionCache` by it logged one posted auction as ~17
+      "post" txns (verified 2026-11-15 SV inspection). The cache keys
+      by fingerprint `"itemID:qty:buyout"` instead (`n` counts identical
+      twins); real aid/idx live on the entry for `CancelAuction`, and
+      `GM.Inventory.OwnedByKey(key)` resolves fp/aid/idx. Ghost rows
+      (same aid twice) are skipped, sold/history rows filtered only
+      when some row reports `status==0`, and empty snapshots must
+      repeat before vanish processing (mid-requery reads can be 0).
     - `GetCommoditySearchResultInfo` can return **polluted rows for
       non-commodity itemIDs** (cloth-shaped 2c lots for a bag). Only
       consume commodity results when the item search returns nothing.
+    - **Protection blocks bypass `pcall`**: calling a secure Blizzard
+      function (`LaunchURL`, `Screenshot`) from addon code trips
+      `ADDON_ACTION_BLOCKED` + the disable/ignore dialog — not a Lua
+      error. Gate with `type(f) == "function" and not
+      issecurefunction(f)` before calling optional client functions.
+    - **Mail flag/inbox snapshot only move on a server header push**:
+      `HasNewMail` and the inbox stay stale for seconds after
+      `AutoLootMailItem` loots — call `CheckInbox` ~0.7s after loots
+      (debounced, one in flight) to drop the new-mail icon promptly,
+      and again after `MAIL_SHOW` since pending mail lands late.
     - `GetMouseFocus` AND `GetMouseFoci` are both gone — drop
       resolution must hit-test panes with `IsMouseOver()` (geometric
       bounds check, always present) instead of the focus API.
@@ -228,9 +356,18 @@ Primary data = the in-house book feed below.
 - Hard rule: in-game actions are click-per-step only — one protected
   `C_AuctionHouse` call per hardware event. ToS boundary is documented
   in the design doc §8.
-- Alt+Click conflict: TSM captures Alt+Click for its own UI — our
-  alt-click capture in `ItemInput.lua` may be shadowed/double-fire.
-  Accepted for phase 1; re-test and possibly remap at the TSM
-  replacement milestone (open question §10.6 in the vault doc).
+- Item targeting gesture is **Shift+click while the plan window is
+  open** (`ItemInput.lua`). `HandleModifiedItemClick` is **REPLACED**
+  (wrapped, original called through for unclaimed clicks) — the
+  shared funnel Baganator, EllesmereUIBags, and Blizzard's handlers
+  delegate to. Returning true is load-bearing: callers check it before
+  native follow-through, so claimed clicks suppress Baganator's
+  StackSplitFrame / Blizzard's split — a `hooksecurefunc` post-hook
+  can't suppress, it runs after the dialog opens. Per-handler globals
+  like `ContainerFrameItemButton_OnModifiedClick` don't reliably
+  exist/fire on this client (Baganator replaces the bag buttons).
+  `SetItemRef` is hooked separately for chat links (may not delegate
+  to the funnel here). The IsShown gate keeps bare
+  shift+click-for-linking from popping the planner.
 - Not yet registered on the Codebase Map (project started 2026-11-11,
   post-closure).

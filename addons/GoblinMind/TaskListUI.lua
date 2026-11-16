@@ -44,11 +44,28 @@ local function Tasks()
 			key = "pos",
 		}
 	end
-	-- sniper hits awaiting action
-	local hits = 0
-	for _, h in ipairs(GM.Sniper.hits or {}) do
-		if not h.done then hits = hits + 1 end
+	-- auctions we bid on and lost the lead in — rebid from MINE
+	local ob = GM.Inventory.Outbids and GM.Inventory.Outbids() or {}
+	if #ob > 0 then
+		t[#t + 1] = {
+			text = format("outbid on %d auction%s%s", #ob,
+				#ob == 1 and "" or "s",
+				ob[1].itemID and (" — " ..
+					(GM.QHex(ob[1].itemID) or "") ..
+					((GM.ItemName and GM.ItemName(ob[1].itemID))
+						or "item") .. "|r now " ..
+					(GM.Money and GM.Money(ob[1].curBid or 0) or "?"))
+					or ""),
+			key = "warn",
+			go = AHOpen() and "MINE" or "open AH",
+			fn = function()
+				if GM.AHUI and GM.AHUI.Toggle then GM.AHUI.Toggle() end
+			end,
+		}
 	end
+	-- sniper hits awaiting action — the same filtered set the sniper
+	-- window renders (SOON/GOLD/BID), not the raw row dump
+	local hits = (GM.Sniper.PendingCount and GM.Sniper.PendingCount()) or 0
 	if hits > 0 then
 		t[#t + 1] = {
 			text = format("%d sniper hit%s pending", hits,

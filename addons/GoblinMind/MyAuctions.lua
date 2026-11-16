@@ -1,29 +1,21 @@
 local _, GM = ...
 
 -- Part 13 (frontend parity): the My Auctions surface — TSM's AuctionUI
--- tab 4. One scroll table of our posted auctions: per-item price,
--- undercut flag vs the shared book (mbx excludes our own listings),
--- time remaining, per-row cancel. CancelAuction stays one click per
--- call, armed to a confirm like the group-delete button — a misclick
--- costs a deposit.
+-- tab 4. POSTED mirrors the AH window's MINE tab exactly: posted
+-- auctions on top, our bids underneath, same columns, same
+-- CANCEL/REBID buttons. BAGS is the post picker.
 --
 -- Owned-auction buyout is PER-ITEM on Forever (same convention the
 -- item-search results proved: qty=147 buyout=200 = 2s/bag). The unit
--- column shows it raw; total is unit*qty.
+-- column shows it raw; lot is unit*qty.
 
 GM.MyAuctions = {}
 local MA = GM.MyAuctions
 local ui
 
 local ROW_H = 26
-local VISIBLE = 15
-
-local function FmtLeft(sec)
-	if not sec or sec <= 0 then return "—" end
-	if sec >= 3600 then return format("%dh", ceil(sec / 3600)) end
-	if sec >= 60 then return format("%dm", ceil(sec / 60)) end
-	return "<1m"
-end
+local VISIBLE = 14 -- BAGS page rows
+local MINE_VISIBLE = 6 -- rows per POSTED pane (matches AHUI MINE)
 
 local W = GM.Widgets
 local Btn = W.Btn
@@ -34,7 +26,7 @@ local function Build()
 	if ui then return end
 	ui = { scroll = 0 }
 	local f = CreateFrame("Frame", "GoblinMindMyAuctions", UIParent)
-	f:SetSize(640, 480)
+	f:SetSize(800, 500)
 	f:SetPoint("CENTER", 60, 10)
 	f:SetFrameStrata("HIGH")
 	f:SetToplevel(true)
@@ -78,7 +70,7 @@ local function Build()
 		b.key = p[2]
 		b:SetScript("OnClick", function()
 			ui.page = p[2]
-			ui.scroll = 0
+			ui.scroll, ui.bidScroll, ui.bagScroll = 0, 0, 0
 			MA.Refresh()
 		end)
 		ui.segs[i] = b
@@ -106,10 +98,12 @@ local function Build()
 	ui.summary:SetPoint("LEFT", cancel, "RIGHT", 12, 0)
 	ui.summary:SetJustifyH("LEFT")
 
-	-- column header — text/positions set per page in Refresh
+	-- column header + scroll host (BAGS page only — POSTED builds its
+	-- own headers into the two panes below)
 	local hdr = CreateFrame("Frame", nil, f)
-	hdr:SetSize(616, 16)
+	hdr:SetSize(776, 16)
 	hdr:SetPoint("TOPLEFT", 12, -60)
+	ui.hdr = hdr
 	ui.hdrFs = {}
 	for i = 1, 6 do
 		local fs = GM.MakeFontString(hdr, GM.FONT_BOLD, 9, "secondary")
@@ -118,66 +112,168 @@ local function Build()
 	ui.count = GM.MakeFontString(hdr, GM.FONT, 9, "textDim")
 	ui.count:SetPoint("RIGHT", -2, 0)
 
-	-- scroll host
 	local host = CreateFrame("Frame", nil, f)
-	host:SetSize(616, VISIBLE * ROW_H + 4)
+	host:SetSize(776, VISIBLE * ROW_H + 4)
 	host:SetPoint("TOPLEFT", 12, -78)
 	if host.SetClipsChildren then host:SetClipsChildren(true) end
 	host:EnableMouseWheel(true)
 	host:SetScript("OnMouseWheel", function(_, d)
-		ui.scroll = math.max(0, ui.scroll - d * 3)
+		ui.bagScroll = math.max(0, (ui.bagScroll or 0) - d * 3)
 		MA.Refresh()
 	end)
 	ui.host = host
 
-	ui.rows = {}
-	for i = 1, VISIBLE do
-		local row = CreateFrame("Button", nil, host)
-		row:SetSize(608, ROW_H - 2)
-		row:SetPoint("TOPLEFT", 0, -((i - 1) * ROW_H))
+	-- POSTED page mirrors the AH window's MINE tab exactly: posted
+	-- auctions on top, our bids underneath — same columns, same
+	-- CANCEL/REBID row buttons, same pane geometry (776 wide, 6 rows)
+	local PANE_H = 22 + MINE_VISIBLE * ROW_H + 8
+	local fp = CreateFrame("Frame", nil, f)
+	fp:SetSize(776, PANE_H)
+	fp:SetPoint("TOPLEFT", 12, -62)
+	GM.Panel(fp, "contLowest")
+	fp:EnableMouseWheel(true)
+	fp:SetScript("OnMouseWheel", function(_, d)
+		ui.scroll = math.max(0, (ui.scroll or 0) - d * 3)
+		MA.Refresh()
+	end)
+	ui.fp = fp
+	for i, h in ipairs({
+		{ "POSTED — ITEM", 26 }, { "QTY", 218 }, { "UNIT", 260 },
+		{ "LOT", 330 }, { "MARKET", 420 }, { "STATUS", 500 },
+		{ "TIME", 640 },
+	}) do
+		local fs = GM.MakeFontString(fp, GM.FONT_BOLD, 9, "secondary")
+		fs:SetPoint("TOPLEFT", h[2], -6)
+		fs:SetText(h[1])
+	end
+	ui.mCount = GM.MakeFontString(fp, GM.FONT, 9, "textDim")
+	ui.mCount:SetPoint("TOPRIGHT", -8, -7)
+	ui.mRows = {}
+	for i = 1, MINE_VISIBLE do
+		local row = CreateFrame("Button", nil, fp)
+		row:SetSize(760, ROW_H - 2)
+		row:SetPoint("TOPLEFT", 8, -22 - ((i - 1) * ROW_H))
 		row.bg = row:CreateTexture(nil, "BACKGROUND")
 		row.bg:SetAllPoints()
 		row.bg:SetColorTexture(GM.RGB(i % 2 == 0 and "contMedium" or "contLowest"))
 		W.HoverTint(row)
 		row.icon = row:CreateTexture(nil, "ARTWORK")
-		row.icon:SetSize(18, 18)
+		row.icon:SetSize(16, 16)
 		row.icon:SetPoint("LEFT", 4, 0)
 		row.name = GM.MakeFontString(row, GM.FONT, 10, "text")
-		row.name:SetPoint("LEFT", 28, 0)
-		row.name:SetWidth(200)
+		row.name:SetPoint("LEFT", 26, 0)
+		row.name:SetWidth(184)
 		row.name:SetJustifyH("LEFT")
 		row.qty = GM.MakeFontString(row, GM.FONT, 10, "text")
-		row.qty:SetPoint("LEFT", 236, 0)
+		row.qty:SetPoint("LEFT", 218, 0)
 		row.unit = GM.MakeFontString(row, GM.FONT, 10, "text")
-		row.unit:SetPoint("LEFT", 288, 0)
-		row.total = GM.MakeFontString(row, GM.FONT, 10, "textDim")
-		row.total:SetPoint("LEFT", 366, 0)
-		row.left = GM.MakeFontString(row, GM.FONT, 10, "text")
-		row.left:SetPoint("LEFT", 444, 0)
-		row.status = GM.MakeFontString(row, GM.FONT, 10, "text")
-		row.status:SetPoint("LEFT", 500, 0)
-		row.status:SetWidth(74)
-		row.status:SetJustifyH("LEFT")
-		local x = CreateFrame("Button", nil, row)
-		x:SetSize(16, 16)
-		x:SetPoint("RIGHT", -4, 0)
-		x.text = GM.MakeFontString(x, GM.FONT_BOLD, 10, "textDim")
-		x.text:SetPoint("CENTER")
-		x.text:SetText("x")
-		x:SetScript("OnEnter", function() x.text:SetTextColor(GM.RGB("err")) end)
-		x:SetScript("OnLeave", function()
-			x.text:SetTextColor(GM.RGB(x.armed and "warn" or "textDim"))
+		row.unit:SetPoint("LEFT", 260, 0)
+		row.lot = GM.MakeFontString(row, GM.FONT, 10, "text")
+		row.lot:SetPoint("LEFT", 330, 0)
+		row.mkt = GM.MakeFontString(row, GM.FONT, 9, "textDim")
+		row.mkt:SetPoint("LEFT", 420, 0)
+		row.stat = GM.MakeFontString(row, GM.FONT_BOLD, 9, "textDim")
+		row.stat:SetPoint("LEFT", 500, 0)
+		row.stat:SetWidth(136)
+		row.stat:SetJustifyH("LEFT")
+		row.time = GM.MakeFontString(row, GM.FONT, 9, "textDim")
+		row.time:SetPoint("LEFT", 640, 0)
+		local act = CreateFrame("Button", nil, row)
+		act:SetSize(56, 16)
+		act:SetPoint("RIGHT", -4, 0)
+		GM.Panel(act, "contHigh")
+		act.text = GM.MakeFontString(act, GM.FONT_BOLD, 8, "warn")
+		act.text:SetPoint("CENTER")
+		act.text:SetText("CANCEL")
+		row.act = act
+		row:SetScript("OnEnter", function(self)
+			if self.tipID then
+				GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+				GameTooltip:SetItemByID(self.tipID)
+				GameTooltip:Show()
+			end
 		end)
-		row.x = x
-		ui.rows[i] = row
+		row:SetScript("OnLeave", function() GameTooltip:Hide() end)
+		ui.mRows[i] = row
 	end
+	ui.fEmpty = GM.MakeFontString(fp, GM.FONT, 10, "textDim")
+	ui.fEmpty:SetPoint("CENTER", 0, -10)
+
+	local bp = CreateFrame("Frame", nil, f)
+	bp:SetSize(776, PANE_H)
+	bp:SetPoint("TOPLEFT", fp, "BOTTOMLEFT", 0, -8)
+	GM.Panel(bp, "contLowest")
+	bp:EnableMouseWheel(true)
+	bp:SetScript("OnMouseWheel", function(_, d)
+		ui.bidScroll = math.max(0, (ui.bidScroll or 0) - d * 3)
+		MA.Refresh()
+	end)
+	ui.bp = bp
+	for i, h in ipairs({
+		{ "BIDS — ITEM", 26 }, { "OUR BID", 218 }, { "CURRENT", 300 },
+		{ "BUYOUT", 390 }, { "TIME", 480 }, { "STATUS", 560 },
+	}) do
+		local fs = GM.MakeFontString(bp, GM.FONT_BOLD, 9, "secondary")
+		fs:SetPoint("TOPLEFT", h[2], -6)
+		fs:SetText(h[1])
+	end
+	ui.bCount = GM.MakeFontString(bp, GM.FONT, 9, "textDim")
+	ui.bCount:SetPoint("TOPRIGHT", -8, -7)
+	ui.bRows = {}
+	for i = 1, MINE_VISIBLE do
+		local row = CreateFrame("Button", nil, bp)
+		row:SetSize(760, ROW_H - 2)
+		row:SetPoint("TOPLEFT", 8, -22 - ((i - 1) * ROW_H))
+		row.bg = row:CreateTexture(nil, "BACKGROUND")
+		row.bg:SetAllPoints()
+		row.bg:SetColorTexture(GM.RGB(i % 2 == 0 and "contMedium" or "contLowest"))
+		W.HoverTint(row)
+		row.icon = row:CreateTexture(nil, "ARTWORK")
+		row.icon:SetSize(16, 16)
+		row.icon:SetPoint("LEFT", 4, 0)
+		row.name = GM.MakeFontString(row, GM.FONT, 10, "text")
+		row.name:SetPoint("LEFT", 26, 0)
+		row.name:SetWidth(184)
+		row.name:SetJustifyH("LEFT")
+		row.our = GM.MakeFontString(row, GM.FONT, 10, "text")
+		row.our:SetPoint("LEFT", 218, 0)
+		row.cur = GM.MakeFontString(row, GM.FONT, 10, "text")
+		row.cur:SetPoint("LEFT", 300, 0)
+		row.bo = GM.MakeFontString(row, GM.FONT, 9, "textDim")
+		row.bo:SetPoint("LEFT", 390, 0)
+		row.time = GM.MakeFontString(row, GM.FONT, 9, "textDim")
+		row.time:SetPoint("LEFT", 480, 0)
+		row.stat = GM.MakeFontString(row, GM.FONT_BOLD, 9, "textDim")
+		row.stat:SetPoint("LEFT", 560, 0)
+		row.stat:SetWidth(130)
+		row.stat:SetJustifyH("LEFT")
+		local act = CreateFrame("Button", nil, row)
+		act:SetSize(56, 16)
+		act:SetPoint("RIGHT", -4, 0)
+		GM.Panel(act, "contHigh")
+		act.text = GM.MakeFontString(act, GM.FONT_BOLD, 8, "accent")
+		act.text:SetPoint("CENTER")
+		act.text:SetText("REBID")
+		row.act = act
+		row:SetScript("OnEnter", function(self)
+			if self.tipID then
+				GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+				GameTooltip:SetItemByID(self.tipID)
+				GameTooltip:Show()
+			end
+		end)
+		row:SetScript("OnLeave", function() GameTooltip:Hide() end)
+		ui.bRows[i] = row
+	end
+	ui.bEmpty = GM.MakeFontString(bp, GM.FONT, 10, "textDim")
+	ui.bEmpty:SetPoint("CENTER", 0, -10)
 
 	-- BAGS page rows: include toggle + name/qty/group/suggested/verdict
 	ui.excl = {}
 	ui.bagRows = {}
 	for i = 1, VISIBLE do
 		local row = CreateFrame("Button", nil, host)
-		row:SetSize(608, ROW_H - 2)
+		row:SetSize(768, ROW_H - 2)
 		row:SetPoint("TOPLEFT", 0, -((i - 1) * ROW_H))
 		row.bg = row:CreateTexture(nil, "BACKGROUND")
 		row.bg:SetAllPoints()
@@ -218,13 +314,11 @@ local function Build()
 
 	ui.foot = GM.MakeFontString(f, GM.FONT, 9, "textDim")
 	ui.foot:SetPoint("BOTTOMLEFT", 14, 10)
-	ui.foot:SetText("x = cancel auction (click to arm, click again to confirm)")
+	ui.foot:SetText("cancels are one click each · undercuts sort first")
 end
 
 -- ============ data ============
 
-local POSTED_COLS = { { "ITEM", 28 }, { "QTY", 236 }, { "UNIT", 288 },
-	{ "TOTAL", 366 }, { "LEFT", 444 }, { "STATUS", 500 } }
 local BAGS_COLS = { { "", 4 }, { "ITEM", 24 }, { "QTY", 232 },
 	{ "GROUP", 290 }, { "UNIT", 444 }, { "VERDICT", 520 } }
 
@@ -235,106 +329,144 @@ function MA.Refresh()
 		b._gmBg:SetColorTexture(GM.RGB(sel and "contHighest" or "contLowest"))
 		b.text:SetTextColor(GM.RGB(sel and "accent" or "textDim"))
 	end
-	local cols = ui.page == "bags" and BAGS_COLS or POSTED_COLS
-	for i, fs in ipairs(ui.hdrFs) do
-		local c = cols[i]
-		if c then
-			fs:ClearAllPoints()
-			fs:SetPoint("LEFT", c[2], 0)
-			fs:SetText(c[1])
-			fs:Show()
-		else
-			fs:Hide()
+	local posted = ui.page == "posted"
+	ui.fp:SetShown(posted)
+	ui.bp:SetShown(posted)
+	ui.host:SetShown(not posted)
+	ui.hdr:SetShown(not posted)
+	if not posted then
+		for i, fs in ipairs(ui.hdrFs) do
+			local c = BAGS_COLS[i]
+			if c then
+				fs:ClearAllPoints()
+				fs:SetPoint("LEFT", c[2], 0)
+				fs:SetText(c[1])
+				fs:Show()
+			else
+				fs:Hide()
+			end
 		end
 	end
 	-- hide the inactive page's pool; the active refresh re-shows its own
-	for _, r in ipairs(ui.rows) do r:SetShown(ui.page == "posted") end
 	for _, r in ipairs(ui.bagRows) do r:SetShown(false) end
-	if ui.page == "bags" then MA.RefreshBags() else MA.RefreshPosted() end
+	if posted then MA.RefreshPosted() else MA.RefreshBags() end
 end
 
+-- same paint as the AH window's MINE tab — shared row sources live in
+-- Inventory so both surfaces read identical data
 function MA.RefreshPosted()
-	local owned = GM.Inventory.auctions or {}
-	local rows, totalVal, n = {}, 0, 0
-	for aid, a in pairs(owned) do
-		local unit = a.buyout -- per-item convention (verified)
-		local cheapest = GM.AH.BookCheapest and GM.AH.BookCheapest(a.itemID)
-		local remain = a.tLeft and a.at and (a.at + a.tLeft - time()) or nil
-		rows[#rows + 1] = {
-			aid = aid, id = a.itemID, qty = a.qty or 1, unit = unit,
-			remain = remain, cheapest = cheapest,
-			undercut = unit and cheapest and cheapest < unit or false,
-		}
-		n = n + 1
-		totalVal = totalVal + (unit or 0) * (a.qty or 1)
+	local rows = GM.Inventory.MineRows()
+	ui.fEmpty:SetText(#rows == 0 and "no auctions up" or "")
+	ui.fEmpty:SetShown(#rows == 0)
+	local maxScroll = math.max(0, #rows - #ui.mRows)
+	ui.scroll = math.min(ui.scroll or 0, maxScroll)
+	W.ScrollText(ui.mCount, ui.scroll, #ui.mRows, #rows)
+	local uc, totalVal = 0, 0
+	for _, r in ipairs(rows) do
+		uc = uc + (r.undercut and 1 or 0)
+		totalVal = totalVal + (r.unit or 0) * (r.qty or 1)
 	end
-	table.sort(rows, function(a, b)
-		if a.undercut ~= b.undercut then return a.undercut end
-		return (a.unit or math.huge) < (b.unit or math.huge)
-	end)
-
-	ui.summary:SetText(format("%d auctions · %s listed", n, GM.Money(totalVal)))
-	ui.empty:SetText("no auctions posted — POST SCAN lists bags by group ops")
-	ui.empty:SetShown(#rows == 0)
-	ui.foot:SetText("x = cancel auction (click to arm, click again to confirm)")
-	local maxScroll = math.max(0, #rows - VISIBLE)
-	ui.scroll = math.min(ui.scroll, maxScroll)
-	W.ScrollText(ui.count, ui.scroll, VISIBLE, #rows)
-
-	for i = 1, VISIBLE do
-		local row = ui.rows[i]
-		local r = rows[i + ui.scroll]
+	ui.summary:SetText(format("%d auctions · %s listed",
+		#rows, GM.Money(totalVal)))
+	for i = 1, #ui.mRows do
+		local row, r = ui.mRows[i], rows[i + ui.scroll]
 		if r then
 			row:Show()
-			row.aid = r.aid
-			row.icon:SetTexture(GM.ItemIcon(r.id) or 134400)
-			row.name:SetText(GM.ItemName(r.id) or ("item " .. r.id))
-			row.qty:SetText("×" .. r.qty)
-			row.unit:SetText(r.unit and GM.Money(r.unit) or "—")
-			row.total:SetText(r.unit and GM.Money(r.unit * r.qty) or "—")
-			local short = r.remain and r.remain < 300
-			row.left:SetText(FmtLeft(r.remain))
-			row.left:SetTextColor(GM.RGB(short and "warn" or "text"))
+			row.tipID = r.id
+			row.icon:SetTexture(r.id and GM.ItemIcon(r.id) or 134400)
+			row.name:SetText(r.name or "?")
+			row.name:SetTextColor(GM.NameColor(r.id))
+			row.qty:SetText("×" .. (r.qty or 1))
+			row.unit:SetText(r.unit and GM.Money(r.unit) .. "/ea" or "—")
+			row.lot:SetText(r.unit and GM.Money(r.unit * (r.qty or 1)) or "—")
+			row.mkt:SetText(r.mkt and (GM.Money(r.mkt) .. "/ea") or "no market")
 			if r.undercut then
-				row.status:SetText(GM.CC("err") .. "UNDERCUT −"
-					.. GM.Money(r.unit - r.cheapest) .. "|r")
-			elseif r.cheapest then
-				row.status:SetText(GM.CC("pos") .. "lowest|r")
+				row.stat:SetText(GM.CC("warn") .. "UNDERCUT|r"
+					.. (r.cheap and (" @ " .. GM.Money(r.cheap)) or ""))
+			elseif r.cheap == nil then
+				row.stat:SetText(GM.CC("textDim") .. "no book data|r")
 			else
-				row.status:SetText(GM.CC("textDim") .. "no book|r")
+				row.stat:SetText(GM.CC("pos") .. "lowest|r")
 			end
-			row.x.armed = nil
-			row.x.text:SetText("x")
-			row.x.text:SetTextColor(GM.RGB("textDim"))
-			row.x:SetScript("OnClick", function(x)
-				if not x.armed then
-					x.armed = true
-					x.text:SetText("?")
-					x.text:SetTextColor(GM.RGB("warn"))
-					return
-				end
-				local aid = row.aid
-				GM.Inventory.recentCancels[aid] = time()
-				local a = GM.Inventory.auctions and GM.Inventory.auctions[aid]
-				if a then GM.Ledger.Add("cancel", a.itemID, a.qty, a.buyout) end
-				C_AuctionHouse.CancelAuction(aid)
-				GM.After(2, GM.Inventory.QueryOwned)
+			local tl = r.tLeft
+			row.time:SetText(tl and (tl >= 3600
+				and format("%dh%02dm", floor(tl / 3600), floor(tl % 3600 / 60))
+				or tl >= 60 and format("%dm", floor(tl / 60))
+				or "<1m") or "—")
+			local aid = r.aid
+			row.act:SetScript("OnClick", function()
+				GM.AH.Execute({ kind = "cancel", auctionID = aid })
 				MA.Refresh()
 			end)
 			row:SetScript("OnClick", function()
-				if r.id then GM.TargetItem(r.id) end
+				if not r.id then return end
+				if IsShiftKeyDown() then GM.ModifiedItemClick(r.id)
+				else GM.TargetItem(r.id) end
 			end)
 		else
 			row:Hide()
 		end
 	end
+	-- bids pane: outbid rows sort first, REBID = current + 1c
+	local bids = GM.Inventory.BidRows()
+	ui.bEmpty:SetText(#bids == 0 and "no bids placed this session" or "")
+	ui.bEmpty:SetShown(#bids == 0)
+	local bMax = math.max(0, #bids - #ui.bRows)
+	ui.bidScroll = math.min(ui.bidScroll or 0, bMax)
+	W.ScrollText(ui.bCount, ui.bidScroll, #ui.bRows, #bids)
+	for i = 1, #ui.bRows do
+		local row, r = ui.bRows[i], bids[i + ui.bidScroll]
+		if r then
+			row:Show()
+			row.tipID = r.id
+			row.icon:SetTexture(r.id and GM.ItemIcon(r.id) or 134400)
+			row.name:SetText(r.name or "?")
+			row.name:SetTextColor(GM.NameColor(r.id))
+			row.our:SetText(r.ourBid and GM.Money(r.ourBid) or "—")
+			row.cur:SetText(r.curBid and GM.Money(r.curBid) or "—")
+			row.bo:SetText(r.buyout and GM.Money(r.buyout) or "—")
+			local tl = r.remain
+			row.time:SetText(tl and tl > 0 and (tl >= 3600
+				and format("%dh%02dm", floor(tl / 3600), floor(tl % 3600 / 60))
+				or tl >= 60 and format("%dm", floor(tl / 60))
+				or "<1m") or "—")
+			local st = r.status
+			row.stat:SetText(st == "outbid"
+				and (GM.CC("warn") .. "OUTBID|r")
+				or st == "won" and (GM.CC("pos") .. "won|r")
+				or st == "lost" and (GM.CC("textDim") .. "lost|r")
+				or (GM.CC("pos") .. "winning|r"))
+			local aid, id, cur = r.aid, r.id, r.curBid
+			if st == "outbid" and cur then
+				row.act:Show()
+				row.act:SetScript("OnClick", function()
+					GM.AH.Execute({ kind = "bid", itemID = id,
+						auctionID = aid, total = cur + 1 })
+					GM.After(0.5, MA.Refresh)
+				end)
+			else
+				row.act:Hide()
+			end
+			row:SetScript("OnClick", function()
+				if not r.id then return end
+				if IsShiftKeyDown() then GM.ModifiedItemClick(r.id)
+				else GM.TargetItem(r.id) end
+			end)
+		else
+			row:Hide()
+		end
+	end
+	ui.foot:SetText(format("%d auction%s%s — cancels are one click each · "
+		.. "undercuts sort first (book mbx < your price)",
+		#rows, #rows == 1 and "" or "s",
+		uc > 0 and format(" · %s%d undercut|r", GM.CC("warn"), uc) or ""))
 end
 
 -- BAGS page: every bag item with its live post decision (book-driven,
 -- no scan) — check toggles include; POST SCAN takes only checked rows.
 function MA.RefreshBags()
 	local bags = GM.Auctioning.BagItems()
-	local bookFresh = GM.AH.BookAge() < 300
+	local bookFresh = GM.AH.BookLive()
 	local rows, nPost, nChk = {}, 0, 0
 	for id, e in pairs(bags) do
 		local unit, why = GM.Auctioning.PreviewPost(id)
@@ -373,18 +505,19 @@ function MA.RefreshBags()
 	ui.empty:SetShown(#rows == 0)
 	ui.foot:SetText("checks include in POST SCAN · verdicts use the shared book when <5m old")
 	local maxScroll = math.max(0, #rows - VISIBLE)
-	ui.scroll = math.min(ui.scroll or 0, maxScroll)
-	W.ScrollText(ui.count, ui.scroll, VISIBLE, #rows)
+	ui.bagScroll = math.min(ui.bagScroll or 0, maxScroll)
+	W.ScrollText(ui.count, ui.bagScroll, VISIBLE, #rows)
 	for i = 1, VISIBLE do
 		local row = ui.bagRows[i]
-		local r = rows[i + ui.scroll]
+		local r = rows[i + ui.bagScroll]
 		if r then
 			row:Show()
 			local dim = not r.postable
 			row.icon:SetTexture(GM.ItemIcon(r.id) or 134400)
 			row.icon:SetDesaturated(dim)
 			row.name:SetText(GM.ItemName(r.id) or ("item " .. r.id))
-			row.name:SetTextColor(GM.RGB(dim and "textDim" or "text"))
+			row.name:SetTextColor(GM.NameColor(
+				not dim and r.id, dim and "textDim" or "text"))
 			row.qty:SetText("×" .. r.total .. (r.stacks > 1 and ("·" .. r.stacks .. "st") or ""))
 			row.group:SetText(r.group)
 			row.unit:SetText(r.unit and GM.Money(r.unit) or "—")
@@ -393,14 +526,16 @@ function MA.RefreshBags()
 				or r.verdict == "soulbound" and "textDim" or "warn"
 			row.verdict:SetText(r.verdict)
 			row.verdict:SetTextColor(GM.RGB(vc))
-			row.chk.text:SetText(r.checked and "✓" or "")
+			row.chk.text:SetText(r.checked and "×" or "")
 			local id = r.id
 			row.chk:SetScript("OnClick", function()
 				ui.excl[id] = not ui.excl[id] and true or nil
 				MA.Refresh()
 			end)
 			row:SetScript("OnClick", function()
-				if r.id then GM.TargetItem(r.id) end
+				if not r.id then return end
+				if IsShiftKeyDown() then GM.ModifiedItemClick(r.id)
+				else GM.TargetItem(r.id) end
 			end)
 		else
 			row:Hide()
@@ -411,6 +546,7 @@ end
 function MA.Show()
 	Build()
 	GM.Inventory.QueryOwned()
+	GM.Inventory.QueryBids()
 	ui.frame:Show()
 	MA.Refresh()
 	GM.After(0.5, MA.Refresh)
@@ -429,5 +565,11 @@ end
 local baseRefreshOwned = GM.Inventory.RefreshOwned
 function GM.Inventory.RefreshOwned(...)
 	baseRefreshOwned(...)
+	if ui and ui.frame:IsShown() then MA.Refresh() end
+end
+-- same for the bids half — RefreshBids runs on timers/events too
+local baseRefreshBids = GM.Inventory.RefreshBids
+function GM.Inventory.RefreshBids(...)
+	baseRefreshBids(...)
 	if ui and ui.frame:IsShown() then MA.Refresh() end
 end

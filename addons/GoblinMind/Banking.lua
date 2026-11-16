@@ -84,7 +84,8 @@ local function Slots(scope)
 		for slot = 1, n do
 			local info = C_Container.GetContainerItemInfo(bag, slot)
 			tinsert(out, { bag = bag, slot = slot, itemID = info and info.itemID,
-				count = info and info.stackCount or 0 })
+				count = info and info.stackCount or 0,
+				locked = info and info.isLocked or nil })
 		end
 	end
 	return out
@@ -311,6 +312,18 @@ end
 
 -- collect: loot one mail containing the item (or any attachment if
 -- itemID is nil). Returns true when the inbox has nothing left to take.
+-- HasNewMail() only moves on a server header push — pull it after a
+-- loot so the mail icon drops now, not on the lazy refresh.
+local pullArmed
+local function PullInbox()
+	if pullArmed or not CheckInbox then return end
+	pullArmed = true
+	GM.After(0.7, function()
+		pullArmed = nil
+		pcall(CheckInbox)
+	end)
+end
+
 local function DoMailCollect(step)
 	if not (MailFrame and MailFrame:IsShown()) then
 		return nil, "mailbox is closed"
@@ -323,6 +336,7 @@ local function DoMailCollect(step)
 			if not id then break end
 			if not step.itemID or id == step.itemID then
 				AutoLootMailItem(i)
+				PullInbox()
 				return "confirm" -- looted one mail; more may remain
 			end
 		end

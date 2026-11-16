@@ -1,0 +1,34 @@
+name: Bug report
+description: Report a GoblinMind problem — screenshots welcome
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Screenshots help enormously — **drag an image straight into any
+        text box below** and GitHub embeds it.
+
+        In-game, run `/goblin bug` — it opens a window with a
+        diagnostics block (Ctrl+A, Ctrl+C to copy) and a SCREENSHOT
+        button that saves to your `WoW\Screenshots` folder. Paste the
+        block into **Diagnostics** and drag the screenshot into
+        **What happened**.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, what you got. Drag screenshots here.
+      placeholder: e.g. opened the mailbox, expected the mail icon to clear, it lingered ~5s
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: "1. ...\n2. ...\n3. ..."
+  - type: textarea
+    id: diag
+    attributes:
+      label: Diagnostics (/goblin bug)
+      description: Paste the block from the in-game /goblin bug window. Version, client build, data age and recent log are all in there.
+      render: text

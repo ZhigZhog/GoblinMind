@@ -414,6 +414,8 @@ local function FillItemRow(row, id, right, sub)
 	row.icon:SetTexture(GM.ItemIcon and GM.ItemIcon(id)
 		or "Interface\\Icons\\INV_Misc_QuestionMark")
 	row.name:SetText(RowName(id))
+	row.name:SetTextColor(GM.NameColor(id))
+	W.ShiftItem(row, function() return row.id end)
 	row.sub:SetText(sub or "")
 	row.right:SetText(right or "")
 end
@@ -613,6 +615,8 @@ local function BuildUI()
 			GU.RefreshMembers()
 		end)
 	ui.memPanel, ui.memTitle, ui.memRows = memP, memT, memRows
+	memT:SetWidth(200) -- clip before it can reach the TOPRIGHT count
+	memT:SetWordWrap(false)
 	memP:SetScript("OnReceiveDrag", function()
 		local ty, id = GetCursorInfo()
 		if ty == "item" and id then
@@ -632,9 +636,10 @@ local function BuildUI()
 			GU.RefreshCatalogue(true)
 		end)
 	ui.catPanel, ui.catTitle, ui.catRows = catP, catT, catRows
-	catT:SetWidth(210)
-	catT:SetJustifyH("LEFT")
-	catT:SetWordWrap(false)
+	-- header row is a search row: the count owns TOPRIGHT and the
+	-- shown/ungrouped stats live on the bottom hint line — a title
+	-- string here collides with both
+	catT:SetText("")
 	ui.search = EditBox(catP, 200)
 	ui.search:SetPoint("TOPLEFT", 8, -2)
 	ui.search:SetHeight(16)
@@ -646,7 +651,6 @@ local function BuildUI()
 			GU.RefreshCatalogue()
 		end
 	end)
-	catT:SetPoint("TOPLEFT", 214, -8)
 	ui.catHint = GM.MakeFontString(catP, GM.FONT, 8, "secondary")
 	ui.catHint:SetPoint("BOTTOMLEFT", 8, 4)
 	ui.catHint:SetText("click adds to selected group")
@@ -1038,7 +1042,7 @@ function GU.RefreshTree()
 			local marker = g.depth > 1
 				and (GM.CC("secondary") .. "· |r") or ""
 			row.text:SetText(strrep("    ", g.depth - 1) .. marker
-				.. (g.kids and (GM.CC("secondary") .. "▾ |r") or "")
+				.. (g.kids and (GM.CC("secondary") .. "▼ |r") or "")
 				.. g.leaf
 				.. GM.CC("secondary") .. "  " .. g.n .. "|r")
 			row.text:SetTextColor(GM.RGB(
@@ -1080,8 +1084,19 @@ RowName = function(id)
 end
 
 local function MemberList()
-	local ids = {}
-	for id in GM.Groups.IterateItems(editPath()) do ids[#ids + 1] = id end
+	local ids, path, explicit = {}, editPath(), {}
+	for id in GM.Groups.IterateItems(path) do
+		ids[#ids + 1] = id
+		explicit[id] = true
+	end
+	-- Base Group holds every ungrouped item implicitly (TSM root
+	-- semantics): shown here but NOT written to the SV — moving one
+	-- out means assigning it somewhere via the catalogue, not unassign
+	if path == "Base Group" then
+		for _, id in ipairs(GM.Groups.UngroupedIds()) do
+			if not explicit[id] then ids[#ids + 1] = id end
+		end
+	end
 	sort(ids, function(a, b) return CatName(a) < CatName(b) end)
 	return ids
 end
@@ -1101,12 +1116,21 @@ function GU.RefreshMembers()
 			FillItemRow(row, id,
 				(e and e.p) and GM.Money(e.p) or "",
 				own > 0 and ("own " .. own) or "")
-			row.x:Show()
-			row.x:SetScript("OnClick", function()
-				GM.Groups.Unassign(id)
-				ui.catDirty = true
-				GU.Refresh()
-			end)
+			-- Base Group members are the ungrouped set — an x there
+			-- can't remove them, so it's hidden; catalogue click is
+			-- the move path
+			local implicit = editPath() == "Base Group"
+				and not GM.Groups.GroupForItem(id)
+			if implicit then
+				row.x:Hide()
+			else
+				row.x:Show()
+				row.x:SetScript("OnClick", function()
+					GM.Groups.Unassign(id)
+					ui.catDirty = true
+					GU.Refresh()
+				end)
+			end
 			row:SetScript("OnClick", nil)
 		else
 			row:Hide()
@@ -1148,7 +1172,7 @@ function GU.RefreshCatalogue(skipRebuild)
 	if not list then return end
 	local ungrouped = 0
 	for _, e in ipairs(list) do if not e.grp then ungrouped = ungrouped + 1 end end
-	ui.catTitle:SetText(format("(%d shown · %d ungrouped)",
+	ui.catHint:SetText(format("%d shown · %d ungrouped · click adds",
 		#list, ungrouped))
 	local maxOff = math.max(0, #list - LIST_ROWS)
 	if ui.catOff > maxOff then ui.catOff = maxOff end
@@ -1162,12 +1186,17 @@ function GU.RefreshCatalogue(skipRebuild)
 				(ent and ent.p) and GM.Money(ent.p) or "",
 				e.grp and ("· " .. e.grp) or "")
 			row.x:Hide()
-			row.name:SetTextColor(GM.RGB(e.grp and "textDim" or "text"))
+			row.name:SetTextColor(GM.NameColor(
+				not e.grp and e.id, "textDim"))
 			row:SetScript("OnClick", function()
 				if ui.drag
 					or (ui.lastDrop and GetTime() - ui.lastDrop < 0.3) then
 					return
 				end
+				-- shift+click already handled by FillItemRow's
+				-- ShiftItem hook on mousedown — just swallow the
+				-- assign click
+				if IsShiftKeyDown() then return end
 				GM.Groups.Assign(e.id, GM.Groups.Ensure(editPath()))
 				ui.catDirty = true
 				GU.Refresh()

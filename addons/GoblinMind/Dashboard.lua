@@ -168,10 +168,17 @@ local function TaskLines()
 				or GM.CC("pos") .. "all priced best|r")
 		out[#out + 1] = "   → CANCEL SCAN for undercuts"
 	end
-	local hits = #(GM.Sniper.hits or {})
-	if hits > 0 then
-		out[#out + 1] = format("%s%d sniper hit%s|r — MARKET",
-			GM.CC("pos"), hits, hits == 1 and "" or "s")
+	-- actionable hits only — the sniper feed's own filters (SOON on
+	-- by default) decide what counts; the raw row dump stays out
+	local raw = #(GM.Sniper.hits or {})
+	local hits = (GM.Sniper.PendingCount and GM.Sniper.PendingCount())
+		or raw
+	if hits > 0 or raw > 0 then
+		out[#out + 1] = format("%s%d sniper hit%s%s|r — MARKET",
+			hits > 0 and GM.CC("pos") or GM.CC("textDim"), hits,
+			hits == 1 and "" or "s",
+			raw > hits and GM.CC("textDim") ..
+				format(" (%d filtered)", raw - hits) or "")
 	end
 	local mail = GetInboxNumItems and GetInboxNumItems() or 0
 	if mail > 0 then
@@ -333,7 +340,8 @@ function DB.MountHome(host)
 			local r = rec[i]
 			if r then
 				fs:SetText(format("%s  %s  %s ×%d  %s", date("%H:%M", r.t),
-					r.ty, GM.ItemName(r.i) or ("item " .. r.i), r.q,
+					r.ty, (GM.QHex(r.i) or "") ..
+						(GM.ItemName(r.i) or ("item " .. r.i)) .. "|r", r.q,
 					r.u and GM.Money(r.u) .. " /ea" or "—"))
 			else
 				fs:SetText("")

@@ -57,83 +57,12 @@ local bugEv = CreateFrame("Frame")
 pcall(bugEv.RegisterEvent, bugEv, "PLAYER_LOGIN")
 bugEv:SetScript("OnEvent", ClearFiledBugs)
 
--- the report dialog — a description box + FILE; diagnostics attach
--- automatically. StageReport is forward-declared: its body sits past
--- the HexEnc codec it uses.
+-- the report dialog lives in BugReport.lua (one bug window for
+-- /goblin bug AND the settings button). StageReport below hex-stages
+-- into SavedVariables; it's exported as GM.StageReport and
+-- forward-declared here only because its body sits past HexEnc.
 local StageReport
-local bugD
 local ShowProfDialog
-local function BuildBugDialog()
-	if bugD then return end
-	local d = CreateFrame("Frame", nil, UIParent)
-	d:SetSize(440, 300)
-	d:SetPoint("CENTER", 0, 40)
-	d:SetFrameStrata("FULLSCREEN_DIALOG")
-	d:SetToplevel(true)
-	d:SetMovable(true)
-	d:EnableMouse(true)
-	d:RegisterForDrag("LeftButton")
-	d:SetScript("OnDragStart", d.StartMoving)
-	d:SetScript("OnDragStop", d.StopMovingOrSizing)
-	GM.Panel(d, "contLow", "outlineVar")
-	bugD = d
-
-	local t = GM.MakeFontString(d, GM.FONT_BOLD, 13, "accent")
-	t:SetPoint("TOPLEFT", 12, -10)
-	t:SetText("FILE A BUG REPORT")
-
-	local desc = CreateFrame("EditBox", nil, d)
-	desc:SetPoint("TOPLEFT", 12, -34)
-	desc:SetSize(416, 170)
-	desc:SetAutoFocus(false)
-	desc:SetMultiLine(true)
-	desc:SetMaxLetters(4000)
-	desc:SetFont(GM.FONT, 10, "")
-	desc:SetTextColor(GM.RGB("text"))
-	desc:SetTextInsets(6, 6, 6, 6)
-	local bg = desc:CreateTexture(nil, "BACKGROUND")
-	bg:SetAllPoints()
-	bg:SetColorTexture(GM.RGB("contLowest"))
-	desc:SetScript("OnEscapePressed", function() d:Hide() end)
-	d.desc = desc
-
-	local note = GM.MakeFontString(d, GM.FONT, 9, "textDim")
-	note:SetPoint("TOPLEFT", desc, "BOTTOMLEFT", 2, -6)
-	note:SetWidth(416)
-	note:SetJustifyH("LEFT")
-	note:SetText("attaches client build, addon version, AH book age, and "
-		.. "the last Lua errors. The brain watcher files it to GitHub "
-		.. "after your next /reload.")
-
-	local file = CreateFrame("Button", nil, d)
-	file:SetSize(120, 22)
-	file:SetPoint("BOTTOMRIGHT", -12, 10)
-	GM.Panel(file, "accent")
-	file.text = GM.MakeFontString(file, GM.FONT_BOLD, 10, "contLowest")
-	file.text:SetPoint("CENTER")
-	file.text:SetText("FILE REPORT")
-	file:SetScript("OnClick", function()
-		local txt = strtrim(desc:GetText() or "")
-		if txt == "" then
-			GM.Print(GM.CC("warn") .. "describe the bug first|r")
-			return
-		end
-		local id = StageReport(txt)
-		desc:SetText("")
-		d:Hide()
-		GM.Print("bug report staged (" .. id .. ") — /reload to send "
-			.. "(the brain watcher files it to GitHub)")
-	end)
-
-	local cancel = CreateFrame("Button", nil, d)
-	cancel:SetSize(70, 22)
-	cancel:SetPoint("RIGHT", file, "LEFT", -8, 0)
-	GM.Panel(cancel, "contHigh")
-	cancel.text = GM.MakeFontString(cancel, GM.FONT_BOLD, 10, "text")
-	cancel.text:SetPoint("CENTER")
-	cancel.text:SetText("CANCEL")
-	cancel:SetScript("OnClick", function() d:Hide() end)
-end
 
 function S.FlagReload()
 	S.needReload = true
@@ -300,7 +229,7 @@ local PROFILE_KEYS = {
 -- stage: build the report body (description + diagnostics), hex it
 -- with the profile codec, store "id|hex" so the brain can regex it
 -- straight out of the SavedVariables file
-function StageReport(desc)
+function StageReport(desc, title)
 	local id = format("gm-%d-%d", time(), math.random(100, 999))
 	local _, _, _, build = GetBuildInfo()
 	local ver = GetAddOnMetadata
@@ -319,7 +248,7 @@ function StageReport(desc)
 		body[#body + 1] = "- " .. e
 	end
 	local payload = table.concat(body, "\n")
-	local title = strtrim(desc:gsub("\n.*", ""))
+	title = title and strtrim(title) or strtrim(desc:gsub("\n.*", ""))
 	if title == "" then title = "In-game bug report" end
 	if #title > 80 then title = title:sub(1, 77) .. "..." end
 	GM.db.bugReports = GM.db.bugReports or {}
@@ -327,6 +256,7 @@ function StageReport(desc)
 		id .. "|" .. HexEnc(title .. "\n" .. payload)
 	return id
 end
+GM.StageReport = StageReport
 
 
 local function ExportProfile()
@@ -657,11 +587,10 @@ local function Build()
 	ui.mmHide:SetPoint("TOPLEFT", 500, -24)
 	RowAt(gen, "Tooltip side panel", 320, 50)
 	ui.embed = BoolSeg(gen,
-		function() return GM.db.tooltip and GM.db.tooltip.embeddedTooltip or false end,
-		function(v)
-			GM.Tooltip.SetOption("embeddedTooltip", nil, v)
-			S.FlagReload()
-		end)
+		-- the stored flag is INVERTED (embeddedTooltip=true embeds
+		-- into the native tip); the checkbox reads as "side panel"
+		function() return not (GM.db.tooltip and GM.db.tooltip.embeddedTooltip) end,
+		function(v) GM.Tooltip.SetOption("embeddedTooltip", nil, not v) end)
 	ui.embed:SetPoint("TOPLEFT", 500, -48)
 	RowAt(gen, "Show on modifier", 320, 74)
 	ui.mod = CycleBtn(gen, 76,
@@ -741,8 +670,7 @@ local function Build()
 	bug.text:SetPoint("CENTER")
 	bug.text:SetText("BUG REPORT")
 	bug:SetScript("OnClick", function()
-		BuildBugDialog()
-		bugD:Show()
+		if GM.BugReport then GM.BugReport.Show() end
 	end)
 
 	S.Relayout()
@@ -777,7 +705,9 @@ local function BuildTooltipRows()
 		else
 			ctl = CycleBtn(ui.ttHost, 84, d.get, d.set, d.domain)
 		end
-		ctl:SetPoint("TOPLEFT", x + colW - 84, y + 3)
+		-- same y as the label — the old +3 floated every control into
+		-- the row above (looked like a second, stray button)
+		ctl:SetPoint("TOPLEFT", x + colW - 84, y)
 		tinsert(ui.ttRows, { d = d, ctl = ctl })
 	end
 	ui.ttInnerH = math.max(234, ceil(#opts / 2) * rowH + top + 10)

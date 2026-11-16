@@ -179,6 +179,7 @@ function DU.Refresh()
 			row:Show()
 			row.icon:SetTexture(GM.ItemIcon(r.id) or 134400)
 			row.name:SetText(GM.ItemName(r.id) or ("item " .. r.id))
+			row.name:SetTextColor(GM.NameColor(r.id))
 			row.qty:SetText("×" .. r.qty)
 			-- VENDOR = what the SELL button actually pays per unit
 			row.dv:SetText(r.vendor and GM.Money(r.vendor) or "—")
@@ -220,7 +221,9 @@ function DU.Refresh()
 				DU.Refresh()
 			end)
 			row:SetScript("OnClick", function()
-				if r.id then GM.TargetItem(r.id) end
+				if not r.id then return end
+				if IsShiftKeyDown() then GM.ModifiedItemClick(r.id)
+				else GM.TargetItem(r.id) end
 			end)
 		else
 			row:Hide()

@@ -175,6 +175,25 @@ MoneyFmt = function(v)
 	return out
 end
 
+-- this client's string-width measuring ignores |T|t texture escapes,
+-- so a GameTooltip auto-sizes icon-mode money lines too narrow and
+-- the right column overhangs the frame. Measure with the tags
+-- stripped, sum the icon widths back in, and widen the tip ourselves.
+local mfs
+local function LineW(text)
+	if not text then return 0 end
+	if not mfs then
+		mfs = UIParent:CreateFontString(nil, "OVERLAY")
+		mfs:SetFont(GM.FONT, 10, "")
+	end
+	local icons = 0
+	mfs:SetText((text:gsub("|T[^|]-|t", function(tag)
+		icons = icons + (tonumber(tag:match(":(%d+)")) or 11) + 2
+		return ""
+	end)))
+	return mfs:GetStringWidth() + icons
+end
+
 local function AgeStr(t0)
 	if not t0 then return nil end
 	local d = time() - t0
@@ -270,20 +289,23 @@ end
 
 local function A_RightText(id)
 	local e = GM.ItemEntry(id)
-	local n = e and e.sup or 0
-	local age = GM.AH.BookAge and GM.AH.BookAge()
-	local fresh = age and age < math.huge and age
-	if fresh then
+	-- label the winning source: live scan when it's freshest
+	-- (tagged), backend otherwise — never a book age on DB values
+	if GM.AH.BookLive and GM.AH.BookLive() then
+		local age = GM.AH.BookAge()
+		local n = GM.AH.BookSupply(id) or (e and e.sup) or 0
 		return GM.CC("text") .. format("%d auctions", n) .. "|r ("
-			.. GM.CC(fresh < 300 and "pos" or "warn") .. AgeStr(time() - fresh) .. "|r)"
+			.. GM.CC(age < 300 and "pos" or "warn") .. AgeStr(time() - age)
+			.. GM.CC("pos") .. " live|r)"
 	end
+	local n = e and e.sup or 0
 	local dAge = GM.DataAge()
 	return GM.CC("text") .. format("%d auctions", n) .. "|r ("
 		.. GM.CC("warn") .. (dAge and AgeStr(time() - dAge) or "no data") .. "|r)"
 end
 
 local function P_MinBuyout(t, id)
-	local v = GM.AH.BookAge and GM.AH.BookAge() < 600 and GM.AH.BookMin(id)
+	local v = GM.AH.BookLive and GM.AH.BookLive() and GM.AH.BookMin(id)
 		or Price("dbminbuyout", id)
 	if v then t:AddItemValueLine("Min Buyout", v) end
 end
@@ -358,7 +380,7 @@ local function P_Reset(t, id)
 end
 
 local function P_LiveBook(t, id)
-	local fresh = GM.AH.BookAge and GM.AH.BookAge() < 600
+	local fresh = GM.AH.BookLive and GM.AH.BookLive()
 	if not fresh then return end
 	local mn, sup = GM.AH.BookMin(id), GM.AH.BookSupply(id)
 	if mn then
@@ -588,13 +610,79 @@ end
 local sideTip
 local hideHooked = {}
 
+local function AnchorSideTip()
+	-- Blizzard's compare tips (ShoppingTooltip1/2) claim the TOPRIGHT
+	-- slot of GameTooltip — the same spot we want. Anchor off the
+	-- widest edge of the whole shown chain so they can't cover us,
+	-- and flip left of the chain when the right edge runs into the
+	-- screen bound.
+	if not sideTip or not sideTip:IsShown() then return end
+	local src = sideTip._src or GameTooltip
+	local right, left = src, src
+	for _, name in ipairs({ "ShoppingTooltip1", "ShoppingTooltip2" }) do
+		local t = _G[name]
+		if t and t:IsShown() and t:GetRight() then
+			if not right:GetRight() or t:GetRight() > right:GetRight() then
+				right = t
+			end
+			if t:GetLeft() and left:GetLeft()
+				and t:GetLeft() < left:GetLeft() then
+				left = t
+			end
+		end
+	end
+	sideTip:ClearAllPoints()
+	local w = sideTip:GetWidth() or 0
+	local screenR = UIParent:GetRight() or math.huge
+	if right:GetRight() and right:GetRight() + w > screenR
+		and left:GetLeft() and left:GetLeft() > w then
+		sideTip:SetPoint("TOPRIGHT", left, "TOPLEFT", -2, 0)
+	else
+		sideTip:SetPoint("TOPLEFT", right, "TOPRIGHT", 2, 0)
+	end
+end
+
+local SIDE_ROW_H = 13
+
 local function BuildSideTip()
 	if sideTip then return end
-	local ok, tip = pcall(CreateFrame, "GameTooltip", "GoblinMindSideTip",
-		UIParent, "GameTooltipTemplate")
-	if not ok or not tip then return end
+	-- plain frame, NOT a GameTooltip — this client ignores |T|t icon
+	-- escapes when auto-sizing, so icon-mode money columns overhang
+	-- the tooltip frame. Our own panel sizes off LineW's real
+	-- measurements instead of the broken auto-size.
+	local tip = CreateFrame("Frame", "GoblinMindSideTip", UIParent)
+	tip:SetFrameStrata("TOOLTIP")
 	tip:SetClampedToScreen(true)
+	GM.Panel(tip, "contLowest", "outlineVar")
+	tip.title = GM.MakeFontString(tip, GM.FONT_BOLD, 11, "accent")
+	tip.title:SetPoint("TOPLEFT", 8, -6)
+	tip.title:SetText("GoblinMind")
+	tip.rows = {}
+	tip:Hide()
 	sideTip = tip
+	-- compare tips can finish populating a frame after our fill —
+	-- re-anchor whenever one shows so we stay clear of them
+	for _, name in ipairs({ "ShoppingTooltip1", "ShoppingTooltip2" }) do
+		local t = _G[name]
+		if t then pcall(t.HookScript, t, "OnShow", AnchorSideTip) end
+	end
+end
+
+local function SideRow(i)
+	local r = sideTip.rows[i]
+	if not r then
+		r = {}
+		r.left = GM.MakeFontString(sideTip, GM.FONT, 10, "textDim")
+		r.left:SetPoint("TOPLEFT", 8, -20 - (i - 1) * SIDE_ROW_H)
+		r.left:SetJustifyH("LEFT")
+		-- right-anchored + right-justified: the text ends at the inset
+		-- regardless of the fontstring's (mis-measured) own width
+		r.right = GM.MakeFontString(sideTip, GM.FONT, 10, "text")
+		r.right:SetPoint("TOPRIGHT", -8, -20 - (i - 1) * SIDE_ROW_H)
+		r.right:SetJustifyH("RIGHT")
+		sideTip.rows[i] = r
+	end
+	return r
 end
 
 local function Fill(itemID, tooltip)
@@ -623,37 +711,89 @@ local function Fill(itemID, tooltip)
 	local lr, lg, lb = GM.RGB("textDim")
 	local rr, rg, rb = GM.RGB("text")
 	local ar, ag, ab = GM.RGB("accent")
-	local target = o.embeddedTooltip and tooltip or nil
-	if not target then
-		BuildSideTip()
-		if not sideTip then return end
-		sideTip:SetOwner(tooltip, "ANCHOR_NONE")
-		sideTip:ClearAllPoints()
-		sideTip:SetPoint("TOPLEFT", tooltip, "TOPRIGHT", 0, 0)
-		target = sideTip
-		target:SetText("GoblinMind", ar, ag, ab)
-	else
-		target:AddLine(" ")
+	local age = GM.DataAge()
+	local stale = age and age > (GM.db and GM.db.dataMaxAge or 7200)
+		and format("DB %dm old — /reload or FULL SCAN", age / 60) or nil
+
+	if o.embeddedTooltip then
+		if sideTip then sideTip:Hide() end
+		tooltip:AddLine(" ")
+		for _, ln in ipairs(b.lines) do
+			if ln.section then
+				tooltip:AddDoubleLine(ln.left, ln.right or "", ar, ag, ab, lr, lg, lb)
+			elseif ln.right then
+				local vr, vg, vb = ln.accent and ar or rr, ln.accent and ag or rg, ln.accent and ab or rb
+				tooltip:AddDoubleLine(ln.left, ln.right, lr, lg, lb, vr, vg, vb)
+			else
+				tooltip:AddLine(ln.left, lr, lg, lb)
+			end
+		end
+		if stale then
+			tooltip:AddLine(stale, GM.RGB("warn"))
+		end
+		tooltip:Show()
+		-- widen past the client's broken |T|t measuring — icon-mode
+		-- money columns would overhang the auto-sized frame. 40px
+		-- covers the double-line insets and column gap.
+		if o.tooltipPriceFormat == "icon" then
+			local need = 0
+			for _, ln in ipairs(b.lines) do
+				local w = LineW(ln.left) + LineW(ln.right) + 40
+				if w > need then need = w end
+			end
+			if need > (tooltip:GetWidth() or 0) then
+				tooltip:SetWidth(need)
+			end
+		end
+		return
 	end
+
+	-- side tip: our own frame — measured width, so icon money can
+	-- never spill past the panel edge
+	BuildSideTip()
+	if not sideTip then return end
+	sideTip._src = tooltip
+	local need, ri = 0, 0
+	local function PutLine(left, right, lc, rc)
+		ri = ri + 1
+		local row = SideRow(ri)
+		row.left:Show()
+		row.left:SetText(left or "")
+		row.left:SetTextColor(lc[1], lc[2], lc[3])
+		if right then
+			row.right:Show()
+			row.right:SetText(right)
+			row.right:SetTextColor(rc[1], rc[2], rc[3])
+		else
+			row.right:Hide()
+		end
+		local w = LineW(left) + LineW(right) + (right and 32 or 16)
+		if w > need then need = w end
+	end
+	local LC = { lr, lg, lb }
+	local RC = { rr, rg, rb }
+	local AC = { ar, ag, ab }
 	for _, ln in ipairs(b.lines) do
 		if ln.section then
-			target:AddDoubleLine(ln.left, ln.right or "", ar, ag, ab, lr, lg, lb)
+			PutLine(ln.left, ln.right, AC, LC)
 		elseif ln.right then
-			local vr, vg, vb = ln.accent and ar or rr, ln.accent and ag or rg, ln.accent and ab or rb
-			target:AddDoubleLine(ln.left, ln.right, lr, lg, lb, vr, vg, vb)
+			PutLine(ln.left, ln.right, LC, ln.accent and AC or RC)
 		else
-			target:AddLine(ln.left, lr, lg, lb)
+			PutLine(ln.left, nil, LC)
 		end
 	end
-	-- freshness trailer: honest staleness warning regardless of mode
-	local age = GM.DataAge()
-	if age and age > (GM.db and GM.db.dataMaxAge or 7200) then
-		local wr, wg, wb = GM.RGB("warn")
-		target:AddLine(format("DB %dm old — /reload or FULL SCAN", age / 60), wr, wg, wb)
+	if stale then PutLine(stale, nil, { GM.RGB("warn") }) end
+	for j = ri + 1, #sideTip.rows do
+		sideTip.rows[j].left:Hide()
+		sideTip.rows[j].right:Hide()
 	end
-	target:Show()
+	local titleW = LineW("GoblinMind") + 16
+	if titleW > need then need = titleW end
+	sideTip:SetSize(need, 20 + ri * SIDE_ROW_H + 6)
+	sideTip:Show()
+	AnchorSideTip()
 
-	if target == sideTip and not hideHooked[tooltip] then
+	if not hideHooked[tooltip] then
 		hideHooked[tooltip] = true
 		local hide = function() if sideTip then sideTip:Hide() end end
 		tooltip:HookScript("OnHide", hide)

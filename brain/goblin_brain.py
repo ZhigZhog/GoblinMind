@@ -73,6 +73,14 @@ def _atom(s, i):
         return False, i
     if tok == 'nil':
         return None, i
+    # TSM encodes every data field as an UPPERCASE base-32 token —
+    # including digit-only ones ('13' is 35 base-32, not thirteen).
+    # Hand them all to the field decoder as strings: int() would
+    # steal digit tokens as decimal, and float() reads '6E8' as
+    # 6e8 scientific notation — that's where the billion-scale
+    # tooltip prices came from.
+    if re.fullmatch(r'[0-9A-Z]+', tok):
+        return tok, i
     try:
         return int(tok), i
     except ValueError:
@@ -153,11 +161,20 @@ def parse_payload(payload):
     return val
 
 
-def b36(v):
-    """Base-36 decode for the letter-bearing encodings; passthrough ints."""
-    if isinstance(v, str) and re.fullmatch(r'[0-9A-Z]+', v):
-        return int(v, 36)
-    return v
+def b32(v):
+    """Base-32 decode for TSM's AppData value encodings — matches
+    UnpackData in LibTSMService/AuctionDB.lua verbatim: tonumber(v,32),
+    and tokens longer than 6 chars split into hi*2^30 + lo because
+    Lua's tonumber can't represent >32-bit base conversions. The old
+    base-36 guess mispriced every TSM-derived field ~20-30%."""
+    if not isinstance(v, str) or not re.fullmatch(r'[0-9A-Z]+', v):
+        return v
+    try:
+        if len(v) <= 6:
+            return int(v, 32)
+        return int(v[:-6], 32) * (1 << 30) + int(v[-6:], 32)
+    except ValueError:
+        return None  # a W-Z token can't be base-32 — corrupt, not data
 
 
 def rows_of(chunk):
@@ -186,6 +203,10 @@ def read_chunks(path):
                 continue
             tag, scope, payload = m.groups()
             chunk = parse_payload(payload)
+            # header fields are decimal, not base-32 — _atom leaves
+            # all [0-9A-Z]+ tokens as strings, so coerce explicitly
+            if 'downloadTime' in chunk:
+                chunk['downloadTime'] = int(chunk['downloadTime'])
             key = (tag, scope)
             if key not in chunks or chunk['downloadTime'] > chunks[key]['downloadTime']:
                 chunks[key] = chunk
@@ -211,7 +232,8 @@ def cmd_dump(path):
         for j, row in enumerate(rows_of(c)):
             if j >= 3:
                 break
-            dec = {k: b36(v) for k, v in row.items()}
+            dec = {k: (v if k == 'itemString' else b32(v))
+                   for k, v in row.items()}
             print(f'  {dec}')
 
 
@@ -243,115 +265,140 @@ def load_vendor_buy(path):
     return out
 
 
-def cmd_emit(path, out_path):
-    chunks = read_chunks(path)
-    items = {}          # itemID -> record
-    data_age = 0
-    realm_age = 0       # newest realm-scope downloadTime
-    region_age = 0      # newest region-scope downloadTime
-    n_adb = n_rows = n_priced = 0
-
-    # realm-scope rows: current stats (DATA), historical, scan stats
-    # region-scope rows: REGION_STAT / REGION_SALE give market avg + velocity
-    per_item = {}
+def tsm_items(chunks, realm=None):
+    """Parse AUCTIONDB chunks -> (items_by_scope, data_age, realm_age,
+    region_age). Realm chunks land under their own scope
+    ('Normal-Alliance'); region rows overlay onto every realm scope
+    (region stats are realm-agnostic). realm = configured scope —
+    when set, only that scope's realm rows are consumed (cross-realm
+    pollution guard); without it every realm scope gets its own
+    entry."""
+    data_age = realm_age = region_age = 0
+    # scope -> iid -> raw decoded record; '_region' holds region rows
+    per_scope = {'_region': {}}
     for (tag, scope), c in chunks.items():
         if not tag.startswith('AUCTIONDB'):
             continue
-        n_adb += 1
-        n_rows += sum(1 for k in c.get('data', {}) if isinstance(k, int))
-        data_age = max(data_age, c['downloadTime'])
         is_region = scope.endswith('-US') or '_REGION_' in tag
+        if realm and not is_region and scope != realm:
+            continue
+        data_age = max(data_age, c['downloadTime'])
         if is_region:
             region_age = max(region_age, c['downloadTime'])
         else:
             realm_age = max(realm_age, c['downloadTime'])
+        bucket = per_scope.setdefault(
+            '_region' if is_region else scope, {})
         for row in rows_of(c):
             isr = row.get('itemString')
             if isr is None:
                 continue
             item_id = int(isr) if isinstance(isr, int) else \
-                int(isr.split(':')[1]) if isinstance(isr, str) and isr.startswith('i:') else None
+                int(isr.split(':')[1]) if isinstance(isr, str) and isr.startswith('i:') else \
+                int(isr) if isinstance(isr, str) and isr.isdigit() else None
             if item_id is None:
                 continue
-            rec = per_item.setdefault(item_id, {})
-            if is_region:
-                for k, v in row.items():
-                    if k == 'itemString':
-                        continue
-                    rec.setdefault('region', {})[k] = b36(v)
-            else:
-                for k, v in row.items():
-                    if k == 'itemString':
-                        continue
-                    rec[k] = b36(v)
+            rec = bucket.setdefault(item_id, {})
+            for k, v in row.items():
+                if k == 'itemString':
+                    continue
+                if is_region:
+                    rec.setdefault('region', {})[k] = b32(v)
+                else:
+                    rec[k] = b32(v)
 
-    for item_id, rec in per_item.items():
-        p = rec.get('marketValue') or rec.get('marketValueRecent') \
-            or rec.get('minBuyout') or rec.get('historical')
-        region = rec.get('region', {})
-        if not p:
-            p = region.get('regionMarketValue') or region.get('regionHistorical')
-        if not p:
-            LOG.debug('item %s: no price fields — skipped', item_id)
+    # shape each scope: realm rows + region overlay
+    items_by_scope = {}
+    for scope, bucket in per_scope.items():
+        if scope == '_region':
             continue
-        n_priced += 1
-        # regionSoldPerDay is a raw count — TSM displays it unscaled in
-        # its tooltip (regionSalePercent is the only permille field).
-        raw_vel = region.get('regionSoldPerDay') or region.get('regionSale')
-        vel = raw_vel
-        out = {
-            'p': p,
-            'p10': int(p * 0.85),      # placeholder band until the model lands
-            'p90': int(p * 1.15),
-        }
-        # v2: pass every source field through with compact keys — the
-        # pricing engine resolves db* names to these (see Pricing.lua)
-        for k, v in (
-            ('mkt',    rec.get('marketValue')),         # dbmarket
-            ('mb',     rec.get('minBuyout')),           # dbminbuyout
-            ('hist',   rec.get('historical')),          # dbhistorical
-            ('recent', rec.get('marketValueRecent')),
-            ('sup',    rec.get('numAuctions')),
-            ('rmkt',   region.get('regionMarketValue')),  # dbregionmarketavg
-            ('rhist',  region.get('regionHistorical')),   # dbregionhistorical
-            ('rsale',  region.get('regionSale')),         # dbregionsale
-            ('rsalep', region.get('regionSalePercent')),  # permille — /1000 at read
-        ):
-            if v:
-                out[k] = v
-        if vel:  # dbregionsalerate
-            out['vel'] = round(vel) if vel >= 10 else round(vel, 1)
-        mb = rec.get('minBuyout')
-        if mb and mb < p * 0.85:
-            out['reset'] = {
-                'below': mb,
-                'maxN': rec.get('numAuctions') or 10,
-                'ev': int((p * 0.95 - mb) * min(rec.get('numAuctions') or 1,
-                                                max(vel or 1, 1))),
+        items = {}
+        for item_id, rec in bucket.items():
+            region = dict(per_scope['_region'].get(item_id, {})
+                          .get('region', {}))
+            region.update(rec.get('region', {}))
+            p = rec.get('marketValue') or rec.get('marketValueRecent') \
+                or rec.get('minBuyout') or rec.get('historical')
+            if not p:
+                p = region.get('regionMarketValue') \
+                    or region.get('regionHistorical')
+            if not p:
+                LOG.debug('item %s: no price fields — skipped', item_id)
+                continue
+            # regionSoldPerDay is a raw count — TSM displays it unscaled in
+            # its tooltip (regionSalePercent is the only permille field).
+            # regionSale is a PRICE, not a rate — falling back to it
+            # emitted copper values as "units/day" (vel=6600 on dead
+            # items). Absent rate data stays nil, honestly.
+            vel = region.get('regionSoldPerDay')
+            out = {
+                'p': p,
+                'p10': int(p * 0.85),   # placeholder band until the model lands
+                'p90': int(p * 1.15),
             }
-        items[item_id] = out
+            # v2: pass every source field through with compact keys — the
+            # pricing engine resolves db* names to these (see Pricing.lua)
+            for k, v in (
+                ('mkt',    rec.get('marketValue')),         # dbmarket
+                ('mb',     rec.get('minBuyout')),           # dbminbuyout
+                ('hist',   rec.get('historical')),          # dbhistorical
+                ('recent', rec.get('marketValueRecent')),
+                ('sup',    rec.get('numAuctions')),
+                ('rmkt',   region.get('regionMarketValue')),  # dbregionmarketavg
+                ('rhist',  region.get('regionHistorical')),   # dbregionhistorical
+                ('rsale',  region.get('regionSale')),         # dbregionsale
+                ('rsalep', region.get('regionSalePercent')),  # permille — /1000 at read
+            ):
+                if v:
+                    out[k] = v
+            if vel:  # dbregionsalerate
+                out['vel'] = round(vel) if vel >= 10 else round(vel, 1)
+            mb = rec.get('minBuyout')
+            if mb and mb < p * 0.85:
+                out['reset'] = {
+                    'below': mb,
+                    'maxN': rec.get('numAuctions') or 10,
+                    'ev': int((p * 0.95 - mb) * min(
+                        rec.get('numAuctions') or 1, max(vel or 1, 1))),
+                }
+            items[item_id] = out
+        items_by_scope[scope] = items
+    return items_by_scope, data_age, realm_age, region_age
+
+
+def cmd_emit(path, out_path, realm=None):
+    chunks = read_chunks(path)
+    items_by_scope, data_age, realm_age, region_age = \
+        tsm_items(chunks, realm)
+    # realm-aware emit: scopes mirror cmd_book's shape so the addon's
+    # realms[GM.Scope()] lookup works on either feed; flat items is
+    # the primary scope for legacy readers
+    realms = {s: {'items': items, 'dataAge': realm_age or data_age,
+                  'generated': int(time.time())}
+              for s, items in items_by_scope.items()}
+    primary = realm or max(realms, key=lambda s: len(realms[s]['items']),
+                           default=None)
+    flat = realms.get(primary, {})
 
     db = {
-        'version': 2,
+        'version': 3,
+        'source': 'tsm',
         'filedBugs': [
             {'id': rid, 'url': url} for rid, url in load_filed().items()],
         'generated': int(time.time()),
         'dataAge': data_age,      # newest downloadTime across all chunks
         'realmAge': realm_age,    # realm-scope chunks only (≈ TSM "Realm Data")
         'regionAge': region_age,  # region-scope chunks only (≈ TSM "Region Data")
-        'items': items,
+        'realms': realms,
+        'items': flat.get('items', {}),
         'vendorBuy': load_vendor_buy(path),  # TSM VendorSell.Retail → id=cost
     }
 
     write_db(db, out_path)
-    LOG.info('emitted %d items -> %s (%d KB)',
-             len(items), out_path,
-             os.path.getsize(out_path) // 1024)
-    LOG.debug('  %d chunks total, %d AUCTIONDB, %d rows, %d priced '
-              '(%d skipped no-price)',
-              len(chunks), n_adb, n_rows, n_priced,
-              len(per_item) - n_priced)
-    return len(items)
+    LOG.info('emitted %d scopes %d items -> %s (%d KB)',
+             len(realms), sum(len(r['items']) for r in realms.values()),
+             out_path, os.path.getsize(out_path) // 1024)
+    return sum(len(r['items']) for r in realms.values())
 
 
 _IDENT = re.compile(r'[A-Za-z_][A-Za-z0-9_]*\Z')
@@ -573,7 +620,7 @@ def _sv_root(path, root=None):
         os.path.dirname(path), *(['..'] * n)))
 
 
-def cmd_book(sv_arg, out_paths, root=None, feed=None):
+def cmd_book(sv_arg, out_paths, root=None, feed=None, realm=None):
     """Emit GoblinMindDB from our own feeds. Merges every
     GoblinMind.lua on the account: newest book snapshot wins per
     item, all snapshots feed the history, and ledger sells sum
@@ -652,6 +699,26 @@ def cmd_book(sv_arg, out_paths, root=None, feed=None):
                     'migration); keeping last good DB')
         return
 
+    # TSM backend: parse AppData realm+region chunks for the
+    # configured realm — the shared feed TSM pulls from. It's the
+    # source of truth where most current; a fresher full scan wins.
+    # Scope names match (both are "Realm-Faction"), so TSM items map
+    # straight onto book scopes.
+    tsm_by_scope = {}
+    tsm_realm_age = tsm_region_age = 0
+    if os.path.basename(sv_arg).lower() != 'goblinmind.lua' \
+            and os.path.exists(sv_arg):
+        tsm_by_scope, _, tsm_realm_age, tsm_region_age = \
+            tsm_items(read_chunks(sv_arg), realm)
+
+    # TSM scope names differ from the addon's GM.Scope() names —
+    # TSM normalizes realms its own way ('Normal-Alliance' vs
+    # 'CAMWOWUS1Realm5PvE-Alliance'). Fold the configured TSM realm
+    # scope into every book scope sharing its faction suffix.
+    tsm_main = tsm_by_scope.get(realm) if realm else {}
+    tsm_faction = realm.rsplit('-', 1)[-1] if realm else None
+    tsm_consumed = set()
+
     realms = {}
     for scope, books in books_by_scope.items():
         # newest book per item defines the current listing picture
@@ -674,11 +741,60 @@ def cmd_book(sv_arg, out_paths, root=None, feed=None):
                 'p': p, 'mkt': p,
                 'vel': vel.get(scope, {}).get(iid),
             }
+        # merge over the TSM backend for this scope: TSM-only fields
+        # (hist/recent/region stats/reset) always come from TSM; the
+        # book's live listing fields win when the scan is fresher than
+        # the feed (per-item rule is scope-level: one snapshot time
+        # vs one downloadTime)
+        same_faction = tsm_faction and \
+            scope.rsplit('-', 1)[-1] == tsm_faction
+        tsm_scope_items = tsm_main if same_faction else {}
+        if tsm_scope_items:
+            tsm_consumed.add(realm)
+        book_fresh = latest_t >= tsm_realm_age or not tsm_scope_items
+        merged = dict(tsm_scope_items)
+        for iid, e in items.items():
+            m = merged.get(iid) or {}
+            # cross-source sanity: our weighted mean diverging >25x
+            # from TSM's own marketValue/historical is a data bug
+            # (poisoned sample, stale emit), never a real market —
+            # keep TSM's number for the price fields
+            p_sane = True
+            anchor = m.get('mkt') or m.get('hist')
+            if e.get('p') and anchor and (
+                    e['p'] > anchor * 25 or e['p'] < anchor / 25):
+                p_sane = False
+            for k in ('mbx', 'n'):
+                if e.get(k) is not None:
+                    m[k] = e[k]
+            if book_fresh:
+                for k in ('mb', 'sup', 'p', 'mkt', 'vel'):
+                    if e.get(k) is not None and (
+                            k not in ('p', 'mkt') or p_sane):
+                        m[k] = e[k]
+            else:
+                # backend newer — book listing fields still fill gaps
+                # where the feed has nothing for this item
+                for k in ('mb', 'sup', 'p', 'mkt', 'vel'):
+                    if m.get(k) is None and e.get(k) is not None:
+                        m[k] = e[k]
+            merged[iid] = m
         realms[scope] = {
-            'items': items,
-            'dataAge': latest_t or None,
+            'items': merged,
+            'dataAge': max(latest_t,
+                           tsm_realm_age if tsm_scope_items else 0)
+            or None,
             'generated': int(now),
         }
+    # a TSM realm with no same-faction book scope still emits under
+    # its own name — reachable via the flat top-level mirror
+    for scope, tsm_scope_items in tsm_by_scope.items():
+        if scope not in tsm_consumed and scope not in realms:
+            realms[scope] = {
+                'items': tsm_scope_items,
+                'dataAge': tsm_realm_age or None,
+                'generated': int(now),
+            }
 
     # flat top-level mirror of the primary scope — keeps pre-realm
     # consumers working (largest scope wins)
@@ -696,6 +812,10 @@ def cmd_book(sv_arg, out_paths, root=None, feed=None):
         # TIMESTAMP (like the TSM emit's newest downloadTime), not
         # an age duration
         'dataAge': flat.get('dataAge'),
+        # TSM backend clocks — the addon's RealmAge/RegionAge read
+        # these; None when AppData wasn't parsed (SV-path invocation)
+        'realmAge': tsm_realm_age or None,
+        'regionAge': tsm_region_age or None,
         'feed': feed,
         'realms': realms,
         'items': flat.get('items', {}),
@@ -767,20 +887,22 @@ def self_feed():
 
 def resolve_feed(arg, outs):
     """arg is a feed name (feeds.json), an AppData.lua path, or a
-    GoblinMind.lua SV path. Returns (appdata, outs, feed_name, root).
-    Config outs are used when the CLI gives none."""
+    GoblinMind.lua SV path. Returns (appdata, outs, feed_name, root,
+    realm). Config outs are used when the CLI gives none; `realm`
+    scopes TSM chunk selection to one "Realm-Faction" scope."""
     if arg == 'self':
         f = self_feed()
         if not f:
             raise SystemExit(
                 "'self' feed: script is not inside a WoW install "
                 "(expected .../Interface/AddOns/<addon>/brain/)")
-        return f['appdata'], list(outs) or f['out'], 'self', f['root']
+        return (f['appdata'], list(outs) or f['out'], 'self',
+                f['root'], f.get('realm'))
     f = load_feeds().get(arg)
     if f:
         return (f['appdata'], list(outs) or f.get('out', []), arg,
-                f.get('root'))
-    return arg, outs, None, None
+                f.get('root'), f.get('realm'))
+    return arg, outs, None, None, None
 
 
 def sv_paths(appdata, root=None):
@@ -877,23 +999,25 @@ def process_bugs(appdata, root=None):
     return newly
 
 
-def cmd_bugs(appdata, outs):
+def cmd_bugs(appdata, outs, realm=None):
     """One-shot: file staged reports, then emit so filedBugs reaches
     the addon on its next load."""
     n = process_bugs(appdata)
     LOG.info('bug pass: %d filed', len(n))
     for out in outs:
-        cmd_emit(appdata, out)
+        cmd_emit(appdata, out, realm)
 
 
 HEARTBEAT = 300  # verbose "still alive" line every 5 min
 
 
 def cmd_watch(appdata, outs, interval=5, settle=20, feed='tsm',
-              root=None, feedname=None):
+              root=None, feedname=None, realm=None):
     """Poll AppData mtime; emit after the file goes quiet. The TSM
     desktop app rewrites chunks non-atomically, so a fresh mtime is
-    only trusted once it stops moving for `settle` seconds."""
+    only trusted once it stops moving for `settle` seconds. Book mode
+    emits on BOTH settled AppData (TSM backend refresh merges in) and
+    SavedVariables flushes (our own scans/ledger)."""
     last_mtime = 0
     quiet_since = None
     last_beat = time.time()
@@ -917,13 +1041,24 @@ def cmd_watch(appdata, outs, interval=5, settle=20, feed='tsm',
             quiet_since = now
         elif quiet_since and now - quiet_since >= settle:
             quiet_since = None
-            if feed == 'tsm':
-                LOG.info('AppData settled — emitting')
+            LOG.info('AppData settled — emitting')
+            if feed == 'book':
+                # a settled AppData means the TSM app pushed fresh
+                # realm data — cmd_book folds it into the merge
+                try:
+                    t0 = time.time()
+                    cmd_book(appdata, outs, root, feedname, realm)
+                    LOG.debug('  book emit done in %.1fs',
+                              time.time() - t0)
+                except Exception:  # never die on a mid-write file
+                    LOG.exception('book emit failed')
+            else:
                 for out in outs:
                     t0 = time.time()
                     try:
-                        cmd_emit(appdata, out)
-                        LOG.debug('  %s done in %.1fs', out, time.time() - t0)
+                        cmd_emit(appdata, out, realm)
+                        LOG.debug('  %s done in %.1fs', out,
+                                  time.time() - t0)
                     except Exception:  # never die on a mid-write file
                         LOG.exception('emit %s failed', out)
         # staged bug reports ride the SavedVariables file — it only
@@ -942,14 +1077,15 @@ def cmd_watch(appdata, outs, interval=5, settle=20, feed='tsm',
                         # ledger data — re-emit merged across every
                         # character's SV
                         try:
-                            cmd_book(appdata, outs, root, feedname)
+                            cmd_book(appdata, outs, root, feedname,
+                                     realm)
                         except Exception:
                             LOG.exception('book emit failed')
                     elif newly:
                         LOG.info('re-emitting with filedBugs')
                         for out in outs:
                             try:
-                                cmd_emit(appdata, out)
+                                cmd_emit(appdata, out, realm)
                             except Exception:
                                 LOG.exception('emit %s failed', out)
                 except Exception:
@@ -997,7 +1133,8 @@ def main():
         return
     if not a.appdata:
         ap.error('%s needs a feed name or path' % a.cmd)
-    appdata, outs, feedname, root = resolve_feed(a.appdata, a.out)
+    appdata, outs, feedname, root, realm = \
+        resolve_feed(a.appdata, a.out)
     if a.cmd == 'dump':
         cmd_dump(appdata)
     elif a.cmd == 'watch':
@@ -1008,7 +1145,8 @@ def main():
         while True:
             try:
                 cmd_watch(appdata, outs, a.interval, a.settle,
-                          feed=a.feed, root=root, feedname=feedname)
+                          feed=a.feed, root=root, feedname=feedname,
+                          realm=realm)
             except KeyboardInterrupt:
                 LOG.info('stopped by user')
                 return
@@ -1018,15 +1156,15 @@ def main():
     elif a.cmd == 'bugs':
         if not outs:
             ap.error('bugs needs output paths (CLI or feeds.json)')
-        cmd_bugs(appdata, outs)
+        cmd_bugs(appdata, outs, realm)
     elif a.cmd == 'book':
         if not outs:
             ap.error('book needs output paths (CLI or feeds.json)')
-        cmd_book(appdata, outs, root, feedname)
+        cmd_book(appdata, outs, root, feedname, realm)
     else:
         if not outs:
             ap.error('emit needs an output path (CLI or feeds.json)')
-        cmd_emit(appdata, outs[0])
+        cmd_emit(appdata, outs[0], realm)
 
 
 if __name__ == '__main__':

@@ -141,7 +141,11 @@ local function MakeTable(parent, cols, onClick)
 		end)
 		row:SetScript("OnLeave", function() GameTooltip:Hide() end)
 		row:SetScript("OnClick", function()
-			if row.id and onClick then onClick(row.id) end
+			if IsShiftKeyDown() then
+				if row.id then GM.ModifiedItemClick(row.id) end
+			elseif row.id and onClick then
+				onClick(row.id)
+			end
 		end)
 		t.rows[i] = row
 	end
@@ -174,6 +178,9 @@ end
 -- ============ pages: content builders ============
 
 local ItemName = GM.ItemNameOr
+local function QName(id)
+	return (GM.QHex(id) or "") .. ItemName(id) .. "|r"
+end
 
 -- INVENTORY: owned items by value
 local function BuildInventory()
@@ -185,7 +192,7 @@ local function BuildInventory()
 		local v = p and p * c.total or 0
 		total = total + v
 		tinsert(out, { id = id, v = v, cells = {
-			ItemName(id),
+			QName(id),
 			c.bags + c.bank > 0 and ("×" .. (c.bags + c.bank)) or "",
 			(c.mail + c.guild + c.auction) > 0
 				and ("+" .. (c.mail + c.guild + c.auction)) or "",
@@ -203,7 +210,7 @@ local function BuildSales(agg)
 		if a.sellQ and a.sellQ > 0 then
 			total = total + a.sellT
 			tinsert(out, { id = id, v = a.sellT, cells = {
-				ItemName(id), "×" .. a.sellQ,
+				QName(id), "×" .. a.sellQ,
 				GM.Money(a.sellT / a.sellQ), GM.Money(a.sellT),
 			} })
 		end
@@ -220,7 +227,7 @@ local function BuildResale(agg)
 			local profit = a.sellT - avgB * a.sellQ
 			total = total + profit
 			tinsert(out, { id = id, v = profit, cells = {
-				ItemName(id), "×" .. a.sellQ, GM.Money(avgB),
+				QName(id), "×" .. a.sellQ, GM.Money(avgB),
 				GM.Money(avgS), GM.Money(profit),
 			}, colors = { nil, nil, nil, nil,
 				profit >= 0 and "pos" or "err" } })
@@ -236,7 +243,7 @@ local function BuildExpenses(agg)
 		if a.buyQ and a.buyQ > 0 then
 			total = total + a.buyT
 			tinsert(out, { id = id, v = a.buyT, cells = {
-				ItemName(id), "×" .. a.buyQ,
+				QName(id), "×" .. a.buyQ,
 				GM.Money(a.buyT / a.buyQ), GM.Money(a.buyT),
 			} })
 		end
@@ -252,7 +259,7 @@ local function BuildFailed(agg)
 		if f > 0 then
 			local rate = f / (f + (a.sellQ or 0)) * 100
 			tinsert(out, { id = id, v = f, cells = {
-				ItemName(id),
+				QName(id),
 				a.expireQ and a.expireQ > 0 and tostring(a.expireQ) or "—",
 				a.cancelQ and a.cancelQ > 0 and tostring(a.cancelQ) or "—",
 				format("%.0f%%", rate),
@@ -305,7 +312,7 @@ function OV.RefreshLog()
 				e.ty == "sell" and GM.CC("pos") or
 					e.ty == "buy" and GM.CC("warn") or GM.CC("textDim"),
 				TX_LABEL[e.ty] or e.ty,
-				ItemName(e.i), e.q,
+				QName(e.i), e.q,
 				money and (" · " .. GM.Money(money)) or ""))
 		end
 	end
@@ -724,6 +731,7 @@ local function RefreshItem()
 	itP.icon:SetTexture(GM.ItemIcon and GM.ItemIcon(id)
 		or "Interface\\Icons\\INV_Misc_QuestionMark")
 	itP.name:SetText(ItemName(id))
+	itP.name:SetTextColor(GM.NameColor(id))
 	local e = GM.ItemEntry(id)
 	local m = GM.Price("dbmarket", id)
 	itP.mkt:SetText(m and ("market " .. GM.Money(m)) or "no market data")

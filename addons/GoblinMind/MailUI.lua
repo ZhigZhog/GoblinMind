@@ -24,7 +24,10 @@ local MU = GM.MailUI
 local ui
 
 local ROW_H = 24
-local VISIBLE = 14
+local VISIBLE = 15
+local VISIBLE_SEND = 10 -- SEND page gives the rest to the compose strip
+local SUBJ_HINT = "subject — default: first attached item"
+local BODY_HINT = "message (optional)"
 local tinsert, sort = tinsert, table.sort
 local format = format
 
@@ -41,6 +44,72 @@ end
 
 local function CommandPending()
 	return C_Mail and C_Mail.IsCommandPending and C_Mail.IsCommandPending()
+end
+
+-- ============ recipient autocomplete ============
+-- TSM-style inline complete: the first prefix-match fills the box
+-- with the remainder highlighted — keep typing to refine or move on.
+-- Candidates ordered most-likely-first: recent sends, account alts,
+-- friends, guild roster.
+local REALM = GetRealmName and (GetRealmName():gsub("%s", "")) or ""
+local function ShortName(n)
+	if not n then return end
+	if Ambiguate then return Ambiguate(n, "mail") end
+	local base, r = n:match("^([^%-]+)%-(.+)$")
+	if r and r:gsub("%s", "") == REALM then return base end
+	return n
+end
+
+local function RecipientNames()
+	local names, seen = {}, {}
+	local me = UnitName and UnitName("player") or ""
+	local function add(n)
+		n = n and strtrim(ShortName(n) or "")
+		if not n or n == "" or n == me then return end
+		local k = n:lower()
+		if not seen[k] then seen[k] = true names[#names + 1] = n end
+	end
+	for _, r in ipairs(GM.db and GM.db.mailRecent or {}) do add(r) end
+	for _, ck in ipairs(GM.Ledger and GM.Ledger.Chars() or {}) do add(ck) end
+	local nf = C_FriendList and C_FriendList.GetNumFriends
+		and C_FriendList.GetNumFriends() or 0
+	for i = 1, nf do
+		local info = C_FriendList.GetFriendInfoByIndex(i)
+		add(info and info.name)
+	end
+	if IsInGuild and IsInGuild() and GetNumGuildMembers then
+		for i = 1, GetNumGuildMembers() do
+			add((GetGuildRosterInfo(i)))
+		end
+	end
+	return names
+end
+
+local acList -- rebuilt each time the recipient box takes focus
+local function ACOnChar(eb)
+	if IsControlKeyDown() then return end
+	local text = eb:GetText() or ""
+	if text == "" or text == "recipient" then return end
+	local lt = text:lower()
+	for _, k in ipairs(acList or {}) do
+		if #k > #text and k:lower():sub(1, #lt) == lt then
+			eb:SetText(k)
+			eb:HighlightText(#text, #k)
+			break
+		end
+	end
+end
+
+-- remember a recipient after a successful send (dedup, cap 10)
+local function PushRecent(to)
+	if not GM.db then return end
+	local rec = GM.db.mailRecent
+	if not rec then rec = {} GM.db.mailRecent = rec end
+	for i, r in ipairs(rec) do
+		if r:lower() == to:lower() then tremove(rec, i) break end
+	end
+	tinsert(rec, 1, to)
+	while #rec > 10 do tremove(rec) end
 end
 
 -- ============ data ============
@@ -63,32 +132,84 @@ local function InboxRows()
 	return rows
 end
 
--- bag list for the send page — every stack is attachable in principle;
--- soulbound/quest items are refused by the mail box itself
-local function BagRows()
-	local rows = {}
+-- outgoing-mail attachments: {sendIdx, name, qty} per filled send
+-- slot. Return 1 is the item name (used by PendingAttachments before);
+-- the stack count is the LAST return in the (name, id, tex, count)
+-- signature — grab it position-agnostically.
+local function AttachedList()
+	local list = {}
+	if GetSendMailItem then
+		for i = 1, (ATTACHMENTS_MAX_SEND or 12) do
+			local ret = { GetSendMailItem(i) }
+			local name = ret[1]
+			if name then
+				list[#list + 1] = {
+					sendIdx = i, name = name,
+					qty = tonumber(ret[#ret]) or 0,
+				}
+			end
+		end
+	end
+	return list
+end
+
+-- send-page rows: bag stacks + attached items. Exactly one row is
+-- marked per filled send slot — locked stacks claim their name's
+-- attachments first; when the client doesn't report locks, the first
+-- same-name bag row claims instead (which stack is the attached one
+-- is unknowable, but the count is honest and DETACH still works —
+-- it operates on the send slot, not the bag slot). Attachments that
+-- left the bag entirely show as their own row at the top.
+local function SendRows()
+	local attached = AttachedList()
+	local attByName = {} -- name → queue of attachment entries
+	for _, a in ipairs(attached) do
+		local q = attByName[a.name] or {}
+		q[#q + 1] = a
+		attByName[a.name] = q
+	end
+	local rows, lockedByName = {}, {}
 	for _, s in ipairs(GM.Banking.BagSlots()) do
 		if s.itemID then
+			local name = GM.ItemName(s.itemID) or ("item " .. s.itemID)
+			if s.locked then lockedByName[name] = (lockedByName[name] or 0) + 1 end
 			rows[#rows + 1] = {
 				bag = s.bag, slot = s.slot, id = s.itemID,
-				qty = s.count,
-				name = GM.ItemName(s.itemID) or ("item " .. s.itemID),
+				qty = s.count, name = name, locked = s.locked,
 			}
 		end
 	end
-	sort(rows, function(a, b) return (a.name or "") < (b.name or "") end)
-	return rows
-end
-
-local function PendingAttachments()
-	local n = 0
-	if GetSendMailItem then
-		for i = 1, (ATTACHMENTS_MAX_SEND or 12) do
-			local name = GetSendMailItem(i)
-			if name then n = n + 1 end
+	local function Claim(r)
+		local q = attByName[r.name]
+		if q and #q > 0 then
+			local a = tremove(q, 1)
+			r.attached = a.sendIdx
+			r.qty = a.qty > 0 and a.qty or r.qty
+			a.claimed = true
 		end
 	end
-	return n
+	for _, r in ipairs(rows) do
+		if r.locked then Claim(r) end
+	end
+	for _, r in ipairs(rows) do
+		if not r.attached and (lockedByName[r.name] or 0) == 0 then Claim(r) end
+	end
+	for _, list in pairs(attByName) do
+		for _, a in ipairs(list) do
+			if not a.claimed then
+				rows[#rows + 1] = {
+					qty = a.qty, name = a.name, attached = a.sendIdx,
+				}
+			end
+		end
+	end
+	sort(rows, function(a, b)
+		if (a.attached ~= nil) ~= (b.attached ~= nil) then
+			return a.attached ~= nil
+		end
+		return (a.name or "") < (b.name or "")
+	end)
+	return rows, #attached
 end
 
 -- ============ window ============
@@ -97,7 +218,7 @@ local function Build()
 	if ui then return end
 	ui = { page = "inbox", scroll = 0 }
 	local f = CreateFrame("Frame", "GoblinMindMail", UIParent)
-	f:SetSize(560, 430)
+	f:SetSize(560, 480)
 	f:SetPoint("CENTER", -80, -20)
 	f:SetFrameStrata("HIGH")
 	f:SetToplevel(true)
@@ -181,6 +302,10 @@ local function Build()
 	ui.sendBar:SetPoint("LEFT", scan, "RIGHT", 8, 0)
 	ui.to = EditBox(ui.sendBar, 110, "recipient")
 	ui.to:SetPoint("LEFT")
+	ui.to:SetScript("OnChar", ACOnChar)
+	ui.to:HookScript("OnEditFocusGained", function()
+		acList = RecipientNames()
+	end)
 	ui.money = EditBox(ui.sendBar, 60, "copper")
 	ui.money:SetPoint("LEFT", ui.to, "RIGHT", 6, 0)
 	ui.send = Btn(ui.sendBar, 52, "SEND", function() MU.Send() end)
@@ -217,6 +342,7 @@ local function Build()
 	end
 	ui.count = GM.MakeFontString(hdr, GM.FONT, 9, "textDim")
 	ui.count:SetPoint("RIGHT", -2, 0)
+	ui.hdr = hdr
 
 	-- scroll host
 	local host = CreateFrame("Frame", nil, f)
@@ -251,6 +377,8 @@ local function Build()
 		row.c3:SetPoint("LEFT", 330, 0)
 		row.c4 = GM.MakeFontString(row, GM.FONT, 10, "text")
 		row.c4:SetPoint("LEFT", 395, 0)
+		row.c4:SetWidth(52) -- "COD Xg Xs Xc" must not reach c5
+		row.c4:SetJustifyH("LEFT")
 		row.c5 = GM.MakeFontString(row, GM.FONT, 9, "textDim")
 		row.c5:SetPoint("LEFT", 450, 0)
 		row.c5:SetWidth(24) -- keep clear of the row action button
@@ -261,11 +389,36 @@ local function Build()
 		act.text = GM.MakeFontString(act, GM.FONT_BOLD, 8, "accent")
 		act.text:SetPoint("CENTER")
 		row.act = act
+		W.ShiftItem(row, function() return row.tipID end)
 		ui.rows[i] = row
 	end
 
 	ui.empty = GM.MakeFontString(host, GM.FONT, 10, "textDim")
 	ui.empty:SetPoint("CENTER")
+
+	-- compose strip (send page only): subject + multiline body sit
+	-- above the list; Refresh slides the header/host down to make room
+	local comp = CreateFrame("Frame", nil, f)
+	comp:SetSize(536, 112)
+	comp:SetPoint("TOPLEFT", 12, -60)
+	GM.Panel(comp, "contLowest", "outlineVar")
+	ui.subject = EditBox(comp, 524, SUBJ_HINT)
+	ui.subject:SetPoint("TOPLEFT", 6, -6)
+	ui.subject:SetTextInsets(8, 8, 0, 0)
+	ui.body = EditBox(comp, 524, BODY_HINT)
+	ui.body:SetPoint("TOPLEFT", 6, -28)
+	ui.body:SetPoint("BOTTOMRIGHT", -6, 8) -- fills the strip's remainder
+	ui.body:SetMultiLine(true)
+	ui.body:SetTextInsets(8, 8, 6, 6)
+	-- multiline Enter is a newline, not "accept"
+	ui.body:SetScript("OnEnterPressed", function() end)
+	ui.body:SetMaxLetters(500)
+	ui.compose = comp
+	comp:Hide()
+	-- tab hops through the compose fields
+	ui.to:SetScript("OnTabPressed", function() ui.subject:SetFocus() end)
+	ui.subject:SetScript("OnTabPressed", function() ui.body:SetFocus() end)
+	ui.body:SetScript("OnTabPressed", function() ui.body:ClearFocus() end)
 
 	ui.foot = GM.MakeFontString(f, GM.FONT, 9, "textDim")
 	ui.foot:SetPoint("BOTTOMLEFT", 14, 10)
@@ -273,11 +426,27 @@ end
 
 -- ============ actions ============
 
+-- HasNewMail()/the inbox snapshot only move when the server pushes
+-- fresh headers. After our loots (and on open, while pending mail is
+-- still in flight) the mail icon lags seconds behind the truth.
+-- CheckInbox fetches headers now instead of waiting for the lazy
+-- refresh — one pull in flight is enough, headers are a snapshot.
+local pullArmed
+local function PullInbox()
+	if pullArmed then return end
+	pullArmed = true
+	GM.After(0.7, function()
+		pullArmed = nil
+		pcall(CheckInbox)
+	end)
+end
+
 -- one click per mail: take everything. COD mail is never auto-looted —
 -- looting pays the charge, and that's a pay decision.
 local function OpenMail(r)
 	if CommandPending() then return end
 	pcall(AutoLootMailItem, r.index)
+	PullInbox()
 	MU.Refresh()
 end
 
@@ -317,6 +486,7 @@ function MU.OpenAll()
 			if ui.openedCount and ui.openedCount > 0 then
 				GM.Print(format("open all: %d mail collected", ui.openedCount))
 			end
+			PullInbox() -- final state: flag drops as the last headers land
 			MU.Refresh()
 			return
 		end
@@ -325,6 +495,7 @@ function MU.OpenAll()
 			return
 		end
 		pcall(AutoLootMailItem, next_i)
+		PullInbox()
 		ui.openedCount = (ui.openedCount or 0) + 1
 		ui.openAllBtn.text:SetText("OPENING · " .. ui.openedCount)
 		GM.After(0.45, step)
@@ -344,6 +515,26 @@ local function Attach(r)
 	MU.Refresh()
 end
 
+local function Detach(r)
+	-- clicking a filled send slot lifts the stack to the cursor; drop
+	-- it into the first free bag slot (ClearCursor as fallback)
+	local pickup = C_Container and C_Container.PickupContainerItem
+	if not (r.attached and ClickSendMailItemButton) then return end
+	ClickSendMailItemButton(r.attached)
+	if GetCursorInfo and GetCursorInfo() then
+		if pickup then
+			for _, s in ipairs(GM.Banking.BagSlots()) do
+				if not s.itemID then
+					pickup(s.bag, s.slot)
+					break
+				end
+			end
+		end
+		if GetCursorInfo() then ClearCursor() end
+	end
+	MU.Refresh()
+end
+
 function MU.Send()
 	local to = strtrim(ui.to:GetText() or "")
 	if to == "" or to == "recipient" then
@@ -356,9 +547,17 @@ function MU.Send()
 	if copper > 0 then
 		pcall(SetSendMailMoney, copper)
 	end
-	local ok, err = pcall(SendMail, to,
-		(name and name ~= "") and name or "GoblinMind", "")
-	if not ok then
+	-- hint strings survive unfocused boxes — treat them as empty
+	local subj = strtrim(ui.subject and ui.subject:GetText() or "")
+	if subj == "" or subj == SUBJ_HINT then
+		subj = (name and name ~= "") and name or "GoblinMind"
+	end
+	local body = strtrim(ui.body and ui.body:GetText() or "")
+	if body == BODY_HINT then body = "" end
+	local ok, err = pcall(SendMail, to, subj, body)
+	if ok then
+		PushRecent(to)
+	else
 		GM.Print(GM.CC("err") .. "SendMail: " .. tostring(err) .. "|r")
 	end
 	MU.Refresh()
@@ -372,6 +571,20 @@ function MU.Refresh()
 	ui.pageTabs.set(ui.page)
 	ui.sendBar:SetShown(ui.page == "send")
 	ui.openAllBtn:SetShown(ui.page == "inbox")
+	-- layout swap: the compose strip pushes the list down on SEND
+	ui.compose:SetShown(ui.page == "send")
+	local vis = VISIBLE
+	ui.hdr:ClearAllPoints()
+	ui.host:ClearAllPoints()
+	if ui.page == "send" then
+		vis = VISIBLE_SEND
+		ui.hdr:SetPoint("TOPLEFT", 12, -180)
+		ui.host:SetPoint("TOPLEFT", 12, -198)
+	else
+		ui.hdr:SetPoint("TOPLEFT", 12, -60)
+		ui.host:SetPoint("TOPLEFT", 12, -78)
+	end
+	ui.host:SetHeight(vis * ROW_H + 4)
 
 	if ui.page == "inbox" then
 		for i, t in ipairs({ "SENDER", "SUBJECT", "ITEMS", "GOLD", "DAYS" }) do
@@ -383,13 +596,15 @@ function MU.Refresh()
 		ui.empty:SetShown(#rows == 0)
 		ui.foot:SetText("OPEN = one mail per click · COD is flagged, never "
 			.. "auto-looted · DELETE arms on empty mail")
-		local maxScroll = math.max(0, #rows - VISIBLE)
+		local maxScroll = math.max(0, #rows - vis)
 		ui.scroll = math.min(ui.scroll or 0, maxScroll)
-		W.ScrollText(ui.count, ui.scroll, VISIBLE, #rows)
+		W.ScrollText(ui.count, ui.scroll, vis, #rows)
 		for i = 1, VISIBLE do
-			local row, r = ui.rows[i], rows[i + ui.scroll]
+			local row = ui.rows[i]
+			local r = i <= vis and rows[i + ui.scroll] or nil
 			if r then
 				row:Show()
+				row.tipID = nil -- a mail row is a mail, not an item
 				row.c1:SetText(r.sender)
 				row.c2:SetText(r.subject)
 				row.c3:SetText(r.items > 0 and ("×" .. r.items .. " item"
@@ -449,31 +664,50 @@ function MU.Refresh()
 		for i, t in ipairs({ "ITEM", "", "QTY", "", "" }) do
 			ui.head[i]:SetText(t)
 		end
-		local pend = PendingAttachments()
+		local rows, pend = {}, 0
+		if open then rows, pend = SendRows() end
 		ui.head[2]:SetText(format("%d attached", pend))
-		local rows = open and BagRows() or {}
+		-- subject defaults to the first attached item — write it for
+		-- real while the box is untouched (empty/hint/our last auto
+		-- value); user-typed subjects are left alone
+		local defSubj = AttachedList()[1]
+			and AttachedList()[1].name or "GoblinMind"
+		local cur = strtrim(ui.subject:GetText() or "")
+		if not ui.subject:HasFocus()
+			and (cur == "" or cur == SUBJ_HINT or cur == ui.autoSubj) then
+			ui.autoSubj = defSubj
+			ui.subject:SetText(defSubj)
+			ui.subject:SetTextColor(GM.RGB("text"))
+		end
 		ui.empty:SetText(not open and "open the mailbox"
 			or (#rows == 0 and "bags empty" or ""))
 		ui.empty:SetShown(#rows == 0)
 		ui.foot:SetText("ATTACH moves a stack into the outgoing mail · "
-			.. "copper field sends gold · SEND is one click")
-		local maxScroll = math.max(0, #rows - VISIBLE)
+			.. "DETACH pulls it back · copper field sends gold")
+		local maxScroll = math.max(0, #rows - vis)
 		ui.scroll = math.min(ui.scroll or 0, maxScroll)
-		W.ScrollText(ui.count, ui.scroll, VISIBLE, #rows)
+		W.ScrollText(ui.count, ui.scroll, vis, #rows)
 		for i = 1, VISIBLE do
-			local row, r = ui.rows[i], rows[i + ui.scroll]
+			local row = ui.rows[i]
+			local r = i <= vis and rows[i + ui.scroll] or nil
 			if r then
 				row:Show()
-				row.c1:SetText(r.name)
-				row.c2:SetText("")
-				row.c3:SetText("×" .. r.qty)
+				row.c1:SetText(r.attached and (GM.CC("accent") .. r.name .. "|r")
+					or r.name)
+				row.c2:SetText(r.attached
+					and (GM.CC("warn") .. "in mail|r") or "")
+				row.c3:SetText(r.qty > 0 and ("×" .. r.qty) or "")
 				row.c4:SetText("")
 				row.c5:SetText("")
-				row.act.text:SetText("ATTACH")
-				row.act.text:SetTextColor(GM.RGB("accent"))
+				row.act.text:SetText(r.attached and "DETACH" or "ATTACH")
+				row.act.text:SetTextColor(GM.RGB(r.attached and "warn" or "accent"))
 				local item = r
-				row.act:SetScript("OnClick", function() Attach(item) end)
+				row.tipID = item.id
+				row.act:SetScript("OnClick", function()
+					if item.attached then Detach(item) else Attach(item) end
+				end)
 				row:SetScript("OnEnter", function(self)
+					if not item.id then return end
 					GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
 					GameTooltip:SetItemByID(item.id)
 					GameTooltip:Show()
@@ -514,6 +748,8 @@ function MU.OnMailOpen()
 	if ui.wantDefault then return end
 	ui.frame:Show()
 	pcall(CheckInbox)
+	PullInbox() -- pending mail often lands a beat after MAIL_SHOW
+	GM.After(2.0, function() pcall(CheckInbox) end)
 	MU.Refresh()
 	-- the panel manager may still be positioning it; park now + retry
 	GM.FramePark.Park(MailFrame)
