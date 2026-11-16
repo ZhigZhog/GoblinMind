@@ -16,7 +16,8 @@ import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ADDONS = ("GoblinMind", "GoblinMind_Data")
-BRAIN_FILES = ("goblin_brain.py", "goblin-watch.bat", "vendor_buy.json")
+BRAIN_FILES = ("goblin_brain.py", "goblin-watch.bat", "vendor_buy.json",
+               "goblin_server.py")
 
 
 def main():

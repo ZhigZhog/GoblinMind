@@ -92,19 +92,20 @@ def merged_book(conn, scope):
     rows = conn.execute(
         'SELECT t, items, lots FROM uploads WHERE scope=? '
         'ORDER BY t ASC', (scope,)).fetchall()
-    items, lots, newest = {}, {}, 0
+    items, newest = {}, 0
+    lots_by_iid = {}   # iid -> {fp: n} from the newest upload owning it
     for t, items_j, lots_j in rows:
         its = json.loads(items_j)
         lts = json.loads(lots_j or '{}')
         newest = max(newest, t)
+        up_by_iid = {}
+        for f, n in lts.items():
+            up_by_iid.setdefault(f.split(':', 1)[0], {})[f] = n
         for iid in its:
             items[iid] = its[iid]          # later rows overwrite
-            lots_iid = {f: n for f, n in lts.items()
-                        if f.split(':', 1)[0] == str(iid)}
-            for f in list(lots):
-                if f.split(':', 1)[0] == str(iid):
-                    lots.pop(f)
-            lots.update(lots_iid)
+            lots_by_iid[iid] = up_by_iid.get(iid, {})
+    lots = {f: n for grp in lots_by_iid.values()
+            for f, n in grp.items()}
     return {'scope': scope, 't': int(newest) if newest else None,
             'items': items, 'lots': lots}
 
