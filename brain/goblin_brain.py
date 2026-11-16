@@ -1011,12 +1011,16 @@ def delta_stats(scope):
         gone = sum(e[3] for e in win)
         prev = sum(e[4] for e in win)
         prices = sorted(e[2] for e in win)
+        # units/day over the observed span (earliest event -> now),
+        # not the full 7d window — and floored at 1 day so a hot
+        # first diff doesn't extrapolate to absurd rates
+        span_d = max(now - min(e[0] for e in win), 86400) / 86400
         try:
             iid = int(iid_s)
         except ValueError:
             continue
         out[iid] = {
-            'vel': round(units / (VEL_DAYS * 86400), 4),
+            'vel': round(units / span_d, 4),
             'rsale': prices[len(prices) // 2] if prices else None,
             'rsalep': min(1000, int(gone * 1000 / prev)) if prev else None,
         }
