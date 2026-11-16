@@ -209,8 +209,8 @@ end
 
 -- test injector — stages a fake wire sale event + beacon without
 -- comms, so the staging->brain-consume->emit path can be verified
--- solo (/run GM.Mesh.Test()). Own echoes are dropped by design,
--- so a real second sender is needed to test CHAT_MSG_ADDON itself.
+-- solo (/run GoblinMind.Mesh.Test()). Own echoes are dropped by
+-- design, so a real second sender is needed for CHAT_MSG_ADDON.
 function M.Test()
 	GM.db.mesh = GM.db.mesh or { ev = {}, mb = {}, seq = 0 }
 	Stage("ev", STAGE_CAP, { t = time(), s = GM.Scope(),

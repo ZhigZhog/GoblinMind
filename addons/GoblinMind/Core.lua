@@ -1,4 +1,7 @@
 local addonName, GM = ...
+-- expose the namespace for /run and external tooling — without this
+-- every file-local GM is invisible to the console
+GoblinMind = GM
 print("GoblinMind: Core.lua executing")
 
 local DEFAULTS = {
