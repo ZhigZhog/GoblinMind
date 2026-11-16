@@ -1098,14 +1098,17 @@ def cmd_book(sv_arg, out_paths, root=None, feed=None, realm=None):
         ledger_bychar.update(
             (sv.get('GoblinMindLedger') or {}).get('byChar') or {})
         # mesh staging — wire records the addon parked in the SV;
-        # meshAck (emitted below) is the purge handshake
+        # meshAck (emitted below) is the purge handshake. Lua arrays
+        # parse as int-keyed dicts — take .values() for the records
         mesh = gms.get('mesh') or {}
-        for e in mesh.get('ev') or []:
-            mesh_ev.append(e)
-            mesh_seq = max(mesh_seq, e.get('q') or 0)
-        for e in mesh.get('mb') or []:
-            mesh_mb.append(e)
-            mesh_seq = max(mesh_seq, e.get('q') or 0)
+        for key in ('ev', 'mb'):
+            recs = mesh.get(key)
+            if isinstance(recs, dict):
+                recs = list(recs.values())
+            for e in recs or []:
+                (mesh_ev if key == 'ev' else mesh_mb).append(e)
+                if isinstance(e, dict):
+                    mesh_seq = max(mesh_seq, e.get('q') or 0)
     # the API feed's stored snapshot rides in as another book per scope —
     # newest book wins per item in the merge below, so a fresh dump
     # beats a stale scan and vice versa
