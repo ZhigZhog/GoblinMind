@@ -352,6 +352,23 @@ function C.Init()
 				and GM.CraftingUI and GM.CraftingUI.OnTradeSkillOpen then
 				GM.CraftingUI.OnTradeSkillOpen()
 			end
+			-- the OPEN overlay click cast the profession spell — now
+			-- that the line is live, fire the craft it was for (the
+			-- 0.6s tail lets the line's data land, same as the scan
+			-- debounce)
+			if C.pendingOpenCraft then
+				local p = C.pendingOpenCraft
+				C.pendingOpenCraft = nil
+				GM.After(0.6, function()
+					local ok, err = C.Craft(p.id, p.qty)
+					if not ok then
+						GM.Print(GM.CC("warn") .. tostring(err) .. "|r")
+					end
+					if GM.CraftingUI and GM.CraftingUI.Refresh then
+						GM.CraftingUI.Refresh()
+					end
+				end)
+			end
 		elseif e == "TRADE_SKILL_CLOSE" then
 			return -- no scan on close
 		end
@@ -783,6 +800,72 @@ function C.CraftableAll(recipeID)
 	return n == math.huge and 0 or n
 end
 
+-- ============ tradeskill-line open ============
+-- CraftRecipe only acts on the CURRENTLY OPEN tradeskill line — a
+-- queued Smelt Iron cast is a no-op while Engineering (or nothing) is
+-- open. On Forever the line opens by casting the profession spell,
+-- which is a protected call needing a hardware event — the same shape
+-- TSM uses (its profession dropdown is a secure spell button). The UI
+-- arms a SecureActionButton overlay labeled OPEN; the click casts the
+-- spell, TRADE_SKILL_SHOW fires, and C.pendingOpenCraft re-fires the
+-- craft the user asked for — one click, one cast.
+local function SpellName(id)
+	if C_Spell and C_Spell.GetSpellName then
+		local ok, n = pcall(C_Spell.GetSpellName, id)
+		if ok and type(n) == "string" and n ~= "" then return n end
+	end
+	if GetSpellInfo then
+		local ok, n = pcall(GetSpellInfo, id)
+		if ok and type(n) == "string" and n ~= "" then return n end
+	end
+end
+
+-- Mining's spellbook entry actually opens Smelting (TSM parity —
+-- GetProfessionSpellName maps Mining→Smelting); every other
+-- profession's display name IS its spell name
+local function ProfSpellName(prof)
+	local mine = SpellName(2575)
+	if mine and prof == mine then return SpellName(2656) or prof end
+	return prof
+end
+
+-- spell name the OPEN button casts for this recipe's profession
+function C.ProfSpell(recipeID)
+	local prof = C.Prof(recipeID)
+	if not prof then return nil end
+	return ProfSpellName(prof), prof
+end
+
+-- is the line that can craft recipeID the currently open one?
+function C.LineOpenFor(recipeID)
+	if ForeignTradeskill() then return true end -- linked/NPC: they own the line
+	if not (C_TradeSkillUI and C_TradeSkillUI.GetTradeSkillLineForRecipe) then
+		return true -- can't tell — let CraftRecipe try
+	end
+	local ok, lineID, prof = pcall(
+		C_TradeSkillUI.GetTradeSkillLineForRecipe, recipeID)
+	if not ok or not prof then return true end
+	local cur
+	if C_TradeSkillUI.GetTradeSkillLine then
+		local ok2, v = pcall(C_TradeSkillUI.GetTradeSkillLine)
+		if ok2 then cur = v end
+	end
+	if type(cur) == "number" then
+		return lineID ~= nil and cur == lineID
+	end
+	if type(cur) == "string" and cur ~= "" then
+		if cur == prof then return true end
+		-- an open Smelting window satisfies Mining recipes
+		local mine, smelt = SpellName(2575), SpellName(2656)
+		if mine and smelt
+			and (cur == mine or cur == smelt)
+			and (prof == mine or prof == smelt) then
+			return true
+		end
+	end
+	return false
+end
+
 -- execute a craft — the same protected call Blizzard's Create buttons
 -- make (verified: CraftRecipe(id,1) produces the item). count>1 is
 -- Blizzard's own multicraft path — one call, N casts. If Forever
@@ -794,6 +877,10 @@ end
 function C.Craft(recipeID, qty)
 	local r = GoblinMindCrafting.recipes and GoblinMindCrafting.recipes[recipeID]
 	if not r then return nil, "unknown recipe" end
+	if not C.LineOpenFor(recipeID) then
+		return nil, (C.Prof(recipeID) or "tradeskill")
+			.. " isn't open — click OPEN"
+	end
 	if not (C_TradeSkillUI and C_TradeSkillUI.CraftRecipe) then
 		return nil, "no craft API on this client"
 	end
@@ -813,7 +900,8 @@ function C.Craft(recipeID, qty)
 				.. "falling back to one cast per click|r")
 		else
 			GM.Print(GM.CC("warn") .. "craft didn't start — "
-				.. "open the tradeskill window|r")
+				.. (C.Prof(recipeID) or "tradeskill")
+				.. " isn't open — click OPEN|r")
 		end
 	end)
 	return true

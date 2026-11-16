@@ -158,6 +158,53 @@ local function CatPrompt(title, cb)
 	p.eb:SetFocus()
 end
 
+-- CraftRecipe only acts on the open tradeskill line, and opening the
+-- line is a protected spell cast — so when a craft's line isn't open
+-- we cover its button with a secure OPEN overlay that casts the
+-- profession spell (TSM's SecureSpellButton shape). One click: spell
+-- cast → TRADE_SKILL_SHOW → C.pendingOpenCraft re-fires the craft.
+local function SecureOpenFor(btn)
+	if btn._gmOpen then return btn._gmOpen end
+	local ov = CreateFrame("Button", nil, btn,
+		"SecureActionButtonTemplate")
+	ov:SetAllPoints()
+	ov:SetFrameLevel(btn:GetFrameLevel() + 5)
+	ov:RegisterForClicks(GetCVarBool
+		and GetCVarBool("ActionButtonUseKeyDown")
+		and "LeftButtonDown" or "LeftButtonUp")
+	ov:SetAttribute("type", "spell")
+	ov:HookScript("OnClick", function()
+		GM.Crafting.pendingOpenCraft = { id = ov._rid, qty = ov._qty }
+	end)
+	ov:Hide()
+	btn._gmOpen = ov
+	return ov
+end
+
+-- returns true when an armed OPEN overlay covers the button (the
+-- normal craft click is superseded). `allow` gates arming without
+-- skipping the hide — a button that stops qualifying must still shed
+-- a stale overlay. Protected-frame attribute and visibility changes
+-- are combat-locked, so mid-fight this just leaves the button alone —
+-- C.Craft's own guard reports the closed line.
+local function GateCraft(btn, recipeID, qty, allow)
+	local ov = SecureOpenFor(btn)
+	if InCombatLockdown and InCombatLockdown() then return false end
+	if allow and not (GM.Crafting.LineOpenFor
+		and GM.Crafting.LineOpenFor(recipeID)) then
+		local spell = GM.Crafting.ProfSpell
+			and GM.Crafting.ProfSpell(recipeID)
+		if spell then
+			ov._rid, ov._qty = recipeID, qty
+			ov:SetAttribute("spell", spell)
+			ov:Show()
+			return true
+		end
+	end
+	ov:Hide()
+	return false
+end
+
 local function BuildUI()
 	if ui then return end
 	ui = {}
@@ -798,7 +845,11 @@ function CU.Refresh()
 				GM.Crafting.QueueSet(id, 0) CU.Refresh()
 			end)
 			-- » = craft the queued amount in one call — Blizzard's
-			-- multicraft path; watchdog drops to 1/click if unsupported
+			-- multicraft path; watchdog drops to 1/click if unsupported.
+			-- closed line → the secure OPEN overlay takes the click
+			-- (only when there's something to make — missing mats
+			-- should still reach the footer)
+			GateCraft(r.craft, id, q.qty, (q.craftable or 0) > 0)
 			r.craft.text:SetTextColor(GM.RGB(
 				(q.craftable or 0) > 0 and "accent" or "textDim"))
 			r.craft:SetScript("OnClick", function()
@@ -910,21 +961,28 @@ function CU.Refresh()
 		ui.craft1._gmBg:SetColorTexture(GM.RGB(
 			craftable > 0 and "accent" or "contHigh"))
 		local batch = not GM.Crafting.noBatch
-		ui.craft1.text:SetText(craftable > 0 and batch
-			and ("CRAFT ×" .. craftable) or "CRAFT")
+		local opening = GateCraft(ui.craft1, ui.sel, craftable,
+			craftable > 0)
+		local prof = GM.Crafting.Prof and GM.Crafting.Prof(ui.sel)
+		ui.craft1.text:SetText(opening
+			and ("OPEN " .. (prof and prof:upper() or "TRADESKILL"))
+			or (craftable > 0 and batch
+				and ("CRAFT ×" .. craftable) or "CRAFT"))
 		ui.craft1.text:SetTextColor(GM.RGB(
 			craftable > 0 and "contLowest" or "textDim"))
 		local allCraftable = GM.Crafting.CraftableAll
 			and GM.Crafting.CraftableAll(ui.sel) or craftable
-		ui.craftHint:SetText(craftable > 0
-			and ((batch
-				and "tradeskill must be open · one click crafts the batch"
-				or "tradeskill must be open · 1 cast per click — this client can't batch")
-				.. (allCraftable > craftable
-					and format(" · +%d w/ bank+alts", allCraftable - craftable) or ""))
-			or (allCraftable > 0
-				and format("0 on hand — %d possible with bank/alts", allCraftable)
-				or "missing materials"))
+		ui.craftHint:SetText(opening
+			and "opens the tradeskill · the craft fires when it's live"
+			or (craftable > 0
+				and ((batch
+					and "tradeskill must be open · one click crafts the batch"
+					or "tradeskill must be open · 1 cast per click — this client can't batch")
+					.. (allCraftable > craftable
+						and format(" · +%d w/ bank+alts", allCraftable - craftable) or ""))
+				or (allCraftable > 0
+					and format("0 on hand — %d possible with bank/alts", allCraftable)
+					or "missing materials")))
 	else
 		ui.det:Hide()
 	end
