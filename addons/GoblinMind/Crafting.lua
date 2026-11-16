@@ -76,7 +76,8 @@ function C.Debug(matchName)
 	GM.Print("global GetTradeSkillLine: " .. tostring(
 		GetTradeSkillLine and GetTradeSkillLine() or GetTradeSkillLine))
 	if C_TradeSkillUI then
-		GM.Print("C_TSUI.GetTradeSkillLine: " .. tostring(C_TradeSkillUI.GetTradeSkillLine))
+		GM.Print("C_TSUI.GetTradeSkillLine() → " .. tostring(
+			pcall(C_TradeSkillUI.GetTradeSkillLine)))
 		GM.Print("C_TSUI.GetCategoryInfo: " .. tostring(C_TradeSkillUI.GetCategoryInfo))
 		GM.Print("C_TSUI.GetTradeSkillLineForRecipe: " .. tostring(C_TradeSkillUI.GetTradeSkillLineForRecipe))
 		GM.Print("C_TSUI.GetProfessionName: " .. tostring(C_TradeSkillUI.GetProfessionName))
@@ -848,7 +849,7 @@ function C.LineOpenFor(recipeID)
 	if not (C_TradeSkillUI and C_TradeSkillUI.GetTradeSkillLineForRecipe) then
 		return true -- can't tell — let CraftRecipe try
 	end
-	local ok, lineID, prof = pcall(
+	local ok, lineID, prof, rootID = pcall(
 		C_TradeSkillUI.GetTradeSkillLineForRecipe, recipeID)
 	if not ok or not prof then return true end
 	local cur
@@ -856,20 +857,42 @@ function C.LineOpenFor(recipeID)
 		local ok2, v = pcall(C_TradeSkillUI.GetTradeSkillLine)
 		if ok2 then cur = v end
 	end
-	if type(cur) == "number" then
-		return lineID ~= nil and cur == lineID
-	end
-	if type(cur) == "string" and cur ~= "" then
-		if cur == prof then return true end
-		-- an open Smelting window satisfies Mining recipes
+	-- the name check doubles as the Smelting-alias home: an open
+	-- Smelting window satisfies Mining recipes
+	local function NameMatch(name)
+		if not name or name == "" then return false end
+		if name == prof then return true end
 		local mine, smelt = SpellName(2575), SpellName(2656)
-		if mine and smelt
-			and (cur == mine or cur == smelt)
-			and (prof == mine or prof == smelt) then
-			return true
+		return mine and smelt
+			and (name == mine or name == smelt)
+			and (prof == mine or prof == smelt) or false
+	end
+	if type(cur) == "number" then
+		return cur == lineID or (rootID ~= nil and cur == rootID)
+	end
+	if type(cur) == "string" then
+		return cur ~= "" and NameMatch(cur)
+	end
+	if type(cur) == "table" then
+		-- C_ tables on Forever vary — probe the numeric+name fields
+		for _, k in ipairs({ "skillLineID", "tradeSkillLineID",
+		                    "professionID", "lineID" }) do
+			local v = cur[k]
+			if type(v) == "number"
+				and (v == lineID or (rootID ~= nil and v == rootID)) then
+				return true
+			end
+		end
+		for _, k in ipairs({ "name", "professionName",
+		                    "tradeSkillLineName" }) do
+			if NameMatch(cur[k]) then return true end
 		end
 	end
-	return false
+	-- cur nil/""/0: nothing is open -> false, the gate arms. Anything
+	-- else we can't parse: SOMETHING is open — let CraftRecipe try and
+	-- let the pendingCast watchdog report failure instead of
+	-- dead-ending here
+	return not (cur == nil or cur == "" or cur == 0)
 end
 
 -- ============ secure OPEN overlay (shared by CraftingUI + PlanQueue) ============

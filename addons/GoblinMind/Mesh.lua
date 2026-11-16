@@ -30,8 +30,11 @@ M.stats = { sent = 0, heard = 0, lastSend = nil, lastHear = nil }
 -- ============ channel lifecycle ============
 
 local function FindChannel()
-	local _, _, id = GetChannelName(CHANNEL)
-	return id
+	-- first return is the channel number; return 3 is the
+	-- INSTANCE id (0 in the world) — reading it as the channel
+	-- id left the join state at "not joined" forever
+	local id = GetChannelName(CHANNEL)
+	return tonumber(id) or 0
 end
 
 local function TryJoin(tries)

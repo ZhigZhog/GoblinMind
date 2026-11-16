@@ -175,6 +175,14 @@ local function Build()
 	frame:RegisterForDrag("LeftButton")
 	frame:SetScript("OnDragStart", frame.StartMoving)
 	frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
+	-- first-show font heal: the window builds HIDDEN at login (Prewarm)
+	-- and fontstrings on a hidden frame may never rasterize — the
+	-- one-shot login FixupFonts can't reach text that only exists after
+	-- that. Re-applying on show covers whatever shape the first-load
+	-- failure takes; cheap no-op once fonts are live.
+	frame:HookScript("OnShow", function()
+		if GM.FixupFonts then GM.FixupFonts() end
+	end)
 
 	-- scan buttons ride the title strip — subtle button rects so they
 	-- read as actions, not navigation tabs
