@@ -104,6 +104,35 @@ function C.Debug(matchName)
 				GM.Print("  basePI = nil")
 			end
 		end
+		if C_TradeSkillUI.GetAllRecipeIDs then
+			local ok, res = pcall(C_TradeSkillUI.GetAllRecipeIDs)
+			GM.Print("  GetAllRecipeIDs → " .. tostring(
+				ok and type(res) == "table" and (#res .. " ids")
+				or res))
+		end
+		if C_TradeSkillUI.GetFilteredRecipeIDs then
+			local ok, res = pcall(C_TradeSkillUI.GetFilteredRecipeIDs)
+			GM.Print("  GetFilteredRecipeIDs → " .. tostring(
+				ok and type(res) == "table" and (#res .. " ids")
+				or res))
+		end
+		-- gate internals for a recipe (arg) or the first queued one
+		local rid = tonumber(matchName)
+			or next(GoblinMindCrafting.queue or {})
+		if rid then
+			GM.Print("  lastProf = " .. tostring(C.lastProf))
+			local pf = ProfessionsFrame or TradeSkillFrame
+			GM.Print("  pf shown = " .. tostring(pf and pf:IsShown()))
+			if ProfessionsFrame and ProfessionsFrame.BookPage then
+				GM.Print("  bookPage shown = " .. tostring(
+					ProfessionsFrame.BookPage:IsShown()))
+			end
+			GM.Print("  recipe " .. rid .. " prof = " .. tostring(
+				C.Prof(rid)))
+			GM.Print("  LineOpenFor → " .. tostring(C.LineOpenFor(rid)))
+			GM.Print("  LineClosedFor → " .. tostring(
+				C.LineClosedFor and C.LineClosedFor(rid)))
+		end
 	else
 		GM.Print("C_TradeSkillUI missing")
 	end
@@ -973,6 +1002,50 @@ function C.LineOpenFor(recipeID)
 	return true
 end
 
+-- POSITIVE evidence the recipe's line is closed — this is what arms
+-- the OPEN overlay, and the distinction matters: the overlay casts a
+-- profession spell, and casting it on an already-open line TOGGLES
+-- the session shut (the open-sound/close-sound loop). Arming needs
+-- certainty; uncertainty falls to the plain craft button where a
+-- wrong guess only costs a watchdog-reported dead call.
+function C.LineClosedFor(recipeID)
+	if ForeignTradeskill() then return false end
+	if not (C_TradeSkillUI and C_TradeSkillUI.CraftRecipe) then
+		return false
+	end
+	-- a live non-empty list that lacks the recipe means a DIFFERENT
+	-- line is open — casting our profession's spell is the correct
+	-- switch, not a toggle
+	local sawList
+	for _, fn in ipairs({ "GetAllRecipeIDs", "GetFilteredRecipeIDs" }) do
+		if C_TradeSkillUI[fn] then
+			local ok, res = pcall(C_TradeSkillUI[fn])
+			if ok and type(res) == "table" and #res > 0 then
+				sawList = true
+				for _, id in ipairs(res) do
+					if id == recipeID then return false end
+				end
+			end
+		end
+	end
+	if sawList then return true end -- live list, recipe absent
+	-- tracked session state: another profession verifiably opened
+	-- last (TRADE_SKILL_CLOSE clears lastProf, so a mismatch means a
+	-- different line is live)
+	local prof = C.Prof(recipeID)
+	if prof and C.lastProf and C.lastProf ~= prof then
+		local mine, smelt = SpellName(2575), SpellName(2656)
+		local alias = mine and smelt
+			and (C.lastProf == mine or C.lastProf == smelt)
+			and (prof == mine or prof == smelt)
+		if not alias then return true end
+	end
+	-- the native frame hidden = no session at all
+	local pf = ProfessionsFrame or TradeSkillFrame
+	if pf and not pf:IsShown() then return true end
+	return false -- can't prove closed — don't arm the toggle-cast
+end
+
 -- ============ secure OPEN overlay (shared by CraftingUI + PlanQueue) ============
 -- The overlay is a SecureActionButtonTemplate child of the normal
 -- button: armed, it covers the button and the click casts the
@@ -1006,7 +1079,9 @@ end
 function C.GateButton(btn, recipeID, qty, allow)
 	local ov = SecureOpenFor(btn)
 	if InCombatLockdown and InCombatLockdown() then return false end
-	if allow and not C.LineOpenFor(recipeID) then
+	-- arm only on positive-closed evidence — an unsure "maybe closed"
+	-- would let this click toggle a live line shut
+	if allow and C.LineClosedFor(recipeID) then
 		local spell = C.ProfSpell(recipeID)
 		if spell then
 			ov._rid, ov._qty = recipeID, qty
