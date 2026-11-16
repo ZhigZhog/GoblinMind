@@ -106,7 +106,23 @@ Primary data = the in-house book feed below.
   `Startup\goblinmind-brain-watch.bat` — launches the INSTALLED
   copy (`AddOns\GoblinMind\brain\`, `watch self`) in a titled
   minimized console; `pythonw` + `&`/`disown` also works for a
-  session-local watcher.
+  session-local watcher. The watcher **self-restarts when
+  `goblin_brain.py` changes on disk** (stats own mtime each poll,
+  respawns via `subprocess.Popen` + `os._exit` — `execv`/`spawnv`
+  split `C:\Program Files\` on Windows). Deploy = copy the file
+  over; no manual restart needed.
+- **Crowdsource backend (`brain\goblin_server.py`)**: persistent
+  merged-book service on `127.0.0.1:8765` (binds `0.0.0.0` — LAN
+  needs a firewall rule for TCP 8765). Endpoints: `/v1/register`,
+  `/v1/upload`, `/v1/book?scope=`, `/v1/health`. SQLite beside the
+  script; newest-upload-wins per item, 200 uploads/install/scope,
+  10 uploads/10min rate limit, 7-day staleness cutoff + hourly GC.
+  Auto-starts via `Startup\goblinmind-server.bat` from the installed
+  brain dir. The watcher pulls it on a 15m cadence (remote books
+  marked `remote: True` — never re-uploaded) and uploads only
+  genuinely newer local books. Peer upload → merge → pull → emitted
+  DB verified end-to-end. Config: `feeds.json` `backend` block
+  (`url`, `name`, `scope`, `poll_minutes`, `upload`).
   The watcher also scans `WTF\Account\*\SavedVariables\GoblinMind.lua`
   each poll for staged bug reports (`gm-<ts>-<n>|<hex>` strings in
   `GoblinMindSettings.bugReports`), files them to GitHub issues
