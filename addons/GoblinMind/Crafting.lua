@@ -351,6 +351,11 @@ function C.Init()
 	GoblinMindCrafting = GoblinMindCrafting or {}
 	GoblinMindCrafting.recipes = GoblinMindCrafting.recipes or {}
 	GoblinMindCrafting.queue = GoblinMindCrafting.queue or {}
+	-- K opens the professions OVERVIEW — no TRADE_SKILL_SHOW fires —
+	-- so the takeover hook on the native frame has to exist at load
+	if GM.CraftingUI and GM.CraftingUI.HookDefault then
+		GM.CraftingUI.HookDefault()
+	end
 	local f = CreateFrame("Frame")
 	for _, evt in ipairs({
 		"TRADE_SKILL_LIST_UPDATE", "TRADE_SKILL_DATA_SOURCE_CHANGED",

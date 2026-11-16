@@ -975,6 +975,34 @@ function CU.ParkDefault()
 	GM.FramePark.Park(DefaultFrame())
 end
 
+-- installed at load, not lazily on first tradeskill open: K's
+-- professions OVERVIEW fires no TRADE_SKILL_SHOW, so the event path
+-- never sees it — the native frame's own OnShow is the only signal.
+-- The frame may be load-on-demand, so poll until it exists.
+local hookedPF
+function CU.HookDefault()
+	if hookedPF then return end
+	local pf = DefaultFrame()
+	if not pf then
+		CU._hookTries = (CU._hookTries or 0) + 1
+		if CU._hookTries < 30 and GM.After then
+			GM.After(1, CU.HookDefault)
+		end
+		return
+	end
+	hookedPF = pf
+	pf:HookScript("OnShow", function()
+		if ui and ui.wantDefault then return end
+		CU.ParkDefault()
+		BuildUI()
+		ui.selProf = nil -- overview carries no profession context
+		ui.frame:Show()
+		CU.Refresh()
+		Footer("tradeskill open — BLIZZARD UI gives the "
+			.. "default frame back")
+	end)
+end
+
 function CU.RestoreDefault()
 	GM.FramePark.Restore(DefaultFrame())
 end
