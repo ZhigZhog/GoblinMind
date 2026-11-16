@@ -113,7 +113,8 @@ local function BuildStats(parent)
 end
 
 local PAD, GAP = 10, 8
-local LEFT_W = 456
+local WIN_W = 768
+local LEFT_W = 464
 
 -- step-table column labels per plan kind — mode'd plans put the item
 -- name in col 3 and step.desc/source detail in col 4, so the headers
@@ -132,7 +133,7 @@ local function Build()
 	if ui.frame then return end
 
 	local frame = CreateFrame("Frame", "GoblinMindPlanFrame", UIParent)
-	frame:SetSize(700, 542)
+	frame:SetSize(WIN_W, 542)
 	frame:SetPoint("CENTER")
 	frame:SetMovable(true)
 	frame:EnableMouse(true)
@@ -344,7 +345,7 @@ local function Build()
 	local stats = ui.stats
 	stats:SetPoint("TOPRIGHT", -PAD, -64)
 	stats:SetPoint("BOTTOMRIGHT", -PAD, PAD)
-	stats:SetWidth(700 - 2 * PAD - GAP - LEFT_W)
+	stats:SetWidth(WIN_W - 2 * PAD - GAP - LEFT_W)
 	GM.Panel(stats, "contLow")
 	if GM.ChromePanel then GM.ChromePanel(stats) end
 	local stTitle = GM.MakeFontString(stats, GM.FONT_MED, 10, "primary")
