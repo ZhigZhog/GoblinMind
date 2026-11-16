@@ -22,7 +22,20 @@ local ownedPrimed = false -- first refresh just populates — everything
                           -- would look "new" otherwise
 local emptyArmed = false  -- empty snapshots must repeat before vanish
                           -- processing (mid-requery reads can be empty)
+local postUntil = 0       -- posts are only ledgered inside this window —
+                          -- enumeration ghost rows (sold/history rows the
+                          -- status filter can't catch) otherwise ratchet
+                          -- fp counts up and read as phantom posts
+local pendingLost = {}    -- [fp] = {e, lost, fresh} — a vanished row must
+                          -- STAY gone one refresh before sell/expire
+                          -- ledgers; transient ghost rows (the mirror of
+                          -- phantom posts) would otherwise log fake sales
+                          -- and poison the brain's vel feed
 GM.Inventory.recentCancels = recentCancels
+
+function GM.Inventory.ArmPost(sec)
+	postUntil = math.max(postUntil, time() + (sec or 15))
+end
 
 -- ============ mailbox ============
 
@@ -152,7 +165,8 @@ function GM.Inventory.RefreshOwned()
 	for fp, e in pairs(now) do
 		local old = auctionCache[fp]
 		local extra = (e.n or 1) - ((old and old.n) or 0)
-		if ownedPrimed and extra > 0 and not recentCancels[fp] then
+		if ownedPrimed and extra > 0 and not recentCancels[fp]
+			and t <= postUntil then
 			for _ = 1, extra do
 				GM.Ledger.Add("post", e.itemID, e.qty, e.buyout)
 			end
@@ -163,21 +177,40 @@ function GM.Inventory.RefreshOwned()
 		if ownedPrimed and lost > 0
 			and not recentCancels[fp]
 			and not (prev.aid and recentCancels[prev.aid]) then
-			local couldExpire = prev.tLeft and (t - prev.at) >= prev.tLeft
-			for _ = 1, lost do
-				if couldExpire then
-					-- vanished on schedule without a cancel → expiry
-					GM.Ledger.Add("expire", prev.itemID, prev.qty,
-						nil, { auctionID = prev.aid or fp })
-				else
-					-- buyout is per-item on Forever — sale proceeds per
-					-- unit are buyout minus the 5% AH cut
-					local unit = prev.buyout and prev.qty > 0
-						and math.floor(prev.buyout * 0.95) or nil
-					GM.Ledger.Add("sell", prev.itemID, prev.qty,
-						unit, { auctionID = prev.aid or fp })
+			-- hold the verdict one refresh — a ghost row that popped
+			-- in and out is noise, a real sale stays gone
+			pendingLost[fp] = { e = prev, lost = lost, fresh = true }
+		end
+	end
+	for fp, pl in pairs(pendingLost) do
+		if pl.fresh then
+			pl.fresh = nil -- just armed this pass — verdict next refresh
+		elseif recentCancels[fp]
+			or (pl.e.aid and recentCancels[pl.e.aid]) then
+			pendingLost[fp] = nil -- canceled while pending — not a sale
+		else
+			local cur = now[fp]
+			local deficit = (pl.e.n or 1) - (cur and (cur.n or 1) or 0)
+			local n = math.min(pl.lost, deficit)
+			if n > 0 then
+				local couldExpire = pl.e.tLeft
+					and (t - pl.e.at) >= pl.e.tLeft
+				for _ = 1, n do
+					if couldExpire then
+						-- vanished on schedule without a cancel → expiry
+						GM.Ledger.Add("expire", pl.e.itemID, pl.e.qty,
+							nil, { auctionID = pl.e.aid or fp })
+					else
+						-- buyout is per-item on Forever — sale proceeds
+						-- per unit are buyout minus the 5% AH cut
+						local unit = pl.e.buyout and pl.e.qty > 0
+							and math.floor(pl.e.buyout * 0.95) or nil
+						GM.Ledger.Add("sell", pl.e.itemID, pl.e.qty,
+							unit, { auctionID = pl.e.aid or fp })
+					end
 				end
 			end
+			pendingLost[fp] = nil
 		end
 	end
 	auctionCache = now
@@ -197,6 +230,37 @@ local OWNER_SORTS = Enum and Enum.AuctionHouseSortOrder and {
 	{ sortOrder = Enum.AuctionHouseSortOrder.Name, reverseSort = false },
 	{ sortOrder = Enum.AuctionHouseSortOrder.Price, reverseSort = false },
 } or {}
+
+-- /goblin owndump — raw GetOwnedAuctionInfo rows + cache fingerprints.
+-- Chasing phantom ledger posts: prints every field that distinguishes a
+-- real listing from ghost rows (sold/history rows with no status to
+-- filter on, nil-aid duplicates).
+function GM.Inventory.DumpOwned()
+	if not (C_AuctionHouse and C_AuctionHouse.GetNumOwnedAuctions) then
+		GM.Print("no C_AuctionHouse")
+		return
+	end
+	local n = C_AuctionHouse.GetNumOwnedAuctions() or 0
+	GM.Print(format("owned auctions: %d rows", n))
+	for i = 1, n do
+		local ok, info = pcall(C_AuctionHouse.GetOwnedAuctionInfo, i)
+		if ok and type(info) == "table" then
+			local keys = {}
+			for k in pairs(info) do keys[#keys + 1] = tostring(k) end
+			table.sort(keys)
+			GM.Print(format("  [%d] id=%s aid=%s qty=%s buyout=%s bid=%s status=%s tLeft=%s",
+				i,
+				tostring(info.itemKey and info.itemKey.itemID or info.itemID),
+				tostring(info.auctionID or info.auctionId),
+				tostring(info.quantity), tostring(info.buyoutAmount),
+				tostring(info.bidAmount), tostring(info.status),
+				tostring(info.timeLeftSeconds)))
+			GM.Print("      keys: " .. table.concat(keys, ","))
+		else
+			GM.Print(format("  [%d] <error>", i))
+		end
+	end
+end
 
 function GM.Inventory.QueryOwned()
 	if not (C_AuctionHouse and C_AuctionHouse.QueryOwnedAuctions) then
@@ -416,9 +480,7 @@ end
 -- BAG_UPDATE (debounced) + logout; bank on BANKFRAME_OPENED + bag
 -- changes while the frame is up.
 
-local function CharKey()
-	return (UnitName("player") or "?") .. "-" .. (GetRealmName() or "?")
-end
+local CharKey = GM.CharKey
 
 local BANK_BAGS = { -1, -3 } -- classic bank container + reagent bank
 do
@@ -537,6 +599,7 @@ f:SetScript("OnEvent", function(_, event, ...)
 	elseif event == "OWNED_AUCTIONS_UPDATED" then
 		GM.Inventory.RefreshOwned()
 	elseif event == "AUCTION_HOUSE_AUCTION_CREATED" then
+		GM.Inventory.ArmPost(15)
 		GM.Inventory.QueryOwned()
 	elseif event == "BIDS_UPDATED" then
 		EnumerateBids()

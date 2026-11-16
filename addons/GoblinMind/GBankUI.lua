@@ -402,20 +402,10 @@ end
 
 local function EnsureSwitchBtn()
 	if not (GuildBankFrame and ui and not ui.switchBtn) then return end
-	local b = CreateFrame("Button", nil, GuildBankFrame)
-	b:SetSize(84, 16)
-	b:SetPoint("TOPRIGHT", GuildBankFrame, "TOPRIGHT", -40, -8)
-	b:SetFrameLevel(GuildBankFrame:GetFrameLevel() + 20)
-	GM.Panel(b, "accent")
-	b.text = GM.MakeFontString(b, GM.FONT_BOLD, 9, "contLowest")
-	b.text:SetPoint("CENTER")
-	b.text:SetText("GOBLINMIND")
-	b:SetScript("OnClick", function()
+	ui.switchBtn = W.SwitchBtn(GuildBankFrame, function()
 		ui.wantDefault = nil
 		GU.OnGBankOpen()
-	end)
-	ui.switchBtn = b
-	GuildBankFrame:HookScript("OnShow", function()
+	end, function()
 		if not ui.wantDefault then GM.FramePark.Park(GuildBankFrame) end
 	end)
 end

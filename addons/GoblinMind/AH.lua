@@ -1040,6 +1040,7 @@ function GM.AH.Execute(step)
 			or (not ok and GM.AH.IsCommodity(step.itemID))
 		-- bid below buyout only — a bid equal to buyout is rejected
 		local bid = step.bid and step.bid < step.unit and step.bid or nil
+		if GM.Inventory.ArmPost then GM.Inventory.ArmPost(15) end
 		if isComm then
 			C_AuctionHouse.PostCommodity(loc, step.duration or 2, qty, step.unit)
 		else

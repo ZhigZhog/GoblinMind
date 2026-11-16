@@ -72,7 +72,7 @@ function W.Tip(f, linesFn)
 		GameTooltip:SetOwner(f, "ANCHOR_TOP")
 		GameTooltip:SetText(lines[1], 1, 1, 1)
 		for i = 2, #lines do
-			GameTooltip:AddLine(lines[i], 0.75, 0.75, 0.75)
+			GameTooltip:AddLine(lines[i], 0.8, 0.8, 0.75, true)
 		end
 		GameTooltip:Show()
 	end)
@@ -89,6 +89,118 @@ function W.ShiftItem(f, idFn)
 		local id = type(idFn) == "function" and idFn() or idFn
 		if id then GM.ModifiedItemClick(id) end
 	end)
+end
+
+-- paneled action button, larger variant (contHigh + FONT_BOLD 10
+-- accent, centered). No handlers wired — callers SetScript their own
+-- OnClick; CraftingUI's secure OPEN overlay needs a bare button to
+-- cover. Was an identical Btn triple in CraftingUI/GroupsUI/OpsUI.
+function W.ActionBtn(parent, label, w, h)
+	local b = CreateFrame("Button", nil, parent)
+	b:SetSize(w, h or 20)
+	GM.Panel(b, "contHigh")
+	b.text = GM.MakeFontString(b, GM.FONT_BOLD, 10, "accent")
+	b.text:SetPoint("CENTER")
+	b.text:SetText(label)
+	return b
+end
+
+-- status line setter — the ui.footer pattern in the takeover windows
+function W.Footer(fs, msg, err)
+	fs:SetText(msg)
+	fs:SetTextColor(GM.RGB(err and "err" or "secondary"))
+end
+
+-- marked editbox: 2px edge mark goes accent when the user edits
+-- (eb.dirty set), Escape drops dirty + clears focus. onEscape fires
+-- after ClearFocus — pass the module's Refresh so the row repaints.
+-- Was an identical pair in GroupsUI/OpsUI (GroupsUI layers its own
+-- OnEditFocusGained capture on top via SetScript).
+function W.DirtyEditBox(parent, w, h, onEscape)
+	local eb = CreateFrame("EditBox", nil, parent)
+	eb:SetSize(w, h or 20)
+	eb:SetAutoFocus(false)
+	eb:SetFont(GM.FONT, 10, "")
+	eb:SetTextColor(GM.RGB("text"))
+	eb:SetTextInsets(5, 4, 0, 0)
+	local bg = eb:CreateTexture(nil, "BACKGROUND")
+	bg:SetAllPoints()
+	bg:SetColorTexture(GM.RGB("contLowest"))
+	local mark = eb:CreateTexture(nil, "ARTWORK")
+	mark:SetSize(2, (h or 20) - 2)
+	mark:SetPoint("TOPLEFT", eb, "TOPLEFT", 0, -1)
+	mark:SetColorTexture(GM.RGB("outlineVar"))
+	eb.mark = mark
+	eb:SetScript("OnEscapePressed", function(self)
+		self.dirty = nil
+		self:ClearFocus()
+		if onEscape then onEscape() end
+	end)
+	eb:SetScript("OnTextChanged", function(self, user)
+		if user then
+			self.dirty = true
+			self.mark:SetColorTexture(GM.RGB("accent"))
+		end
+	end)
+	return eb
+end
+
+-- text segment button (toggle-strip member) + selected-state paint.
+-- Was an identical Segment/PaintSeg pair in GroupsUI/OpsUI.
+function W.Segment(parent, label, w, h)
+	local b = CreateFrame("Button", nil, parent)
+	b:SetSize(w, h or 18)
+	GM.Panel(b, "contLowest")
+	b.text = GM.MakeFontString(b, GM.FONT_BOLD, 9, "textDim")
+	b.text:SetPoint("CENTER")
+	b.text:SetText(label)
+	return b
+end
+
+function W.PaintSeg(b, selected)
+	b._gmBg:SetColorTexture(GM.RGB(selected and "contHighest" or "contLowest"))
+	b.text:SetTextColor(GM.RGB(selected and "accent" or "textDim"))
+end
+
+-- full-height column panel with title (+count fs at top right). topY
+-- positions under the toolbar row — CraftingUI uses -52, OpsUI -34.
+-- Was two near-identical Panel()s; p.titleFs and p.count are both set
+-- so either consumer's field name resolves.
+function W.ColPanel(parent, x, w, title, topY)
+	local p = CreateFrame("Frame", nil, parent)
+	p:SetPoint("TOPLEFT", x, topY or -52)
+	p:SetPoint("BOTTOM", 0, 30)
+	p:SetWidth(w)
+	GM.Panel(p, "contLowest")
+	p:SetClipsChildren(true)
+	local t = GM.MakeFontString(p, GM.FONT_BOLD, 9, "secondary")
+	t:SetPoint("TOPLEFT", 8, -6)
+	t:SetText(title)
+	p.titleFs = t
+	p.count = GM.MakeFontString(p, GM.FONT, 9, "textDim")
+	p.count:SetPoint("TOPRIGHT", -8, -7)
+	return p
+end
+
+-- GOBLINMIND switch button on a Blizzard frame — the takeover
+-- windows' shared "go back / come back" affordance. Was six copies
+-- (AHUI/BankUI/GBankUI/MailUI/VendoringUI/CraftingUI). onClick fires
+-- when the user wants OUR window back; onShow hooks the native
+-- frame's show so the caller can re-park it. Returns nil if the
+-- native frame doesn't exist yet.
+function W.SwitchBtn(native, onClick, onShow)
+	if not native then return nil end
+	local b = CreateFrame("Button", nil, native)
+	b:SetSize(84, 16)
+	b:SetPoint("TOPRIGHT", native, "TOPRIGHT", -40, -8)
+	b:SetFrameLevel(native:GetFrameLevel() + 20)
+	GM.Panel(b, "accent")
+	b.text = GM.MakeFontString(b, GM.FONT_BOLD, 9, "contLowest")
+	b.text:SetPoint("CENTER")
+	b.text:SetText("GOBLINMIND")
+	b:SetScript("OnClick", onClick)
+	if onShow then native:HookScript("OnShow", onShow) end
+	return b
 end
 
 -- subtle hover tint — attach at row creation; the HIGHLIGHT layer

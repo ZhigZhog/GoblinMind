@@ -1342,7 +1342,7 @@ function PQ.Refresh()
 			local kind = curStep and curStep.kind
 			-- craft step with a closed line → the secure OPEN overlay
 			-- takes the click (same gate as the crafting window); the
-			-- spell cast opens the line and pendingOpenCraft re-fires
+			-- spell cast opens the line and the gate flips to CRAFT
 			local left = kind == "note" and curStep.recipeID
 				and ((curStep.qty or 1) - (curStep.crafted or 0))
 			local opening = GM.Crafting.GateButton

@@ -19,69 +19,15 @@ local EXPR_SOURCES = { "dbmarket", "vendorsell", "crafting", "matprice",
 local ROW_H = 18
 
 local function EditBox(parent, w, h)
-	local eb = CreateFrame("EditBox", nil, parent)
-	eb:SetSize(w, h or 20)
-	eb:SetAutoFocus(false)
-	eb:SetFont(GM.FONT, 10, "")
-	eb:SetTextColor(GM.RGB("text"))
-	eb:SetTextInsets(5, 4, 0, 0)
-	local bg = eb:CreateTexture(nil, "BACKGROUND")
-	bg:SetAllPoints()
-	bg:SetColorTexture(GM.RGB("contLowest"))
-	local mark = eb:CreateTexture(nil, "ARTWORK")
-	mark:SetSize(2, (h or 20) - 2)
-	mark:SetPoint("TOPLEFT", eb, "TOPLEFT", 0, -1)
-	mark:SetColorTexture(GM.RGB("outlineVar"))
-	eb.mark = mark
-	eb:SetScript("OnEscapePressed", function(self)
-		self.dirty = nil
-		self:ClearFocus()
-		OU.Refresh()
-	end)
-	eb:SetScript("OnTextChanged", function(self, user)
-		if user then
-			self.dirty = true
-			self.mark:SetColorTexture(GM.RGB("accent"))
-		end
-	end)
-	return eb
+	return W.DirtyEditBox(parent, w, h, OU.Refresh)
 end
 
-local function Segment(parent, label, w)
-	local b = CreateFrame("Button", nil, parent)
-	b:SetSize(w, ROW_H)
-	GM.Panel(b, "contLowest")
-	b.text = GM.MakeFontString(b, GM.FONT_BOLD, 9, "textDim")
-	b.text:SetPoint("CENTER")
-	b.text:SetText(label)
-	return b
-end
+local Segment = W.Segment
+local PaintSeg = W.PaintSeg
 
-local function PaintSeg(b, selected)
-	b._gmBg:SetColorTexture(GM.RGB(selected and "contHighest" or "contLowest"))
-	b.text:SetTextColor(GM.RGB(selected and "accent" or "textDim"))
-end
+local Btn = W.ActionBtn
 
-local function Btn(parent, label, w, h)
-	local b = CreateFrame("Button", nil, parent)
-	b:SetSize(w, h or 20)
-	GM.Panel(b, "contHigh")
-	b.text = GM.MakeFontString(b, GM.FONT_BOLD, 10, "accent")
-	b.text:SetPoint("CENTER")
-	b.text:SetText(label)
-	return b
-end
-
-local function Tip(btn, fn)
-	btn:SetScript("OnEnter", function()
-		GameTooltip:SetOwner(btn, "ANCHOR_TOP")
-		local lines = fn()
-		GameTooltip:SetText(lines[1])
-		for i = 2, #lines do GameTooltip:AddLine(lines[i], 0.8, 0.8, 0.75, true) end
-		GameTooltip:Show()
-	end)
-	btn:SetScript("OnLeave", function() GameTooltip:Hide() end)
-end
+local Tip = W.Tip
 
 local function SetMark(eb, state)
 	eb.mark:SetColorTexture(GM.RGB(
@@ -89,10 +35,7 @@ local function SetMark(eb, state)
 		or state == "dirty" and "accent" or "outlineVar"))
 end
 
-local function Footer(msg, err)
-	ui.footer:SetText(msg)
-	ui.footer:SetTextColor(GM.RGB(err and "err" or "secondary"))
-end
+local function Footer(msg, err) W.Footer(ui.footer, msg, err) end
 
 -- ============ selection state ============
 
@@ -226,17 +169,7 @@ local WIN_W, WIN_H = 860, 560
 local TYPE_ROWS, OP_ROWS = 9, 18
 
 local function Panel(parent, x, w, title)
-	local p = CreateFrame("Frame", nil, parent)
-	p:SetPoint("TOPLEFT", x, -34)
-	p:SetPoint("BOTTOM", -0, 30)
-	p:SetWidth(w)
-	GM.Panel(p, "contLowest")
-	p:SetClipsChildren(true)
-	local t = GM.MakeFontString(p, GM.FONT_BOLD, 9, "secondary")
-	t:SetPoint("TOPLEFT", 8, -6)
-	t:SetText(title)
-	p.titleFs = t
-	return p
+	return W.ColPanel(parent, x, w, title, -34)
 end
 
 local function ListRow(parent, w)

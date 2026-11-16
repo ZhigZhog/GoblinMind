@@ -431,15 +431,7 @@ end
 -- still in flight) the mail icon lags seconds behind the truth.
 -- CheckInbox fetches headers now instead of waiting for the lazy
 -- refresh — one pull in flight is enough, headers are a snapshot.
-local pullArmed
-local function PullInbox()
-	if pullArmed then return end
-	pullArmed = true
-	GM.After(0.7, function()
-		pullArmed = nil
-		pcall(CheckInbox)
-	end)
-end
+local PullInbox = GM.PullInbox
 
 -- one click per mail: take everything. COD mail is never auto-looted —
 -- looting pays the charge, and that's a pay decision.
@@ -724,20 +716,10 @@ end
 
 local function EnsureSwitchBtn()
 	if not (MailFrame and ui and not ui.switchBtn) then return end
-	local b = CreateFrame("Button", nil, MailFrame)
-	b:SetSize(84, 16)
-	b:SetPoint("TOPRIGHT", MailFrame, "TOPRIGHT", -40, -8)
-	b:SetFrameLevel(MailFrame:GetFrameLevel() + 20)
-	GM.Panel(b, "accent")
-	b.text = GM.MakeFontString(b, GM.FONT_BOLD, 9, "contLowest")
-	b.text:SetPoint("CENTER")
-	b.text:SetText("GOBLINMIND")
-	b:SetScript("OnClick", function()
+	ui.switchBtn = W.SwitchBtn(MailFrame, function()
 		ui.wantDefault = nil
 		MU.OnMailOpen()
-	end)
-	ui.switchBtn = b
-	MailFrame:HookScript("OnShow", function()
+	end, function()
 		if not ui.wantDefault then GM.FramePark.Park(MailFrame) end
 	end)
 end

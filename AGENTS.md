@@ -226,47 +226,74 @@ Primary data = the in-house book feed below.
   - **`SetTexCoord` signature is (left, right, top, bottom)** — not
     (l,t,r,b). Transposing silently produces 1px-column stretches that
     look like solid bands.
-  - **`C_TradeSkillUI.CraftRecipe` works for qty=1** (verified
-    2026-11-14 via `/goblin craftprobe`); count>1 is Blizzard's
-    multicraft path — **`CraftRecipe(count>1) is squelched on this
-    client** (pcall succeeds, no cast, "interface action failed";
-    verified live 2026-11-15). A stack runs as a CHAIN: one
-    `CraftRecipe(id,1)` per click, then each
-    `UNIT_SPELLCAST_SUCCEEDED` fires the next link (0.15s gap —
-    the client can still read "casting" in the same frame; castGUID
-    dedupes SUCCEEDED+CHANNEL_STOP doubles). qty=1 works from
-    insecure context (craftprobe ran it from a slash command) so
-    event-driven links are legal. `C.craftChain` aborts on
-    FAILED/INTERRUPTED/TRADE_SKILL_CLOSE/a dead link; a second
-    `C.Craft` while one runs returns "already crafting". The
-    `pendingCast` watchdog (UNIT_SPELLCAST_START within 0.6s)
-    reports dead calls; `pendingOpenCraft` retries the post-open
-    craft 3× at 0.6s and expires after 4s (a blocked cast left it
-    firing on unrelated opens). **`C.LineOpenFor` treats EMPTY recipe
-    enumerations as inconclusive, not "closed"** — `GetAllRecipeIDs`/
-    `GetFilteredRecipeIDs` are partially stubbed and an empty table
-    can't distinguish dead enumeration from a dead line; arming the
-    OPEN overlay on a false negative made the cast toggle the live
-    line shut (the open-sound/close-sound freeze). Fallback order:
-    non-empty list → tracked `C.lastProf` (Scan sets it per-recipe,
-    `TRADE_SKILL_CLOSE` clears it) → `ProfessionsFrame:IsShown()`
-    (a parked frame stays shown while the line is live) → permissive.
-    `CraftingUI`'s `OnHide` calls `CloseTradeSkill` ONLY on a
-    deliberate close (`ui.closing` — X button / toggle-off); tab
-    swaps and the UISpecialFrames ESC sweep must keep the session.
-    Actual
-    crafting progress is tracked by listening to
-    `UNIT_SPELLCAST_SUCCEEDED`/`CHANNEL_STOP` (spellID == recipeID):
-    each finished cast decrements `queue[spellID]` and ticks
-    `step.crafted` on the active plan note step. `CraftEnchant`/
-    `CraftSalvage`/`IsRecipeRepeating`/`RecraftRecipe` also exist in
-    the namespace; classic `DoTradeSkill`/`DoCraft`/`GetCraftInfo`
+  - **`C_TradeSkillUI.CraftRecipe` multicrafts — but ONLY the full
+    6-arg call, ONLY from a hardware event** (verified live
+    2026-11-16: `CraftRecipe(2657, 2, nil, nil, nil, nil)` from a
+    slash context produced 2 Copper Bars; TSM passes the identical
+    `(spellId, quantity, optionalMats, level, nil,
+    applyConcentration)` shape on Forever). `CraftRecipe(id, n)`
+    with just two args is silently ignored. Timer/event-callback
+    calls (C_Timer, event handlers) no-op regardless — pcall
+    succeeds, no cast, no error; **hardware-gating is real**, same
+    as retail (why TSM is one-click-per-craft there). `/cast
+    <recipe name>` does NOT work — recipes aren't spellbook spells.
+    The one correct model: **one real click → one full-arg call →
+    the engine auto-repeats internally for the whole batch**.
+    OPEN→CRAFT is a two-click flow for the same reason — nothing
+    may fire the follow-up craft for the user.
+    Batch completion events: `UNIT_SPELLCAST_SUCCEEDED` fires
+    PER ITEM for larger batches, separated by the real cast time
+    (≈2.8s/item for Heavy Shot) — a short settle delay credits the
+    batch after item #1 (the advance-after-one bug). Small batches
+    may emit a single event for the whole run. Bookkeeping waits
+    for engine idle (UnitCastingInfo/ChannelInfo clear + 1s since
+    last event), then credits `min(bag-delta, n) − events-seen` —
+    `C_Item.GetItemCount` before/after the call is ground truth;
+    castGUID dedupes SUCCEEDED+CHANNEL_STOP pairs. Interrupted/
+    failed clears only when the spellID matches the batch recipe
+    (unrelated spell failures must not void bookkeeping).
+    `C.pendingCast` + `C.WatchCast` (UNIT_SPELLCAST_START within
+    0.6s) reports dead calls; `C.pendingOpenCraft` only carries the
+    "click CRAFT" prompt now. **`C.LineOpenFor`/`C.LineClosedFor`
+    treat EMPTY recipe enumerations as inconclusive, not "closed"**
+    — `GetAllRecipeIDs`/`GetFilteredRecipeIDs` are partially
+    stubbed and an empty table can't distinguish dead enumeration
+    from a dead line; arming the OPEN overlay on a false negative
+    made the cast toggle the live line shut (open/close loop).
+    Evidence order (both directions): `C.recentOpen[recipeID]` stamp
+    (survives a young <8s TRADE_SKILL_CLOSE — Forever can deliver
+    SHOW(new) BEFORE CLOSE(old); lazy expiry 12s) → either enum
+    proves presence, ONLY `GetAllRecipeIDs` proves absence
+    (`GetFilteredRecipeIDs` honors the Blizzard frame's search
+    filter — absence in a filtered subset is ambiguous) → tracked
+    `C.lastProf` (Scan sets it, TRADE_SKILL_CLOSE clears; Mining↔
+    Smelting alias via SpellName(2575)/SpellName(2656)) →
+    `ProfessionsFrame:IsShown()` (a parked frame stays shown while
+    the line is live). `CraftingUI`'s `OnHide` calls
+    `CloseTradeSkill` ONLY on a deliberate close (`ui.closing` —
+    X button / toggle-off); tab swaps and the UISpecialFrames ESC
+    sweep must keep the session. Actual crafting progress is
+    tracked by listening to `UNIT_SPELLCAST_SUCCEEDED`/
+    `CHANNEL_STOP` (spellID == recipeID): each finished cast
+    decrements `queue[spellID]` and ticks `step.crafted` on the
+    active plan note step. `CraftEnchant`/`CraftSalvage`/
+    `IsRecipeRepeating`/`RecraftRecipe` also exist in the
+    namespace; classic `DoTradeSkill`/`DoCraft`/`GetCraftInfo`
     globals are all nil — the client is purely retail-shaped here.
 
     `AUCTION_CANCELED` fires once PER LISTING a
     `ReplicateItems` stream replaces — a full scan = thousands
     of events. Never surface it raw; gate on `GM.AH.Busy()` +
     `GM.AH.cancelMute` (8s tail set in both book-finish paths).
+    `GetOwnedAuctionInfo` rows can include sold/history ghosts the
+    `status` filter can't prove — bare fingerprint-count deltas
+    ratchet up over a session and read as phantom ledger `post`s.
+    Posts are only ledgered inside `GM.Inventory.ArmPost`'s window
+    (armed by AH.Execute's post step + AUCTION_HOUSE_AUCTION_
+    CREATED); vanished rows get a double-confirm (`pendingLost` —
+    must stay gone one refresh) before sell/expire can ledger, so
+    ghost flicker can't fake sales into the `vel` feed.
+    `/goblin owndump` dumps raw rows for diagnosis.
     `GetTradeSkillLineForRecipe(recipeID)` exists (TSM marks it
     retail-only and never calls it on Forever) and returns
     `(skillLineID, "Profession Name", rootSkillLine)` — the

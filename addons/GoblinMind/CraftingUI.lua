@@ -15,31 +15,9 @@ local unpack = unpack or table.unpack
 
 local ROW_H = 18
 
-local function Btn(parent, label, w, h)
-	local b = CreateFrame("Button", nil, parent)
-	b:SetSize(w, h or 20)
-	GM.Panel(b, "contHigh")
-	b.text = GM.MakeFontString(b, GM.FONT_BOLD, 10, "accent")
-	b.text:SetPoint("CENTER")
-	b.text:SetText(label)
-	return b
-end
-
-local function Tip(btn, fn)
-	btn:SetScript("OnEnter", function()
-		GameTooltip:SetOwner(btn, "ANCHOR_TOP")
-		local lines = fn()
-		GameTooltip:SetText(lines[1])
-		for i = 2, #lines do GameTooltip:AddLine(lines[i], 0.8, 0.8, 0.75, true) end
-		GameTooltip:Show()
-	end)
-	btn:SetScript("OnLeave", function() GameTooltip:Hide() end)
-end
-
-local function Footer(msg, err)
-	ui.footer:SetText(msg)
-	ui.footer:SetTextColor(GM.RGB(err and "err" or "secondary"))
-end
+local Btn = W.ActionBtn
+local Tip = W.Tip
+local function Footer(msg, err) W.Footer(ui.footer, msg, err) end
 
 -- ============ window ============
 
@@ -48,42 +26,10 @@ local PROF_W, REC_W = 140, 440
 local PROF_ROWS, LIST_ROWS = 16, 22
 
 local function Panel(parent, x, w, title)
-	local p = CreateFrame("Frame", nil, parent)
-	p:SetPoint("TOPLEFT", x, -52) -- toolbar row sits at -32..-48
-	p:SetPoint("BOTTOM", 0, 30)
-	p:SetWidth(w)
-	GM.Panel(p, "contLowest")
-	p:SetClipsChildren(true)
-	local t = GM.MakeFontString(p, GM.FONT_BOLD, 9, "secondary")
-	t:SetPoint("TOPLEFT", 8, -6)
-	t:SetText(title)
-	p.count = GM.MakeFontString(p, GM.FONT, 9, "textDim")
-	p.count:SetPoint("TOPRIGHT", -8, -7)
-	return p
+	return W.ColPanel(parent, x, w, title, -52) -- toolbar row sits at -32..-48
 end
 
-local function EditBox(parent, w, hint)
-	local eb = CreateFrame("EditBox", nil, parent)
-	eb:SetSize(w, 16)
-	eb:SetAutoFocus(false)
-	eb:SetFont(GM.FONT, 10, "")
-	eb:SetTextColor(GM.RGB("text"))
-	eb:SetTextInsets(5, 4, 0, 0)
-	local bg = eb:CreateTexture(nil, "BACKGROUND")
-	bg:SetAllPoints()
-	bg:SetColorTexture(GM.RGB("contLowest"))
-	eb:SetText(hint)
-	eb:SetTextColor(GM.RGB("textDim"))
-	eb:SetScript("OnEditFocusGained", function()
-		if eb:GetText() == hint then
-			eb:SetText("")
-			eb:SetTextColor(GM.RGB("text"))
-		end
-	end)
-	eb:SetScript("OnEscapePressed", function() eb:ClearFocus() end)
-	eb:SetScript("OnEnterPressed", function() eb:ClearFocus() end)
-	return eb
-end
+local EditBox = W.EditBox
 
 local function ListRow(parent, w)
 	local r = CreateFrame("Button", nil, parent)
@@ -162,8 +108,9 @@ end
 -- line is a protected spell cast — when a craft's line isn't open,
 -- C.GateButton covers the button with a secure OPEN overlay that casts
 -- the profession spell (Crafting.lua — shared with the plan window's
--- exec button). One click: spell cast → TRADE_SKILL_SHOW →
--- C.pendingOpenCraft re-fires the craft.
+-- exec button). Two clicks: spell cast → TRADE_SKILL_SHOW → the gate
+-- clears and the next click runs C.Craft (CraftRecipe needs its own
+-- hardware event — nothing may fire it for the user).
 local function GateCraft(btn, recipeID, qty, allow)
 	return GM.Crafting.GateButton
 		and GM.Crafting.GateButton(btn, recipeID, qty, allow)
@@ -476,8 +423,7 @@ local function BuildUI()
 		ui.detMats[i] = m
 	end
 	-- CRAFT ×N: Blizzard's multicraft call — one click, one protected
-	-- call, N casts. If Forever doesn't honor count>1 the watchdog
-	-- falls back to single casts automatically.
+	-- call, N casts via the full-arg CraftRecipe (verified live).
 	ui.craft1 = Btn(det, "CRAFT", 66)
 	ui.craft1:SetPoint("BOTTOMLEFT", 8, 8)
 	ui.craftHint = GM.MakeFontString(det, GM.FONT, 8, "textDim")
@@ -816,7 +762,7 @@ function CU.Refresh()
 				GM.Crafting.QueueSet(id, 0) CU.Refresh()
 			end)
 			-- » = craft the queued amount in one call — Blizzard's
-			-- multicraft path; watchdog drops to 1/click if unsupported.
+			-- multicraft path (full-arg CraftRecipe, verified live).
 			-- closed line → the secure OPEN overlay takes the click
 			-- (only when there's something to make — missing mats
 			-- should still reach the footer)
@@ -937,12 +883,16 @@ function CU.Refresh()
 		ui.craft1.text:SetText(opening
 			and ("OPEN " .. (prof and prof:upper() or "TRADESKILL"))
 			or (craftable > 0 and ("CRAFT ×" .. craftable) or "CRAFT"))
+		-- profession names run long ("OPEN ENGINEERING") — grow the
+		-- button to fit instead of letting the label bleed past its edge
+		ui.craft1:SetWidth(max(66,
+			(ui.craft1.text:GetStringWidth() or 0) + 18))
 		ui.craft1.text:SetTextColor(GM.RGB(
 			craftable > 0 and "contLowest" or "textDim"))
 		local allCraftable = GM.Crafting.CraftableAll
 			and GM.Crafting.CraftableAll(ui.sel) or craftable
 		ui.craftHint:SetText(opening
-			and "opens the tradeskill · the craft fires when it's live"
+			and "opens the tradeskill · click again to craft"
 			or (craftable > 0
 				and ("tradeskill must be open · one click crafts the batch"
 					.. (allCraftable > craftable
@@ -1041,20 +991,10 @@ end
 local function EnsureSwitchBtn()
 	local pf = DefaultFrame()
 	if not (pf and ui and not ui.switchBtn) then return end
-	local b = CreateFrame("Button", nil, pf)
-	b:SetSize(84, 16)
-	b:SetPoint("TOPRIGHT", pf, "TOPRIGHT", -40, -8)
-	b:SetFrameLevel(pf:GetFrameLevel() + 20)
-	GM.Panel(b, "accent")
-	b.text = GM.MakeFontString(b, GM.FONT_BOLD, 9, "contLowest")
-	b.text:SetPoint("CENTER")
-	b.text:SetText("GOBLINMIND")
-	b:SetScript("OnClick", function()
+	ui.switchBtn = W.SwitchBtn(pf, function()
 		ui.wantDefault = nil
 		CU.OnTradeSkillOpen()
-	end)
-	ui.switchBtn = b
-	pf:HookScript("OnShow", function()
+	end, function()
 		if not ui.wantDefault then CU.ParkDefault() end
 	end)
 end

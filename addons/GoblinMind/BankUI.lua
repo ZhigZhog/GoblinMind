@@ -272,20 +272,10 @@ end
 
 local function EnsureSwitchBtn()
 	if not (BankFrame and ui and not ui.switchBtn) then return end
-	local b = CreateFrame("Button", nil, BankFrame)
-	b:SetSize(84, 16)
-	b:SetPoint("TOPRIGHT", BankFrame, "TOPRIGHT", -40, -8)
-	b:SetFrameLevel(BankFrame:GetFrameLevel() + 20)
-	GM.Panel(b, "accent")
-	b.text = GM.MakeFontString(b, GM.FONT_BOLD, 9, "contLowest")
-	b.text:SetPoint("CENTER")
-	b.text:SetText("GOBLINMIND")
-	b:SetScript("OnClick", function()
+	ui.switchBtn = W.SwitchBtn(BankFrame, function()
 		ui.wantDefault = nil
 		BU.OnBankOpen()
-	end)
-	ui.switchBtn = b
-	BankFrame:HookScript("OnShow", function()
+	end, function()
 		if not ui.wantDefault then GM.FramePark.Park(BankFrame) end
 	end)
 end

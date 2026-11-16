@@ -1465,20 +1465,10 @@ end
 
 local function EnsureSwitchBtn()
 	if not (AuctionHouseFrame and ui and not ui.switchBtn) then return end
-	local b = CreateFrame("Button", nil, AuctionHouseFrame)
-	b:SetSize(84, 16)
-	b:SetPoint("TOPRIGHT", AuctionHouseFrame, "TOPRIGHT", -40, -8)
-	b:SetFrameLevel(AuctionHouseFrame:GetFrameLevel() + 20)
-	GM.Panel(b, "accent")
-	b.text = GM.MakeFontString(b, GM.FONT_BOLD, 9, "contLowest")
-	b.text:SetPoint("CENTER")
-	b.text:SetText("GOBLINMIND")
-	b:SetScript("OnClick", function()
+	ui.switchBtn = W.SwitchBtn(AuctionHouseFrame, function()
 		ui.wantDefault = nil
 		AU.OnAHOpen()
-	end)
-	ui.switchBtn = b
-	AuctionHouseFrame:HookScript("OnShow", function()
+	end, function()
 		if not ui.wantDefault then GM.FramePark.Park(AuctionHouseFrame) end
 	end)
 end

@@ -314,15 +314,7 @@ end
 -- itemID is nil). Returns true when the inbox has nothing left to take.
 -- HasNewMail() only moves on a server header push — pull it after a
 -- loot so the mail icon drops now, not on the lazy refresh.
-local pullArmed
-local function PullInbox()
-	if pullArmed or not CheckInbox then return end
-	pullArmed = true
-	GM.After(0.7, function()
-		pullArmed = nil
-		pcall(CheckInbox)
-	end)
-end
+local PullInbox = GM.PullInbox
 
 local function DoMailCollect(step)
 	if not (MailFrame and MailFrame:IsShown()) then

@@ -11,11 +11,7 @@ GM.Ledger = {}
 local TX_CAP = 5000
 local GOLD_CAP = 200
 
-local function CharKey()
-	local name = UnitName("player") or "?"
-	local realm = GetRealmName and GetRealmName() or ""
-	return realm ~= "" and (name .. "-" .. realm) or name
-end
+local CharKey = GM.CharKey
 
 function GM.Ledger.Init()
 	GoblinMindLedger = GoblinMindLedger or {}

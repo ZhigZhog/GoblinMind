@@ -494,11 +494,15 @@ function C.Init()
 		end
 		if e == "UNIT_SPELLCAST_FAILED"
 			or e == "UNIT_SPELLCAST_INTERRUPTED" then
-			local unit = ...
+			local unit, _, spellID = ...
 			if unit == "player" then
 				Tr("cast", e)
 				C.pendingCast = nil
-				if C.batchQty then
+				-- only the batch's own recipe ending counts — an
+				-- unrelated cast failing mid-batch (hearthstone,
+				-- combat spell) must not void the settle bookkeeping
+				if C.batchQty
+					and (not spellID or spellID == C.batchQty.id) then
 					C.batchQty = nil
 					GM.Print(GM.CC("warn") .. "batch interrupted|r")
 				end
@@ -1235,7 +1239,8 @@ end
 -- The overlay is a SecureActionButtonTemplate child of the normal
 -- button: armed, it covers the button and the click casts the
 -- profession spell instead of reaching OnClick. pendingOpenCraft is
--- stashed so TRADE_SKILL_SHOW re-fires the real craft — one click.
+-- stashed so TRADE_SKILL_SHOW can prompt the real CRAFT click —
+-- CraftRecipe is hardware-gated, nothing may fire it for the user.
 local function SecureOpenFor(btn)
 	if btn._gmOpen then return btn._gmOpen end
 	local ov = CreateFrame("Button", nil, btn,
@@ -1316,12 +1321,12 @@ function C.WatchCast(recipeID)
 end
 
 -- execute a craft — the same protected call Blizzard's Create buttons
--- make (verified: CraftRecipe(id,1) produces the item). count>1 is
--- squelched on this client (pcall succeeds, no cast, "interface
--- action failed" — verified live), so a stack runs as a CHAIN: one
--- qty=1 call per click, then each UNIT_SPELLCAST_SUCCEEDED fires the
--- next link. Whole stack per click, honest errors, no silent
--- downgrade.
+-- make. On Forever numCasts>1 works ONLY with the full argument list
+-- (verified live: (id, n) alone is silently ignored; the six-arg call
+-- multicrafts), and ONLY from a hardware event — timer/event calls
+-- no-op, so one click = one whole batch via the engine's own
+-- auto-repeat. Queue decrements happen in OnCastComplete, not here —
+-- counts track casts that actually finished, not casts we asked for.
 -- Queue decrements happen in OnCastComplete, not here — counts track
 -- casts that actually finished, not casts we asked for.
 function C.Craft(recipeID, qty)
@@ -1340,8 +1345,12 @@ function C.Craft(recipeID, qty)
 	local n = max(1, floor(qty or 1))
 	-- whole stack or error: CraftRecipe silently no-ops when the
 	-- recipe can't craft (no mats/forge), which the watchdog then
-	-- can't tell apart from a protection squelch — gate first
-	local can = C.Craftable and C.Craftable(recipeID) or 0
+	-- can't tell apart from a protection squelch — gate first.
+	-- Only when mats are actually known: a recipe captured without
+	-- reagent data reports 0 craftable forever and would dead-end
+	-- every click — let CraftRecipe try and let the watchdog say it
+	local knowsMats = r.mats and next(r.mats) ~= nil
+	local can = knowsMats and C.Craftable and C.Craftable(recipeID) or n
 	if can < n then
 		Tr("craft blocked —", can, "of", n, "craftable")
 		return nil, format("only %d craftable — missing "

@@ -146,6 +146,10 @@ SlashCmdList.GOBLINMIND = function(msg)
 		GM.Print("craft trace " .. (GM.Crafting.trace and "ON" or "OFF"))
 		return
 	end
+	if msg:sub(1, 7) == "owndump" then
+		GM.Inventory.DumpOwned()
+		return
+	end
 	if msg:sub(1, 9) == "fontcheck" then
 		-- font health probe: a dead file reports zero glyph width —
 		-- catches the first-run stall that blanked FONT_MED labels
@@ -353,6 +357,28 @@ SlashCmdList.GOBLINMIND = function(msg)
 	else
 		GM.PlanQueue.Toggle()
 	end
+end
+
+-- Debounced inbox re-query after a mail loot — CheckInbox needs a beat
+-- for the server to settle the deleted mail. Was an identical pair in
+-- Banking/MailUI; the armed flag is shared (same action either way).
+local pullArmed
+function GM.PullInbox()
+	if pullArmed or not CheckInbox then return end
+	pullArmed = true
+	GM.After(0.7, function()
+		pullArmed = nil
+		pcall(CheckInbox)
+	end)
+end
+
+-- Character key "Name-Realm" — the SV per-char bucket key. Shared by
+-- Inventory (alt tracking) and Ledger (byChar txns); realm can come
+-- back empty on early calls, so don't concat unconditionally.
+function GM.CharKey()
+	local name = UnitName("player") or "?"
+	local realm = GetRealmName and GetRealmName() or ""
+	return realm ~= "" and (name .. "-" .. realm) or name
 end
 
 -- Realm key matching AppData scopes, e.g. "Normal-Alliance"
