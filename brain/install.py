@@ -90,12 +90,17 @@ def write_bat(path, title, cmd):
 
 
 def firewall_rule():
-    if not ctypes.windll.shell32.IsUserAnAdmin():
+    windll = getattr(ctypes, 'windll', None)
+    if windll is None or not windll.shell32.IsUserAnAdmin():
         print('  firewall rule needs an admin shell — run once as admin:')
         print(f'    netsh advfirewall firewall add rule '
               f'name="GoblinMind Backend {PORT}" dir=in action=allow '
               f'protocol=TCP localport={PORT}')
         return
+    # netsh has no upsert — delete first so re-runs stay idempotent
+    subprocess.run(['netsh', 'advfirewall', 'firewall', 'delete',
+                    'rule', f'name=GoblinMind Backend {PORT}'],
+                   capture_output=True)
     r = subprocess.run(
         ['netsh', 'advfirewall', 'firewall', 'add', 'rule',
          f'name=GoblinMind Backend {PORT}', 'dir=in', 'action=allow',
@@ -138,9 +143,11 @@ def main():
 
     url = (a.backend_url or
            ask('Backend server URL (host\'s LAN IP, e.g. '
-               'http://192.168.1.10:8765)'))
+               'http://192.168.1.10:8765)', 'http://127.0.0.1:8765'))
     if not url:
         sys.exit('backend URL is required')
+    if '://' not in url:
+        url = 'http://' + url
     name = a.name or ask('Install name', socket.gethostname())
     scopes = a.scope or [
         ask('Realm-faction scope (shown by /goblin status in game)',
@@ -151,12 +158,17 @@ def main():
 
     print('GoblinMind install:')
     write_feeds(url, name, scopes)
-    write_bat(WATCH_BAT, 'GoblinMind Brain',
-              'python goblin_brain.py watch self -v --feed book')
-    if a.host:
-        write_bat(SERVER_BAT, 'GoblinMind Server',
-                  f'python goblin_server.py {PORT}')
-        firewall_rule()
+    if addon_root():
+        write_bat(WATCH_BAT, 'GoblinMind Brain',
+                  'python goblin_brain.py watch self -v --feed book')
+        if a.host:
+            write_bat(SERVER_BAT, 'GoblinMind Server',
+                      f'python goblin_server.py {PORT}')
+            firewall_rule()
+    else:
+        # 'watch self' can't resolve paths outside Interface/AddOns —
+        # a Startup bat pointing here would silently die at login
+        print('  skipped Startup entries — not inside Interface/AddOns')
     print('done — the watcher starts at next login (or run '
           'goblin-watch.bat now). /reload in game to pick it up.')
 
