@@ -111,12 +111,23 @@ local function Gold() return GetMoney and GetMoney() or 0 end
 
 -- effective reserve/allocation in copper right now
 function B.Alloc(a)
+	-- the base pool is every copper no other envelope claims — it
+	-- reads live gold instead of a stored alloc so it never drifts
+	if a.pool then
+		local g = Gold()
+		for _, o in ipairs(DB()) do
+			if o ~= a then g = g - B.Remaining(o) end
+		end
+		return math.max(0, g)
+	end
 	if a.pct then return floor(Gold() * a.pct / 100) end
 	return a.alloc or 0
 end
 
 function B.Remaining(a)
-	if a.kind == "save" then return B.Alloc(a) end
+	-- pool/save balances are already live — spent/income would
+	-- double-count against a moving alloc (they stay as bookkeeping)
+	if a.pool or a.kind == "save" then return B.Alloc(a) end
 	return math.max(0, B.Alloc(a) + (a.income or 0) - (a.spent or 0))
 end
 
@@ -159,6 +170,13 @@ local function MatchingAccounts(step)
 	if tag then
 		for _, a in ipairs(DB()) do
 			if a.kind == tag then tinsert(out, a) end
+		end
+	end
+	-- nothing kind-matched: the base pool is the catch-all — every
+	-- spend draws gold, so every spend may draw the pool down
+	if #out == 0 then
+		for _, a in ipairs(DB()) do
+			if a.pool then tinsert(out, a) end
 		end
 	end
 	return out, false
@@ -259,6 +277,13 @@ end
 
 function B.Init()
 	DB()
+	-- fresh installs start with one account: the base pool — a live
+	-- envelope over all unearmarked gold so the ledger's spend math
+	-- has a home before the player creates their own budgets
+	if not next(DB()) then
+		tinsert(DB(), { name = "Base Pool", kind = "ah", pool = true,
+			spent = 0, income = 0 })
+	end
 	B.Sample()
 	-- background sampler keeps the trend lines honest while idle
 	local function tick()
@@ -270,6 +295,7 @@ end
 
 -- display helper: "5g" for budgets, "30%" for saves
 function B.AllocText(a)
+	if a.pool then return GM.Money(B.Alloc(a)) end
 	if a.kind == "save" then return a.pct .. "%" end
 	return GM.Money(a.alloc or 0)
 end

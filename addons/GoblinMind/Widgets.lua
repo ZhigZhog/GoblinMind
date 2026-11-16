@@ -332,7 +332,7 @@ end
 -- spend accounts show left + spent (red when overdrawn)
 function W.PaintAcctRow(row, a)
 	row.name:SetText(a.name)
-	row.kind.text:SetText(GM.Budget.KINDS[a.kind])
+	row.kind.text:SetText(a.pool and "POOL" or GM.Budget.KINDS[a.kind])
 	row.grp.text:SetText(a.group or "—")
 	row.grp.text:SetTextColor(GM.RGB(a.group and "accent" or "textDim"))
 	row.alloc:SetText(GM.Budget.AllocText(a))

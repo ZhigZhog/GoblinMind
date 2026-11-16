@@ -6,7 +6,17 @@ REM
 REM Needs Python 3.x on PATH. Leave this window open while playing;
 REM close it to stop the watcher.
 cd /d "%~dp0"
-python goblin_brain.py watch self -v --feed book
+REM Inside a WoW install (.../Interface/AddOns/<addon>/brain/) the
+REM 'self' feed derives every path from the script location — no
+REM feeds.json needed. In the dev tree that check would exit with an
+REM error, so fall back to the named dev feed.
+echo %~dp0 | findstr /i /c:"\Interface\AddOns\" >nul
+if errorlevel 1 (
+	echo Dev tree detected - 'self' feed needs a WoW install; using 'forever' feed from feeds.json
+	python goblin_brain.py watch forever -v --feed book
+) else (
+	python goblin_brain.py watch self -v --feed book
+)
 echo.
 echo Watcher exited. Reopen this file to restart it.
 pause

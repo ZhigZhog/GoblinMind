@@ -620,6 +620,20 @@ def _sv_root(path, root=None):
         os.path.dirname(path), *(['..'] * n)))
 
 
+def _existing_db_has_items(path):
+    """True when the current output DB already prices items — the
+    emitted format writes `items={` then `[` for the first entry, so
+    `items={}` marks an empty table. Lets the clobber guard protect a
+    shipped DB on a fresh history too."""
+    try:
+        with open(path, encoding='utf-8', errors='replace') as fh:
+            head = fh.read(262144)
+    except OSError:
+        return False
+    m = re.search(r'items\s*=\s*\{', head)
+    return bool(m) and head[m.end():m.end() + 1] == '['
+
+
 def cmd_book(sv_arg, out_paths, root=None, feed=None, realm=None):
     """Emit GoblinMindDB from our own feeds. Merges every
     GoblinMind.lua on the account: newest book snapshot wins per
@@ -689,14 +703,16 @@ def cmd_book(sv_arg, out_paths, root=None, feed=None, realm=None):
                 iid = int(tx['i'])
                 v[iid] = v.get(iid, 0) + int(tx.get('q') or 1)
 
-    # clobber guard: a parse that found no books while history is
-    # populated means the SV was read mid-write or the addon just
-    # migrated formats — refuse to overwrite a good DB with an empty
-    # one. Fresh installs (empty history) emit normally.
-    if not books_by_scope and any(hist.get(s) for s in hist):
-        LOG.warning('book emit skipped — no books parsed but history '
-                    'is non-empty (likely mid-write SV or format '
-                    'migration); keeping last good DB')
+    # clobber guard: a parse that found no books means the SV was
+    # read mid-write, the addon migrated formats, or the player just
+    # hasn't scanned yet — refuse to overwrite a populated DB
+    # (shipped or previously emitted) with an empty one.
+    if not books_by_scope and (
+            any(hist.get(s) for s in hist)
+            or any(_existing_db_has_items(o) for o in out_paths)):
+        LOG.warning('book emit skipped — no books parsed but a '
+                    'populated DB/history exists (mid-write SV, format '
+                    'migration, or no scans yet); keeping last good DB')
         return
 
     # TSM backend: parse AppData realm+region chunks for the

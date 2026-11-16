@@ -24,8 +24,16 @@ Primary data = the in-house book feed below.
 - Live data source: `...\AddOns\TradeSkillMaster_AppHelper\AppData.lua`
   — line-per-chunk `LoadData(tag, scope, [[return {...}]])` format,
   base-32 encoded values (NOT 36 — see the decoder note below), **non-atomic writes** (debounce before parse).
-- Brain sync: `scripts\brain-watch.bat` runs `watch forever -v
-  --feed book` — the in-house feed. It re-emits `GoblinMindDB` on
+- Brain sync: the **canonical watcher runs from the installed
+  addon** — `E:\...\AddOns\GoblinMind\brain\goblin_brain.py watch
+  self -v --feed book` — so `brain.log`, `book_history.json`, and
+  `filed_bugs.json` live in the mod dir, not the dev tree. `watch
+  self` derives every path from the script location (no feeds.json
+  needed — the release never ships one). `goblin-watch.bat` is
+  dual-mode: inside `...\Interface\AddOns\` it runs `watch self`,
+  anywhere else (dev tree) it falls back to `watch forever`.
+  `scripts\brain-watch.bat` / `watch forever` remain the dev feed —
+  the in-house feed. It re-emits `GoblinMindDB` on
   BOTH triggers: SavedVariables flush (/reload, logout → newest book
   wins per item, ledger sums across chars) AND settled AppData
   writes (TSM desktop push → backend refresh folds into the merge —
@@ -95,8 +103,10 @@ Primary data = the in-house book feed below.
   feeds.json entry + one bat line — no code change.** Each feed's
   watcher writes only its own outputs, so multiple watchers can run
   in parallel (one per install). **Auto-starts at login** via
-  `Startup\goblinmind-brain-watch.bat` (launches `pythonw`, no console);
-  `pythonw` + `&`/`disown` also works for a session-local watcher.
+  `Startup\goblinmind-brain-watch.bat` — launches the INSTALLED
+  copy (`AddOns\GoblinMind\brain\`, `watch self`) in a titled
+  minimized console; `pythonw` + `&`/`disown` also works for a
+  session-local watcher.
   The watcher also scans `WTF\Account\*\SavedVariables\GoblinMind.lua`
   each poll for staged bug reports (`gm-<ts>-<n>|<hex>` strings in
   `GoblinMindSettings.bugReports`), files them to GitHub issues
