@@ -19,3 +19,5 @@ dist/
 
 # offline lua test scratch — local only
 tmp/
+brain/api_state.json
+brain/api_book.json

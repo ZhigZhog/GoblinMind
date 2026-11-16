@@ -17,6 +17,7 @@ Format notes (verified against the live file):
               tokens like 9C / 1JI are base-36 encoded copper (or counts).
 """
 import argparse
+import base64
 import glob
 import json
 import logging
@@ -28,6 +29,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.parse
 import urllib.request
 
 LOG = logging.getLogger('goblin_brain')
@@ -634,6 +636,203 @@ def _existing_db_has_items(path):
     return bool(m) and head[m.end():m.end() + 1] == '['
 
 
+# ---------- Blizzard Game Data API feed (TSM-free pipeline) ----------
+# Pulls the same raw snapshot TSM's app consumes — the connected-realm
+# auction dump — and normalizes it into the in-game book's shape so
+# cmd_book's merge/history machinery computes mkt/hist/recent from it.
+# Credentials live in feeds.json under "api" (machine-local, never
+# shipped); state lands next to the script like the other brain files.
+
+API_STATE_PATH = os.path.join(os.path.dirname(
+    os.path.abspath(__file__)), 'api_state.json')
+API_BOOK_PATH = os.path.join(os.path.dirname(
+    os.path.abspath(__file__)), 'api_book.json')
+API_HOST = '{region}.api.blizzard.com'
+API_TOKEN_URL = 'https://oauth.battle.net/token'
+
+
+def _api_cfg():
+    """feeds.json 'api' block — {} when absent. Shape:
+    {namespace, client_id, client_secret, realm(s), poll_minutes,
+     region}. `realm`/`realms` accept our scope names
+    ('Normal-Alliance') or realm names; each maps to a connected-realm
+    ID once resolved."""
+    return (load_feeds() or {}).get('api') or {}
+
+
+def _load_api_state():
+    try:
+        with open(API_STATE_PATH, encoding='utf-8') as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_api_state(st):
+    tmp = API_STATE_PATH + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as fh:
+        json.dump(st, fh)
+    os.replace(tmp, API_STATE_PATH)
+
+
+def _api_token(cfg):
+    """client-credentials bearer, cached in api_state.json until ~1min
+    before expiry. ~1 token request/day at normal poll cadence."""
+    st = _load_api_state()
+    tok = st.get('token') or {}
+    if tok.get('access_token') and tok.get('exp', 0) > time.time() + 60:
+        return tok['access_token']
+    cred = base64.b64encode(('%s:%s' % (
+        cfg['client_id'], cfg['client_secret'])).encode()).decode()
+    req = urllib.request.Request(
+        API_TOKEN_URL + '?grant_type=client_credentials',
+        data=b'', method='POST')
+    req.add_header('Authorization', 'Basic ' + cred)
+    resp = json.load(urllib.request.urlopen(req, timeout=30))
+    st['token'] = {'access_token': resp['access_token'],
+                   'exp': time.time() + resp.get('expires_in', 86400)}
+    _save_api_state(st)
+    return resp['access_token']
+
+
+def _api_get(cfg, path, params=None):
+    """GET {region}.api.blizzard.com<path>?<params> with the bearer.
+    One 401 retry (a cached token may be revoked mid-day)."""
+    url = 'https://%s%s?%s' % (
+        API_HOST.format(region=cfg.get('region', 'us')), path,
+        urllib.parse.urlencode(params or {}))
+    for attempt in (1, 2):
+        req = urllib.request.Request(url)
+        req.add_header('Authorization', 'Bearer ' + _api_token(cfg))
+        try:
+            return json.load(urllib.request.urlopen(req, timeout=120))
+        except urllib.error.HTTPError as e:
+            if e.code == 401 and attempt == 1:
+                st = _load_api_state()
+                st.pop('token', None)
+                _save_api_state(st)   # force re-auth on retry
+                continue
+            raise
+
+
+def _api_realm_names(cfg):
+    """scope list from cfg['realms'] (dict keys = our scope names) or
+    cfg['realm'] — strings like 'Normal-Alliance' (scope) or 'Normal'
+    (bare realm name)."""
+    realms = cfg.get('realms')
+    if isinstance(realms, dict):
+        return [k for k in realms if k and not str(k).startswith('_')]
+    if isinstance(realms, list):
+        return [r for r in realms if r]
+    if cfg.get('realm'):
+        return [cfg['realm']]
+    return []
+
+
+def api_resolve_realms(cfg):
+    """scope name -> connected-realm ID. One realm/index request lists
+    every realm with its connected_realm href inline; the ID is the
+    trailing path segment. Cached in api_state.json — realm structure
+    changes only on Blizzard-side merges."""
+    names = _api_realm_names(cfg)
+    if not names:
+        return {}
+    st = _load_api_state()
+    known = st.get('realm_ids') or {}
+    # a realms dict may pin IDs by hand — honor nonzero values and
+    # resolve only the unpinned ones
+    pinned = {k: int(v) for k, v in (cfg.get('realms') or {}).items()
+              if isinstance(v, int) and v > 0}
+    known.update({k.lower(): v for k, v in pinned.items()})
+    want = {n.lower(): n for n in names}
+    if all(n.lower() in known for n in names):
+        return {n: known[n.lower()] for n in names}
+    idx = _api_get(cfg, '/data/wow/realm/index',
+                   {'namespace': cfg.get('namespace', 'dynamic-us'),
+                    'locale': 'en_US'})
+    for r in idx.get('realms', []):
+        rname = str(r.get('name') or '').lower()
+        rslug = str(r.get('slug') or '').lower()
+        href = str((r.get('connected_realm') or {}).get('href') or '')
+        m = re.search(r'/connected-realm/(\d+)', href)
+        if not m:
+            continue
+        crid = int(m.group(1))
+        for w in want:
+            wl = w.lower()
+            # our scope is 'Realm-Faction'; match on the realm part or
+            # the slug — 'Normal-Alliance' hits realm 'Normal'
+            realm_part = wl.split('-', 1)[0].replace(' ', '')
+            if rname == wl or rname == realm_part or rslug == realm_part:
+                known[wl] = crid
+    st['realm_ids'] = known
+    _save_api_state(st)
+    missing = [n for n in names if n.lower() not in known]
+    if missing:
+        LOG.warning('api: realms not found in %s index: %s',
+                    cfg.get('namespace'), ', '.join(missing))
+    return {n: known[n.lower()] for n in names if n.lower() in known}
+
+
+def api_poll(cfg=None):
+    """Pull each configured connected-realm auction dump and store the
+    newest snapshot in api_book.json. Emits nothing itself — cmd_book
+    folds the stored book into the next emit. Returns scopes pulled."""
+    cfg = cfg or _api_cfg()
+    if not cfg.get('client_id'):
+        return {}
+    realm_map = api_resolve_realms(cfg)
+    if not realm_map:
+        return {}
+    now = int(time.time())
+    books = {}
+    for scope, crid in realm_map.items():
+        data = _api_get(cfg, '/data/wow/connected-realm/%d/auctions' % crid,
+                        {'namespace': cfg.get('namespace', 'dynamic-us'),
+                         'locale': 'en_US'})
+        items, lots = {}, {}
+        for a in data.get('auctions', []):
+            iid = (a.get('item') or {}).get('id')
+            qty = int(a.get('quantity') or 1)
+            unit = a.get('unit_price')
+            if unit is None:
+                bo = a.get('buyout')
+                unit = bo / qty if bo and qty else None
+            if iid is None or not unit:
+                continue
+            u = int(round(unit))
+            e = items.setdefault(iid, {'mb': None, 'mbx': 0,
+                                       'sup': 0, 'n': 0})
+            e['mb'] = u if e['mb'] is None else min(e['mb'], u)
+            e['mbx'] = max(e['mbx'], u)
+            e['sup'] = (e['sup'] or 0) + qty
+            e['n'] = (e['n'] or 0) + 1
+            # lot fingerprint for the §4 delta engine (same shape as
+            # Inventory.lua's itemID:qty:buyout)
+            fp = '%s:%s:%s' % (iid, qty, u)
+            lots[fp] = lots.get(fp, 0) + 1
+        books[scope] = {'t': now, 'items': items, 'lots': lots}
+        LOG.info('api poll %s: %d lots, %d items', scope,
+                 sum(lots.values()), len(items))
+    tmp = API_BOOK_PATH + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as fh:
+        json.dump({'t': now, 'books': books}, fh)
+    os.replace(tmp, API_BOOK_PATH)
+    return books
+
+
+def api_books():
+    """Stored API snapshot as book-shaped entries for cmd_book's
+    books_by_scope merge — {scope: {t, items}}."""
+    try:
+        with open(API_BOOK_PATH, encoding='utf-8') as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    return {s: b for s, b in (data.get('books') or {}).items()
+            if b and b.get('items')}
+
+
 def cmd_book(sv_arg, out_paths, root=None, feed=None, realm=None):
     """Emit GoblinMindDB from our own feeds. Merges every
     GoblinMind.lua on the account: newest book snapshot wins per
@@ -661,6 +860,11 @@ def cmd_book(sv_arg, out_paths, root=None, feed=None, realm=None):
                 str(b.get('scope') or 'default'), []).append(b)
         ledger_bychar.update(
             (sv.get('GoblinMindLedger') or {}).get('byChar') or {})
+    # the API feed's stored snapshot rides in as another book per scope —
+    # newest book wins per item in the merge below, so a fresh dump
+    # beats a stale scan and vice versa
+    for scope, b in api_books().items():
+        books_by_scope.setdefault(scope, []).append(b)
     now = time.time()
 
     hist = load_book_hist()  # {scope: {iid: [[ts,mb,sup,n],...]}}
@@ -1050,9 +1254,15 @@ def cmd_watch(appdata, outs, interval=5, settle=20, feed='tsm',
     last_emit = time.time()  # the startup settle always emits once;
                              # the floor clock starts there
     sv_mtimes = {}
+    api_cfg_raw = _api_cfg() if feed == 'book' else {}
+    api_poll_secs = float(api_cfg_raw.get('poll_minutes', 30)) * 60
+    last_api_poll = time.time()  # first poll after one full interval
     LOG.info('watching %s', appdata)
     LOG.info('outputs: %s', ' ; '.join(outs))
     LOG.info('poll=%ss settle=%ss', interval, settle)
+    if api_cfg_raw:
+        LOG.info('api feed: realm=%s poll=%dm',
+                 _api_realm_names(api_cfg_raw), api_poll_secs / 60)
 
     def emit_book(why):
         nonlocal last_emit
@@ -1120,6 +1330,16 @@ def cmd_watch(appdata, outs, interval=5, settle=20, feed='tsm',
                                 LOG.exception('emit %s failed', out)
                 except Exception:
                     LOG.exception('bug pass failed')
+        # api poll: pull the connected-realm dump on its own cadence,
+        # then re-emit so the merge picks the fresh book up
+        if feed == 'book' and api_cfg_raw and \
+                now - last_api_poll >= api_poll_secs:
+            last_api_poll = now
+            try:
+                api_poll(api_cfg_raw)
+                emit_book('api poll')
+            except Exception:  # network hiccups must not kill the loop
+                LOG.exception('api poll failed')
         # cadence floor: book mode re-merges at least once an hour —
         # keeps `generated` moving through quiet stretches so the
         # addon's staleness flag means what it says
@@ -1138,7 +1358,7 @@ def cmd_watch(appdata, outs, interval=5, settle=20, feed='tsm',
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('cmd', choices=['dump', 'emit', 'watch', 'bugs',
-                                    'book', 'feeds'])
+                                    'book', 'feeds', 'api'])
     ap.add_argument('appdata', nargs='?',
                     help='feed name from feeds.json, an AppData.lua '
                          'path, or a GoblinMind.lua SV path')
@@ -1167,6 +1387,33 @@ def main():
             LOG.info('  root:    %s', f.get('root'))
             for out in f.get('out', []):
                 LOG.info('  out:     %s', out)
+        return
+    if a.cmd == 'api':
+        # api realms — resolve configured scope names to connected-realm
+        # IDs (the §2 verification probe); api poll — one-shot dump pull
+        api_action = a.appdata or 'realms'
+        cfg = _api_cfg()
+        if not cfg:
+            LOG.info('no "api" block in %s — see feeds.example.json',
+                     FEEDS_PATH)
+            return
+        if api_action == 'realms':
+            realm_map = api_resolve_realms(cfg)
+            for scope, crid in realm_map.items():
+                LOG.info('%s -> connected-realm %d', scope, crid)
+            if not realm_map:
+                LOG.info('no realms resolved — check namespace/realm '
+                         'names in the api block')
+        elif api_action == 'poll':
+            books = api_poll(cfg)
+            for scope, b in books.items():
+                LOG.info('%s: %d items, %d lots @ %s', scope,
+                         len(b['items']), sum(b['lots'].values()),
+                         time.strftime('%H:%M:%S',
+                                       time.localtime(b['t'])))
+            LOG.info('snapshot -> %s', API_BOOK_PATH)
+        else:
+            ap.error('api takes "realms" or "poll"')
         return
     if not a.appdata:
         ap.error('%s needs a feed name or path' % a.cmd)

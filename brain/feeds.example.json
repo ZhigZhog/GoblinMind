@@ -13,6 +13,7 @@
   "_comment": "api block = the TSM-free feed (see WoWVault/Proposals/api-feed-proposal.md). Register a client at develop.battle.net for client_id/secret; realms maps our scope name to the connected-realm ID from /data/wow/connected-realm/index. This whole block is machine-local — never commit real secrets.",
   "api": {
     "namespace": "dynamic-us",
+    "region": "us",
     "client_id": "YOUR_CLIENT_ID",
     "client_secret": "YOUR_CLIENT_SECRET",
     "realms": {
