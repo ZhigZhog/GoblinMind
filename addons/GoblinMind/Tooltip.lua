@@ -373,9 +373,13 @@ end
 
 local function P_Reset(t, id)
 	local e = GM.ItemEntry(id)
-	if e and e.reset then
-		t:AddTextLine("reset", GM.CC("warn") .. "below " .. GM.Money(e.reset.below)
-			.. " · ev " .. GM.Money(e.reset.ev) .. "|r")
+	local rs = e and e.reset
+	if type(rs) == "table" then
+		t:AddTextLine("reset", GM.CC("warn") .. "below " .. GM.Money(rs.below)
+			.. " · ev " .. GM.Money(rs.ev) .. "|r")
+	elseif type(rs) == "number" and rs > 0 then
+		-- some feeds emit reset as a bare threshold, not {below, ev}
+		t:AddTextLine("reset", GM.CC("warn") .. "below " .. GM.Money(rs) .. "|r")
 	end
 end
 

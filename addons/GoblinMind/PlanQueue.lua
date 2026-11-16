@@ -1191,7 +1191,11 @@ function PQ.Refresh()
 	local liveSup = bookFresh and GM.AH.BookSupply(dispID)
 	ui.statLabel["units"]:SetText(liveSup and "live units" or "DB auctions")
 	set("units", (liveSup or (entry and entry.sup)) and tostring(liveSup or entry.sup))
-	set("reset", entry and entry.reset and (GM.Money(entry.reset.below) .. " · ev " .. GM.Money(entry.reset.ev)))
+	local rs = entry and entry.reset
+	set("reset", type(rs) == "table"
+		and (GM.Money(rs.below) .. " · ev " .. GM.Money(rs.ev))
+		or type(rs) == "number" and rs > 0
+		and GM.Money(rs) or nil)
 	set("gold", GM.Money(GetMoney()))
 	-- the cap is a fraction of gold, not a currency amount
 	set("budget cap", GM.db and format("%.0f%%", (GM.db.riskBudget or 0) * 100))

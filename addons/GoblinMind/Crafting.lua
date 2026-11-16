@@ -195,6 +195,16 @@ end
 -- Run with the tradeskill window open; says exactly what the call did.
 function C.CraftProbe(match)
 	GM.Print("— craft API probe —")
+	-- trailing flag word switches the call under test:
+	--   "t" → same cast inside C_Timer.After (is the wall timing or
+	--         the missing hardware event? — decides if chains can run)
+	--   "n" → numCasts=2 retry        "r" → numCasts=2 + reagent table
+	local flag
+	local w = match and match:match("%s+(%a+)%s*$")
+	if w == "t" or w == "n" or w == "r" then
+		flag = w
+		match = match:match("^(.-)%s+%a+%s*$")
+	end
 	if C_TradeSkillUI then
 		local names = {}
 		for k in pairs(C_TradeSkillUI) do
@@ -232,11 +242,39 @@ function C.CraftProbe(match)
 		C.Craftable(id)))
 	if C_TradeSkillUI and C_TradeSkillUI.CraftRecipe then
 		-- full TSM arg list (count, optionalMats, level, orderID,
-		-- concentration) — matches LibTSMWoW TradeSkill.Craft verbatim
-		local ok, r1, r2 = pcall(C_TradeSkillUI.CraftRecipe,
-			id, 1, nil, nil, nil, nil)
-		GM.Print("CraftRecipe(1) pcall=" .. tostring(ok)
-			.. " r1=" .. tostring(r1) .. " r2=" .. tostring(r2))
+		-- concentration) — matches LibTSMWoW TradeSkill.Craft verbatim.
+		-- Every call arms a 4.5s watcher that counts real completed
+		-- casts for this recipeID — "pcall=true" means nothing on a
+		-- client that squelches silently, the verdict is the truth
+		local call = function(n, reag)
+			local ok, r1, r2 = pcall(C_TradeSkillUI.CraftRecipe,
+				id, n or 1, reag, nil, nil, nil)
+			GM.Print(format("CraftRecipe(%s%s) pcall=%s r1=%s r2=%s",
+				tostring(n or 1), reag and ",{}" or "",
+				tostring(ok), tostring(r1), tostring(r2)))
+			if not ok then return end
+			C._probe = { id = id, saw = 0 }
+			GM.After(4.5, function()
+				local p = C._probe
+				if p and p.id == id then
+					C._probe = nil
+					GM.Print(p.saw > 0
+						and ("probe verdict: " .. p.saw
+							.. " cast(s) landed")
+						or "probe verdict: NO cast landed")
+				end
+			end)
+		end
+		if flag == "t" then
+			GM.Print("timer-context cast in 0.4s")
+			C_Timer.After(0.4, function() call() end)
+		elseif flag == "n" then
+			call(2)
+		elseif flag == "r" then
+			call(2, {})
+		else
+			call()
+		end
 	end
 end
 
@@ -340,6 +378,13 @@ end
 -- what actually got made, whether the call batched or not.
 local function OnCastComplete(unit, castGUID, spellID)
 	if unit ~= "player" or not spellID then return end
+	-- some paths re-fire completion for one cast — same castGUID
+	-- means same cast, count it once
+	if castGUID and castGUID == C._lastCastGUID then return end
+	C._lastCastGUID = castGUID
+	if C._probe and spellID == C._probe.id then
+		C._probe.saw = C._probe.saw + 1
+	end
 	if GoblinMindCrafting.queue and GoblinMindCrafting.queue[spellID] then
 		C.QueueAdd(spellID, -1)
 		if GM.CraftingUI and GM.CraftingUI.Refresh then GM.CraftingUI.Refresh() end
@@ -354,40 +399,56 @@ local function OnCastComplete(unit, castGUID, spellID)
 			GM.PlanQueue.Refresh()
 		end
 	end
-	-- batch chain: this client squelches CraftRecipe(count>1) (pcall
-	-- succeeds, no cast, "interface action failed") — the stack runs
-	-- as one qty=1 call per completed cast, fired off the very event
-	-- that proved the previous one landed. qty=1 works from insecure
-	-- context (craftprobe ran it from a slash command), so event-
-	-- driven links are legal.
-	local ch = C.craftChain
-	-- SUCCEEDED and CHANNEL_STOP can both fire for one cast — the
-	-- castGUID arg dedupes so a link isn't consumed twice
-	if ch and ch.id == spellID and (not castGUID or ch.lastGUID ~= castGUID) then
-		ch.lastGUID = castGUID
-		if ch.left > 0 then
-			ch.left = ch.left - 1
-			-- tiny gap: the client can still read "casting" in the same
-			-- frame as SUCCEEDED and would squelch the next call
-			C.pendingCast = { id = spellID }
-			GM.After(0.15, function()
-				if not C.craftChain then return end
-				Tr("chain link", spellID, "left", ch.left)
-				local ok = pcall(C_TradeSkillUI.CraftRecipe, spellID, 1)
-				if ok then
-					C.WatchCast(spellID)
-				else
-					C.pendingCast = nil
-					C.craftChain = nil
-					GM.Print(GM.CC("warn") .. "batch stopped|r")
+	-- batch settle: items land cast-time APART (the engine repeats
+	-- the cast bar itself) — a fixed debounce settles early after
+	-- item #1. Instead poll until the player is genuinely idle,
+	-- then credit what bags can prove: the item-count delta is
+	-- ground truth under every event model; events alone are the
+	-- fallback for outputs bags can't count
+	local b = C.batchQty
+	if b and b.id == spellID then
+		b.got = (b.got or 0) + 1
+		b.lastEvent = GetTime()
+		if not b.settling then
+			b.settling = true
+			local function settle()
+				local bb = C.batchQty
+				if bb ~= b then return end
+				local busy = (UnitCastingInfo and UnitCastingInfo("player"))
+					or (UnitChannelInfo and UnitChannelInfo("player"))
+				if busy or (b.lastEvent
+						and GetTime() - b.lastEvent < 1.0) then
+					GM.After(0.4, settle)
+					return
 				end
-			end)
-		else
-			Tr("chain done", spellID)
-			C.craftChain = nil
-			if GM.CraftingUI and GM.CraftingUI.Refresh then
-				GM.CraftingUI.Refresh()
+				C.batchQty = nil
+				local made = bb.got or 0
+				if bb.itemID and bb.itemCount then
+					local d = bb.itemCount(bb.itemID) - (bb.before or 0)
+					if d > made then made = d end
+				end
+				local extra = min(made, bb.n or 1) - (bb.got or 0)
+				if extra <= 0 then return end
+				Tr("batch settle —", extra, "more for", spellID)
+				if GoblinMindCrafting.queue
+					and GoblinMindCrafting.queue[spellID] then
+					C.QueueAdd(spellID, -extra)
+					if GM.CraftingUI and GM.CraftingUI.Refresh then
+						GM.CraftingUI.Refresh()
+					end
+				end
+				local st = GM.PlanQueue and GM.PlanQueue.ActiveStep
+					and GM.PlanQueue.ActiveStep()
+				if st and st.recipeID == spellID then
+					st.crafted = (st.crafted or 0) + extra
+					if st.crafted >= (st.qty or 1) then
+						GM.PlanQueue.Advance()
+					else
+						GM.PlanQueue.Refresh()
+					end
+				end
 			end
+			GM.After(1.0, settle)
 		end
 	end
 end
@@ -437,8 +498,8 @@ function C.Init()
 			if unit == "player" then
 				Tr("cast", e)
 				C.pendingCast = nil
-				if C.craftChain then
-					C.craftChain = nil
+				if C.batchQty then
+					C.batchQty = nil
 					GM.Print(GM.CC("warn") .. "batch interrupted|r")
 				end
 			end
@@ -457,15 +518,22 @@ function C.Init()
 				and GM.CraftingUI and GM.CraftingUI.OnTradeSkillOpen then
 				GM.CraftingUI.OnTradeSkillOpen()
 			end
+			-- the plan window's exec gate must re-evaluate on every
+			-- line change — a stale armed overlay covers the button
+			-- until something re-runs GateButton over it
+			if GM.PlanQueue and GM.PlanQueue.Refresh then
+				GM.PlanQueue.Refresh()
+			end
 			-- the OPEN overlay click cast the profession spell — now
 			-- that the line is live, fire the craft it was for (the
 			-- 0.6s tail lets the line's data land, same as the scan
 			-- debounce)
-			-- stale pending crafts die here: if the secure cast was
-			-- blocked (the "interface action failed" squelch) no SHOW
-			-- ever arrives, and a lingering entry would otherwise fire
-			-- its craft on some unrelated open seconds later — consume
-			-- it on the first SHOW and only honor a fresh one
+			-- CraftRecipe is hardware-gated on this client — nothing
+			-- can auto-fire the pending craft (a timer call no-ops,
+			-- verified). The OPEN click's job ends here: the line is
+			-- open, the gate clears, and the user's next real click on
+			-- CRAFT runs the batch in one call. The pending entry only
+			-- survives long enough to prompt that click.
 			local p = C.pendingOpenCraft
 			C.pendingOpenCraft = nil
 			if p then
@@ -473,43 +541,41 @@ function C.Init()
 					"%.2f", GetTime() - (p.t or 0)))
 			end
 			if p and GetTime() - (p.t or 0) <= 4 then
-				-- the recipe list settles AFTER TRADE_SKILL_SHOW —
-				-- retry on failure a few beats so a slow line swap
-				-- doesn't dead-end the craft the click was for.
-				-- C.Craft early-returns without calling CraftRecipe
-				-- when the line still reads closed, so the retry is
-				-- free.
-				local tries = 0
-				local function fire()
-					tries = tries + 1
-					local ok, err = C.Craft(p.id, p.qty)
-					if ok then
-						local rr = GoblinMindCrafting.recipes
-							and GoblinMindCrafting.recipes[p.id]
-						GM.Print(GM.CC("secondary") .. "crafting "
-							.. (rr and rr.name or "recipe")
-							.. " ×" .. (p.qty or 1) .. "|r")
-					elseif tries < 3 then
-						GM.After(0.6, fire)
-						return
-					else
-						GM.Print(GM.CC("warn") .. tostring(err) .. "|r")
-					end
-					if GM.CraftingUI and GM.CraftingUI.Refresh then
-						GM.CraftingUI.Refresh()
-					end
+				local rr = GoblinMindCrafting.recipes
+					and GoblinMindCrafting.recipes[p.id]
+				GM.Print(GM.CC("secondary")
+					.. (C.Prof(p.id) or "line")
+					.. " open — click CRAFT for "
+					.. (rr and rr.name or "recipe")
+					.. " ×" .. (p.qty or 1) .. "|r")
+				if GM.CraftingUI and GM.CraftingUI.Refresh then
+					GM.CraftingUI.Refresh()
 				end
-				GM.After(0.6, fire)
 			end
 		elseif e == "TRADE_SKILL_CLOSE" then
 			Tr("TRADE_SKILL_CLOSE")
 			C.lastProf = nil -- session ended; a stale prof would
 			-- read as "line open" in LineOpenFor's fallback
-			C.craftChain = nil -- a dead line can't feed the next link
+			C.batchQty = nil -- a dead line can't finish its batch
+			-- close voids open-stamps — but only ones old enough to
+			-- be the session that ended: a swap fires CLOSE for the
+			-- OLD line, and Forever can deliver it AFTER the new
+			-- line's SHOW (pending already consumed → keyed survival
+			-- failed). A stamp younger than its own cast's settle
+			-- window can't be the line that just closed — keep it.
+			if C.recentOpen then
+				local now = GetTime()
+				for rid, t in pairs(C.recentOpen) do
+					if now - t > 8 then C.recentOpen[rid] = nil end
+				end
+			end
 			-- TSM parity: session end = our window end (K toggle-off
 			-- and every other native close land here)
 			if GM.CraftingUI and GM.CraftingUI.OnTradeSkillClose then
 				GM.CraftingUI.OnTradeSkillClose()
+			end
+			if GM.PlanQueue and GM.PlanQueue.Refresh then
+				GM.PlanQueue.Refresh()
 			end
 			return -- no scan on close
 		end
@@ -992,12 +1058,37 @@ function C.LineOpenFor(recipeID)
 	-- dead". Treating {} as "closed" was the OPEN-button freeze: the
 	-- gate armed while the line was live, and the cast then toggled
 	-- that line shut.
+	-- we cast this recipe's open spell ourselves and no session-close
+	-- has voided the stamp since — the OPEN→CRAFT intermediate step:
+	-- treat the line as open without asking the (often stale) enum.
+	-- A cast that never produced TRADE_SKILL_SHOW expires with its
+	-- pending entry so the gate can re-arm for a real retry.
+	local ro = C.recentOpen and C.recentOpen[recipeID]
+	if ro then
+		local p = C.pendingOpenCraft
+		if (p and p.id == recipeID and GetTime() - (p.t or 0) > 6)
+			or GetTime() - ro > 12 then
+			-- cast produced no SHOW, or the stamp outlived its
+			-- settle window — by 12s Scan's lastProf holds the truth
+			C.recentOpen[recipeID] = nil
+			if p and p.id == recipeID then C.pendingOpenCraft = nil end
+			Tr("open? stamp expired")
+		else
+			Tr("open? yes — open cast issued")
+			return true
+		end
+	end
+	-- presence in EITHER enum proves open; only GetAllRecipeIDs can
+	-- prove absence — GetFilteredRecipeIDs honors the Blizzard
+	-- frame's search filter, so a recipe missing from it can still
+	-- belong to the live line (a filtered subset must never be an
+	-- absence verdict)
 	local sawList
 	for _, fn in ipairs({ "GetAllRecipeIDs", "GetFilteredRecipeIDs" }) do
 		if C_TradeSkillUI[fn] then
 			local ok, res = pcall(C_TradeSkillUI[fn])
 			if ok and type(res) == "table" and #res > 0 then
-				sawList = true
+				if fn == "GetAllRecipeIDs" then sawList = true end
 				for _, id in ipairs(res) do
 					if id == recipeID then
 						Tr("open? yes — recipe in", fn)
@@ -1007,12 +1098,11 @@ function C.LineOpenFor(recipeID)
 			end
 		end
 	end
-	if sawList then
-		Tr("open? no — live list lacks recipe")
-		return false
-	end
-	-- inconclusive — fall back to tracked session state. Scan records
-	-- the profession it last saw open; TRADE_SKILL_CLOSE clears it.
+	-- tracked session state beats enum absence: Scan records the
+	-- profession it actually saw open (TRADE_SKILL_CLOSE clears it),
+	-- while the enum lags a line swap and can hold the OLD line's
+	-- list — absence in a stale list must not outrank an open we
+	-- observed ourselves
 	local prof = C.Prof(recipeID)
 	if prof and C.lastProf then
 		if C.lastProf == prof then
@@ -1027,6 +1117,12 @@ function C.LineOpenFor(recipeID)
 			Tr("open? yes — lastProf alias", C.lastProf)
 			return true
 		end
+	end
+	if sawList then
+		Tr("open? no — live list lacks recipe")
+		return false
+	end
+	if prof and C.lastProf then
 		Tr("open? no — lastProf is", C.lastProf, "≠", prof)
 		return false -- a different line is the live one
 	end
@@ -1055,15 +1151,38 @@ function C.LineClosedFor(recipeID)
 	if not (C_TradeSkillUI and C_TradeSkillUI.CraftRecipe) then
 		return false
 	end
+	-- we cast this recipe's open spell and no session-close has
+	-- voided the stamp — the line is ours, don't arm the toggle-cast
+	-- (the observed open/close loop). If the cast never produced a
+	-- SHOW the stamp expires with its pending entry so a real retry
+	-- can arm.
+	local ro = C.recentOpen and C.recentOpen[recipeID]
+	if ro then
+		local p = C.pendingOpenCraft
+		if (p and p.id == recipeID and GetTime() - (p.t or 0) > 6)
+			or GetTime() - ro > 12 then
+			C.recentOpen[recipeID] = nil
+			if p and p.id == recipeID then C.pendingOpenCraft = nil end
+			Tr("closed? stamp expired")
+		else
+			Tr("closed? no — open cast issued")
+			return false
+		end
+	end
 	-- a live non-empty list that lacks the recipe means a DIFFERENT
 	-- line is open — casting our profession's spell is the correct
 	-- switch, not a toggle
+	-- presence in EITHER enum means not-closed; only GetAllRecipeIDs
+	-- can prove absence — GetFilteredRecipeIDs honors the Blizzard
+	-- frame's search filter, and a recipe missing from a filtered
+	-- subset can still belong to the live line (ambiguous absence
+	-- must never arm the toggle-cast)
 	local sawList
 	for _, fn in ipairs({ "GetAllRecipeIDs", "GetFilteredRecipeIDs" }) do
 		if C_TradeSkillUI[fn] then
 			local ok, res = pcall(C_TradeSkillUI[fn])
 			if ok and type(res) == "table" and #res > 0 then
-				sawList = true
+				if fn == "GetAllRecipeIDs" then sawList = true end
 				for _, id in ipairs(res) do
 					if id == recipeID then
 						Tr("closed? no — recipe in", fn)
@@ -1073,23 +1192,34 @@ function C.LineClosedFor(recipeID)
 			end
 		end
 	end
+	-- tracked session state beats enum absence here too: Scan saw
+	-- lastProf open (TRADE_SKILL_CLOSE clears it), while the enum
+	-- can still hold the PREVIOUS line's list mid-swap — absence in
+	-- a stale list must not arm the toggle-cast over an open we
+	-- observed ourselves
+	local prof = C.Prof(recipeID)
+	if prof and C.lastProf then
+		if C.lastProf == prof then
+			Tr("closed? no — lastProf", C.lastProf)
+			return false
+		end
+		-- Mining↔Smelting share a line — lastProf=Mining with a
+		-- Smelting recipe is the same session, not a closed one
+		local mine, smelt = SpellName(2575), SpellName(2656)
+		if mine and smelt
+			and (C.lastProf == mine or C.lastProf == smelt)
+			and (prof == mine or prof == smelt) then
+			Tr("closed? no — lastProf alias", C.lastProf)
+			return false
+		end
+	end
 	if sawList then
 		Tr("closed? yes — live list lacks recipe")
 		return true
 	end
-	-- tracked session state: another profession verifiably opened
-	-- last (TRADE_SKILL_CLOSE clears lastProf, so a mismatch means a
-	-- different line is live)
-	local prof = C.Prof(recipeID)
-	if prof and C.lastProf and C.lastProf ~= prof then
-		local mine, smelt = SpellName(2575), SpellName(2656)
-		local alias = mine and smelt
-			and (C.lastProf == mine or C.lastProf == smelt)
-			and (prof == mine or prof == smelt)
-		if not alias then
-			Tr("closed? yes — lastProf", C.lastProf, "≠", prof)
-			return true
-		end
+	if prof and C.lastProf then
+		Tr("closed? yes — lastProf", C.lastProf, "≠", prof)
+		return true -- a different line verifiably opened last
 	end
 	-- the native frame hidden = no session at all
 	local pf = ProfessionsFrame or TradeSkillFrame
@@ -1121,6 +1251,14 @@ local function SecureOpenFor(btn)
 			"for recipe", ov._rid)
 		C.pendingOpenCraft = { id = ov._rid, qty = ov._qty,
 			t = GetTime() }
+		-- the gate must not re-arm while this cast's line swap is
+		-- still landing — LineClosedFor consults this stamp
+		C.recentOpen = C.recentOpen or {}
+		if ov._rid then C.recentOpen[ov._rid] = GetTime() end
+		-- the arm is consumed on use — leave it up and a second
+		-- click re-casts the spell onto the (now open) line before
+		-- any refresh can disarm it
+		ov:Hide()
 	end)
 	ov:Hide()
 	btn._gmOpen = ov
@@ -1163,8 +1301,10 @@ function C.WatchCast(recipeID)
 		if not (C.pendingCast and C.pendingCast.id == recipeID) then return end
 		C.pendingCast = nil
 		Tr("watchdog — no cast started for", recipeID)
-		if C.craftChain then
-			C.craftChain = nil
+		-- a batch that produced no cast gets the louder wording
+		local pendingBatch = C.batchQty and C.batchQty.n and C.batchQty.n > 1
+		C.batchQty = nil -- dead call; the next click is a fresh run
+		if pendingBatch then
 			GM.Print(GM.CC("warn") .. "batch stopped — "
 				.. "a cast didn't start|r")
 		else
@@ -1194,21 +1334,35 @@ function C.Craft(recipeID, qty)
 	if not (C_TradeSkillUI and C_TradeSkillUI.CraftRecipe) then
 		return nil, "no craft API on this client"
 	end
-	if C.craftChain then
-		return nil, "a batch is already crafting — "
-			.. "let it finish or interrupt the cast"
+	if C.batchQty then
+		return nil, "already crafting — let the cast finish"
 	end
 	local n = max(1, floor(qty or 1))
-	Tr("craft", recipeID, "qty", n, n > 1 and "(chain)" or "")
-	if n > 1 then
-		C.craftChain = { id = recipeID, left = n - 1 }
+	-- whole stack or error: CraftRecipe silently no-ops when the
+	-- recipe can't craft (no mats/forge), which the watchdog then
+	-- can't tell apart from a protection squelch — gate first
+	local can = C.Craftable and C.Craftable(recipeID) or 0
+	if can < n then
+		Tr("craft blocked —", can, "of", n, "craftable")
+		return nil, format("only %d craftable — missing "
+			.. "materials or station?", can)
 	end
+	Tr("craft", recipeID, "qty", n)
+	-- TSM parity, verified live: the full arg list in a hardware-
+	-- event context is what makes numCasts>1 work — (id, n) alone
+	-- is silently ignored. Timer/event callbacks can't craft at
+	-- all on this client; a click is required either way.
 	C.pendingCast = { id = recipeID }
-	local ok, err = pcall(C_TradeSkillUI.CraftRecipe, recipeID, 1)
+	local itemCount = (C_Item and C_Item.GetItemCount) or GetItemCount
+	C.batchQty = { id = recipeID, n = n,
+		itemID = r.itemID, itemCount = itemCount,
+		before = (itemCount and r.itemID) and itemCount(r.itemID) or 0 }
+	local ok, err = pcall(C_TradeSkillUI.CraftRecipe,
+		recipeID, n, nil, nil, nil, nil)
 	if not ok then
 		Tr("CraftRecipe error:", err)
 		C.pendingCast = nil
-		C.craftChain = nil
+		C.batchQty = nil
 		return nil, tostring(err)
 	end
 	C.WatchCast(recipeID)

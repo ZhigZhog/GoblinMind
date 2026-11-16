@@ -952,19 +952,28 @@ def _backend_health(kind, ok, n=0):
 def backend_upload_books(books_by_scope, cfg=None):
     """POST each scope's newest LOCAL book (remote-flagged entries are
     pulled, not ours). Runs inside cmd_book so uploads piggyback every
-    emit but only fire when a scope's book is genuinely newer."""
+    emit but only fire when a scope's book is genuinely newer — or
+    when the scope hasn't uploaded in upload_heartbeat_minutes
+    (default 60), a same-t re-push that keeps the install live on the
+    backend while scans/mesh are idle. The re-push sends the book's
+    real t — bumping it would fake freshness and game the server's
+    7-day staleness cutoff."""
     cfg = cfg or _backend_cfg()
     if not cfg.get('url') or cfg.get('upload') is False:
         return
     st = _load_api_state()
     last_up = st.get('backend_up') or {}
+    last_at = st.get('backend_up_at') or {}
+    heartbeat = float(cfg.get('upload_heartbeat_minutes', 60)) * 60
+    now = time.time()
     for scope, books in books_by_scope.items():
         local = [b for b in books
                  if not b.get('remote') and b.get('t')]
         if not local:
             continue
         newest = max(local, key=lambda b: b['t'])
-        if newest['t'] <= last_up.get(scope, 0):
+        fresh = newest['t'] > last_up.get(scope, 0)
+        if not fresh and now - last_at.get(scope, 0) < heartbeat:
             continue
         try:
             r = _backend_req(cfg, '/v1/upload', {
@@ -972,9 +981,11 @@ def backend_upload_books(books_by_scope, cfg=None):
                 'items': newest['items'],
                 'lots': newest.get('lots') or {}})
             last_up[scope] = newest['t']
+            last_at[scope] = now
             _backend_health('up', True, r.get('items', 0))
-            LOG.info('backend upload %s: %d items', scope,
-                     r.get('items', 0))
+            LOG.info('backend upload %s: %d items%s', scope,
+                     r.get('items', 0),
+                     '' if fresh else ' (hourly re-push)')
         except Exception:
             _backend_health('up', False)
             LOG.exception('backend upload failed: %s', scope)
@@ -982,6 +993,7 @@ def backend_upload_books(books_by_scope, cfg=None):
     # the stale st loaded above doesn't clobber it on save
     st = _load_api_state()
     st['backend_up'] = last_up
+    st['backend_up_at'] = last_at
     _save_api_state(st)
 
 
