@@ -961,12 +961,29 @@ def backend_upload_books(books_by_scope, cfg=None):
 # and expiry look identical to selling at this resolution; accuracy
 # rises with poll cadence and shrinks when relisting is common.
 
+# raw replicate tl bucket (field 4 of the fingerprint) -> lower bound
+# on seconds remaining. A lot gone while elapsed < its lower bound
+# provably still had time left = confident sale; anything else is
+# inconclusive (expiry/cancel/relist all fit).
+TL_LOWER = {0: 0, 1: 1800, 2: 7200, 3: 43200, 4: 172800}
+
+
+def _fp_pref(fp):
+    """iid:qty:unit identity of a fingerprint — the tl bucket rides as
+    an optional 4th field and must NOT be part of the diff identity
+    (a surviving lot drops buckets between scans)."""
+    return fp.rsplit(':', 1)[0] if fp.count(':') >= 3 else fp
+
+
 def delta_record(books):
     """books = {scope: book}. Diffs each book's `lots` against the last
     snapshot for that scope and appends sale events to api_state.json.
-    Events: [t, units, unit_price, lots_gone, prev_lots]."""
+    Events: [t, units, unit_price, lots_gone, prev_lots, cls] where
+    cls: 's' confident sale, 'i' inconclusive (expiry/cancel fit too),
+    'u' no tl data (legacy 3-field fps — counted like 's')."""
     st = _load_api_state()
     prev = st.get('lots') or {}
+    prev_t = st.get('lotsT') or {}
     sales = st.get('sales') or {}
     now = int(time.time())
     for scope, b in books.items():
@@ -974,23 +991,45 @@ def delta_record(books):
         if not new_lots:
             continue
         old = prev.get(scope) or {}
-        scope_sales = sales.setdefault(scope, {})
+        book_t = int(b.get('t') or now)
+        elapsed = max(0, book_t - int(prev_t.get(scope) or 0))
+        new_pref = {}
+        for fp, n in new_lots.items():
+            p = _fp_pref(fp)
+            new_pref[p] = new_pref.get(p, 0) + n
+        old_pref, old_tlbs = {}, {}
         for fp, on in old.items():
-            gone = on - new_lots.get(fp, 0)
+            p = _fp_pref(fp)
+            old_pref[p] = old_pref.get(p, 0) + on
+            old_tlbs.setdefault(p, []).append(
+                fp.rsplit(':', 1)[1] if fp.count(':') >= 3 else 'x')
+        scope_sales = sales.setdefault(scope, {})
+        for p, on in old_pref.items():
+            gone = on - new_pref.get(p, 0)
             if gone <= 0:
                 continue
             try:
-                iid_s, qty_s, unit_s = fp.split(':', 2)
+                iid_s, qty_s, unit_s = p.split(':', 2)
                 iid, qty, unit = int(iid_s), int(qty_s), int(unit_s)
             except ValueError:
                 continue
+            tlbs = [int(t) for t in old_tlbs.get(p) or []
+                    if t != 'x' and t.isdigit() and int(t) in TL_LOWER]
+            if not tlbs:
+                cls = 'u'  # no tl data — pre-refinement semantics
+            elif elapsed < min(TL_LOWER[t] for t in tlbs):
+                cls = 's'  # every variant had provable time left
+            else:
+                cls = 'i'  # could equally be expiry/cancel/relist
             scope_sales.setdefault(str(iid), []).append(
-                [now, qty * gone, unit, gone, on])
+                [now, qty * gone, unit, gone, on, cls])
         for iid_s, ev in scope_sales.items():
             scope_sales[iid_s] = [
                 e for e in ev if now - e[0] < HIST_KEEP]
         prev[scope] = new_lots
+        prev_t[scope] = book_t
     st['lots'] = prev
+    st['lotsT'] = prev_t
     st['sales'] = sales
     _save_api_state(st)
 
@@ -1004,7 +1043,10 @@ def delta_stats(scope):
     now = time.time()
     out = {}
     for iid_s, ev in events.items():
-        win = [e for e in ev if now - e[0] < VEL_DAYS * 86400]
+        # 'i' (inconclusive) events stay out of sale stats — they could
+        # be expiries. Legacy 5-field events and 'u' count as before.
+        win = [e for e in ev if now - e[0] < VEL_DAYS * 86400
+               and (len(e) < 6 or e[5] != 'i')]
         if not win:
             continue
         units = sum(e[1] for e in win)

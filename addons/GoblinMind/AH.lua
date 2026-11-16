@@ -730,9 +730,14 @@ function GM.AH.CollectBook()
 					e.n = e.n + 1
 				end
 				-- lot fingerprint for the brain's sale-delta engine —
-				-- others' listings only; own cancels would read as sales
+				-- others' listings only; own cancels would read as sales.
+				-- The time-left bucket rides as a 4th field: the brain
+				-- diffs on the 3-field prefix (identity) and uses the
+				-- bucket to classify disappearances — gone with time
+				-- provably left = confident sale; else inconclusive.
 				if not own then
 					local fp = id .. ":" .. stackSize .. ":" .. unit
+						.. ":" .. (tlb or "x")
 					lots[fp] = (lots[fp] or 0) + 1
 				end
 			end
