@@ -201,12 +201,15 @@ end
 
 -- === Scans (read-only; safe to call from UI, no protection on queries) ===
 
-function GM.AH.ScanItem(itemID, itemName, done)
+function GM.AH.ScanItem(itemID, itemName, done, key)
 	if not C_AuctionHouse then return done({}) end
 	-- Forever's SendSearchQuery only accepts an ItemKey — no bare itemID
-	-- path; stackables are searched the same way.
+	-- path; stackables are searched the same way. Browse rows carry the
+	-- exact key (itemID+suffix) — pass it through so suffixed variants
+	-- ("of the Bear") resolve their own listings instead of querying
+	-- the suffix-0 base item, which returns none.
 	GM.AH.scanItemID = itemID
-	GM.AH.scanItemKey = C_AuctionHouse.MakeItemKey(itemID, 0, 0, nil)
+	GM.AH.scanItemKey = key or C_AuctionHouse.MakeItemKey(itemID, 0, 0, nil)
 	GM.AH.onScanDone = done
 	GM.AH.asks = nil
 	C_AuctionHouse.SendSearchQuery(GM.AH.scanItemKey, EMPTY_SORTS, true)

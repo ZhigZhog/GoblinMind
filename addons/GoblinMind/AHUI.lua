@@ -45,14 +45,15 @@ local function PassFilters(id, unit)
 	if not flt then return true end
 	if flt.minC and (not unit or unit < flt.minC) then return false end
 	if flt.maxC and unit and unit > flt.maxC then return false end
-	if flt.rarity or flt.classID or flt.minIlvl or flt.maxIlvl then
+	if flt.rarity or flt.classID or flt.minIlvl or flt.maxIlvl or flt.slot then
 		if not GetInfo then return false end
-		local _, _, q, ilvl, _, _, _, _, _, _, _, classID = GetInfo(id)
+		local _, _, q, ilvl, _, _, _, _, loc, _, _, classID = GetInfo(id)
 		if not q then return false end -- uncached: can't verify
 		if flt.rarity and q < flt.rarity then return false end
 		if flt.classID and classID ~= flt.classID then return false end
 		if flt.minIlvl and (not ilvl or ilvl < flt.minIlvl) then return false end
 		if flt.maxIlvl and ilvl and ilvl > flt.maxIlvl then return false end
+		if flt.slot and not flt.slot[loc] then return false end
 	end
 	return true
 end
@@ -174,8 +175,17 @@ local function Results()
 		if id and PassFilters(id, r.minPrice) then
 			local e = GM.ItemEntry(id)
 			local mkt = GM.Price("dbmarket", id)
+			-- itemKey pins the suffix variant — GetItemKeyInfo resolves
+			-- "of the Bear" names where the bare id only gives the base
+			-- name (fallback while the key info is still uncached)
+			local name
+			if C_AuctionHouse.GetItemKeyInfo then
+				local ok, ki = pcall(C_AuctionHouse.GetItemKeyInfo, r.itemKey, true)
+				name = ok and ki and ki.itemName or nil
+			end
 			rows[#rows + 1] = {
-				id = id, name = GM.ItemName(id) or ("item " .. id),
+				id = id, key = r.itemKey,
+				name = name or GM.ItemName(id) or ("item " .. id),
 				qty = r.totalQuantity or 1, unit = r.minPrice,
 				mkt = mkt,
 				low = mkt and r.minPrice and r.minPrice < mkt * 0.9 or nil,
@@ -242,7 +252,7 @@ local function ScanAsks(r)
 		ui.asks = asks or {}
 		ui.status = nil
 		AU.Refresh()
-	end)
+	end, r.key)
 end
 
 local function BuyAsk(a)
@@ -792,7 +802,18 @@ local function Build()
 		"consumables", "trade goods", "ammo", "recipes",
 		"quest", "miscellaneous" }
 	local FCLASS_VAL = { nil, 2, 4, 1, 0, 7, 6, 9, 12, 15 }
-	ui.rarIx, ui.clsIx = 1, 1
+	-- armor-slot filter — equipLoc sets per slot (chest also covers
+	-- robe; back is INVTYPE_CLOAK). Checked client-side in PassFilters
+	local SLOTS = { "any", "head", "shoulder", "back", "chest",
+		"wrist", "hands", "waist", "legs", "feet" }
+	local SLOT_VAL = { nil,
+		{ INVTYPE_HEAD = true }, { INVTYPE_SHOULDER = true },
+		{ INVTYPE_CLOAK = true },
+		{ INVTYPE_CHEST = true, INVTYPE_ROBE = true },
+		{ INVTYPE_WRIST = true }, { INVTYPE_HAND = true },
+		{ INVTYPE_WAIST = true }, { INVTYPE_LEGS = true },
+		{ INVTYPE_FEET = true } }
+	ui.rarIx, ui.clsIx, ui.slotIx = 1, 1, 1
 	local rar = Btn(fb, 96, "rarity: any", function(self)
 		OpenDrop(self, "RARITY", RAR_OPT, ui.rarIx, function(i)
 			ui.rarIx = i
@@ -803,6 +824,16 @@ local function Build()
 	end)
 	rar:SetSize(96, 18)
 	rar:SetPoint("TOPLEFT", 8, -24)
+	local slot = Btn(fb, 100, "slot: any", function(self)
+		OpenDrop(self, "SLOT", SLOTS, ui.slotIx, function(i)
+			ui.slotIx = i
+			ui.filters.slot = SLOT_VAL[i]
+			self.text:SetText("slot: " .. SLOTS[i])
+			AU.Refresh()
+		end)
+	end)
+	slot:SetSize(100, 18)
+	slot:SetPoint("TOPLEFT", 108, -24)
 	local cls = Btn(fb, 108, "class: any", function(self)
 		OpenDrop(self, "CLASS", FCLASSES, ui.clsIx, function(i)
 			ui.clsIx = i
@@ -812,22 +843,22 @@ local function Build()
 		end)
 	end)
 	cls:SetSize(108, 18)
-	cls:SetPoint("TOPLEFT", 8, -48)
-	ui.fltBtns = { rar, cls }
+	cls:SetPoint("TOPLEFT", 8, -46)
+	ui.fltBtns = { rar, cls, slot }
 
 	local function Lab(txt, y)
 		local fs = GM.MakeFontString(fb, GM.FONT, 9, "textDim")
 		fs:SetPoint("TOPLEFT", 8, y)
 		fs:SetText(txt)
 	end
-	Lab("ilvl", -74)
+	Lab("ilvl", -70)
 	ui.minIlvl = EditBox(fb, 36, "")
-	ui.minIlvl:SetPoint("TOPLEFT", 34, -72)
+	ui.minIlvl:SetPoint("TOPLEFT", 34, -68)
 	ui.maxIlvl = EditBox(fb, 36, "")
 	ui.maxIlvl:SetPoint("LEFT", ui.minIlvl, "RIGHT", 6, 0)
-	Lab("price", -96)
+	Lab("price", -92)
 	ui.minC = EditBox(fb, 56, "")
-	ui.minC:SetPoint("TOPLEFT", 42, -94)
+	ui.minC:SetPoint("TOPLEFT", 42, -90)
 	ui.maxC = EditBox(fb, 56, "")
 	ui.maxC:SetPoint("LEFT", ui.minC, "RIGHT", 6, 0)
 	local function ApplyTextFilters()
@@ -849,8 +880,9 @@ local function Build()
 	end
 	local clr = Btn(fb, 60, "CLEAR", function()
 		ui.filters = {}
-		ui.rarIx, ui.clsIx = 1, 1
+		ui.rarIx, ui.clsIx, ui.slotIx = 1, 1, 1
 		rar.text:SetText("rarity: any")
+		slot.text:SetText("slot: any")
 		cls.text:SetText("class: any")
 		ui.minIlvl:SetText("") ui.maxIlvl:SetText("")
 		ui.minC:SetText("") ui.maxC:SetText("")
