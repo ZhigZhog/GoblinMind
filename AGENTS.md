@@ -133,6 +133,15 @@ Primary data = the in-house book feed below.
   (shim addon, scaffolded — TSM-styled UI) · `addons\GoblinMind_Data\`
   (generated-data addon — `GoblinMindDB` from `goblin_brain.py emit`) · `scripts\`
   (`sync-addons.bat` robocopy-deploys into the AddOns dir).
+- **Release packaging**: always `python scripts\package-release.py
+  <version>` → `dist\GoblinMind-<version>.zip`. The zip MUST ship the
+  brain as `GoblinMind/brain/{goblin_brain.py, goblin-watch.bat}`
+  (same layout `sync-addons.bat` deploys — `watch self` derives the
+  install root from it). An addons-only zip is broken — v0.2.0's first
+  upload missed it. Release flow: merge → bump `## Version:` in both
+  .tocs → package → tag `v<version>` → `git push origin main
+  --follow-tags` → create the GitHub release via REST with the zip
+  attached (token via `git credential fill`; the MCP is read-only).
 - UI rule: match TSM's default theme — palette + fonts in
   `addons\GoblinMind\Theme.lua`, fonts referenced from TSM's Media dir.
 - Client quirks (verified 2026-11-11):
