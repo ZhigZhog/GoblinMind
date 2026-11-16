@@ -1404,6 +1404,24 @@ def main():
             if not realm_map:
                 LOG.info('no realms resolved — check namespace/realm '
                          'names in the api block')
+        elif api_action == 'realm-index':
+            # discovery: dump every realm + its connected-realm ID under
+            # the configured namespace — find Forever's real API name
+            idx = _api_get(cfg, '/data/wow/realm/index',
+                           {'namespace': cfg.get('namespace',
+                                                 'dynamic-us'),
+                            'locale': 'en_US'})
+            realms = idx.get('realms', [])
+            LOG.info('%d realms under namespace %s',
+                     len(realms), cfg.get('namespace'))
+            for r in sorted(realms,
+                            key=lambda r: str(r.get('name') or '')):
+                href = str((r.get('connected_realm') or {})
+                           .get('href') or '')
+                m = re.search(r'/connected-realm/(\d+)', href)
+                LOG.info('  %-28s slug=%-28s cr=%s',
+                         r.get('name'), r.get('slug'),
+                         m.group(1) if m else '?')
         elif api_action == 'poll':
             books = api_poll(cfg)
             for scope, b in books.items():
