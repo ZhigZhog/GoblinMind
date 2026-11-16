@@ -1234,6 +1234,29 @@ def cmd_book(sv_arg, out_paths, root=None, feed=None, realm=None):
                 'generated': int(now),
             }
 
+    # region aggregate — pooled across realm scopes, supply-weighted
+    # (proposal §5). One polled realm → its own stats honestly stand
+    # in for the region; nothing borrowed from TSM.
+    region_items = {}
+    for scope, rd in realms.items():
+        for iid, it in rd['items'].items():
+            r = region_items.setdefault(iid, {'w': 0, 'm': 0, 'h': []})
+            w = it.get('sup') or 1
+            if it.get('mkt'):
+                r['m'] += it['mkt'] * w
+                r['w'] += w
+            if it.get('hist'):
+                r['h'].append(it['hist'])
+    for scope, rd in realms.items():
+        for iid, it in rd['items'].items():
+            r = region_items.get(iid)
+            if not r:
+                continue
+            if r['w']:
+                it['rmkt'] = int(r['m'] / r['w'])
+            if r['h']:
+                it['rhist'] = _median(r['h'])
+
     # flat top-level mirror of the primary scope — keeps pre-realm
     # consumers working (largest scope wins)
     primary = max(realms, key=lambda s: len(realms[s]['items']),
