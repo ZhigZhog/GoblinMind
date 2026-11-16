@@ -363,6 +363,17 @@ function GM.AH.FullScan()
 		GM.Print(GM.CC("textDim") .. "full scan ran a moment ago — give it a few seconds|r")
 		return
 	end
+	-- the server throttles ReplicateItems (~15 min after the last
+	-- successful replicate collect — calls inside the window come back
+	-- silently empty and the book falls back to browse). Warn, don't
+	-- block: a stale stamp is possible and a real scan is worth trying.
+	local lastOK = GM.db and GM.db.lastReplicateOK or 0
+	local ago = time() - lastOK
+	if lastOK > 0 and ago < 900 then
+		GM.Print(GM.CC("warn") .. format(
+			"last full scan was %dm ago — the server usually throttles "
+			.. "for ~15m; this may fall back to browse|r", ago / 60))
+	end
 	local msg = GM.CC("textDim") .. "starting full scan…|r"
 	GM.PlanQueue.ScanStatus(msg)
 	if GM.Shopping and GM.Shopping.Status then GM.Shopping.Status(msg) end
@@ -398,8 +409,12 @@ function GM.AH.FullScan()
 			-- replicate is being silently dropped (server throttle) —
 			-- after ~5s fall back to a browse-all book build in parallel
 			if polls == 10 and not GM.AH.browse then
+				local lastOK = GM.db and GM.db.lastReplicateOK or 0
+				local left = lastOK > 0 and 900 - (time() - lastOK) or 0
 				GM.PlanQueue.ScanStatus(GM.CC("textDim") ..
-					"full scan unanswered — switching to browse mode…|r")
+					(left > 0 and format("full scan throttled — ~%dm left, browsing instead…|r",
+						left / 60 + 1)
+					or "full scan unanswered — switching to browse mode…|r"))
 				GM.AH.BrowseBook()
 			end
 			-- debug surface stays in GM.AH.dbgEvents (poll count,
@@ -603,6 +618,7 @@ function GM.AH.CollectBook()
 		GM.AH.bookKind = "replicate"
 		GM.AH.book, GM.AH.bookT = book, time()
 		GM.AH.bookLots = lots
+		if GM.db then GM.db.lastReplicateOK = time() end
 		pcall(GM.AH.SaveBook) -- persistence failure must not kill completion
 		-- drop expiry estimates for listings that left this scan —
 		-- dead or relisted, either way the anchor is stale
