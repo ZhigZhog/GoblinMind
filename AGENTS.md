@@ -228,13 +228,21 @@ Primary data = the in-house book feed below.
     look like solid bands.
   - **`C_TradeSkillUI.CraftRecipe` works for qty=1** (verified
     2026-11-14 via `/goblin craftprobe`); count>1 is Blizzard's
-    multicraft path — `C.Craft` always calls it with the full qty
-    (whole stack or an error; the old `noBatch` qty-1 fallback was
-    removed — a silent downgrade lied about what a click did) and a
+    multicraft path — **`CraftRecipe(count>1) is squelched on this
+    client** (pcall succeeds, no cast, "interface action failed";
+    verified live 2026-11-15). A stack runs as a CHAIN: one
+    `CraftRecipe(id,1)` per click, then each
+    `UNIT_SPELLCAST_SUCCEEDED` fires the next link (0.15s gap —
+    the client can still read "casting" in the same frame; castGUID
+    dedupes SUCCEEDED+CHANNEL_STOP doubles). qty=1 works from
+    insecure context (craftprobe ran it from a slash command) so
+    event-driven links are legal. `C.craftChain` aborts on
+    FAILED/INTERRUPTED/TRADE_SKILL_CLOSE/a dead link; a second
+    `C.Craft` while one runs returns "already crafting". The
     `pendingCast` watchdog (UNIT_SPELLCAST_START within 0.6s)
-    reports a dead call to chat. `pendingOpenCraft` retries the
-    post-open craft 3× at 0.6s — the recipe list settles after
-    TRADE_SKILL_SHOW. **`C.LineOpenFor` treats EMPTY recipe
+    reports dead calls; `pendingOpenCraft` retries the post-open
+    craft 3× at 0.6s and expires after 4s (a blocked cast left it
+    firing on unrelated opens). **`C.LineOpenFor` treats EMPTY recipe
     enumerations as inconclusive, not "closed"** — `GetAllRecipeIDs`/
     `GetFilteredRecipeIDs` are partially stubbed and an empty table
     can't distinguish dead enumeration from a dead line; arming the

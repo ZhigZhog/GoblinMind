@@ -295,7 +295,7 @@ end
 -- completed craft cast (spellID == recipeID) decrements the queue by
 -- one and ticks the active plan step — so queue counts always match
 -- what actually got made, whether the call batched or not.
-local function OnCastComplete(unit, _, spellID)
+local function OnCastComplete(unit, castGUID, spellID)
 	if unit ~= "player" or not spellID then return end
 	if GoblinMindCrafting.queue and GoblinMindCrafting.queue[spellID] then
 		C.QueueAdd(spellID, -1)
@@ -311,6 +311,40 @@ local function OnCastComplete(unit, _, spellID)
 			GM.PlanQueue.Refresh()
 		end
 	end
+	-- batch chain: this client squelches CraftRecipe(count>1) (pcall
+	-- succeeds, no cast, "interface action failed") — the stack runs
+	-- as one qty=1 call per completed cast, fired off the very event
+	-- that proved the previous one landed. qty=1 works from insecure
+	-- context (craftprobe ran it from a slash command), so event-
+	-- driven links are legal.
+	local ch = C.craftChain
+	-- SUCCEEDED and CHANNEL_STOP can both fire for one cast — the
+	-- castGUID arg dedupes so a link isn't consumed twice
+	if ch and ch.id == spellID and (not castGUID or ch.lastGUID ~= castGUID) then
+		ch.lastGUID = castGUID
+		if ch.left > 0 then
+			ch.left = ch.left - 1
+			-- tiny gap: the client can still read "casting" in the same
+			-- frame as SUCCEEDED and would squelch the next call
+			C.pendingCast = { id = spellID }
+			GM.After(0.15, function()
+				if not C.craftChain then return end
+				local ok = pcall(C_TradeSkillUI.CraftRecipe, spellID, 1)
+				if ok then
+					C.WatchCast(spellID)
+				else
+					C.pendingCast = nil
+					C.craftChain = nil
+					GM.Print(GM.CC("warn") .. "batch stopped|r")
+				end
+			end)
+		else
+			C.craftChain = nil
+			if GM.CraftingUI and GM.CraftingUI.Refresh then
+				GM.CraftingUI.Refresh()
+			end
+		end
+	end
 end
 
 function C.Init()
@@ -323,6 +357,7 @@ function C.Init()
 		"TRADE_SKILL_SHOW", "TRADE_SKILL_CLOSE", "PLAYER_LOGIN",
 		"UNIT_SPELLCAST_START", "UNIT_SPELLCAST_CHANNEL_START",
 		"UNIT_SPELLCAST_SUCCEEDED", "UNIT_SPELLCAST_CHANNEL_STOP",
+		"UNIT_SPELLCAST_FAILED", "UNIT_SPELLCAST_INTERRUPTED",
 	}) do pcall(f.RegisterEvent, f, evt) end
 	f:SetScript("OnEvent", function(_, e, ...)
 		if e == "UNIT_SPELLCAST_START"
@@ -342,6 +377,18 @@ function C.Init()
 			OnCastComplete(...)
 			return
 		end
+		if e == "UNIT_SPELLCAST_FAILED"
+			or e == "UNIT_SPELLCAST_INTERRUPTED" then
+			local unit = ...
+			if unit == "player" then
+				C.pendingCast = nil
+				if C.craftChain then
+					C.craftChain = nil
+					GM.Print(GM.CC("warn") .. "batch interrupted|r")
+				end
+			end
+			return
+		end
 		if e == "TRADE_SKILL_SHOW" then
 			-- TSM parity: opening a tradeskill IS opening our crafting
 			-- window (linked/NPC sessions excluded — not ours to drive)
@@ -358,9 +405,14 @@ function C.Init()
 			-- that the line is live, fire the craft it was for (the
 			-- 0.6s tail lets the line's data land, same as the scan
 			-- debounce)
-			if C.pendingOpenCraft then
-				local p = C.pendingOpenCraft
-				C.pendingOpenCraft = nil
+			-- stale pending crafts die here: if the secure cast was
+			-- blocked (the "interface action failed" squelch) no SHOW
+			-- ever arrives, and a lingering entry would otherwise fire
+			-- its craft on some unrelated open seconds later — consume
+			-- it on the first SHOW and only honor a fresh one
+			local p = C.pendingOpenCraft
+			C.pendingOpenCraft = nil
+			if p and GetTime() - (p.t or 0) <= 4 then
 				-- the recipe list settles AFTER TRADE_SKILL_SHOW —
 				-- retry on failure a few beats so a slow line swap
 				-- doesn't dead-end the craft the click was for.
@@ -392,6 +444,7 @@ function C.Init()
 		elseif e == "TRADE_SKILL_CLOSE" then
 			C.lastProf = nil -- session ended; a stale prof would
 			-- read as "line open" in LineOpenFor's fallback
+			C.craftChain = nil -- a dead line can't feed the next link
 			return -- no scan on close
 		end
 		-- trailing debounce: profession context settles sometime during
@@ -926,7 +979,8 @@ local function SecureOpenFor(btn)
 		and "LeftButtonDown" or "LeftButtonUp")
 	ov:SetAttribute("type", "spell")
 	ov:HookScript("OnClick", function()
-		C.pendingOpenCraft = { id = ov._rid, qty = ov._qty }
+		C.pendingOpenCraft = { id = ov._rid, qty = ov._qty,
+			t = GetTime() }
 	end)
 	ov:Hide()
 	btn._gmOpen = ov
@@ -955,13 +1009,32 @@ function C.GateButton(btn, recipeID, qty, allow)
 	return false
 end
 
+-- pendingCast watchdog, shared by the first call and every chain
+-- link: a call that produces no UNIT_SPELLCAST_START within 0.6s
+-- never ran — report it and stop any batch in flight.
+function C.WatchCast(recipeID)
+	GM.After(0.6, function()
+		if not (C.pendingCast and C.pendingCast.id == recipeID) then return end
+		C.pendingCast = nil
+		if C.craftChain then
+			C.craftChain = nil
+			GM.Print(GM.CC("warn") .. "batch stopped — "
+				.. "a cast didn't start|r")
+		else
+			GM.Print(GM.CC("warn") .. "craft didn't start — "
+				.. (C.Prof(recipeID) or "tradeskill")
+				.. " isn't open — click OPEN|r")
+		end
+	end)
+end
+
 -- execute a craft — the same protected call Blizzard's Create buttons
 -- make (verified: CraftRecipe(id,1) produces the item). count>1 is
--- Blizzard's own multicraft path — one call, N casts. Whole stack or
--- an error, never a silent qty-1 downgrade (a quiet one-per-click
--- mode lies about what a click does). If the call produces no cast —
--- dead batch path or the line lied about being open — the pendingCast
--- watchdog reports the miss instead.
+-- squelched on this client (pcall succeeds, no cast, "interface
+-- action failed" — verified live), so a stack runs as a CHAIN: one
+-- qty=1 call per click, then each UNIT_SPELLCAST_SUCCEEDED fires the
+-- next link. Whole stack per click, honest errors, no silent
+-- downgrade.
 -- Queue decrements happen in OnCastComplete, not here — counts track
 -- casts that actually finished, not casts we asked for.
 function C.Craft(recipeID, qty)
@@ -974,25 +1047,22 @@ function C.Craft(recipeID, qty)
 	if not (C_TradeSkillUI and C_TradeSkillUI.CraftRecipe) then
 		return nil, "no craft API on this client"
 	end
+	if C.craftChain then
+		return nil, "a batch is already crafting — "
+			.. "let it finish or interrupt the cast"
+	end
 	local n = max(1, floor(qty or 1))
+	if n > 1 then
+		C.craftChain = { id = recipeID, left = n - 1 }
+	end
 	C.pendingCast = { id = recipeID }
-	local ok, err = pcall(C_TradeSkillUI.CraftRecipe, recipeID, n)
+	local ok, err = pcall(C_TradeSkillUI.CraftRecipe, recipeID, 1)
 	if not ok then
 		C.pendingCast = nil
+		C.craftChain = nil
 		return nil, tostring(err)
 	end
-	GM.After(0.6, function()
-		if not (C.pendingCast and C.pendingCast.id == recipeID) then return end
-		C.pendingCast = nil
-		GM.Print(GM.CC("warn")
-			.. (n > 1
-				and "batch didn't start — this client didn't honor "
-					.. "the multi-cast"
-				or ("craft didn't start — "
-					.. (C.Prof(recipeID) or "tradeskill")
-					.. " isn't open — click OPEN"))
-			.. "|r")
-	end)
+	C.WatchCast(recipeID)
 	return true
 end
 
