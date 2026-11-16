@@ -199,6 +199,11 @@ Primary data = the in-house book feed below.
   - **TGA pipeline**: hand-written encoder in the unmatte script —
     uncompressed 32-bit, top-down rows + `0x28` descriptor (matches
     TSM/EllesmereUI convention; the client honors both `0x08`/`0x28`).
+    **Minimap icon source is `WoWVault\GoblinMindIcon.png`** →
+    regenerate `addons\GoblinMind\Media\chrome-gear.tga` (65×65,
+    LANCZOS, RGBA→BGRA, same header spec) — referenced by
+    `Minimap.lua`. Vault PNG is gitignored like the rest of
+    `WoWVault\`; the .tga is the tracked artifact.
   - **Recipe capture is event-driven**: `C_TradeSkillUI` only returns
     data for the *open* profession — `Scan()` hooks
     `TRADE_SKILL_LIST_UPDATE`/`TRADE_SKILL_SHOW`, so recipes appear as
