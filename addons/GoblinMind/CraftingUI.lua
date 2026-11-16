@@ -1001,6 +1001,16 @@ function CU.HookDefault()
 		Footer("tradeskill open — BLIZZARD UI gives the "
 			.. "default frame back")
 	end)
+	-- the mirror half of the takeover (TSM parity): K's second press
+	-- hides the native frame — ours must follow or there's no way to
+	-- tell the session visually ended. The hide itself is enough;
+	-- TRADE_SKILL_CLOSE handles the bookkeeping.
+	pf:HookScript("OnHide", function()
+		if ui and ui.wantDefault then return end
+		if ui and ui.frame and ui.frame:IsShown() then
+			ui.frame:Hide()
+		end
+	end)
 end
 
 function CU.RestoreDefault()
@@ -1028,6 +1038,16 @@ local function EnsureSwitchBtn()
 	pf:HookScript("OnShow", function()
 		if not ui.wantDefault then CU.ParkDefault() end
 	end)
+end
+
+-- TRADE_SKILL_CLOSE entry — the session ended, so our window goes
+-- with it (TSM parity: their frame closes on the same action). Our
+-- OnHide restores the parked frame; CloseTradeSkill stays gated on
+-- ui.closing because the client already ended the session itself.
+function CU.OnTradeSkillClose()
+	if ui and ui.frame and ui.frame:IsShown() then
+		ui.frame:Hide()
+	end
 end
 
 -- TRADE_SKILL_SHOW entry — called from Crafting.lua's event frame

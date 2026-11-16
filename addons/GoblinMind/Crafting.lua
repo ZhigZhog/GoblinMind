@@ -450,6 +450,11 @@ function C.Init()
 			C.lastProf = nil -- session ended; a stale prof would
 			-- read as "line open" in LineOpenFor's fallback
 			C.craftChain = nil -- a dead line can't feed the next link
+			-- TSM parity: session end = our window end (K toggle-off
+			-- and every other native close land here)
+			if GM.CraftingUI and GM.CraftingUI.OnTradeSkillClose then
+				GM.CraftingUI.OnTradeSkillClose()
+			end
 			return -- no scan on close
 		end
 		-- trailing debounce: profession context settles sometime during
