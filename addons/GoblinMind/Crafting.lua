@@ -14,6 +14,20 @@ local _, GM = ...
 GM.Crafting = {}
 local C = GM.Crafting
 
+-- /goblin crafttrace toggles C.trace — every gate/cast decision and
+-- event logs a [craft] line so a stuck OPEN button shows its branch
+-- instead of its symptom
+local function Tr(...)
+	if not C.trace then return end
+	local parts = {}
+	for i = 1, select("#", ...) do
+		parts[i] = tostring(select(i, ...))
+	end
+	GM.Print(GM.CC("textDim") .. "[craft] "
+		.. table.concat(parts, " ") .. "|r")
+end
+C.Tr = Tr
+
 -- per-recipe profession: a recipe's category tree roots at the
 -- profession ("Engineering", "Mining"). Scan-time APIs like
 -- GetBaseProfessionInfo report the PREVIOUSLY open tradeskill — the
@@ -358,6 +372,7 @@ local function OnCastComplete(unit, castGUID, spellID)
 			C.pendingCast = { id = spellID }
 			GM.After(0.15, function()
 				if not C.craftChain then return end
+				Tr("chain link", spellID, "left", ch.left)
 				local ok = pcall(C_TradeSkillUI.CraftRecipe, spellID, 1)
 				if ok then
 					C.WatchCast(spellID)
@@ -368,6 +383,7 @@ local function OnCastComplete(unit, castGUID, spellID)
 				end
 			end)
 		else
+			Tr("chain done", spellID)
 			C.craftChain = nil
 			if GM.CraftingUI and GM.CraftingUI.Refresh then
 				GM.CraftingUI.Refresh()
@@ -382,6 +398,7 @@ function C.Init()
 	GoblinMindCrafting.queue = GoblinMindCrafting.queue or {}
 	-- K opens the professions OVERVIEW — no TRADE_SKILL_SHOW fires —
 	-- so the takeover hook on the native frame has to exist at load
+	Tr("init — hooking default frame")
 	if GM.CraftingUI and GM.CraftingUI.HookDefault then
 		GM.CraftingUI.HookDefault()
 	end
@@ -396,18 +413,21 @@ function C.Init()
 	f:SetScript("OnEvent", function(_, e, ...)
 		if e == "UNIT_SPELLCAST_START"
 			or e == "UNIT_SPELLCAST_CHANNEL_START" then
-			local unit = ...
+			local unit, _, spellID = ...
 			-- any player cast starting inside the watch window means
 			-- the call landed — don't filter on spellID: if the cast
 			-- spell ever differs from recipeID we'd false-positive
 			-- into the no-batch fallback while crafts actually work
-			if unit == "player" and C.pendingCast then
+			if unit == "player" then
+				Tr("cast start", spellID,
+					C.pendingCast and "(watched)" or "")
 				C.pendingCast = nil
 			end
 			return
 		end
 		if e == "UNIT_SPELLCAST_SUCCEEDED"
 			or e == "UNIT_SPELLCAST_CHANNEL_STOP" then
+			Tr("cast complete", select(3, ...))
 			OnCastComplete(...)
 			return
 		end
@@ -415,6 +435,7 @@ function C.Init()
 			or e == "UNIT_SPELLCAST_INTERRUPTED" then
 			local unit = ...
 			if unit == "player" then
+				Tr("cast", e)
 				C.pendingCast = nil
 				if C.craftChain then
 					C.craftChain = nil
@@ -424,6 +445,7 @@ function C.Init()
 			return
 		end
 		if e == "TRADE_SKILL_SHOW" then
+			Tr("TRADE_SKILL_SHOW")
 			-- TSM parity: opening a tradeskill IS opening our crafting
 			-- window (linked/NPC sessions excluded — not ours to drive)
 			local linked = C_TradeSkillUI
@@ -446,6 +468,10 @@ function C.Init()
 			-- it on the first SHOW and only honor a fresh one
 			local p = C.pendingOpenCraft
 			C.pendingOpenCraft = nil
+			if p then
+				Tr("pendingOpenCraft age", string.format(
+					"%.2f", GetTime() - (p.t or 0)))
+			end
 			if p and GetTime() - (p.t or 0) <= 4 then
 				-- the recipe list settles AFTER TRADE_SKILL_SHOW —
 				-- retry on failure a few beats so a slow line swap
@@ -476,6 +502,7 @@ function C.Init()
 				GM.After(0.6, fire)
 			end
 		elseif e == "TRADE_SKILL_CLOSE" then
+			Tr("TRADE_SKILL_CLOSE")
 			C.lastProf = nil -- session ended; a stale prof would
 			-- read as "line open" in LineOpenFor's fallback
 			C.craftChain = nil -- a dead line can't feed the next link
@@ -972,33 +999,48 @@ function C.LineOpenFor(recipeID)
 			if ok and type(res) == "table" and #res > 0 then
 				sawList = true
 				for _, id in ipairs(res) do
-					if id == recipeID then return true end
+					if id == recipeID then
+						Tr("open? yes — recipe in", fn)
+						return true
+					end
 				end
 			end
 		end
 	end
-	if sawList then return false end -- live list, recipe absent
+	if sawList then
+		Tr("open? no — live list lacks recipe")
+		return false
+	end
 	-- inconclusive — fall back to tracked session state. Scan records
 	-- the profession it last saw open; TRADE_SKILL_CLOSE clears it.
 	local prof = C.Prof(recipeID)
 	if prof and C.lastProf then
-		if C.lastProf == prof then return true end
+		if C.lastProf == prof then
+			Tr("open? yes — lastProf", C.lastProf)
+			return true
+		end
 		-- Mining↔Smelting share a line (Mining's spell opens Smelting)
 		local mine, smelt = SpellName(2575), SpellName(2656)
 		if mine and smelt
 			and (C.lastProf == mine or C.lastProf == smelt)
 			and (prof == mine or prof == smelt) then
+			Tr("open? yes — lastProf alias", C.lastProf)
 			return true
 		end
+		Tr("open? no — lastProf is", C.lastProf, "≠", prof)
 		return false -- a different line is the live one
 	end
 	-- nothing tracked: the Blizzard tradeskill frame is the last
 	-- ground truth — it's never hidden while a line is live (a parked
 	-- frame stays SHOWN; the client hides it when the session ends)
 	local pf = ProfessionsFrame or TradeSkillFrame
-	if pf and not pf:IsShown() then return false end
+	if pf and not pf:IsShown() then
+		Tr("open? no — native frame hidden")
+		return false
+	end
 	-- can't tell — let CraftRecipe try; the pendingCast watchdog
 	-- reports a dead call instead of dead-ending here
+	Tr("open? unsure → permissive (pf", pf and "shown" or "nil", ")")
 	return true
 end
 
@@ -1023,12 +1065,18 @@ function C.LineClosedFor(recipeID)
 			if ok and type(res) == "table" and #res > 0 then
 				sawList = true
 				for _, id in ipairs(res) do
-					if id == recipeID then return false end
+					if id == recipeID then
+						Tr("closed? no — recipe in", fn)
+						return false
+					end
 				end
 			end
 		end
 	end
-	if sawList then return true end -- live list, recipe absent
+	if sawList then
+		Tr("closed? yes — live list lacks recipe")
+		return true
+	end
 	-- tracked session state: another profession verifiably opened
 	-- last (TRADE_SKILL_CLOSE clears lastProf, so a mismatch means a
 	-- different line is live)
@@ -1038,11 +1086,18 @@ function C.LineClosedFor(recipeID)
 		local alias = mine and smelt
 			and (C.lastProf == mine or C.lastProf == smelt)
 			and (prof == mine or prof == smelt)
-		if not alias then return true end
+		if not alias then
+			Tr("closed? yes — lastProf", C.lastProf, "≠", prof)
+			return true
+		end
 	end
 	-- the native frame hidden = no session at all
 	local pf = ProfessionsFrame or TradeSkillFrame
-	if pf and not pf:IsShown() then return true end
+	if pf and not pf:IsShown() then
+		Tr("closed? yes — native frame hidden")
+		return true
+	end
+	Tr("closed? no — can't prove it")
 	return false -- can't prove closed — don't arm the toggle-cast
 end
 
@@ -1062,6 +1117,8 @@ local function SecureOpenFor(btn)
 		and "LeftButtonDown" or "LeftButtonUp")
 	ov:SetAttribute("type", "spell")
 	ov:HookScript("OnClick", function()
+		Tr("OPEN click — casting", ov:GetAttribute("spell"),
+			"for recipe", ov._rid)
 		C.pendingOpenCraft = { id = ov._rid, qty = ov._qty,
 			t = GetTime() }
 	end)
@@ -1084,11 +1141,15 @@ function C.GateButton(btn, recipeID, qty, allow)
 	if allow and C.LineClosedFor(recipeID) then
 		local spell = C.ProfSpell(recipeID)
 		if spell then
+			Tr("gate armed — spell:", spell)
 			ov._rid, ov._qty = recipeID, qty
 			ov:SetAttribute("spell", spell)
 			ov:Show()
 			return true
 		end
+		Tr("gate can't arm — no spell for", C.Prof(recipeID))
+	else
+		Tr("gate clear — allow:", allow)
 	end
 	ov:Hide()
 	return false
@@ -1101,6 +1162,7 @@ function C.WatchCast(recipeID)
 	GM.After(0.6, function()
 		if not (C.pendingCast and C.pendingCast.id == recipeID) then return end
 		C.pendingCast = nil
+		Tr("watchdog — no cast started for", recipeID)
 		if C.craftChain then
 			C.craftChain = nil
 			GM.Print(GM.CC("warn") .. "batch stopped — "
@@ -1137,12 +1199,14 @@ function C.Craft(recipeID, qty)
 			.. "let it finish or interrupt the cast"
 	end
 	local n = max(1, floor(qty or 1))
+	Tr("craft", recipeID, "qty", n, n > 1 and "(chain)" or "")
 	if n > 1 then
 		C.craftChain = { id = recipeID, left = n - 1 }
 	end
 	C.pendingCast = { id = recipeID }
 	local ok, err = pcall(C_TradeSkillUI.CraftRecipe, recipeID, 1)
 	if not ok then
+		Tr("CraftRecipe error:", err)
 		C.pendingCast = nil
 		C.craftChain = nil
 		return nil, tostring(err)

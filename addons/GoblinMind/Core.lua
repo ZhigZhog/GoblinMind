@@ -141,6 +141,11 @@ SlashCmdList.GOBLINMIND = function(msg)
 		GM.Crafting.CraftProbe(strtrim(msg:sub(11)))
 		return
 	end
+	if msg:sub(1, 10) == "crafttrace" then
+		GM.Crafting.trace = not GM.Crafting.trace
+		GM.Print("craft trace " .. (GM.Crafting.trace and "ON" or "OFF"))
+		return
+	end
 	if msg:sub(1, 9) == "fontcheck" then
 		-- font health probe: a dead file reports zero glyph width —
 		-- catches the first-run stall that blanked FONT_MED labels

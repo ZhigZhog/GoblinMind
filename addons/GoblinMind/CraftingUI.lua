@@ -982,16 +982,32 @@ end
 local hookedPF
 function CU.HookDefault()
 	if hookedPF then return end
+	-- TSM parity (TradeSkill.LoadAddon): ProfessionsFrame lives in a
+	-- load-on-demand addon — force it or the frame doesn't exist to
+	-- hook until the first K, by which time it's too late
+	if C_AddOns and C_AddOns.LoadAddOn then
+		pcall(C_AddOns.LoadAddOn, "Blizzard_Professions")
+		pcall(C_AddOns.LoadAddOn, "Blizzard_ProfessionsBook")
+	end
 	local pf = DefaultFrame()
 	if not pf then
 		CU._hookTries = (CU._hookTries or 0) + 1
 		if CU._hookTries < 30 and GM.After then
 			GM.After(1, CU.HookDefault)
+		elseif GM.Crafting and GM.Crafting.Tr then
+			GM.Crafting.Tr("HookDefault gave up — no ProfessionsFrame")
 		end
 		return
 	end
+	if GM.Crafting and GM.Crafting.Tr then
+		GM.Crafting.Tr("hooked", pf:GetName())
+	end
 	hookedPF = pf
 	pf:HookScript("OnShow", function()
+		if GM.Crafting and GM.Crafting.Tr then
+			GM.Crafting.Tr("pf OnShow — wantDefault:",
+				ui and ui.wantDefault)
+		end
 		if ui and ui.wantDefault then return end
 		CU.ParkDefault()
 		BuildUI()
@@ -1006,6 +1022,9 @@ function CU.HookDefault()
 	-- tell the session visually ended. The hide itself is enough;
 	-- TRADE_SKILL_CLOSE handles the bookkeeping.
 	pf:HookScript("OnHide", function()
+		if GM.Crafting and GM.Crafting.Tr then
+			GM.Crafting.Tr("pf OnHide")
+		end
 		if ui and ui.wantDefault then return end
 		if ui and ui.frame and ui.frame:IsShown() then
 			ui.frame:Hide()
