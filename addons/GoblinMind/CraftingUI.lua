@@ -1043,6 +1043,16 @@ function CU.OnTradeSkillOpen()
 	ui.selProf = nil -- scan selects the opened profession (C.lastProf)
 	ui.frame:Show()
 	CU.Refresh()
+	-- say who owns the open — otherwise a user who pressed the default
+	-- professions button sees our window appear with no explanation and
+	-- no visible route back to the Blizzard frame
+	local prof
+	if C_TradeSkillUI and C_TradeSkillUI.GetTradeSkillLine then
+		local ok, v = pcall(C_TradeSkillUI.GetTradeSkillLine)
+		if ok and type(v) == "string" and v ~= "" then prof = v end
+	end
+	Footer((prof or "tradeskill")
+		.. " open — BLIZZARD UI gives the default frame back")
 	-- the frame may not be shown at event time; park now and retry
 	CU.ParkDefault()
 	GM.After(0.3, CU.ParkDefault)

@@ -363,6 +363,12 @@ function C.Init()
 					local ok, err = C.Craft(p.id, p.qty)
 					if not ok then
 						GM.Print(GM.CC("warn") .. tostring(err) .. "|r")
+					else
+						local rr = GoblinMindCrafting.recipes
+							and GoblinMindCrafting.recipes[p.id]
+						GM.Print(GM.CC("secondary") .. "crafting "
+							.. (rr and rr.name or "recipe")
+							.. " ×" .. (p.qty or 1) .. "|r")
 					end
 					if GM.CraftingUI and GM.CraftingUI.Refresh then
 						GM.CraftingUI.Refresh()
