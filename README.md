@@ -12,11 +12,16 @@ file themselves to the private tracker (see below).
 1. Extract the zip into `Interface/AddOns/` — you should end up with
    `Interface/AddOns/GoblinMind/` and `Interface/AddOns/GoblinMind_Data/`.
 2. Enable both addons at the character select screen.
-3. **Run the brain watcher** — double-click
-   `Interface/AddOns/GoblinMind/brain/goblin-watch.bat` and leave the
-   window open while you play (needs Python 3.x on PATH). It keeps your
-   price data fresh and files bug reports. Without it the addon still
-   runs, but prices stay frozen at whatever shipped in the zip.
+3. **Run the installer** — double-click
+   `Interface/AddOns/GoblinMind/brain/install.bat` once (needs
+   Python 3.x on PATH). It writes `feeds.json` (your realm scope +
+   the shared backend's address) and registers the brain watcher to
+   auto-start at login. Prefer manual? Skip the installer and just
+   double-click `goblin-watch.bat` while you play. Either way, without
+   the watcher prices stay frozen at whatever shipped in the zip.
+   To *host* the shared backend on your machine, run
+   `install.bat --host` instead (also starts `goblin_server.py` and
+   adds the firewall rule — needs an admin shell for the rule).
 4. `/reload` (or relog), then open the auction house once — GoblinMind
    builds its own price book from the live AH (FULL SCAN button in the
    AH window, or it collects passively in the background).
