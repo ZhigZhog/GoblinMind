@@ -33,6 +33,10 @@ SCOPE_RE = re.compile(r'^[\w \'\-()]{1,64}$')
 MAX_ITEMS = 400000        # sanity cap — a realm AH won't exceed this
 MAX_PRICE = 10 ** 12      # copper; rejects poisoned/bugged payloads
 KEEP_PER_INSTALL = 200    # uploads retained per (install, scope)
+MERGE_MAX_AGE = 7 * 86400  # uploads older than the stat window are
+                           # corpse data — a dead install's week-old
+                           # book merged under a fresh scope t looks
+                           # current. Age it out of both merge and db.
 
 
 def db():
@@ -86,12 +90,28 @@ def clean_items(items):
     return out
 
 
+_last_gc = [0.0]
+
+
+def _gc(conn):
+    """Lazily purge uploads past the merge window — keeps the store
+    bounded for installs that go silent (KEEP_PER_INSTALL only bounds
+    live ones). Runs at most hourly, piggybacked on requests."""
+    if time.time() - _last_gc[0] < 3600:
+        return
+    _last_gc[0] = time.time()
+    conn.execute('DELETE FROM uploads WHERE t < ?',
+                 (time.time() - MERGE_MAX_AGE,))
+    conn.commit()
+
+
 def merged_book(conn, scope):
     """Newest-upload-wins per item across all contributors, plus the
     lots map from the upload that provided each item."""
     rows = conn.execute(
-        'SELECT t, items, lots FROM uploads WHERE scope=? '
-        'ORDER BY t ASC', (scope,)).fetchall()
+        'SELECT t, items, lots FROM uploads WHERE scope=? AND t>? '
+        'ORDER BY t ASC',
+        (scope, time.time() - MERGE_MAX_AGE)).fetchall()
     items, newest = {}, 0
     lots_by_iid = {}   # iid -> {fp: n} from the newest upload owning it
     for t, items_j, lots_j in rows:
@@ -150,6 +170,7 @@ class Handler(BaseHTTPRequestHandler):
         q = urllib.parse.parse_qs(u.query)
         conn = db()
         try:
+            _gc(conn)
             if u.path == '/v1/health':
                 scopes = [r[0] for r in conn.execute(
                     'SELECT DISTINCT scope FROM uploads')]
