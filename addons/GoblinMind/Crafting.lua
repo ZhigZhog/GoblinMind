@@ -223,8 +223,9 @@ local function Scan()
 	-- GetTradeSkillLine reflects the list actually showing.
 	local prof
 	if C_TradeSkillUI.GetTradeSkillLine then
-		local name = C_TradeSkillUI.GetTradeSkillLine()
-		if type(name) == "string" and name ~= "" then prof = name end
+		-- exists but errors when called on Forever (craftdebug probe)
+		local ok, name = pcall(C_TradeSkillUI.GetTradeSkillLine)
+		if ok and type(name) == "string" and name ~= "" then prof = name end
 	end
 	if not prof and C_TradeSkillUI.GetBaseProfessionInfo then
 		local pi = C_TradeSkillUI.GetBaseProfessionInfo()
@@ -846,9 +847,28 @@ end
 -- is the line that can craft recipeID the currently open one?
 function C.LineOpenFor(recipeID)
 	if ForeignTradeskill() then return true end -- linked/NPC: they own the line
-	if not (C_TradeSkillUI and C_TradeSkillUI.GetTradeSkillLineForRecipe) then
+	if not (C_TradeSkillUI and C_TradeSkillUI.CraftRecipe) then
 		return true -- can't tell — let CraftRecipe try
 	end
+	-- the live recipe list answers exactly what CraftRecipe needs —
+	-- "is this recipe in the open line" — and GetTradeSkillLine can't
+	-- be trusted on Forever (the function exists but errors on call).
+	-- GetAllRecipeIDs is preferred: a stale search filter in the
+	-- parked Blizzard frame shouldn't gate our craft.
+	local ids
+	for _, fn in ipairs({ "GetAllRecipeIDs", "GetFilteredRecipeIDs" }) do
+		if not ids and C_TradeSkillUI[fn] then
+			local ok, res = pcall(C_TradeSkillUI[fn])
+			if ok and type(res) == "table" then ids = res end
+		end
+	end
+	if ids then
+		for _, id in ipairs(ids) do
+			if id == recipeID then return true end
+		end
+		return false
+	end
+	-- enumeration unavailable — fall back to line identity checks
 	local ok, lineID, prof, rootID = pcall(
 		C_TradeSkillUI.GetTradeSkillLineForRecipe, recipeID)
 	if not ok or not prof then return true end
