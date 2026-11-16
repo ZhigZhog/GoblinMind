@@ -390,6 +390,8 @@ function C.Init()
 				GM.After(0.6, fire)
 			end
 		elseif e == "TRADE_SKILL_CLOSE" then
+			C.lastProf = nil -- session ended; a stale prof would
+			-- read as "line open" in LineOpenFor's fallback
 			return -- no scan on close
 		end
 		-- trailing debounce: profession context settles sometime during
@@ -865,66 +867,47 @@ function C.LineOpenFor(recipeID)
 	-- the live recipe list answers exactly what CraftRecipe needs —
 	-- "is this recipe in the open line" — and GetTradeSkillLine can't
 	-- be trusted on Forever (the function exists but errors on call).
-	-- GetAllRecipeIDs is preferred: a stale search filter in the
-	-- parked Blizzard frame shouldn't gate our craft.
-	local ids
+	-- A NON-EMPTY list is authoritative; an EMPTY result is
+	-- inconclusive — these APIs are partially stubbed on this client
+	-- and an empty table can't tell "line closed" from "enumeration
+	-- dead". Treating {} as "closed" was the OPEN-button freeze: the
+	-- gate armed while the line was live, and the cast then toggled
+	-- that line shut.
+	local sawList
 	for _, fn in ipairs({ "GetAllRecipeIDs", "GetFilteredRecipeIDs" }) do
-		if not ids and C_TradeSkillUI[fn] then
+		if C_TradeSkillUI[fn] then
 			local ok, res = pcall(C_TradeSkillUI[fn])
-			if ok and type(res) == "table" then ids = res end
-		end
-	end
-	if ids then
-		for _, id in ipairs(ids) do
-			if id == recipeID then return true end
-		end
-		return false
-	end
-	-- enumeration unavailable — fall back to line identity checks
-	local ok, lineID, prof, rootID = pcall(
-		C_TradeSkillUI.GetTradeSkillLineForRecipe, recipeID)
-	if not ok or not prof then return true end
-	local cur
-	if C_TradeSkillUI.GetTradeSkillLine then
-		local ok2, v = pcall(C_TradeSkillUI.GetTradeSkillLine)
-		if ok2 then cur = v end
-	end
-	-- the name check doubles as the Smelting-alias home: an open
-	-- Smelting window satisfies Mining recipes
-	local function NameMatch(name)
-		if not name or name == "" then return false end
-		if name == prof then return true end
-		local mine, smelt = SpellName(2575), SpellName(2656)
-		return mine and smelt
-			and (name == mine or name == smelt)
-			and (prof == mine or prof == smelt) or false
-	end
-	if type(cur) == "number" then
-		return cur == lineID or (rootID ~= nil and cur == rootID)
-	end
-	if type(cur) == "string" then
-		return cur ~= "" and NameMatch(cur)
-	end
-	if type(cur) == "table" then
-		-- C_ tables on Forever vary — probe the numeric+name fields
-		for _, k in ipairs({ "skillLineID", "tradeSkillLineID",
-		                    "professionID", "lineID" }) do
-			local v = cur[k]
-			if type(v) == "number"
-				and (v == lineID or (rootID ~= nil and v == rootID)) then
-				return true
+			if ok and type(res) == "table" and #res > 0 then
+				sawList = true
+				for _, id in ipairs(res) do
+					if id == recipeID then return true end
+				end
 			end
 		end
-		for _, k in ipairs({ "name", "professionName",
-		                    "tradeSkillLineName" }) do
-			if NameMatch(cur[k]) then return true end
-		end
 	end
-	-- cur nil/""/0: nothing is open -> false, the gate arms. Anything
-	-- else we can't parse: SOMETHING is open — let CraftRecipe try and
-	-- let the pendingCast watchdog report failure instead of
-	-- dead-ending here
-	return not (cur == nil or cur == "" or cur == 0)
+	if sawList then return false end -- live list, recipe absent
+	-- inconclusive — fall back to tracked session state. Scan records
+	-- the profession it last saw open; TRADE_SKILL_CLOSE clears it.
+	local prof = C.Prof(recipeID)
+	if prof and C.lastProf then
+		if C.lastProf == prof then return true end
+		-- Mining↔Smelting share a line (Mining's spell opens Smelting)
+		local mine, smelt = SpellName(2575), SpellName(2656)
+		if mine and smelt
+			and (C.lastProf == mine or C.lastProf == smelt)
+			and (prof == mine or prof == smelt) then
+			return true
+		end
+		return false -- a different line is the live one
+	end
+	-- nothing tracked: the Blizzard tradeskill frame is the last
+	-- ground truth — it's never hidden while a line is live (a parked
+	-- frame stays SHOWN; the client hides it when the session ends)
+	local pf = ProfessionsFrame or TradeSkillFrame
+	if pf and not pf:IsShown() then return false end
+	-- can't tell — let CraftRecipe try; the pendingCast watchdog
+	-- reports a dead call instead of dead-ending here
+	return true
 end
 
 -- ============ secure OPEN overlay (shared by CraftingUI + PlanQueue) ============

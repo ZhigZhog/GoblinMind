@@ -197,15 +197,19 @@ local function BuildUI()
 		end)
 	end)
 	-- closing our window: if the user asked for the Blizzard frame it
-	-- gets its spot back; otherwise close means close — unpark quietly
-	-- and end the tradeskill session (TSM closes it on frame close too)
-	-- so nothing invisible keeps the professions UI alive
+	-- gets its spot back. CloseTradeSkill fires ONLY on a deliberate
+	-- close (ui.closing set by the X button / toggle-off) — every other
+	-- hide (tab swap via Dashboard, the UISpecialFrames ESC sweep, any
+	-- programmatic hide) must keep the session alive: killing it was
+	-- the "open sound, close sound, frozen OPEN" bug — the window hid
+	-- right after the spell opened the line and took the line with it.
 	f:SetScript("OnHide", function()
 		CU.RestoreDefault()
-		if not ui.wantDefault
+		if ui.closing and not ui.wantDefault
 			and C_TradeSkillUI and C_TradeSkillUI.CloseTradeSkill then
 			pcall(C_TradeSkillUI.CloseTradeSkill)
 		end
+		ui.closing = nil
 	end)
 
 	local title = GM.MakeFontString(f, GM.FONT_BOLD, 12, "accent")
@@ -219,7 +223,10 @@ local function BuildUI()
 	close.text = GM.MakeFontString(close, GM.FONT_BOLD, 10, "textDim")
 	close.text:SetPoint("CENTER")
 	close.text:SetText("x")
-	close:SetScript("OnClick", function() f:Hide() end)
+	close:SetScript("OnClick", function()
+		ui.closing = true -- deliberate close → OnHide ends the session
+		f:Hide()
+	end)
 
 	-- toolbar: name filter + craftable-only (Blizzard frame parity)
 	ui.search = EditBox(f, 150, "filter recipes…")
@@ -1038,5 +1045,8 @@ end
 
 function CU.Toggle()
 	BuildUI()
-	if ui.frame:IsShown() then ui.frame:Hide() else CU.Show() end
+	if ui.frame:IsShown() then
+		ui.closing = true -- toggle-off is a deliberate close
+		ui.frame:Hide()
+	else CU.Show() end
 end

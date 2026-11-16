@@ -234,7 +234,19 @@ Primary data = the in-house book feed below.
     `pendingCast` watchdog (UNIT_SPELLCAST_START within 0.6s)
     reports a dead call to chat. `pendingOpenCraft` retries the
     post-open craft 3× at 0.6s — the recipe list settles after
-    TRADE_SKILL_SHOW. Actual
+    TRADE_SKILL_SHOW. **`C.LineOpenFor` treats EMPTY recipe
+    enumerations as inconclusive, not "closed"** — `GetAllRecipeIDs`/
+    `GetFilteredRecipeIDs` are partially stubbed and an empty table
+    can't distinguish dead enumeration from a dead line; arming the
+    OPEN overlay on a false negative made the cast toggle the live
+    line shut (the open-sound/close-sound freeze). Fallback order:
+    non-empty list → tracked `C.lastProf` (Scan sets it per-recipe,
+    `TRADE_SKILL_CLOSE` clears it) → `ProfessionsFrame:IsShown()`
+    (a parked frame stays shown while the line is live) → permissive.
+    `CraftingUI`'s `OnHide` calls `CloseTradeSkill` ONLY on a
+    deliberate close (`ui.closing` — X button / toggle-off); tab
+    swaps and the UISpecialFrames ESC sweep must keep the session.
+    Actual
     crafting progress is tracked by listening to
     `UNIT_SPELLCAST_SUCCEEDED`/`CHANNEL_STOP` (spellID == recipeID):
     each finished cast decrements `queue[spellID]` and ticks
