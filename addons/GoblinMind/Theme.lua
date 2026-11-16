@@ -90,23 +90,44 @@ function GM.Panel(frame, fill, border)
 	end
 end
 
-function GM.MakeFontString(parent, template, size, colorKey)
-	local fs = parent:CreateFontString(nil, "OVERLAY")
+GM._fontFixups = setmetatable({}, { __mode = "k" })
+
+local function ApplyFont(fs, font, size)
 	-- a custom font that fails to resolve must degrade, not blank the
 	-- UI — a first-run install blanked every FONT_MED label until
 	-- /reload. This client's SetFont doesn't return false on failure,
 	-- so prove the font works by measuring a real glyph — a dead font
 	-- reports zero width.
-	local ok = fs:SetFont(template or GM.FONT, size or 11, "")
+	local ok = fs:SetFont(font, size, "")
 	local dead = ok == false
 	if not dead and fs.GetStringWidth then
+		local prev = fs:GetText()
 		fs:SetText("1")
 		dead = fs:GetStringWidth() == 0
-		fs:SetText("")
+		fs:SetText(prev)
 	end
-	if dead then fs:SetFont("Fonts\\FRIZQT__.TTF", size or 11, "") end
+	if dead then fs:SetFont("Fonts\\FRIZQT__.TTF", size, "") end
+end
+
+function GM.MakeFontString(parent, template, size, colorKey)
+	local fs = parent:CreateFontString(nil, "OVERLAY")
+	local font = template or GM.FONT
+	ApplyFont(fs, font, size or 11)
+	GM._fontFixups[fs] = { font, size or 11 }
 	fs:SetTextColor(GM.RGB(colorKey or "text"))
 	return fs
+end
+
+function GM.FixupFonts()
+	-- re-apply every custom font once the client is fully up. The
+	-- first-load failure mode heals here: the font that couldn't
+	-- rasterize during Prewarm resolves on a later SetFont; anything
+	-- still dead degrades to FRIZQT instead of rendering blank.
+	for fs, spec in pairs(GM._fontFixups) do
+		if spec[1] ~= "Fonts\\FRIZQT__.TTF" then
+			ApplyFont(fs, spec[1], spec[2])
+		end
+	end
 end
 
 -- C_Timer exists on modern clients; fall back to a no-op rescan delay.

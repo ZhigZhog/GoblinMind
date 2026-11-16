@@ -820,6 +820,9 @@ local function FinishBrowse(b)
 	if GM.AH.BookAge() < 60 and GM.AH.bookKind == "replicate" then return end
 	GM.AH.bookKind = "browse"
 	GM.AH.book, GM.AH.bookT = b.book, time()
+	-- browse has no per-lot rows — a stale replicate fingerprint map
+	-- must NOT re-persist against this book's items
+	GM.AH.bookLots = nil
 	pcall(GM.AH.SaveBook) -- persistence failure must not kill completion
 	local items = 0
 	for _ in pairs(b.book) do items = items + 1 end

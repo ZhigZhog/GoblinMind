@@ -37,6 +37,9 @@ GM.frame:SetScript("OnEvent", function(_, event, arg1)
 		-- and paying that at first AH open reads as a multi-second
 		-- stall. Build hides the frame — visibility follows the AH.
 		if GM.PlanQueue and GM.PlanQueue.Prewarm then pcall(GM.PlanQueue.Prewarm) end
+		-- a first-load dead font (FONT_MED blanks until /reload) gets a
+		-- second shot after Prewarm once the client is fully up
+		if GM.FixupFonts then GM.After(1, GM.FixupFonts) end
 		GM.Print("loaded — /goblin for the plan window")
 	end
 end)
