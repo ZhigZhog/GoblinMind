@@ -114,10 +114,14 @@ Primary data = the in-house book feed below.
 - **Crowdsource backend (`brain\goblin_server.py`)**: persistent
   merged-book service on `127.0.0.1:8765` (binds `0.0.0.0` — LAN
   needs a firewall rule for TCP 8765). Endpoints: `/v1/register`,
-  `/v1/upload`, `/v1/book?scope=`, `/v1/health`. SQLite beside the
+  `/v1/upload`, `/v1/book?scope=`, `/v1/health`, `/v1/scopes`.
+  `/v1/health` also lists installs (name, attributed scopes, upload
+  count, last-upload `t`); `/v1/scopes` is the open scope list that
+  `install.py` offers as numbered choices. SQLite beside the
   script; newest-upload-wins per item, 200 uploads/install/scope,
-  10 uploads/10min rate limit, 7-day staleness cutoff + hourly GC,
-  client-claimed `t` clamped at `now` (can't pin the book with a
+  10 uploads/10min rate limit, 7-day staleness cutoff + hourly GC
+  + weekly VACUUM, client-claimed `t` clamped at `now` (can't pin
+  the book with a
   future date). Auto-starts via `Startup\goblinmind-server.bat`
   from the installed brain dir; **self-restarts on file change**
   like the watcher. The watcher pulls on a 15m cadence (remote
@@ -131,10 +135,18 @@ Primary data = the in-house book feed below.
   needs no restart); absent = open registration (trusted LAN).
   Re-registering an existing name re-keys that row (no zombie
   installs on reinstall). The host hands the secret to trusted
-  installs out-of-band; installer flag is `--key`.
+  installs out-of-band; installer flag is `--key`. `--host`
+  auto-generates the secret (writes `goblin_server.json` when
+  missing) and prints the LAN URL + key to share.
+  The brain records the health install-count as
+  `api_state.backend.peers` → `GoblinMindDB.backend.peers` →
+  `/goblin status` shows "N installs". `install.py` probes
+  `/v1/health`+`/v1/scopes` before writing config — bad IP or a
+  closed firewall is caught at install, not at first pull.
   **Tests**: `python brain\test_server.py` — in-process server on an
-  ephemeral port + temp DB; 31 checks over register/auth/cleaning/
-  merge/cutoff/GC/rate-limit/key-gate. Known wart it documents:
+  ephemeral port + temp DB; 36 checks over register/auth/cleaning/
+  merge/cutoff/GC/rate-limit/key-gate/scopes/health-detail.
+  Known wart it documents:
   the rate bucket increments before payload validation, so
   malformed uploads still burn quota.
   The watcher also scans `WTF\Account\*\SavedVariables\GoblinMind.lua`

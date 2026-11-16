@@ -916,6 +916,15 @@ def backend_pull(cfg=None):
                      len(d['items']))
     if scopes:
         _backend_health('pull', True, len(books))
+    # how many installs share this backend — /goblin status shows it
+    try:
+        h = _backend_req(cfg, '/v1/health')
+        st = _load_api_state()
+        st.setdefault('backend', {})['peers'] = len(
+            h.get('installs') or [])
+        _save_api_state(st)
+    except Exception:
+        pass  # health detail is optional — never fail the pull on it
     if books:
         try:
             with open(API_BOOK_PATH, encoding='utf-8') as fh:

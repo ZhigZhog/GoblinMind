@@ -88,6 +88,71 @@ def write_feeds(url, name, scopes, key=None, api=None):
     print(f'  wrote {FEEDS} (backend: {url}, scopes: {scopes})')
 
 
+def probe_backend(url):
+    """Connectivity check + the scopes already shared — catches a bad
+    IP or closed firewall at install time, not at first pull."""
+    try:
+        h = json.load(urllib.request.urlopen(
+            url.rstrip('/') + '/v1/health', timeout=8))
+    except Exception as e:
+        return None, str(e)
+    try:
+        s = json.load(urllib.request.urlopen(
+            url.rstrip('/') + '/v1/scopes', timeout=8))
+        h['remote_scopes'] = s.get('scopes') or []
+    except Exception:
+        h['remote_scopes'] = []
+    return h, None
+
+
+def pick_scopes(remote, default):
+    if remote:
+        print('  scopes already shared on this backend:')
+        for i, s in enumerate(remote, 1):
+            print(f'    {i}) {s}')
+        ans = ask('Scope — number, name, or comma list', default)
+    else:
+        ans = ask('Realm-faction scope (shown by /goblin status '
+                  'in game)', default)
+    out = []
+    for part in (ans or '').split(','):
+        part = part.strip()
+        if part.isdigit() and 1 <= int(part) <= len(remote):
+            out.append(remote[int(part) - 1])
+        elif part:
+            out.append(part)
+    return out
+
+
+def lan_ip():
+    """Primary LAN address — the URL friends install against."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(('8.8.8.8', 80))  # no traffic is sent
+        return s.getsockname()[0]
+    except OSError:
+        return None
+    finally:
+        s.close()
+
+
+def ensure_server_secret():
+    """Create goblin_server.json with a fresh install_secret when the
+    host lacks one — friends install with this key. Delete the file
+    for open registration."""
+    import secrets as _secrets
+    cfgp = os.path.join(HERE, 'goblin_server.json')
+    try:
+        cfg = json.load(open(cfgp, encoding='utf-8'))
+    except (OSError, ValueError):
+        cfg = {}
+    if not cfg.get('install_secret'):
+        cfg['install_secret'] = _secrets.token_urlsafe(24)
+        with open(cfgp, 'w', encoding='utf-8') as fh:
+            json.dump(cfg, fh, indent=1)
+    return cfg['install_secret']
+
+
 def validate_api_key(cid, csec):
     """client_credentials round-trip — a typo'd key fails here at
     install time instead of silently dead-ending the api feed."""
@@ -209,9 +274,19 @@ def main():
     if '://' not in url:
         url = 'http://' + url
     name = a.name or ask('Install name', socket.gethostname())
-    scopes = a.scope or [
-        ask('Realm-faction scope (shown by /goblin status in game)',
-            default_scope())]
+    h, err = probe_backend(url)
+    if h is None:
+        print(f'  warning: cannot reach {url} — {err}')
+        print('  (check the IP and that the host\'s firewall '
+              'allows TCP 8765)')
+        if ask('Continue anyway? (y/N)') not in ('y', 'yes'):
+            sys.exit('aborted')
+        remote = []
+    else:
+        remote = h.get('remote_scopes') or []
+        print(f'  backend alive — {len(h.get("installs") or [])} '
+              f'install(s), {len(remote)} scope(s) shared')
+    scopes = a.scope or pick_scopes(remote, default_scope())
     scopes = [s for s in scopes if s]
     if not scopes:
         sys.exit('at least one scope is required')
@@ -239,6 +314,14 @@ def main():
             write_bat(SERVER_BAT, 'GoblinMind Server',
                       f'python goblin_server.py {PORT}')
             firewall_rule()
+            secret = ensure_server_secret()
+            ip = lan_ip()
+            print('  share with friends — they run install.bat and enter:')
+            print(f'    backend URL : '
+                  f'http://{ip or "<this-PC-LAN-IP>"}:{PORT}')
+            print(f'    install key : {secret}')
+            print('  (delete goblin_server.json beside the server for '
+                  'open registration)')
     else:
         # 'watch self' can't resolve paths outside Interface/AddOns —
         # a Startup bat pointing here would silently die at login

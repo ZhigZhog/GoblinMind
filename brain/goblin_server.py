@@ -104,6 +104,7 @@ def clean_items(items):
 
 
 _last_gc = [0.0]
+_last_vacuum = [0.0]
 
 
 def _gc(conn):
@@ -116,6 +117,11 @@ def _gc(conn):
     conn.execute('DELETE FROM uploads WHERE t < ?',
                  (time.time() - MERGE_MAX_AGE,))
     conn.commit()
+    # weekly VACUUM reclaims the file space deleted rows leave —
+    # sqlite doesn't shrink on DELETE alone
+    if time.time() - _last_vacuum[0] > 7 * 86400:
+        _last_vacuum[0] = time.time()
+        conn.execute('VACUUM')
 
 
 def merged_book(conn, scope):
@@ -187,7 +193,25 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == '/v1/health':
                 scopes = [r[0] for r in conn.execute(
                     'SELECT DISTINCT scope FROM uploads')]
-                self._send(200, {'ok': True, 'scopes': scopes})
+                installs = [{'name': name,
+                             'scopes': (scs or '').split(',')
+                             if scs else [],
+                             'uploads': n, 'last': last}
+                            for name, scs, n, last in conn.execute(
+                        'SELECT i.name, '
+                        'GROUP_CONCAT(DISTINCT u.scope), '
+                        'COUNT(u.id), MAX(u.t) '
+                        'FROM installs i '
+                        'LEFT JOIN uploads u ON u.install_id=i.id '
+                        'GROUP BY i.id ORDER BY i.name')]
+                self._send(200, {'ok': True, 'scopes': scopes,
+                                 'installs': installs})
+            elif u.path == '/v1/scopes':
+                # open like health — lets installers offer real scope
+                # choices instead of asking the user to type one
+                scopes = [r[0] for r in conn.execute(
+                    'SELECT DISTINCT scope FROM uploads')]
+                self._send(200, {'scopes': scopes})
             elif u.path == '/v1/book':
                 scope = (q.get('scope') or [''])[0]
                 if not SCOPE_RE.match(scope):

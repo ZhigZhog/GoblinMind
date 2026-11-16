@@ -187,6 +187,20 @@ def main():
     c, h = req(base, '/v1/health')
     check('health lists test scope', S in (h.get('scopes') or []), h)
 
+    print('== scopes endpoint ==')
+    c, s = req(base, '/v1/scopes')
+    check('/v1/scopes lists test scope',
+          S in (s.get('scopes') or []), s)
+
+    print('== health installs detail ==')
+    names = {i['name'] for i in h.get('installs') or []}
+    check('installs listed by name', {'a', 'b'} <= names, names)
+    a_i = next((i for i in h['installs'] if i['name'] == 'a'), None)
+    check('install a reports uploads + last t',
+          a_i is not None and a_i['uploads'] > 0 and a_i['last'], a_i)
+    check('install scopes attributed',
+          a_i is not None and S in a_i['scopes'], a_i)
+
     print('== keyed registration ==')
     with open(gs.CFG_PATH, 'w') as fh:
         json.dump({'install_secret': 'sekrit'}, fh)

@@ -257,11 +257,12 @@ function M.Status()
 		st.ev and #st.ev or 0, st.mb and #st.mb or 0,
 		st.seq or 0, tostring(db.meshAck or "—")))
 	local be = db.backend or {}
-	GM.Print(format("backend: upload %s%s · pull %s%s",
+	GM.Print(format("backend: upload %s%s · pull %s%s · %d install%s",
 		Ago(be.up and be.up.t),
 		be.up and (be.up.ok and "" or " (failed)") or "",
 		Ago(be.pull and be.pull.t),
-		be.pull and (be.pull.ok and "" or " (failed)") or ""))
+		be.pull and (be.pull.ok and "" or " (failed)") or "",
+		be.peers or 0, be.peers == 1 and "" or "s"))
 end
 
 -- ============ consume handshake + boot ============
