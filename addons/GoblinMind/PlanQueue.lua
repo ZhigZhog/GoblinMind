@@ -1328,7 +1328,21 @@ function PQ.Refresh()
 			ui.exec.text:SetText("QUOTE · OTHER ITEM")
 		else
 			local kind = curStep and curStep.kind
+			-- craft step with a closed line → the secure OPEN overlay
+			-- takes the click (same gate as the crafting window); the
+			-- spell cast opens the line and pendingOpenCraft re-fires
+			local left = kind == "note" and curStep.recipeID
+				and ((curStep.qty or 1) - (curStep.crafted or 0))
+			local opening = GM.Crafting.GateButton
+				and GM.Crafting.GateButton(ui.exec,
+					curStep and curStep.recipeID, left or 1,
+					kind == "note" and curStep ~= nil
+					and curStep.recipeID ~= nil)
+			local openProf = opening and GM.Crafting.Prof
+				and GM.Crafting.Prof(curStep.recipeID)
 			local verb = PQ.stepIndex > #PQ.plan.steps and "PLAN DONE"
+				or opening and ("OPEN "
+					.. (openProf and openProf:upper() or "TRADESKILL"))
 				or kind == "cancel" and "CANCEL NEXT"
 				or kind == "post" and "POST NEXT"
 				or kind == "skip" and "NEXT"

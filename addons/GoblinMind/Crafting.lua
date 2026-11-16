@@ -872,6 +872,51 @@ function C.LineOpenFor(recipeID)
 	return false
 end
 
+-- ============ secure OPEN overlay (shared by CraftingUI + PlanQueue) ============
+-- The overlay is a SecureActionButtonTemplate child of the normal
+-- button: armed, it covers the button and the click casts the
+-- profession spell instead of reaching OnClick. pendingOpenCraft is
+-- stashed so TRADE_SKILL_SHOW re-fires the real craft — one click.
+local function SecureOpenFor(btn)
+	if btn._gmOpen then return btn._gmOpen end
+	local ov = CreateFrame("Button", nil, btn,
+		"SecureActionButtonTemplate")
+	ov:SetAllPoints()
+	ov:SetFrameLevel(btn:GetFrameLevel() + 5)
+	ov:RegisterForClicks(GetCVarBool
+		and GetCVarBool("ActionButtonUseKeyDown")
+		and "LeftButtonDown" or "LeftButtonUp")
+	ov:SetAttribute("type", "spell")
+	ov:HookScript("OnClick", function()
+		C.pendingOpenCraft = { id = ov._rid, qty = ov._qty }
+	end)
+	ov:Hide()
+	btn._gmOpen = ov
+	return ov
+end
+
+-- returns true when an armed OPEN overlay covers the button (the
+-- normal craft click is superseded). `allow` gates arming without
+-- skipping the hide — a button that stops qualifying must still shed
+-- a stale overlay. Protected-frame attribute and visibility changes
+-- are combat-locked, so mid-fight this just leaves the button alone —
+-- C.Craft's own guard reports the closed line.
+function C.GateButton(btn, recipeID, qty, allow)
+	local ov = SecureOpenFor(btn)
+	if InCombatLockdown and InCombatLockdown() then return false end
+	if allow and not C.LineOpenFor(recipeID) then
+		local spell = C.ProfSpell(recipeID)
+		if spell then
+			ov._rid, ov._qty = recipeID, qty
+			ov:SetAttribute("spell", spell)
+			ov:Show()
+			return true
+		end
+	end
+	ov:Hide()
+	return false
+end
+
 -- execute a craft — the same protected call Blizzard's Create buttons
 -- make (verified: CraftRecipe(id,1) produces the item). count>1 is
 -- Blizzard's own multicraft path — one call, N casts. If Forever

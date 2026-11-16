@@ -159,50 +159,14 @@ local function CatPrompt(title, cb)
 end
 
 -- CraftRecipe only acts on the open tradeskill line, and opening the
--- line is a protected spell cast — so when a craft's line isn't open
--- we cover its button with a secure OPEN overlay that casts the
--- profession spell (TSM's SecureSpellButton shape). One click: spell
--- cast → TRADE_SKILL_SHOW → C.pendingOpenCraft re-fires the craft.
-local function SecureOpenFor(btn)
-	if btn._gmOpen then return btn._gmOpen end
-	local ov = CreateFrame("Button", nil, btn,
-		"SecureActionButtonTemplate")
-	ov:SetAllPoints()
-	ov:SetFrameLevel(btn:GetFrameLevel() + 5)
-	ov:RegisterForClicks(GetCVarBool
-		and GetCVarBool("ActionButtonUseKeyDown")
-		and "LeftButtonDown" or "LeftButtonUp")
-	ov:SetAttribute("type", "spell")
-	ov:HookScript("OnClick", function()
-		GM.Crafting.pendingOpenCraft = { id = ov._rid, qty = ov._qty }
-	end)
-	ov:Hide()
-	btn._gmOpen = ov
-	return ov
-end
-
--- returns true when an armed OPEN overlay covers the button (the
--- normal craft click is superseded). `allow` gates arming without
--- skipping the hide — a button that stops qualifying must still shed
--- a stale overlay. Protected-frame attribute and visibility changes
--- are combat-locked, so mid-fight this just leaves the button alone —
--- C.Craft's own guard reports the closed line.
+-- line is a protected spell cast — when a craft's line isn't open,
+-- C.GateButton covers the button with a secure OPEN overlay that casts
+-- the profession spell (Crafting.lua — shared with the plan window's
+-- exec button). One click: spell cast → TRADE_SKILL_SHOW →
+-- C.pendingOpenCraft re-fires the craft.
 local function GateCraft(btn, recipeID, qty, allow)
-	local ov = SecureOpenFor(btn)
-	if InCombatLockdown and InCombatLockdown() then return false end
-	if allow and not (GM.Crafting.LineOpenFor
-		and GM.Crafting.LineOpenFor(recipeID)) then
-		local spell = GM.Crafting.ProfSpell
-			and GM.Crafting.ProfSpell(recipeID)
-		if spell then
-			ov._rid, ov._qty = recipeID, qty
-			ov:SetAttribute("spell", spell)
-			ov:Show()
-			return true
-		end
-	end
-	ov:Hide()
-	return false
+	return GM.Crafting.GateButton
+		and GM.Crafting.GateButton(btn, recipeID, qty, allow)
 end
 
 local function BuildUI()
