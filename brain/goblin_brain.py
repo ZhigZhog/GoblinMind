@@ -1205,15 +1205,19 @@ def cmd_book(sv_arg, out_paths, root=None, feed=None, realm=None):
             for k in ('mbx', 'n'):
                 if e.get(k) is not None:
                     m[k] = e[k]
+            # our self-computed fields (hist/recent/rsale/rsalep/reset)
+            # follow the same freshness rule as the shared fields —
+            # fresher book wins outright, fresher feed keeps its own
+            own = ('hist', 'recent', 'rsale', 'rsalep', 'reset')
             if book_fresh:
-                for k in ('mb', 'sup', 'p', 'mkt', 'vel'):
+                for k in ('mb', 'sup', 'p', 'mkt', 'vel') + own:
                     if e.get(k) is not None and (
                             k not in ('p', 'mkt') or p_sane):
                         m[k] = e[k]
             else:
                 # backend newer — book listing fields still fill gaps
                 # where the feed has nothing for this item
-                for k in ('mb', 'sup', 'p', 'mkt', 'vel'):
+                for k in ('mb', 'sup', 'p', 'mkt', 'vel') + own:
                     if m.get(k) is None and e.get(k) is not None:
                         m[k] = e[k]
             merged[iid] = m
