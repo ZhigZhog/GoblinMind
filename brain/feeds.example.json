@@ -9,7 +9,7 @@
    "C:/path/to/WoW/_forever_/Interface/AddOns/GoblinMind_Data/Data.lua"
   ]
  },
- "_comment": "api block = the TSM-free feed (see WoWVault/Proposals/api-feed-proposal.md). Register a client at develop.battle.net for client_id/secret; realms maps our scope name to the connected-realm ID from /data/wow/connected-realm/index. This whole block is machine-local \u00e2\u20ac\u201d never commit real secrets.",
+ "_comment": "api block = the Blizzard Game Data feed. Create YOUR OWN client at develop.battle.net/access/clients (install.bat walks you through it) \u2014 never ship or reuse someone else's credentials; abuse lands on their account. realms maps our scope name to the connected-realm ID (0 = resolve via the realm index). Machine-local \u2014 never commit real secrets.",
  "api": {
   "namespace": "dynamic-us",
   "region": "us",

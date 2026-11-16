@@ -16,6 +16,7 @@ from __file__ the same way `watch self` does, so no path questions
 when the layout is right.
 """
 import argparse
+import base64
 import ctypes
 import json
 import os
@@ -23,6 +24,8 @@ import re
 import socket
 import subprocess
 import sys
+import urllib.request
+import webbrowser
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STARTUP = os.path.expandvars(
@@ -65,7 +68,7 @@ def ask(prompt, default=None):
     return ans or default
 
 
-def write_feeds(url, name, scopes, key=None):
+def write_feeds(url, name, scopes, key=None, api=None):
     cfg = {}
     if os.path.isfile(FEEDS):
         try:
@@ -77,10 +80,56 @@ def write_feeds(url, name, scopes, key=None):
                       'upload': True}
     if key:
         cfg['backend']['key'] = key
+    if api:
+        cfg['api'] = api
     with open(FEEDS, 'w', encoding='utf-8') as fh:
         json.dump(cfg, fh, indent=1)
         fh.write('\n')
     print(f'  wrote {FEEDS} (backend: {url}, scopes: {scopes})')
+
+
+def validate_api_key(cid, csec):
+    """client_credentials round-trip — a typo'd key fails here at
+    install time instead of silently dead-ending the api feed."""
+    cred = base64.b64encode(f'{cid}:{csec}'.encode()).decode()
+    req = urllib.request.Request(
+        'https://oauth.battle.net/token?grant_type=client_credentials',
+        data=b'', method='POST',
+        headers={'Authorization': 'Basic ' + cred})
+    try:
+        json.load(urllib.request.urlopen(req, timeout=15))
+        return True
+    except Exception:
+        return False
+
+
+def api_block(scopes, region):
+    """Prompt for the player's OWN Blizzard client credentials — a
+    packager's key must never ship (abuse lands on their account).
+    realms resolve lazily via the realm index ({scope: 0})."""
+    print()
+    print('Blizzard API feed — you need your OWN client credentials:')
+    print('  1. Sign in on the page that just opened (Battle.net account)')
+    print('  2. Create Client — any name, any redirect URI')
+    print('  3. Paste the Client ID and Client Secret below')
+    print('  (no browser? https://develop.battle.net/access/clients)')
+    try:
+        webbrowser.open('https://develop.battle.net/access/clients')
+    except Exception:
+        pass
+    cid = ask("Client ID ('skip' to disable the Blizzard feed)")
+    if not cid or cid.lower() == 'skip':
+        return None
+    csec = ask('Client Secret')
+    if not csec:
+        return None
+    if not validate_api_key(cid, csec):
+        print('  warning: token round-trip failed for those credentials')
+        if ask('Save them anyway? (y/N)') not in ('y', 'yes'):
+            return None
+    return {'namespace': 'dynamic-' + region, 'region': region,
+            'client_id': cid, 'client_secret': csec,
+            'realms': {s: 0 for s in scopes}, 'poll_minutes': 30}
 
 
 def write_bat(path, title, cmd):
@@ -122,6 +171,12 @@ def main():
     ap.add_argument('--key',
                     help='shared install secret if the backend gates '
                          'registration (blank = open backend)')
+    ap.add_argument('--api-id', help='Blizzard API client ID')
+    ap.add_argument('--api-secret', help='Blizzard API client secret')
+    ap.add_argument('--region', default='us',
+                    help='API region: us/eu/kr/tw (default us)')
+    ap.add_argument('--skip-api', action='store_true',
+                    help='disable the Blizzard API feed entirely')
     ap.add_argument('--host', action='store_true',
                     help='also run the backend server here + firewall rule')
     ap.add_argument('--dev', action='store_true',
@@ -162,9 +217,21 @@ def main():
         sys.exit('at least one scope is required')
     key = a.key or ask('Shared install key (leave blank if the '
                        'backend has none)')
+    api = None
+    if a.api_id and a.api_secret:
+        api = {'namespace': 'dynamic-' + a.region, 'region': a.region,
+               'client_id': a.api_id, 'client_secret': a.api_secret,
+               'realms': {s: 0 for s in scopes}, 'poll_minutes': 30}
+        if not validate_api_key(a.api_id, a.api_secret):
+            print('  warning: API credentials failed a token round-trip')
+    elif not a.skip_api:
+        api = api_block(scopes, a.region)
+        if api is None:
+            print('  Blizzard feed disabled — the backend feed still '
+                  'works; rerun the installer to add a key later')
 
     print('GoblinMind install:')
-    write_feeds(url, name, scopes, key)
+    write_feeds(url, name, scopes, key, api)
     if addon_root():
         write_bat(WATCH_BAT, 'GoblinMind Brain',
                   'python goblin_brain.py watch self -v --feed book')

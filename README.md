@@ -14,14 +14,19 @@ file themselves to the private tracker (see below).
 2. Enable both addons at the character select screen.
 3. **Run the installer** — double-click
    `Interface/AddOns/GoblinMind/brain/install.bat` once (needs
-   Python 3.x on PATH). It writes `feeds.json` (your realm scope +
-   the shared backend's address) and registers the brain watcher to
-   auto-start at login. Prefer manual? Skip the installer and just
-   double-click `goblin-watch.bat` while you play. Either way, without
-   the watcher prices stay frozen at whatever shipped in the zip.
-   To *host* the shared backend on your machine, run
-   `install.bat --host` instead (also starts `goblin_server.py` and
-   adds the firewall rule — needs an admin shell for the rule).
+   Python 3.x on PATH). It writes `feeds.json` (your realm scope,
+   the shared backend's address, and the install key if the host
+   uses one) and registers the brain watcher to auto-start at login.
+   It also opens develop.battle.net so you can create **your own
+   free API client** for the Blizzard feed — paste the Client ID and
+   Secret when asked (they're validated on the spot; `skip` disables
+   that feed — the backend feed works regardless). Prefer manual?
+   Skip the installer and just double-click `goblin-watch.bat` while
+   you play. Either way, without the watcher prices stay frozen at
+   whatever shipped in the zip. To *host* the shared backend on
+   your machine, run `install.bat --host` instead (also starts
+   `goblin_server.py` and adds the firewall rule — needs an admin
+   shell for the rule).
 4. `/reload` (or relog), then open the auction house once — GoblinMind
    builds its own price book from the live AH (FULL SCAN button in the
    AH window, or it collects passively in the background).
