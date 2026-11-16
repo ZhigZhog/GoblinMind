@@ -131,6 +131,22 @@ SlashCmdList.GOBLINMIND = function(msg)
 		GM.Crafting.CraftProbe(strtrim(msg:sub(11)))
 		return
 	end
+	if msg:sub(1, 9) == "fontcheck" then
+		-- font health probe: a dead file reports zero glyph width —
+		-- catches the first-run stall that blanked FONT_MED labels
+		for _, pair in ipairs({
+			{ "FONT", GM.FONT }, { "MED", GM.FONT_MED },
+			{ "BOLD", GM.FONT_BOLD },
+		}) do
+			local fs = UIParent:CreateFontString(nil, "OVERLAY")
+			local ok = fs:SetFont(pair[2], 11, "")
+			fs:SetText("probe")
+			local w = fs.GetStringWidth and fs:GetStringWidth() or -1
+			GM.Print(format("%s set=%s width=%s",
+				pair[1], tostring(ok), tostring(w)))
+		end
+		return
+	end
 	if msg:sub(1, 6) == "market" or msg:sub(1, 4) == "shop" then
 		GM.Shopping.Toggle()
 		return

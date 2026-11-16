@@ -93,12 +93,18 @@ end
 function GM.MakeFontString(parent, template, size, colorKey)
 	local fs = parent:CreateFontString(nil, "OVERLAY")
 	-- a custom font that fails to resolve must degrade, not blank the
-	-- UI — Medium.ttf failed once on a first-run install and every
-	-- FONT_MED label rendered nothing until /reload
+	-- UI — a first-run install blanked every FONT_MED label until
+	-- /reload. This client's SetFont doesn't return false on failure,
+	-- so prove the font works by measuring a real glyph — a dead font
+	-- reports zero width.
 	local ok = fs:SetFont(template or GM.FONT, size or 11, "")
-	if ok == false then
-		fs:SetFont("Fonts\\FRIZQT__.TTF", size or 11, "")
+	local dead = ok == false
+	if not dead and fs.GetStringWidth then
+		fs:SetText("1")
+		dead = fs:GetStringWidth() == 0
+		fs:SetText("")
 	end
+	if dead then fs:SetFont("Fonts\\FRIZQT__.TTF", size or 11, "") end
 	fs:SetTextColor(GM.RGB(colorKey or "text"))
 	return fs
 end
