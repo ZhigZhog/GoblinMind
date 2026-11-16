@@ -1,0 +1,240 @@
+#!/usr/bin/env python3
+"""GoblinMind backend service — the crowdsourced feed.
+
+Deliberately dumb: it stores per-install book snapshots, merges them
+newest-wins per item, and serves the merged book. All price math
+(mkt/hist/recent/sales) stays client-side in goblin_brain.py — pulled
+books feed each install's book_history like any other book, so stats
+evolve from the merged feed without the server knowing statistics.
+
+Endpoints (all JSON):
+  POST /v1/register  {name}                      -> {install_id, token}
+  POST /v1/upload    Authorization: Bearer tok   {scope, t, items, lots?}
+  GET  /v1/book?scope=S                          -> {scope, t, items, lots}
+  GET  /v1/health                                -> {ok, scopes}
+
+Usage: goblin_server.py [port]          (default 8765)
+State: goblin_backend.db (sqlite) next to the script.
+"""
+import json
+import os
+import re
+import secrets
+import sqlite3
+import sys
+import threading
+import time
+import urllib.parse
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+DB_PATH = os.path.join(os.path.dirname(
+    os.path.abspath(__file__)), 'goblin_backend.db')
+SCOPE_RE = re.compile(r'^[\w \'\-()]{1,64}$')
+MAX_ITEMS = 400000        # sanity cap — a realm AH won't exceed this
+MAX_PRICE = 10 ** 12      # copper; rejects poisoned/bugged payloads
+KEEP_PER_INSTALL = 200    # uploads retained per (install, scope)
+
+
+def db():
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute('''CREATE TABLE IF NOT EXISTS installs(
+        id INTEGER PRIMARY KEY, name TEXT, token TEXT UNIQUE,
+        created REAL)''')
+    conn.execute('''CREATE TABLE IF NOT EXISTS uploads(
+        id INTEGER PRIMARY KEY, install_id INTEGER, scope TEXT,
+        t REAL, items TEXT, lots TEXT,
+        UNIQUE(install_id, scope, t))''')
+    conn.execute('''CREATE INDEX IF NOT EXISTS up_scope_t
+        ON uploads(scope, t)''')
+    conn.execute('''CREATE TABLE IF NOT EXISTS rate(
+        install_id INTEGER, bucket REAL, n INTEGER,
+        PRIMARY KEY(install_id, bucket))''')
+    return conn
+
+
+def clean_entry(e):
+    """Whitelisted int-coerced item entry — strips anything malformed
+    before it can reach the merged book."""
+    if not isinstance(e, dict):
+        return None
+    out = {}
+    for k in ('mb', 'mbx', 'sup', 'n'):
+        v = e.get(k)
+        if v is None:
+            out[k] = None
+            continue
+        try:
+            v = int(v)
+        except (TypeError, ValueError):
+            return None
+        if v < 0 or v > MAX_PRICE:
+            return None
+        out[k] = v
+    return out
+
+
+def clean_items(items):
+    out = {}
+    for iid, e in (items or {}).items():
+        try:
+            iid = int(iid)
+        except (TypeError, ValueError):
+            continue
+        ce = clean_entry(e)
+        if ce:
+            out[iid] = ce
+    return out
+
+
+def merged_book(conn, scope):
+    """Newest-upload-wins per item across all contributors, plus the
+    lots map from the upload that provided each item."""
+    rows = conn.execute(
+        'SELECT t, items, lots FROM uploads WHERE scope=? '
+        'ORDER BY t ASC', (scope,)).fetchall()
+    items, lots, newest = {}, {}, 0
+    for t, items_j, lots_j in rows:
+        its = json.loads(items_j)
+        lts = json.loads(lots_j or '{}')
+        newest = max(newest, t)
+        for iid in its:
+            items[iid] = its[iid]          # later rows overwrite
+            lots_iid = {f: n for f, n in lts.items()
+                        if f.split(':', 1)[0] == str(iid)}
+            for f in list(lots):
+                if f.split(':', 1)[0] == str(iid):
+                    lots.pop(f)
+            lots.update(lots_iid)
+    return {'scope': scope, 't': int(newest) if newest else None,
+            'items': items, 'lots': lots}
+
+
+class Handler(BaseHTTPRequestHandler):
+    protocol_version = 'HTTP/1.1'
+
+    def _send(self, code, obj):
+        body = json.dumps(obj).encode()
+        self.send_response(code)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _body(self):
+        try:
+            n = int(self.headers.get('Content-Length') or 0)
+        except ValueError:
+            return None
+        if n <= 0 or n > 64 * 1024 * 1024:
+            return None
+        try:
+            return json.loads(self.rfile.read(n))
+        except ValueError:
+            return None
+
+    def _auth(self, conn):
+        h = self.headers.get('Authorization') or ''
+        if not h.startswith('Bearer '):
+            return None
+        row = conn.execute('SELECT id FROM installs WHERE token=?',
+                           (h[7:],)).fetchone()
+        return row[0] if row else None
+
+    def log_message(self, fmt, *args):
+        sys.stderr.write('%s %s\n' % (self.address_string(),
+                                      fmt % args))
+
+    def do_GET(self):
+        u = urllib.parse.urlparse(self.path)
+        q = urllib.parse.parse_qs(u.query)
+        conn = db()
+        try:
+            if u.path == '/v1/health':
+                scopes = [r[0] for r in conn.execute(
+                    'SELECT DISTINCT scope FROM uploads')]
+                self._send(200, {'ok': True, 'scopes': scopes})
+            elif u.path == '/v1/book':
+                scope = (q.get('scope') or [''])[0]
+                if not SCOPE_RE.match(scope):
+                    self._send(400, {'error': 'bad scope'})
+                    return
+                self._send(200, merged_book(conn, scope))
+            else:
+                self._send(404, {'error': 'not found'})
+        finally:
+            conn.close()
+
+    def do_POST(self):
+        u = urllib.parse.urlparse(self.path)
+        conn = db()
+        try:
+            if u.path == '/v1/register':
+                body = self._body() or {}
+                tok = secrets.token_urlsafe(24)
+                cur = conn.execute(
+                    'INSERT INTO installs(name, token, created) '
+                    'VALUES(?,?,?)',
+                    (str(body.get('name') or 'install')[:64],
+                     tok, time.time()))
+                conn.commit()
+                self._send(200, {'install_id': cur.lastrowid,
+                                 'token': tok})
+                return
+            install = self._auth(conn)
+            if install is None:
+                self._send(401, {'error': 'auth'})
+                return
+            if u.path != '/v1/upload':
+                self._send(404, {'error': 'not found'})
+                return
+            # 10 uploads / 10 minutes per install
+            bucket = time.time() // 600
+            conn.execute(
+                'INSERT INTO rate(install_id,bucket,n) VALUES(?,?,1) '
+                'ON CONFLICT(install_id,bucket) DO UPDATE SET n=n+1',
+                (install, bucket))
+            if (conn.execute('SELECT n FROM rate WHERE install_id=? '
+                             'AND bucket=?', (install, bucket))
+                    .fetchone()[0]) > 10:
+                conn.commit()
+                self._send(429, {'error': 'rate'})
+                return
+            body = self._body()
+            if not isinstance(body, dict):
+                self._send(400, {'error': 'body'})
+                return
+            scope = str(body.get('scope') or '')
+            t = body.get('t')
+            items = clean_items(body.get('items'))
+            lots = body.get('lots') or {}
+            if not SCOPE_RE.match(scope) or not isinstance(
+                    t, (int, float)) or not items or \
+                    len(items) > MAX_ITEMS:
+                self._send(400, {'error': 'payload'})
+                conn.commit()
+                return
+            lots = {str(k): int(v) for k, v in lots.items()
+                    if isinstance(v, (int, float))}
+            conn.execute(
+                'INSERT OR REPLACE INTO '
+                'uploads(install_id,scope,t,items,lots) '
+                'VALUES(?,?,?,?,?)',
+                (install, scope, float(t), json.dumps(items),
+                 json.dumps(lots)))
+            # retention: keep newest KEEP_PER_INSTALL per install+scope
+            conn.execute(
+                'DELETE FROM uploads WHERE install_id=? AND scope=? '
+                'AND id NOT IN (SELECT id FROM uploads WHERE '
+                'install_id=? AND scope=? ORDER BY t DESC LIMIT ?)',
+                (install, scope, install, scope, KEEP_PER_INSTALL))
+            conn.commit()
+            self._send(200, {'ok': True, 'items': len(items)})
+        finally:
+            conn.close()
+
+
+if __name__ == '__main__':
+    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8765
+    srv = ThreadingHTTPServer(('0.0.0.0', port), Handler)
+    print('goblin backend on :%d -> %s' % (port, DB_PATH))
+    srv.serve_forever()

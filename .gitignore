@@ -21,3 +21,4 @@ dist/
 tmp/
 brain/api_state.json
 brain/api_book.json
+brain/goblin_backend.db

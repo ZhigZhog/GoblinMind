@@ -811,7 +811,8 @@ def api_poll(cfg=None):
             # Inventory.lua's itemID:qty:buyout)
             fp = '%s:%s:%s' % (iid, qty, u)
             lots[fp] = lots.get(fp, 0) + 1
-        books[scope] = {'t': now, 'items': items, 'lots': lots}
+        books[scope] = {'t': now, 'items': items, 'lots': lots,
+                        'remote': True}
         LOG.info('api poll %s: %d lots, %d items', scope,
                  sum(lots.values()), len(items))
     tmp = API_BOOK_PATH + '.tmp'
@@ -822,8 +823,8 @@ def api_poll(cfg=None):
 
 
 def api_books():
-    """Stored API snapshot as book-shaped entries for cmd_book's
-    books_by_scope merge — {scope: {t, items}}."""
+    """Stored remote snapshot as book-shaped entries for cmd_book's
+    books_by_scope merge — {scope: {t, items, lots, remote}}."""
     try:
         with open(API_BOOK_PATH, encoding='utf-8') as fh:
             data = json.load(fh)
@@ -831,6 +832,113 @@ def api_books():
         return {}
     return {s: b for s, b in (data.get('books') or {}).items()
             if b and b.get('items')}
+
+
+# ---------- GoblinMind backend feed (crowdsourced, replaces TSM) ----------
+# Forever isn't in Blizzard's public API (verified — see the api-feed
+# proposal §2), so the always-on feed is our own service: installs
+# upload their newest book per scope, the server merges newest-wins,
+# clients pull the merged book back into api_book.json. All statistics
+# still compute client-side — the merged book feeds book_history like
+# any other book.
+
+def _backend_cfg():
+    """feeds.json 'backend' block — {url, scopes[], poll_minutes,
+    upload, name}. The bearer auto-registers into api_state.json on
+    first use."""
+    return (load_feeds() or {}).get('backend') or {}
+
+
+def _backend_token(cfg):
+    st = _load_api_state()
+    tok = st.get('backend_token')
+    if tok:
+        return tok
+    req = urllib.request.Request(
+        cfg['url'].rstrip('/') + '/v1/register',
+        data=json.dumps(
+            {'name': cfg.get('name') or 'goblinmind'}).encode(),
+        headers={'Content-Type': 'application/json'}, method='POST')
+    resp = json.load(urllib.request.urlopen(req, timeout=30))
+    st['backend_token'] = resp['token']
+    _save_api_state(st)
+    return resp['token']
+
+
+def _backend_req(cfg, path, body=None):
+    headers = {'Authorization': 'Bearer ' + _backend_token(cfg)}
+    data = None
+    if body is not None:
+        data = json.dumps(body).encode()
+        headers['Content-Type'] = 'application/json'
+    req = urllib.request.Request(cfg['url'].rstrip('/') + path,
+                                 data=data, headers=headers,
+                                 method='POST' if data else 'GET')
+    return json.load(urllib.request.urlopen(req, timeout=120))
+
+
+def backend_pull(cfg=None):
+    """GET /v1/book per configured scope → remote-flagged entries in
+    the shared remote-book store (api_book.json)."""
+    cfg = cfg or _backend_cfg()
+    if not cfg.get('url'):
+        return {}
+    scopes = cfg.get('scopes') or []
+    if isinstance(scopes, str):
+        scopes = [scopes]
+    books = {}
+    for scope in scopes:
+        d = _backend_req(cfg, '/v1/book?' + urllib.parse.urlencode(
+            {'scope': scope}))
+        if d.get('items'):
+            books[scope] = {'t': int(d.get('t') or time.time()),
+                            'items': d['items'],
+                            'lots': d.get('lots') or {},
+                            'remote': True}
+            LOG.info('backend pull %s: %d items', scope,
+                     len(d['items']))
+    if books:
+        try:
+            with open(API_BOOK_PATH, encoding='utf-8') as fh:
+                cur = json.load(fh)
+        except (OSError, ValueError):
+            cur = {}
+        cur.setdefault('books', {}).update(books)
+        tmp = API_BOOK_PATH + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as fh:
+            json.dump(cur, fh)
+        os.replace(tmp, API_BOOK_PATH)
+    return books
+
+
+def backend_upload_books(books_by_scope, cfg=None):
+    """POST each scope's newest LOCAL book (remote-flagged entries are
+    pulled, not ours). Runs inside cmd_book so uploads piggyback every
+    emit but only fire when a scope's book is genuinely newer."""
+    cfg = cfg or _backend_cfg()
+    if not cfg.get('url') or cfg.get('upload') is False:
+        return
+    st = _load_api_state()
+    last_up = st.get('backend_up') or {}
+    for scope, books in books_by_scope.items():
+        local = [b for b in books
+                 if not b.get('remote') and b.get('t')]
+        if not local:
+            continue
+        newest = max(local, key=lambda b: b['t'])
+        if newest['t'] <= last_up.get(scope, 0):
+            continue
+        try:
+            r = _backend_req(cfg, '/v1/upload', {
+                'scope': scope, 't': newest['t'],
+                'items': newest['items']})
+            last_up[scope] = newest['t']
+            LOG.info('backend upload %s: %d items', scope,
+                     r.get('items', 0))
+        except Exception:
+            LOG.exception('backend upload failed: %s', scope)
+    st['backend_up'] = last_up
+    _save_api_state(st)
 
 
 def cmd_book(sv_arg, out_paths, root=None, feed=None, realm=None):
@@ -865,6 +973,9 @@ def cmd_book(sv_arg, out_paths, root=None, feed=None, realm=None):
     # beats a stale scan and vice versa
     for scope, b in api_books().items():
         books_by_scope.setdefault(scope, []).append(b)
+    # push each scope's newest local book upstream — remote-flagged
+    # (pulled) entries skip themselves inside
+    backend_upload_books(books_by_scope)
     now = time.time()
 
     hist = load_book_hist()  # {scope: {iid: [[ts,mb,sup,n],...]}}
@@ -1257,6 +1368,10 @@ def cmd_watch(appdata, outs, interval=5, settle=20, feed='tsm',
     api_cfg_raw = _api_cfg() if feed == 'book' else {}
     api_poll_secs = float(api_cfg_raw.get('poll_minutes', 30)) * 60
     last_api_poll = time.time()  # first poll after one full interval
+    backend_cfg_raw = _backend_cfg() if feed == 'book' else {}
+    backend_poll_secs = float(
+        backend_cfg_raw.get('poll_minutes', 15)) * 60
+    last_backend_poll = time.time()
     LOG.info('watching %s', appdata)
     LOG.info('outputs: %s', ' ; '.join(outs))
     LOG.info('poll=%ss settle=%ss', interval, settle)
@@ -1340,6 +1455,15 @@ def cmd_watch(appdata, outs, interval=5, settle=20, feed='tsm',
                 emit_book('api poll')
             except Exception:  # network hiccups must not kill the loop
                 LOG.exception('api poll failed')
+        # backend pull: our crowdsourced merged book on its own cadence
+        if feed == 'book' and backend_cfg_raw.get('url') and \
+                now - last_backend_poll >= backend_poll_secs:
+            last_backend_poll = now
+            try:
+                backend_pull(backend_cfg_raw)
+                emit_book('backend pull')
+            except Exception:
+                LOG.exception('backend pull failed')
         # cadence floor: book mode re-merges at least once an hour —
         # keeps `generated` moving through quiet stretches so the
         # addon's staleness flag means what it says

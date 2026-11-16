@@ -9,8 +9,7 @@
       "C:/path/to/WoW/_forever_/Interface/AddOns/GoblinMind_Data/Data.lua"
     ]
   },
-
-  "_comment": "api block = the TSM-free feed (see WoWVault/Proposals/api-feed-proposal.md). Register a client at develop.battle.net for client_id/secret; realms maps our scope name to the connected-realm ID from /data/wow/connected-realm/index. This whole block is machine-local — never commit real secrets.",
+  "_comment": "api block = the TSM-free feed (see WoWVault/Proposals/api-feed-proposal.md). Register a client at develop.battle.net for client_id/secret; realms maps our scope name to the connected-realm ID from /data/wow/connected-realm/index. This whole block is machine-local \u00e2\u20ac\u201d never commit real secrets.",
   "api": {
     "namespace": "dynamic-us",
     "region": "us",
@@ -20,5 +19,15 @@
       "YOURREALM-Faction": 0
     },
     "poll_minutes": 30
+  },
+  "_comment_backend": "backend block = the crowdsourced GoblinMind feed (WoWVault/Proposals/api-feed-proposal.md). url points at a goblin_server.py instance; the bearer token auto-registers into api_state.json on first use. scopes = your GM.Scope() names. upload=false makes a read-only client. Machine-local \u2014 never shipped.",
+  "backend": {
+    "url": "http://YOUR-BACKEND-HOST:8765",
+    "name": "my-install",
+    "scopes": [
+      "YOURREALM-Faction"
+    ],
+    "poll_minutes": 15,
+    "upload": true
   }
 }
