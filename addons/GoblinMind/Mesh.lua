@@ -25,6 +25,7 @@ local Send = C_ChatInfo and C_ChatInfo.SendAddonMessage
 	or SendAddonMessage
 local RegPrefix = C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix
 local chanID, sendQ, pumping = 0, {}, false
+M.stats = { sent = 0, heard = 0, lastSend = nil, lastHear = nil }
 
 -- ============ channel lifecycle ============
 
@@ -51,7 +52,11 @@ local function Pump()
 	local msg = tremove(sendQ, 1)
 	if not msg then pumping = false return end
 	if chanID > 0 then
-		pcall(Send, PREFIX, msg, "CHANNEL", chanID)
+		local ok, sent = pcall(Send, PREFIX, msg, "CHANNEL", chanID)
+		if ok and sent ~= false then
+			M.stats.sent = M.stats.sent + 1
+			M.stats.lastSend = time()
+		end
 	else
 		tinsert(sendQ, 1, msg) -- channel lost — keep, retry next tick
 	end
@@ -182,6 +187,8 @@ local function OnAddon(_, prefix, msg, ctype, sender)
 		"^(%d+)|(%u+)|([^|]*)|?(.*)$")
 	if proto ~= "1" or not body then return end
 	local t = time()
+	M.stats.heard = M.stats.heard + 1
+	M.stats.lastHear = t
 	if kind == "S" then
 		for rec in body:gmatch("[^,]+") do
 			local i, u, p, c, l = rec:match(
@@ -218,6 +225,40 @@ function M.Test()
 	Stage("mb", STAGE_CAP, { t = time(), s = GM.Scope(),
 		i = 2589, m = 2500, q = 500 })
 	GM.Print("mesh: staged test event + beacon — reload to flush SV")
+end
+
+-- ============ status ============
+
+local function Ago(t)
+	if not t then return "never" end
+	local s = time() - t
+	if s < 90 then return s .. "s ago" end
+	if s < 5400 then return format("%dm ago", s / 60) end
+	if s < 129600 then return format("%dh ago", s / 3600) end
+	return ">36h ago"
+end
+
+function M.Status()
+	local db = GoblinMindDB or {}
+	local ch = chanID > 0 and chanID or (FindChannel() or 0)
+	local st = GM.db and GM.db.mesh or {}
+	local nScopes = 0
+	for _ in pairs(db.realms or {}) do nScopes = nScopes + 1 end
+	GM.Print(format("feed: %s · DB %s · %d scopes",
+		db.feed or "?", Ago(db.generated), nScopes))
+	GM.Print(format("mesh: %s · sent %d (%s) · heard %d (%s) · staged %d ev / %d mb · seq %d · ack %s",
+		ch > 0 and ("joined " .. CHANNEL .. " (ch " .. ch .. ")")
+			or "not joined",
+		M.stats.sent, Ago(M.stats.lastSend),
+		M.stats.heard, Ago(M.stats.lastHear),
+		st.ev and #st.ev or 0, st.mb and #st.mb or 0,
+		st.seq or 0, tostring(db.meshAck or "—")))
+	local be = db.backend or {}
+	GM.Print(format("backend: upload %s%s · pull %s%s",
+		Ago(be.up and be.up.t),
+		be.up and (be.up.ok and "" or " (failed)") or "",
+		Ago(be.pull and be.pull.t),
+		be.pull and (be.pull.ok and "" or " (failed)") or ""))
 end
 
 -- ============ consume handshake + boot ============

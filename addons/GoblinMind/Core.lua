@@ -104,6 +104,10 @@ SlashCmdList.GOBLINMIND = function(msg)
 		if GM.BugReport then GM.BugReport.Show() end
 		return
 	end
+	if msg == "status" then
+		if GM.Mesh and GM.Mesh.Status then GM.Mesh.Status() end
+		return
+	end
 	if msg == "minimap" then
 		GM.db.minimapHide = not GM.db.minimapHide
 		if GM.minimapBtn then GM.minimapBtn:SetShown(not GM.db.minimapHide) end

@@ -899,8 +899,12 @@ def backend_pull(cfg=None):
         scopes = [scopes]
     books = {}
     for scope in scopes:
-        d = _backend_req(cfg, '/v1/book?' + urllib.parse.urlencode(
-            {'scope': scope}))
+        try:
+            d = _backend_req(cfg, '/v1/book?' + urllib.parse.urlencode(
+                {'scope': scope}))
+        except Exception:
+            _backend_health('pull', False)
+            raise
         if d.get('items'):
             books[scope] = {'t': int(d.get('t') or time.time()),
                             'items': d['items'],
@@ -908,6 +912,8 @@ def backend_pull(cfg=None):
                             'remote': True}
             LOG.info('backend pull %s: %d items', scope,
                      len(d['items']))
+    if scopes:
+        _backend_health('pull', True, len(books))
     if books:
         try:
             with open(API_BOOK_PATH, encoding='utf-8') as fh:
@@ -921,6 +927,15 @@ def backend_pull(cfg=None):
         os.replace(tmp, API_BOOK_PATH)
         delta_record(books)
     return books
+
+
+def _backend_health(kind, ok, n=0):
+    """last-attempt status per direction, surfaced in the emitted DB
+    so /goblin status can report backend health."""
+    st = _load_api_state()
+    st.setdefault('backend', {})[kind] = {
+        't': int(time.time()), 'n': n, 'ok': ok}
+    _save_api_state(st)
 
 
 def backend_upload_books(books_by_scope, cfg=None):
@@ -946,9 +961,11 @@ def backend_upload_books(books_by_scope, cfg=None):
                 'items': newest['items'],
                 'lots': newest.get('lots') or {}})
             last_up[scope] = newest['t']
+            _backend_health('up', True, r.get('items', 0))
             LOG.info('backend upload %s: %d items', scope,
                      r.get('items', 0))
         except Exception:
+            _backend_health('up', False)
             LOG.exception('backend upload failed: %s', scope)
     st['backend_up'] = last_up
     _save_api_state(st)
@@ -1378,6 +1395,8 @@ def cmd_book(sv_arg, out_paths, root=None, feed=None, realm=None):
         'regionAge': tsm_region_age or None,
         'feed': feed,
         'meshAck': mesh_seq,
+        # last-attempt backend health for /goblin status
+        'backend': _load_api_state().get('backend') or {},
         'realms': realms,
         'items': flat.get('items', {}),
         # vendorBuy is static data scraped from TSM's own addon files —
