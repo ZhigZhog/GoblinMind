@@ -303,6 +303,7 @@ end
 GM.AH.book = nil
 GM.AH.bookT = 0
 GM.AH.bookSubs = {}
+GM.AH.bookLots = nil -- iid:qty:unit lot fingerprints (others' listings)
 
 -- The aggregate book persists in SavedVariables across sessions so a
 -- login doesn't force a fresh full scan. Per-auction rows are
@@ -322,7 +323,8 @@ function GM.AH.SaveBook()
 	GM.db.books = GM.db.books or {}
 	local scope = GM.Scope()
 	GM.db.books[scope] = { t = GM.AH.bookT,
-		kind = GM.AH.bookKind, scope = scope, items = items }
+		kind = GM.AH.bookKind, scope = scope, items = items,
+		lots = GM.AH.bookLots }
 	-- migrate legacy flat book once, then drop it
 	GM.db.book = nil
 end
@@ -339,6 +341,7 @@ function GM.AH.RestoreBook()
 			sup = e.sup, n = e.n }
 	end
 	GM.AH.book, GM.AH.bookT, GM.AH.bookKind = book, s.t or time(), s.kind
+	GM.AH.bookLots = s.lots
 end
 
 function GM.AH.FullScan()
@@ -588,7 +591,7 @@ function GM.AH.CollectBook()
 			ownSet[a.itemID .. ":" .. a.qty .. ":" .. a.buyout] = true
 		end
 	end
-	local rows, book = {}, {}
+	local rows, book, lots = {}, {}, {}
 	local i = 0
 	local lastReport = 0
 	local buyIdx -- field position of buyoutPrice; detected once below
@@ -599,6 +602,7 @@ function GM.AH.CollectBook()
 		GM.AH.lastBookN = n
 		GM.AH.bookKind = "replicate"
 		GM.AH.book, GM.AH.bookT = book, time()
+		GM.AH.bookLots = lots
 		pcall(GM.AH.SaveBook) -- persistence failure must not kill completion
 		-- drop expiry estimates for listings that left this scan —
 		-- dead or relisted, either way the anchor is stale
@@ -705,6 +709,12 @@ function GM.AH.CollectBook()
 					if not own and unit < e.mbx then e.mbx = unit end
 					e.sup = e.sup + stackSize
 					e.n = e.n + 1
+				end
+				-- lot fingerprint for the brain's sale-delta engine —
+				-- others' listings only; own cancels would read as sales
+				if not own then
+					local fp = id .. ":" .. stackSize .. ":" .. unit
+					lots[fp] = (lots[fp] or 0) + 1
 				end
 			end
 		end

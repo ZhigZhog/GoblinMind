@@ -246,11 +246,22 @@ def _first(rows, *keys):
                 return r[k]
 
 
+VENDOR_BUY_PATH = os.path.join(os.path.dirname(
+    os.path.abspath(__file__)), 'vendor_buy.json')
+
+
 def load_vendor_buy(path):
-    """TSM ships a static vendor-sell table — items vendors stock with
-    their buy cost. vendorbuy isn't a registered TSM custom-price
-    source, so we can't query it through TSMAPI_FOUR; parse the Retail
-    table (Forever branch) straight out of LibTSMData instead."""
+    """vendor-sell table — a frozen artifact (`vendor_buy.json`, tracked
+    in the repo and regenerated on each content release — see the
+    api-feed proposal §6) is the production source. The live scrape of
+    TSM's LibTSMData remains only as a dev-side fallback while TSM is
+    still installed; a TSM-less install always has the artifact."""
+    try:
+        with open(VENDOR_BUY_PATH, encoding='utf-8') as fh:
+            return {int(k): int(v)
+                    for k, v in json.load(fh).items()}
+    except (OSError, ValueError):
+        pass
     addons = os.path.dirname(os.path.dirname(path))
     f = os.path.join(addons, 'TradeSkillMaster', 'LibTSMData',
                      'Item', 'VendorSell.lua')
@@ -908,6 +919,7 @@ def backend_pull(cfg=None):
         with open(tmp, 'w', encoding='utf-8') as fh:
             json.dump(cur, fh)
         os.replace(tmp, API_BOOK_PATH)
+        delta_record(books)
     return books
 
 
@@ -931,7 +943,8 @@ def backend_upload_books(books_by_scope, cfg=None):
         try:
             r = _backend_req(cfg, '/v1/upload', {
                 'scope': scope, 't': newest['t'],
-                'items': newest['items']})
+                'items': newest['items'],
+                'lots': newest.get('lots') or {}})
             last_up[scope] = newest['t']
             LOG.info('backend upload %s: %d items', scope,
                      r.get('items', 0))
@@ -939,6 +952,75 @@ def backend_upload_books(books_by_scope, cfg=None):
             LOG.exception('backend upload failed: %s', scope)
     st['backend_up'] = last_up
     _save_api_state(st)
+
+
+# ---------- sale delta engine (proposal §4) ----------
+# Any book carrying a `lots` fingerprint multiset — local scans or
+# pulled remote books — diffs against the previous snapshot for its
+# scope. Disappeared lots are candidate sales. Honest limit: delisting
+# and expiry look identical to selling at this resolution; accuracy
+# rises with poll cadence and shrinks when relisting is common.
+
+def delta_record(books):
+    """books = {scope: book}. Diffs each book's `lots` against the last
+    snapshot for that scope and appends sale events to api_state.json.
+    Events: [t, units, unit_price, lots_gone, prev_lots]."""
+    st = _load_api_state()
+    prev = st.get('lots') or {}
+    sales = st.get('sales') or {}
+    now = int(time.time())
+    for scope, b in books.items():
+        new_lots = b.get('lots')
+        if not new_lots:
+            continue
+        old = prev.get(scope) or {}
+        scope_sales = sales.setdefault(scope, {})
+        for fp, on in old.items():
+            gone = on - new_lots.get(fp, 0)
+            if gone <= 0:
+                continue
+            try:
+                iid_s, qty_s, unit_s = fp.split(':', 2)
+                iid, qty, unit = int(iid_s), int(qty_s), int(unit_s)
+            except ValueError:
+                continue
+            scope_sales.setdefault(str(iid), []).append(
+                [now, qty * gone, unit, gone, on])
+        for iid_s, ev in scope_sales.items():
+            scope_sales[iid_s] = [
+                e for e in ev if now - e[0] < HIST_KEEP]
+        prev[scope] = new_lots
+    st['lots'] = prev
+    st['sales'] = sales
+    _save_api_state(st)
+
+
+def delta_stats(scope):
+    """7d sale-derived stats per item: vel (units/day, market-wide),
+    rsale (median disappeared unit price), rsalep (permille — lots
+    disappeared / lots previously listed)."""
+    st = _load_api_state()
+    events = (st.get('sales') or {}).get(scope) or {}
+    now = time.time()
+    out = {}
+    for iid_s, ev in events.items():
+        win = [e for e in ev if now - e[0] < VEL_DAYS * 86400]
+        if not win:
+            continue
+        units = sum(e[1] for e in win)
+        gone = sum(e[3] for e in win)
+        prev = sum(e[4] for e in win)
+        prices = sorted(e[2] for e in win)
+        try:
+            iid = int(iid_s)
+        except ValueError:
+            continue
+        out[iid] = {
+            'vel': round(units / (VEL_DAYS * 86400), 4),
+            'rsale': prices[len(prices) // 2] if prices else None,
+            'rsalep': min(1000, int(gone * 1000 / prev)) if prev else None,
+        }
+    return out
 
 
 def cmd_book(sv_arg, out_paths, root=None, feed=None, realm=None):
@@ -976,6 +1058,12 @@ def cmd_book(sv_arg, out_paths, root=None, feed=None, realm=None):
     # push each scope's newest local book upstream — remote-flagged
     # (pulled) entries skip themselves inside
     backend_upload_books(books_by_scope)
+    # sale deltas: newest lots-carrying book per scope diffs against
+    # the previous snapshot (local scans and pulled books both count)
+    delta_record({s: max((b for b in bs if b.get('lots')),
+                         key=lambda x: x.get('t') or 0, default=None)
+                  for s, bs in books_by_scope.items()
+                  if any(b.get('lots') for b in bs)})
     now = time.time()
 
     hist = load_book_hist()  # {scope: {iid: [[ts,mb,sup,n],...]}}
@@ -1059,18 +1147,37 @@ def cmd_book(sv_arg, out_paths, root=None, feed=None, realm=None):
             for iid, e in (b.get('items') or {}).items():
                 latest[int(iid)] = e
         items = {}
+        dstats = delta_stats(scope)
         for iid, e in latest.items():
             samples = [(r[0], r[1])
                        for r in hist.get(scope, {}).get(str(iid), [])
                        if len(r) > 1 and r[0] and r[1]]
             p = _market_value(samples, now)
+            # our own TSM-analog fields — no fallback: recent = the
+            # same weighted model over the last 3d, hist = unweighted
+            # median over the whole retained window (long-run anchor)
+            recent = _market_value(
+                [(t, pr) for t, pr in samples
+                 if now - t <= 3 * 86400], now)
+            hist_p = _median([pr for _, pr in samples if pr])
+            ds = dstats.get(iid) or {}
             items[iid] = {
                 'mb': e.get('mb'),
                 'mbx': None if e.get('mbx') == -1 else e.get('mbx'),
                 'sup': e.get('sup'),
                 'n': e.get('n'),
                 'p': p, 'mkt': p,
-                'vel': vel.get(scope, {}).get(iid),
+                'hist': hist_p,
+                'recent': recent,
+                'rsale': ds.get('rsale'),
+                'rsalep': ds.get('rsalep'),
+                # market-wide delta velocity wins; personal ledger
+                # rate remains when the delta engine has no window yet
+                'vel': ds.get('vel') or vel.get(scope, {}).get(iid),
+                # reset signal: listed at <= half the computed market
+                # value — someone's dumping below the model
+                'reset': 1 if (e.get('mb') and p
+                               and e['mb'] <= p * 0.5) else None,
             }
         # merge over the TSM backend for this scope: TSM-only fields
         # (hist/recent/region stats/reset) always come from TSM; the

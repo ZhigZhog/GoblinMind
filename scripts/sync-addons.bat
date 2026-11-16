@@ -14,5 +14,5 @@ for %%A in (GoblinMind GoblinMind_Data) do (
 
 REM Brain rides inside the addon folder so `watch self` can derive
 REM the install root — same layout the release zip ships.
-robocopy "D:\WoW Mods\brain" "%WOW%\GoblinMind\brain" goblin_brain.py goblin-watch.bat /NFL /NDL /NJH /NJS >nul
+robocopy "D:\WoW Mods\brain" "%WOW%\GoblinMind\brain" goblin_brain.py goblin-watch.bat vendor_buy.json /NFL /NDL /NJH /NJS >nul
 if errorlevel 8 ( echo FAILED brain ) else ( echo synced brain )
