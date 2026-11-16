@@ -114,14 +114,19 @@ def main():
                     help='realm-faction scope(s), e.g. MyRealm-Alliance')
     ap.add_argument('--host', action='store_true',
                     help='also run the backend server here + firewall rule')
+    ap.add_argument('--dev', action='store_true',
+                    help='proceed even outside Interface/AddOns')
     ap.add_argument('--remove', action='store_true',
                     help='remove the Startup entries and exit')
     a = ap.parse_args()
 
-    if not addon_root() and not a.remove:
+    if not addon_root() and not a.remove and not a.dev:
         print(f'warning: {HERE} is not inside Interface/AddOns — the '
               'watcher needs the addon layout (watch self derives '
               'paths from this location)')
+        if ask('Continue anyway? (y/N)') not in ('y', 'yes'):
+            sys.exit('aborted — run this from the installed addon\'s '
+                     'brain dir, or pass --dev')
     if a.remove:
         for p in (WATCH_BAT, SERVER_BAT):
             try:
