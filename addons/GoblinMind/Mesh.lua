@@ -207,6 +207,19 @@ local function OnAddon(_, prefix, msg, ctype, sender)
 	end
 end
 
+-- test injector — stages a fake wire sale event + beacon without
+-- comms, so the staging->brain-consume->emit path can be verified
+-- solo (/run GM.Mesh.Test()). Own echoes are dropped by design,
+-- so a real second sender is needed to test CHAT_MSG_ADDON itself.
+function M.Test()
+	GM.db.mesh = GM.db.mesh or { ev = {}, mb = {}, seq = 0 }
+	Stage("ev", STAGE_CAP, { t = time(), s = GM.Scope(),
+		i = 2318, u = 40, p = 420, l = 2, c = "s" })
+	Stage("mb", STAGE_CAP, { t = time(), s = GM.Scope(),
+		i = 2589, m = 2500, q = 500 })
+	GM.Print("mesh: staged test event + beacon — reload to flush SV")
+end
+
 -- ============ consume handshake + boot ============
 
 -- the brain emits meshAck = max consumed seq; purge staged records
