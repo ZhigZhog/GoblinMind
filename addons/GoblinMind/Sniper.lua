@@ -107,7 +107,30 @@ function N.Collect(rows)
 	-- itemID and spread the work across frames
 	collectGen = collectGen + 1
 	local gen = collectGen
-	local caps, i, lastReport = {}, 0, 0
+	local caps, i, lastReport, bad = {}, 0, 0, 0
+	-- one bad row must not kill the chain — an error inside the
+	-- slice means GM.After never reschedules and the last
+	-- "evaluating" line freezes forever (bid-only rows carry nil
+	-- unit: the `c.unit <= cap` compare throws). pcall each row
+	-- and count the skips for the completion line
+	local function EvalRow(c)
+		local cap = caps[c.itemID]
+		if cap == nil then
+			cap = PriceCap(c.itemID, GM.Groups.GetOps(c.itemID, "sniper")) or false
+			caps[c.itemID] = cap
+		end
+		if cap and c.unit and c.unit <= cap then
+			local e = GM.ItemEntry(c.itemID)
+			local m = GM.Price("dbmarket", c.itemID)
+			c.cap = cap
+			c.pct = m and m > 0 and (c.unit / m * 100) or nil
+			-- don't freeze "item N" here — SniperUI re-resolves
+			-- live once the async item data lands
+			c.name = GetInfo and GetInfo(c.itemID)
+			c.hit = true
+			N.hits[#N.hits + 1] = c
+		end
+	end
 	local function ChunkEval()
 		if gen ~= collectGen then return end
 		-- 5ms slices with an inter-slice breather — back-to-back 8ms
@@ -115,23 +138,7 @@ function N.Collect(rows)
 		local t0 = Now()
 		while i < #fresh and Now() - t0 < 5 do
 			i = i + 1
-			local c = fresh[i]
-			local cap = caps[c.itemID]
-			if cap == nil then
-				cap = PriceCap(c.itemID, GM.Groups.GetOps(c.itemID, "sniper")) or false
-				caps[c.itemID] = cap
-			end
-			if cap and c.unit <= cap then
-				local e = GM.ItemEntry(c.itemID)
-				local m = GM.Price("dbmarket", c.itemID)
-				c.cap = cap
-				c.pct = m and m > 0 and (c.unit / m * 100) or nil
-				-- don't freeze "item N" here — SniperUI re-resolves
-				-- live once the async item data lands
-				c.name = GetInfo and GetInfo(c.itemID)
-				c.hit = true
-				N.hits[#N.hits + 1] = c
-			end
+			if not pcall(EvalRow, fresh[i]) then bad = bad + 1 end
 		end
 		if i < #fresh then
 			if Now() - lastReport > 400 then
@@ -143,13 +150,13 @@ function N.Collect(rows)
 			GM.After(0.03, ChunkEval)
 		else
 			GM.PlanQueue.Progress(nil)
-			N.FinishCollect(now, hadSnapshot, #rows, #fresh)
+			N.FinishCollect(now, hadSnapshot, #rows, #fresh, bad)
 		end
 	end
 	ChunkEval()
 end
 
-function N.FinishCollect(now, hadSnapshot, nRows, nFresh)
+function N.FinishCollect(now, hadSnapshot, nRows, nFresh, bad)
 
 	-- drop hits whose listing vanished between snapshots (sold/expired)
 	if hadSnapshot then
@@ -176,7 +183,14 @@ function N.FinishCollect(now, hadSnapshot, nRows, nFresh)
 	local msg = hadSnapshot
 		and format("sniper: %d new listings, %d hits", nFresh, #N.hits)
 		or format("sniper: book primed — %d auctions, %d hits", nRows, #N.hits)
+	if bad and bad > 0 then
+		msg = msg .. format(" · %d skipped", bad)
+	end
 	GM.Shopping.Status(GM.CC("textDim") .. msg .. "|r")
+	-- progress reported through ScanStatus, so completion has to go
+	-- through it too — otherwise the last "evaluating" line stays
+	-- frozen in the AH footer / planner summary
+	GM.PlanQueue.ScanStatus(GM.CC("textDim") .. msg .. "|r")
 	if GM.Shopping.Refresh then GM.Shopping.Refresh() end
 	if GM.SniperUI and GM.SniperUI.Refresh then GM.SniperUI.Refresh() end
 end

@@ -64,8 +64,15 @@ local function BuildRow(parent, i)
 	row.act:SetPoint("LEFT", 34, 0)
 	row.qty   = GM.MakeFontString(row, GM.FONT, 11, "textDim")
 	row.qty:SetPoint("LEFT", 140, 0)
+	-- both text columns get hard bounds: a long name clips right,
+	-- a long desc clips left instead of sliding under the name
+	row.qty:SetPoint("RIGHT", -176, 0)
+	row.qty:SetWordWrap(false)
 	row.price = GM.MakeFontString(row, GM.FONT_MED, 11, "text")
 	row.price:SetPoint("RIGHT", -10, 0)
+	row.price:SetPoint("LEFT", 288, 0)
+	row.price:SetWordWrap(false)
+	row.price:SetJustifyH("RIGHT")
 	return row
 end
 
