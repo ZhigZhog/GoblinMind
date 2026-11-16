@@ -132,6 +132,11 @@ Primary data = the in-house book feed below.
   Re-registering an existing name re-keys that row (no zombie
   installs on reinstall). The host hands the secret to trusted
   installs out-of-band; installer flag is `--key`.
+  **Tests**: `python brain\test_server.py` — in-process server on an
+  ephemeral port + temp DB; 31 checks over register/auth/cleaning/
+  merge/cutoff/GC/rate-limit/key-gate. Known wart it documents:
+  the rate bucket increments before payload validation, so
+  malformed uploads still burn quota.
   The watcher also scans `WTF\Account\*\SavedVariables\GoblinMind.lua`
   each poll for staged bug reports (`gm-<ts>-<n>|<hex>` strings in
   `GoblinMindSettings.bugReports`), files them to GitHub issues
