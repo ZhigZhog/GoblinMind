@@ -893,9 +893,16 @@ def self_feed():
         return None
     if not os.path.isdir(os.path.join(root, 'WTF')):
         return None
-    # the book feed never reads AppData — watch the script itself so
-    # the stat path is always valid and quiet
-    return {'appdata': os.path.abspath(__file__),
+    # When TSM's app data exists, watch IT: the desktop app's periodic
+    # pushes then drive emits (the ~hourly cadence) AND cmd_book's TSM
+    # merge reads real chunks instead of the script. Without TSM the
+    # book feed has no AppData — watch the script itself so the stat
+    # path stays valid and quiet.
+    tsm_appdata = os.path.join(
+        addons_dir, 'TradeSkillMaster_AppHelper', 'AppData.lua')
+    watch = (tsm_appdata if os.path.isfile(tsm_appdata)
+             else os.path.abspath(__file__))
+    return {'appdata': watch,
             'root': root,
             'out': [os.path.join(addons_dir, 'GoblinMind_Data',
                                  'Data.lua')]}
@@ -1025,6 +1032,9 @@ def cmd_bugs(appdata, outs, realm=None):
 
 
 HEARTBEAT = 300  # verbose "still alive" line every 5 min
+EMIT_PERIOD = 3600  # book-mode cadence floor — a quiet install (no
+                    # TSM pushes, no SV flush) still re-merges hourly
+                    # so the DB's generated stamp stays honest
 
 
 def cmd_watch(appdata, outs, interval=5, settle=20, feed='tsm',
@@ -1037,10 +1047,24 @@ def cmd_watch(appdata, outs, interval=5, settle=20, feed='tsm',
     last_mtime = 0
     quiet_since = None
     last_beat = time.time()
+    last_emit = time.time()  # the startup settle always emits once;
+                             # the floor clock starts there
     sv_mtimes = {}
     LOG.info('watching %s', appdata)
     LOG.info('outputs: %s', ' ; '.join(outs))
     LOG.info('poll=%ss settle=%ss', interval, settle)
+
+    def emit_book(why):
+        nonlocal last_emit
+        try:
+            t0 = time.time()
+            cmd_book(appdata, outs, root, feedname, realm)
+            LOG.debug('  book emit (%s) done in %.1fs', why,
+                      time.time() - t0)
+        except Exception:  # never die on a mid-write file
+            LOG.exception('book emit failed')
+        last_emit = time.time()
+
     while True:
         try:
             st = os.stat(appdata)
@@ -1061,13 +1085,7 @@ def cmd_watch(appdata, outs, interval=5, settle=20, feed='tsm',
             if feed == 'book':
                 # a settled AppData means the TSM app pushed fresh
                 # realm data — cmd_book folds it into the merge
-                try:
-                    t0 = time.time()
-                    cmd_book(appdata, outs, root, feedname, realm)
-                    LOG.debug('  book emit done in %.1fs',
-                              time.time() - t0)
-                except Exception:  # never die on a mid-write file
-                    LOG.exception('book emit failed')
+                emit_book('appdata')
             else:
                 for out in outs:
                     t0 = time.time()
@@ -1092,11 +1110,7 @@ def cmd_watch(appdata, outs, interval=5, settle=20, feed='tsm',
                         # a flush means the session wrote fresh book +
                         # ledger data — re-emit merged across every
                         # character's SV
-                        try:
-                            cmd_book(appdata, outs, root, feedname,
-                                     realm)
-                        except Exception:
-                            LOG.exception('book emit failed')
+                        emit_book('sv flush')
                     elif newly:
                         LOG.info('re-emitting with filedBugs')
                         for out in outs:
@@ -1106,6 +1120,13 @@ def cmd_watch(appdata, outs, interval=5, settle=20, feed='tsm',
                                 LOG.exception('emit %s failed', out)
                 except Exception:
                     LOG.exception('bug pass failed')
+        # cadence floor: book mode re-merges at least once an hour —
+        # keeps `generated` moving through quiet stretches so the
+        # addon's staleness flag means what it says
+        if feed == 'book' and now - last_emit >= EMIT_PERIOD:
+            LOG.info('periodic emit — last emit %dm ago',
+                     int((now - last_emit) / 60))
+            emit_book('periodic')
         if now - last_beat >= HEARTBEAT:
             last_beat = now
             LOG.debug('heartbeat — watching, last mtime=%s',
