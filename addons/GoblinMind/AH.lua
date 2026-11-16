@@ -619,6 +619,10 @@ function GM.AH.CollectBook()
 		GM.AH.cancelMute = GetTime() + 8
 		GM.AH.lastBookN = n
 		GM.AH.bookKind = "replicate"
+		-- mesh broadcast diffs against the PREVIOUS snapshot — grab
+		-- it before the swap
+		local prevBook, prevLots, prevT =
+			GM.AH.book, GM.AH.bookLots, GM.AH.bookT
 		GM.AH.book, GM.AH.bookT = book, time()
 		GM.AH.bookLots = lots
 		if GM.db then GM.db.lastReplicateOK = time() end
@@ -634,6 +638,9 @@ function GM.AH.CollectBook()
 		GM.PlanQueue.ScanStatus(GM.CC("textDim") .. format("full scan complete — %d auctions · %d items priced|r", n, items))
 		GM.Print(GM.CC("textDim") .. format("full scan complete — %d auctions · %d items priced|r", n, items))
 		for _, cb in ipairs(GM.AH.bookSubs) do pcall(cb, rows, book) end
+		if GM.Mesh and GM.Mesh.OnBook then
+			pcall(GM.Mesh.OnBook, book, lots, prevBook, prevLots, prevT)
+		end
 		GM.PlanQueue.Refresh()
 	end
 	local function ProcessRow(idx)

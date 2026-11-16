@@ -1082,6 +1082,7 @@ def cmd_book(sv_arg, out_paths, root=None, feed=None, realm=None):
     # scope = addon's "Realm-Faction" — books merge only within the
     # same scope; legacy flat books land under 'default'
     books_by_scope, ledger_bychar = {}, {}
+    mesh_ev, mesh_mb, mesh_seq = [], [], 0
     for p in paths:
         sv = load_sv_tables(p,
                             ['GoblinMindSettings', 'GoblinMindLedger'])
@@ -1096,11 +1097,56 @@ def cmd_book(sv_arg, out_paths, root=None, feed=None, realm=None):
                 str(b.get('scope') or 'default'), []).append(b)
         ledger_bychar.update(
             (sv.get('GoblinMindLedger') or {}).get('byChar') or {})
+        # mesh staging — wire records the addon parked in the SV;
+        # meshAck (emitted below) is the purge handshake
+        mesh = gms.get('mesh') or {}
+        for e in mesh.get('ev') or []:
+            mesh_ev.append(e)
+            mesh_seq = max(mesh_seq, e.get('q') or 0)
+        for e in mesh.get('mb') or []:
+            mesh_mb.append(e)
+            mesh_seq = max(mesh_seq, e.get('q') or 0)
     # the API feed's stored snapshot rides in as another book per scope —
     # newest book wins per item in the merge below, so a fresh dump
     # beats a stale scan and vice versa
     for scope, b in api_books().items():
         books_by_scope.setdefault(scope, []).append(b)
+    # mesh beacons -> remote books (skip upload, ride merge+history);
+    # mesh events -> sales with prev=0 so they never pad the rsalep
+    # denominator. Dedupe by sig — the SV may be re-read before the
+    # ack round-trips and purges the stage
+    for e in mesh_mb:
+        s, iid = e.get('s'), e.get('i')
+        if not s or not iid:
+            continue
+        books_by_scope.setdefault(str(s), []).append({
+            't': e.get('t') or time.time(),
+            'items': {str(int(iid)): {'mb': e.get('m'),
+                                      'mbx': e.get('m'),
+                                      'sup': e.get('q') or 0, 'n': 1}},
+            'remote': True})
+    if mesh_ev:
+        st = _load_api_state()
+        sales = st.get('sales') or {}
+        added = 0
+        for e in mesh_ev:
+            s, iid = e.get('s'), e.get('i')
+            if not s or not iid:
+                continue
+            sig = (e.get('t') or 0, e.get('u') or 0,
+                   e.get('p') or 0, e.get('l') or 1)
+            lst = sales.setdefault(str(s), {}).setdefault(
+                str(int(iid)), [])
+            if any((x[0], x[1], x[2], x[3]) == sig for x in lst):
+                continue
+            lst.append([int(e.get('t') or time.time()),
+                        e.get('u') or 0, e.get('p') or 0,
+                        e.get('l') or 1, 0, e.get('c') or 'u'])
+            added += 1
+        if added:
+            st['sales'] = sales
+            _save_api_state(st)
+            LOG.info('mesh: %d wire events folded into sales', added)
     # push each scope's newest local book upstream — remote-flagged
     # (pulled) entries skip themselves inside
     backend_upload_books(books_by_scope)
@@ -1328,6 +1374,7 @@ def cmd_book(sv_arg, out_paths, root=None, feed=None, realm=None):
         'realmAge': tsm_realm_age or None,
         'regionAge': tsm_region_age or None,
         'feed': feed,
+        'meshAck': mesh_seq,
         'realms': realms,
         'items': flat.get('items', {}),
         # vendorBuy is static data scraped from TSM's own addon files —
