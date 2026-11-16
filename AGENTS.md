@@ -228,9 +228,13 @@ Primary data = the in-house book feed below.
     look like solid bands.
   - **`C_TradeSkillUI.CraftRecipe` works for qty=1** (verified
     2026-11-14 via `/goblin craftprobe`); count>1 is Blizzard's
-    multicraft path — `C.Craft` attempts it and a `pendingCast`
-    watchdog (UNIT_SPELLCAST_START within 0.6s) detects a dead call
-    and sets `C.noBatch` → session-wide single-cast fallback. Actual
+    multicraft path — `C.Craft` always calls it with the full qty
+    (whole stack or an error; the old `noBatch` qty-1 fallback was
+    removed — a silent downgrade lied about what a click did) and a
+    `pendingCast` watchdog (UNIT_SPELLCAST_START within 0.6s)
+    reports a dead call to chat. `pendingOpenCraft` retries the
+    post-open craft 3× at 0.6s — the recipe list settles after
+    TRADE_SKILL_SHOW. Actual
     crafting progress is tracked by listening to
     `UNIT_SPELLCAST_SUCCEEDED`/`CHANNEL_STOP` (spellID == recipeID):
     each finished cast decrements `queue[spellID]` and ticks

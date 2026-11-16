@@ -361,21 +361,33 @@ function C.Init()
 			if C.pendingOpenCraft then
 				local p = C.pendingOpenCraft
 				C.pendingOpenCraft = nil
-				GM.After(0.6, function()
+				-- the recipe list settles AFTER TRADE_SKILL_SHOW —
+				-- retry on failure a few beats so a slow line swap
+				-- doesn't dead-end the craft the click was for.
+				-- C.Craft early-returns without calling CraftRecipe
+				-- when the line still reads closed, so the retry is
+				-- free.
+				local tries = 0
+				local function fire()
+					tries = tries + 1
 					local ok, err = C.Craft(p.id, p.qty)
-					if not ok then
-						GM.Print(GM.CC("warn") .. tostring(err) .. "|r")
-					else
+					if ok then
 						local rr = GoblinMindCrafting.recipes
 							and GoblinMindCrafting.recipes[p.id]
 						GM.Print(GM.CC("secondary") .. "crafting "
 							.. (rr and rr.name or "recipe")
 							.. " ×" .. (p.qty or 1) .. "|r")
+					elseif tries < 3 then
+						GM.After(0.6, fire)
+						return
+					else
+						GM.Print(GM.CC("warn") .. tostring(err) .. "|r")
 					end
 					if GM.CraftingUI and GM.CraftingUI.Refresh then
 						GM.CraftingUI.Refresh()
 					end
-				end)
+				end
+				GM.After(0.6, fire)
 			end
 		elseif e == "TRADE_SKILL_CLOSE" then
 			return -- no scan on close
@@ -962,10 +974,11 @@ end
 
 -- execute a craft — the same protected call Blizzard's Create buttons
 -- make (verified: CraftRecipe(id,1) produces the item). count>1 is
--- Blizzard's own multicraft path — one call, N casts. If Forever
--- doesn't honor it the call produces no cast at all, so a watchdog
--- watches for UNIT_SPELLCAST_START: nothing within 0.6s → the batch
--- path is dead and every future call this session falls back to 1.
+-- Blizzard's own multicraft path — one call, N casts. Whole stack or
+-- an error, never a silent qty-1 downgrade (a quiet one-per-click
+-- mode lies about what a click does). If the call produces no cast —
+-- dead batch path or the line lied about being open — the pendingCast
+-- watchdog reports the miss instead.
 -- Queue decrements happen in OnCastComplete, not here — counts track
 -- casts that actually finished, not casts we asked for.
 function C.Craft(recipeID, qty)
@@ -978,7 +991,7 @@ function C.Craft(recipeID, qty)
 	if not (C_TradeSkillUI and C_TradeSkillUI.CraftRecipe) then
 		return nil, "no craft API on this client"
 	end
-	local n = C.noBatch and 1 or max(1, floor(qty or 1))
+	local n = max(1, floor(qty or 1))
 	C.pendingCast = { id = recipeID }
 	local ok, err = pcall(C_TradeSkillUI.CraftRecipe, recipeID, n)
 	if not ok then
@@ -988,15 +1001,14 @@ function C.Craft(recipeID, qty)
 	GM.After(0.6, function()
 		if not (C.pendingCast and C.pendingCast.id == recipeID) then return end
 		C.pendingCast = nil
-		if n > 1 then
-			C.noBatch = true
-			GM.Print(GM.CC("warn") .. "multi-cast not honored on this client — "
-				.. "falling back to one cast per click|r")
-		else
-			GM.Print(GM.CC("warn") .. "craft didn't start — "
-				.. (C.Prof(recipeID) or "tradeskill")
-				.. " isn't open — click OPEN|r")
-		end
+		GM.Print(GM.CC("warn")
+			.. (n > 1
+				and "batch didn't start — this client didn't honor "
+					.. "the multi-cast"
+				or ("craft didn't start — "
+					.. (C.Prof(recipeID) or "tradeskill")
+					.. " isn't open — click OPEN"))
+			.. "|r")
 	end)
 	return true
 end

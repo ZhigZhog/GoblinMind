@@ -924,14 +924,12 @@ function CU.Refresh()
 		end
 		ui.craft1._gmBg:SetColorTexture(GM.RGB(
 			craftable > 0 and "accent" or "contHigh"))
-		local batch = not GM.Crafting.noBatch
 		local opening = GateCraft(ui.craft1, ui.sel, craftable,
 			craftable > 0)
 		local prof = GM.Crafting.Prof and GM.Crafting.Prof(ui.sel)
 		ui.craft1.text:SetText(opening
 			and ("OPEN " .. (prof and prof:upper() or "TRADESKILL"))
-			or (craftable > 0 and batch
-				and ("CRAFT ×" .. craftable) or "CRAFT"))
+			or (craftable > 0 and ("CRAFT ×" .. craftable) or "CRAFT"))
 		ui.craft1.text:SetTextColor(GM.RGB(
 			craftable > 0 and "contLowest" or "textDim"))
 		local allCraftable = GM.Crafting.CraftableAll
@@ -939,9 +937,7 @@ function CU.Refresh()
 		ui.craftHint:SetText(opening
 			and "opens the tradeskill · the craft fires when it's live"
 			or (craftable > 0
-				and ((batch
-					and "tradeskill must be open · one click crafts the batch"
-					or "tradeskill must be open · 1 cast per click — this client can't batch")
+				and ("tradeskill must be open · one click crafts the batch"
 					.. (allCraftable > craftable
 						and format(" · +%d w/ bank+alts", allCraftable - craftable) or ""))
 				or (allCraftable > 0
