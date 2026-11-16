@@ -967,6 +967,9 @@ def backend_upload_books(books_by_scope, cfg=None):
         except Exception:
             _backend_health('up', False)
             LOG.exception('backend upload failed: %s', scope)
+    # _backend_health wrote 'up' to state inside the loop — reload so
+    # the stale st loaded above doesn't clobber it on save
+    st = _load_api_state()
     st['backend_up'] = last_up
     _save_api_state(st)
 

@@ -237,11 +237,16 @@ class Handler(BaseHTTPRequestHandler):
                 return
             lots = {str(k): int(v) for k, v in lots.items()
                     if isinstance(v, (int, float))}
+            # t is client-claimed and drives newest-wins, the staleness
+            # cutoff, and GC — a book can't be newer than now, so cap
+            # future dates. Past values pass through: an old scan
+            # uploaded late is legitimately old data.
+            t = min(float(t), time.time())
             conn.execute(
                 'INSERT OR REPLACE INTO '
                 'uploads(install_id,scope,t,items,lots) '
                 'VALUES(?,?,?,?,?)',
-                (install, scope, float(t), json.dumps(items),
+                (install, scope, t, json.dumps(items),
                  json.dumps(lots)))
             # retention: keep newest KEEP_PER_INSTALL per install+scope
             conn.execute(
@@ -255,8 +260,27 @@ class Handler(BaseHTTPRequestHandler):
             conn.close()
 
 
+def _self_restart():
+    """Same trap the watcher had: a copied-over goblin_server.py never
+    reloads in a live process. Poll own mtime; on change spawn the
+    replacement and exit (Popen handles spaced paths on Windows)."""
+    import subprocess
+    own = os.path.abspath(__file__)
+    mtime = os.path.getmtime(own)
+    while True:
+        time.sleep(30)
+        try:
+            if os.path.getmtime(own) != mtime:
+                subprocess.Popen([sys.executable] + sys.argv,
+                                 cwd=os.getcwd())
+                os._exit(0)
+        except OSError:
+            pass
+
+
 if __name__ == '__main__':
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8765
     srv = ThreadingHTTPServer(('0.0.0.0', port), Handler)
+    threading.Thread(target=_self_restart, daemon=True).start()
     print('goblin backend on :%d -> %s' % (port, DB_PATH))
     srv.serve_forever()
