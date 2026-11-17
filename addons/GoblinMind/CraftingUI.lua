@@ -23,13 +23,27 @@ local function Footer(msg, err) W.Footer(ui.footer, msg, err) end
 
 local WIN_W, WIN_H = 970, 560
 local PROF_W, REC_W = 140, 440
-local PROF_ROWS, LIST_ROWS = 16, 22
+local PROF_ROWS, LIST_ROWS = 16, 21
 
 local function Panel(parent, x, w, title)
 	return W.ColPanel(parent, x, w, title, -52) -- toolbar row sits at -32..-48
 end
 
 local EditBox = W.EditBox
+
+local ItemInfo = C_Item and C_Item.GetItemInfo or GetItemInfo
+
+-- tree group for a recipe's output item: the fine-grained type
+-- (subclass — "Food & Drink", "Parts", "Cloth") when it exists,
+-- else the class name; uncached items re-group on GET_ITEM_INFO_
+-- RECEIVED, same as names do
+local function ItemGroup(id)
+	local t = id and ItemInfo and (select(7, ItemInfo(id)))
+	if type(t) ~= "string" or t == "" then
+		t = id and ItemInfo and (select(6, ItemInfo(id)))
+	end
+	return (type(t) == "string" and t ~= "") and t or "Miscellaneous"
+end
 
 local function ListRow(parent, w)
 	local r = CreateFrame("Button", nil, parent)
@@ -38,6 +52,10 @@ local function ListRow(parent, w)
 	W.HoverTint(r)
 	r.text = GM.MakeFontString(r, GM.FONT, 10, "text")
 	r.text:SetPoint("LEFT", 6, 0)
+	-- width cap + no-wrap: a long name clips instead of bleeding
+	-- into the right-anchored level/count sub (AGENTS header rule)
+	r.text:SetWidth(w - 48)
+	r.text:SetWordWrap(false)
 	r.text:SetJustifyH("LEFT")
 	return r
 end
@@ -237,11 +255,26 @@ local function BuildUI()
 	-- middle: recipes of the selected profession
 	local recP = Panel(f, 10 + PROF_W + 6, REC_W, "RECIPES")
 	ui.recP = recP
+	-- column headers riding under the panel title — the tree's
+	-- group bands share these columns
+	local recHead = {}
+	for i, hx in ipairs({ 18, 190, 262, 310 }) do
+		local fs = GM.MakeFontString(recP, GM.FONT_BOLD, 9, "secondary")
+		fs:SetPoint("TOPLEFT", hx, -22)
+		recHead[i] = fs
+	end
+	recHead[1]:SetText("RECIPE")
+	recHead[2]:SetText("PROFIT")
+	recHead[3]:SetText("SALES/D")
+	recHead[4]:SetText("CAN")
+	local fs = GM.MakeFontString(recP, GM.FONT_BOLD, 9, "secondary")
+	fs:SetPoint("TOPRIGHT", -8, -22)
+	fs:SetText("Q")
 	ui.recRows = {}
 	for i = 1, LIST_ROWS do
 		local r = CreateFrame("Button", nil, recP)
 		r:SetSize(REC_W - 16, ROW_H)
-		r:SetPoint("TOPLEFT", 8, -24 - (i - 1) * (ROW_H + 2))
+		r:SetPoint("TOPLEFT", 8, -40 - (i - 1) * (ROW_H + 2))
 		r:RegisterForClicks("LeftButtonUp", "RightButtonUp")
 		GM.Panel(r, "contLowest")
 		r.skill = GM.MakeFontString(r, GM.FONT_BOLD, 9, "pos")
@@ -271,6 +304,34 @@ local function BuildUI()
 		GM.Panel(r.qbtn, "contHigh")
 		r.qbtn.text = GM.MakeFontString(r.qbtn, GM.FONT_BOLD, 9, "accent")
 		r.qbtn.text:SetPoint("CENTER")
+		-- tip bound ONCE — Refresh assigns r._row per slot; hooking
+		-- inside the render loop stacked OnEnter handlers that
+		-- captured stale rows (and group headers need nil tips)
+		Tip(r, function()
+			local row = r._row
+			if not row or row.hdr then return nil end
+			local lines = { row.name or "recipe",
+				row.prof or "" }
+			tinsert(lines, format("cost %s → price %s · profit %s",
+				row.cost and GM.Money(row.cost) or "?",
+				row.price and GM.Money(row.price) or "?",
+				row.profit and GM.Signed(row.profit) or "?"))
+			if row.effProfit ~= row.profit then
+				tinsert(lines, format("with owned mats: cost %s · profit %s (%d%% covered)",
+					row.effCost and GM.Money(row.effCost) or "?",
+					row.effProfit and GM.Signed(row.effProfit) or "?",
+					floor((row.coverage or 0) * 100)))
+			end
+			for _, m in ipairs(row.mats or {}) do
+				local have = GM.Crafting.Available(m.id)
+				tinsert(lines, format("  %s ×%d  have %d  @%s",
+					(GM.QHex(m.id) or "")
+						.. (GM.ItemName(m.id) or ("item " .. m.id))
+						.. "|r", m.qty, have,
+					GM.Money(GM.Crafting.MatPrice(m.id) or 0)))
+			end
+			return lines
+		end)
 		r:Hide()
 		ui.recRows[i] = r
 	end
@@ -296,7 +357,7 @@ local function BuildUI()
 		CU.Refresh()
 	end)
 	ui.recEmpty = GM.MakeFontString(recP, GM.FONT, 10, "textDim")
-	ui.recEmpty:SetPoint("TOPLEFT", 10, -30)
+	ui.recEmpty:SetPoint("TOPLEFT", 10, -44)
 	ui.recEmpty:SetText("no recipes — open a profession\ntradeskill window once to capture")
 
 	-- right: the queue
@@ -428,7 +489,7 @@ local function BuildUI()
 	ui.craft1:SetPoint("BOTTOMLEFT", 8, 8)
 	ui.craftHint = GM.MakeFontString(det, GM.FONT, 8, "textDim")
 	ui.craftHint:SetPoint("LEFT", ui.craft1, "RIGHT", 8, 0)
-	ui.craftHint:SetWidth(200)
+	ui.craftHint:SetWidth(136)
 	ui.craftHint:SetJustifyH("LEFT")
 	ui.craft1:SetScript("OnClick", function()
 		if not ui.sel then return end
@@ -439,6 +500,34 @@ local function BuildUI()
 		end
 		local ok, err = GM.Crafting.Craft(ui.sel, n)
 		if not ok then Footer(err, true) end
+		CU.Refresh()
+	end)
+	-- objective-tracker toggle, Blizzard's Track Recipe parity —
+	-- C_TradeSkillUI.SetRecipeTracked drives the Profession section
+	-- in the quest tracker; not hardware-gated
+	ui.trackBtn = Btn(det, "TRACK", 52)
+	ui.trackBtn:SetPoint("RIGHT", det, "RIGHT", -58, 0)
+	ui.trackBtn:SetPoint("BOTTOM", det, "BOTTOM", 0, 8)
+	Tip(ui.trackBtn, function()
+		return { "Track recipe",
+			"Adds this recipe's reagent checklist to the quest",
+			"tracker, same as Blizzard's Track Recipe button." }
+	end)
+	ui.trackBtn:SetScript("OnClick", function()
+		if not ui.sel then return end
+		local set = C_TradeSkillUI and C_TradeSkillUI.SetRecipeTracked
+		if not set then
+			Footer("recipe tracking unsupported on this client", true)
+			return
+		end
+		local isTracked = C_TradeSkillUI.IsRecipeTracked
+		local on = isTracked and select(2, pcall(isTracked, ui.sel, false))
+		local ok = pcall(set, ui.sel, not on, false)
+		if ok then
+			Footer((not on) and "tracking recipe" or "untracked")
+		else
+			Footer("tracking failed — client refused", true)
+		end
 		CU.Refresh()
 	end)
 	ui.catBtn = Btn(det, "+CAT", 44)
@@ -522,6 +611,20 @@ local function MyProfs()
 	return set
 end
 
+-- skill levels for professions THIS character knows, keyed by the
+-- display name recipes are tagged with (GetProfessionInfo return 3/4)
+local function ProfLevels()
+	if not (GetProfessions and GetProfessionInfo) then return nil end
+	local out = {}
+	for _, idx in ipairs({ GetProfessions() }) do
+		local name, _, lvl, max = GetProfessionInfo(idx)
+		if type(name) == "string" and name ~= "" then
+			out[name] = { lvl = lvl, max = max }
+		end
+	end
+	return out
+end
+
 local function ProfList()
 	-- distinct professions with recipe counts, "ALL" first — C.Prof
 	-- resolves via the recipe's category root, which also heals stored
@@ -578,6 +681,38 @@ local function RecipeRows()
 	return out
 end
 
+-- filtered recipes → collapsible class tree (vendor-window style):
+-- one header per output item type, A-Z, recipe order preserved
+-- inside each group. The scroll/paging list is the flattened array
+local function RecDisplay()
+	local groups, order = {}, {}
+	for _, r in ipairs(RecipeRows()) do
+		local c = r.grp or ItemGroup(r.itemID)
+		r.grp = c
+		local g = groups[c]
+		if not g then
+			g = { n = 0 }
+			groups[c] = g
+			order[#order + 1] = c
+		end
+		g.n = g.n + 1
+		g[#g + 1] = r
+	end
+	sort(order)
+	local disp, n = {}, 0
+	local col = ui.recCollapsed or {}
+	for _, c in ipairs(order) do
+		local g = groups[c]
+		disp[#disp + 1] = { hdr = true, cls = c, n = g.n,
+			closed = col[c] }
+		n = n + g.n
+		if not col[c] then
+			for _, r in ipairs(g) do disp[#disp + 1] = r end
+		end
+	end
+	return disp, n
+end
+
 local DIFF_NAMES = { "optimal", "medium", "easy", "trivial" }
 
 function CU.Refresh()
@@ -585,6 +720,7 @@ function CU.Refresh()
 
 	-- professions + categories (scrolled)
 	local profs = ProfList()
+	ui.levels = ProfLevels()
 	ui.profOff = math.min(ui.profOff or 0,
 		math.max(0, #profs - PROF_ROWS))
 	W.ScrollText(ui.profP.count, ui.profOff, PROF_ROWS, #profs)
@@ -608,7 +744,10 @@ function CU.Refresh()
 				and (sel and "accent" or "warn")
 				or (p.alt and not sel and "textDim")
 				or (sel and "accent" or "text")))
-			r.sub:SetText(p.n)
+			local lv = ui.levels and p.prof and ui.levels[p.prof]
+			r.sub:SetText(lv and lv.lvl
+				and (lv.lvl .. " · " .. p.n)
+				or p.n)
 			local key, cat = p.prof, p.cat
 			r:SetScript("OnClick", function(_, btn)
 				if cat and btn == "RightButton" then
@@ -628,22 +767,52 @@ function CU.Refresh()
 		end
 	end
 
-	-- recipes
-	local rows = RecipeRows()
+	-- recipes → collapsible item-type tree
+	local disp, nItems = RecDisplay()
 	ui.recOff = math.min(ui.recOff or 0,
-		math.max(0, #rows - LIST_ROWS))
-	W.ScrollText(ui.recP.count, ui.recOff, LIST_ROWS, #rows)
-	ui.recEmpty:SetShown(#rows == 0)
-	-- keep a live selection — the detail pane needs one
+		math.max(0, #disp - LIST_ROWS))
+	W.ScrollText(ui.recP.count, ui.recOff, LIST_ROWS, #disp)
+	ui.recEmpty:SetShown(nItems == 0)
+	-- keep a live selection — the detail pane needs one (skip headers)
 	if not (ui.sel and GoblinMindCrafting.recipes[ui.sel]) then
-		ui.sel = rows[1] and rows[1].recipeID or nil
+		ui.sel = nil
+		for _, e in ipairs(disp) do
+			if not e.hdr then ui.sel = e.recipeID break end
+		end
 	end
 	for i, r in ipairs(ui.recRows) do
-		local row = rows[ui.recOff + i]
-		if row then
+		local row = disp[ui.recOff + i]
+		if row and row.hdr then
+			-- group band: click collapses/expands the item-type group
 			r:Show()
+			r._row = row
+			r._gmBg:SetColorTexture(GM.RGB("contHigh"))
+			r.skill:Hide()
+			r.name:ClearAllPoints()
+			r.name:SetPoint("LEFT", 6, 0)
+			r.name:SetWidth(300)
+			r.name:SetText((row.closed and "▶ " or "▼ ") .. row.cls
+				.. GM.CC("secondary") .. "  ×" .. row.n .. "|r")
+			r.name:SetTextColor(GM.RGB("accent"))
+			r.profit:SetText("")
+			r.sale:SetText("")
+			r.can:SetText("")
+			r.qbtn:Hide()
+			local cls = row.cls
+			r:SetScript("OnClick", function()
+				ui.recCollapsed = ui.recCollapsed or {}
+				ui.recCollapsed[cls] = not ui.recCollapsed[cls] or nil
+				CU.Refresh()
+			end)
+		elseif row then
+			r:Show()
+			r._row = row
+			r.qbtn:Show()
 			local isSel = row.recipeID == ui.sel
 			r._gmBg:SetColorTexture(GM.RGB(isSel and "contHigh" or "contLowest"))
+			r.name:ClearAllPoints()
+			r.name:SetPoint("LEFT", 18, 0)
+			r.name:SetWidth(168)
 			r.name:SetText(row.name or ("recipe " .. row.recipeID))
 			-- skill-ups: TradeskillRelativeDifficulty 0-2 grants
 			-- (optimal/medium/easy), 3 = trivial is grayed out;
@@ -665,10 +834,10 @@ function CU.Refresh()
 				and ((row.craftable or 0) > 0 and "accent" or "pos") or "err")
 				or "textDim"
 			r.name:SetTextColor(GM.NameColor(row.itemID, nc))
-			r.profit:SetText(ep and
-				(ep > 0 and "+" or "") .. GM.Money(ep) or "—")
-			r.profit:SetTextColor(GM.RGB(
-				ep and (ep > 0 and "pos" or "err") or "textDim"))
+			-- GM.Signed: +pos/-err colored, abs — GM.Money(-x) renders
+			-- garbage through the floored-modulo math
+			r.profit:SetText(ep and GM.Signed(ep) or "—")
+			r.profit:SetTextColor(GM.RGB("textDim"))
 			-- sale volume: ledger feed's units/day for the product
 			local vel = row.itemID
 				and GM.Price("dbregionsalerate", row.itemID)
@@ -704,31 +873,9 @@ function CU.Refresh()
 				end
 				CU.Refresh()
 			end)
-			Tip(r, function()
-				local lines = { row.name or "recipe",
-					row.prof or "" }
-				tinsert(lines, format("cost %s → price %s · profit %s",
-					row.cost and GM.Money(row.cost) or "?",
-					row.price and GM.Money(row.price) or "?",
-					row.profit and GM.Money(row.profit) or "?"))
-				if row.effProfit ~= row.profit then
-					tinsert(lines, format("with owned mats: cost %s · profit %s (%d%% covered)",
-						row.effCost and GM.Money(row.effCost) or "?",
-						row.effProfit and GM.Money(row.effProfit) or "?",
-						floor((row.coverage or 0) * 100)))
-				end
-				for _, m in ipairs(row.mats or {}) do
-					local have = GM.Crafting.Available(m.id)
-					tinsert(lines, format("  %s ×%d  have %d  @%s",
-						(GM.QHex(m.id) or "")
-							.. (GM.ItemName(m.id) or ("item " .. m.id))
-							.. "|r", m.qty, have,
-						GM.Money(GM.Crafting.MatPrice(m.id) or 0)))
-				end
-				return lines
-			end)
 		else
 			r:Hide()
+			r._row = nil
 		end
 	end
 
@@ -747,8 +894,8 @@ function CU.Refresh()
 			r.qty._id, r.qty._q = q.recipeID, q.qty
 			if not r.qty:HasFocus() then r.qty:SetText("×" .. q.qty) end
 			local p = q.profit and q.profit * q.qty
-			r.profit:SetText(p and ((p > 0 and "+" or "") .. GM.Money(p)) or "—")
-			r.profit:SetTextColor(GM.RGB(p and (p > 0 and "pos" or "err") or "textDim"))
+			r.profit:SetText(p and GM.Signed(p) or "—")
+			r.profit:SetTextColor(GM.RGB("textDim"))
 			if q.cost then totCost = totCost + q.cost * q.qty end
 			if p then totProfit = totProfit + p end
 			local id = q.recipeID
@@ -825,8 +972,16 @@ function CU.Refresh()
 		ui.det:Show()
 		ui.detIcon:SetTexture(GM.ItemIcon(dr.itemID) or 134400)
 		ui.detIconBtn.itemID = dr.itemID
-		ui.detName:SetText(GM.ItemName(dr.itemID) or dr.name or "?")
+		local tracked = C_TradeSkillUI
+			and C_TradeSkillUI.IsRecipeTracked
+			and select(2, pcall(C_TradeSkillUI.IsRecipeTracked,
+				ui.sel, false))
+		ui.detName:SetText((tracked and "★ " or "")
+			.. (GM.ItemName(dr.itemID) or dr.name or "?"))
 		ui.detName:SetTextColor(GM.NameColor(dr.itemID))
+		ui.trackBtn.text:SetText(tracked and "TRACKED" or "TRACK")
+		ui.trackBtn.text:SetTextColor(GM.RGB(
+			tracked and "accent" or "textDim"))
 		local profit, price, cost = GM.Crafting.Profit(ui.sel)
 		local sub = {}
 		if (dr.numMade or 1) > 1 then tinsert(sub, "makes ×" .. dr.numMade) end
@@ -839,7 +994,7 @@ function CU.Refresh()
 		tinsert(sub, format("cost %s → %s (%s)",
 			cost and GM.Money(cost) or "?",
 			price and GM.Money(price) or "?",
-			profit and (profit > 0 and "+" or "") .. GM.Money(profit) or "?"))
+			profit and GM.Signed(profit) or "?"))
 		local vel = dr.itemID
 			and GM.Price("dbregionsalerate", dr.itemID)
 		if vel and vel > 0 then

@@ -63,6 +63,15 @@ function GM.Signed(copper)
 	return GM.CC(key) .. (copper >= 0 and "+" or "-") .. "|r" .. GM.Money(abs(copper))
 end
 
+-- compact age/span: "7d" / "14h" / "25m" / "40s" — callers add "ago"
+function GM.FmtAge(sec)
+	sec = floor(sec or 0)
+	if sec >= 86400 then return format("%dd", floor(sec / 86400 + 0.5)) end
+	if sec >= 3600 then return format("%dh", floor(sec / 3600 + 0.5)) end
+	if sec >= 60 then return format("%dm", floor(sec / 60)) end
+	return sec .. "s"
+end
+
 -- Shared backdrop matching TSM's flat dark panels + thin outline.
 -- This client has no SetBackdrop — flat fill texture + 1px edge strips
 -- achieve the identical look on any client.

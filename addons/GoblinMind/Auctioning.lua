@@ -361,13 +361,20 @@ function A.CancelScanNow()
 	local owned = GM.Inventory.auctions or {}
 	local byItem = {}
 	for fp, a in pairs(owned) do
-		local e = byItem[a.itemID] or { aids = {}, minUnit = math.huge }
+		local e = byItem[a.itemID] or { aids = {}, seen = {},
+			minUnit = math.huge }
 		-- owned buyout is per-item on Forever (same convention as
 		-- item-search results — see AH.lua note) — no /qty
 		local unit = a.buyout and a.qty > 0 and a.buyout or nil
 		-- the map key is a listing fingerprint — CancelAuction needs
-		-- the snapshot's real auctionID (enum index fallback)
-		tinsert(e.aids, { aid = a.aid or a.idx or fp, qty = a.qty, unit = unit })
+		-- the snapshot's real auctionID (enum index fallback).
+		-- duplicate enum rows share that key — collapse them or the
+		-- same real auction gets a cancel step per ghost row
+		local akey = a.aid or a.idx or fp
+		if not e.seen[akey] then
+			e.seen[akey] = true
+			tinsert(e.aids, { aid = akey, qty = a.qty, unit = unit })
+		end
 		if unit and unit < e.minUnit then e.minUnit = unit end
 		byItem[a.itemID] = e
 	end

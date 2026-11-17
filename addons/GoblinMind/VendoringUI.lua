@@ -13,6 +13,10 @@ local _, GM = ...
 --             merchant per click (UseContainerItem) — click-per-step.
 --   BUYBACK — sold-item recovery (GetBuybackItemInfo/BuybackItem).
 --
+-- Every page renders as a collapsible tree grouped by item class
+-- (itemType, e.g. Reagent / Tradeskill / Junk) with a name filter;
+-- BUY adds a FLIPS-ONLY toggle on top of the 85%-of-market gate.
+--
 -- BLIZZARD UI hands the frame back; the GOBLINMIND button stamped on
 -- the native frame round-trips. ESC/X close the merchant session —
 -- close means close, nothing left parked with a live session.
@@ -40,6 +44,15 @@ end
 
 -- ============ data ============
 
+-- item class for tree grouping — names resolve asynchronously, so an
+-- uncached item lands in Miscellaneous and re-groups when
+-- GET_ITEM_INFO_RECEIVED repaints (VU.Refresh is subscribed below)
+local ItemInfo = C_Item and C_Item.GetItemInfo or GetItemInfo
+local function ItemClass(id)
+	local t = id and ItemInfo and (select(6, ItemInfo(id)))
+	return (type(t) == "string" and t ~= "") and t or "Miscellaneous"
+end
+
 -- merchant stock: one row per slot; vendor flips (price < 85% of our
 -- market value, same gate as Vendoring.BuyScan) sort first
 local function BuyData()
@@ -61,7 +74,7 @@ local function BuyData()
 				and info.numAvailable ~= -1 and info.numAvailable ~= 0
 				and unit < mkt * 0.85
 			rows[#rows + 1] = {
-				index = i, id = id,
+				index = i, id = id, cls = ItemClass(id),
 				name = (id and GM.ItemName(id)) or (link and link:match("%[(.-)%]"))
 					or ("slot " .. i),
 				qty = qty, cost = info.price, mkt = mkt and mkt * qty,
@@ -90,6 +103,7 @@ local function SellData()
 				and not GM.Vendoring.IsBlacklisted(s.itemID) then
 				rows[#rows + 1] = {
 					bag = s.bag, slot = s.slot, id = s.itemID,
+					cls = ItemClass(s.itemID),
 					qty = s.count, val = sell * s.count,
 					name = GM.ItemName(s.itemID),
 				}
@@ -109,7 +123,8 @@ local function BackData()
 			and GetBuybackItemInfo(i)
 		local id = link and tonumber(link:match("item:(%d+)"))
 		rows[#rows + 1] = {
-			index = i, id = id, qty = qty or 1, price = price,
+			index = i, id = id, cls = ItemClass(id), qty = qty or 1,
+			price = price,
 			name = (id and GM.ItemName(id)) or (link and link:match("%[(.-)%]"))
 				or ("slot " .. i),
 		}
@@ -126,13 +141,53 @@ local PAGES = {
 		head = { "ITEM", "QTY", "PRICE", "" } },
 }
 
+-- filters + grouping: name search (all pages) and flips-only (BUY),
+-- then one collapsible class header per itemType. Groups sort A-Z;
+-- the page's own row order is preserved inside each group (BUY keeps
+-- flips-first, SELL keeps value-desc) — the scroll list is this
+-- flattened display array, headers included
+local function FlatTree(rows)
+	local q = (ui.search and ui.search:GetText() or ""):lower()
+	if q == "filter…" then q = "" end
+	local groups, order = {}, {}
+	for _, r in ipairs(rows) do
+		local pass = (q == "" or (r.name or ""):lower():find(q, 1, true))
+			and not (ui.page == "buy" and ui.flipsOnly and not r.flip)
+		if pass then
+			local c = r.cls or "Miscellaneous"
+			local g = groups[c]
+			if not g then
+				g = { n = 0 }
+				groups[c] = g
+				order[#order + 1] = c
+			end
+			g.n = g.n + 1
+			g[#g + 1] = r
+		end
+	end
+	sort(order)
+	local disp, nItems = {}, 0
+	for _, c in ipairs(order) do
+		local g = groups[c]
+		disp[#disp + 1] = { hdr = true, cls = c, n = g.n,
+			closed = ui.collapsed[c] or nil }
+		nItems = nItems + g.n
+		if not ui.collapsed[c] then
+			for _, r in ipairs(g) do
+				disp[#disp + 1] = r
+			end
+		end
+	end
+	return disp, nItems, #order
+end
+
 -- ============ window ============
 
 local function Build()
 	if ui then return end
-	ui = { page = "buy", scroll = 0 }
+	ui = { page = "buy", scroll = 0, collapsed = {} }
 	local f = CreateFrame("Frame", "GoblinMindVendor", UIParent)
-	f:SetSize(560, 450)
+	f:SetSize(560, 470)
 	f:SetPoint("CENTER", -80, -20)
 	f:SetFrameStrata("HIGH")
 	f:SetToplevel(true)
@@ -226,10 +281,52 @@ local function Build()
 			"window. The GOBLINMIND button on that frame switches back." }
 	end)
 
+	-- filter row: name search (all pages) + FLIPS-ONLY (BUY) +
+	-- collapse/expand-all for the class tree
+	ui.search = EditBox(f, 130, "filter…")
+	ui.search:SetPoint("TOPLEFT", 12, -56)
+	ui.search:SetScript("OnTextChanged", function()
+		ui.scroll = 0
+		VU.Refresh()
+	end)
+	ui.flipsBtn = Btn(f, 76, "FLIPS ONLY", function()
+		ui.flipsOnly = not ui.flipsOnly or nil
+		ui.flipsBtn.text:SetTextColor(GM.RGB(ui.flipsOnly and "accent"
+			or "textDim"))
+		ui.scroll = 0
+		VU.Refresh()
+	end)
+	ui.flipsBtn:SetPoint("LEFT", ui.search, "RIGHT", 8, 0)
+	ui.flipsBtn.text:SetTextColor(GM.RGB("textDim"))
+	-- W.Btn's hover leave resets to textDim — re-assert the ON color
+	ui.flipsBtn:HookScript("OnLeave", function()
+		ui.flipsBtn.text:SetTextColor(GM.RGB(
+			ui.flipsOnly and "accent" or "textDim"))
+	end)
+	Tip(ui.flipsBtn, "Only vendor stock priced under 85% of market")
+	ui.collapseBtn = Btn(f, 100, "COLLAPSE ALL", function()
+		-- flip the current majority: anything expanded collapses;
+		-- an all-collapsed tree re-expands
+		local anyOpen
+		local rows = MerchantOpen() and ({ buy = BuyData, sell = SellData,
+			back = BackData })[ui.page]() or {}
+		for _, r in ipairs(rows) do
+			if not ui.collapsed[r.cls or "Miscellaneous"] then
+				anyOpen = true
+				break
+			end
+		end
+		for _, r in ipairs(rows) do
+			ui.collapsed[r.cls or "Miscellaneous"] = anyOpen or nil
+		end
+		VU.Refresh()
+	end)
+	ui.collapseBtn:SetPoint("LEFT", ui.flipsBtn, "RIGHT", 6, 0)
+
 	-- column header (labels swap per page)
 	local hdr = CreateFrame("Frame", nil, f)
 	hdr:SetSize(536, 16)
-	hdr:SetPoint("TOPLEFT", 12, -60)
+	hdr:SetPoint("TOPLEFT", 12, -78)
 	ui.head = {}
 	for i, hx in ipairs({ 28, 240, 300, 380 }) do
 		local fs = GM.MakeFontString(hdr, GM.FONT_BOLD, 9, "secondary")
@@ -242,7 +339,7 @@ local function Build()
 	-- scroll host
 	local host = CreateFrame("Frame", nil, f)
 	host:SetSize(536, VISIBLE * ROW_H + 4)
-	host:SetPoint("TOPLEFT", 12, -78)
+	host:SetPoint("TOPLEFT", 12, -96)
 	if host.SetClipsChildren then host:SetClipsChildren(true) end
 	host:EnableMouseWheel(true)
 	host:SetScript("OnMouseWheel", function(_, d)
@@ -351,34 +448,69 @@ function VU.Refresh()
 	end
 	for i = 1, 4 do ui.head[i]:SetText(page.head[i]) end
 
+	ui.flipsBtn:SetShown(ui.page == "buy")
 	local rows = open and page.data() or {}
+	local disp, nItems, nGroups = FlatTree(rows)
+	ui.collapseBtn.text:SetText(#rows > nItems and "EXPAND ALL"
+		or "COLLAPSE ALL")
 	ui.empty:SetText(not open
 		and "open a merchant to trade"
+		or nItems == 0 and #rows > 0 and "nothing matches the filter"
 		or ui.page == "buy" and "merchant has no stock listed"
 		or ui.page == "sell" and "no junk in bags"
 		or "nothing to buy back")
-	ui.empty:SetShown(#rows == 0)
+	ui.empty:SetShown(#disp == 0)
 	ui.foot:SetText(ui.page == "buy"
 		and "flips sort first — vendor price < 85% of market · "
 			.. "BUY = one stack · shift-click = pick qty"
 		or ui.page == "sell" and "one stack per SELL click · right-click row = blacklist"
 		or "sold items can be bought back until you log out")
 
-	local maxScroll = math.max(0, #rows - VISIBLE)
+	local maxScroll = math.max(0, #disp - VISIBLE)
 	ui.scroll = math.min(ui.scroll or 0, maxScroll)
-	W.ScrollText(ui.count, ui.scroll, VISIBLE, #rows)
+	ui.count:SetText(format("%d items · %d types", nItems, nGroups))
 	for i = 1, VISIBLE do
 		local row = ui.rows[i]
-		local r = rows[i + ui.scroll]
-		if r then
+		local r = disp[i + ui.scroll]
+		if r and r.hdr then
+			-- class group header — click collapses/expands its items
+			row:Show()
+			row.tip, row.tipIdx, row.tipID = nil, nil, nil
+			row.act:Hide()
+			row.qtyBox:Hide()
+			row.icon:SetTexture(nil)
+			row.bg:SetColorTexture(GM.RGB("contHigh"))
+			row.name:ClearAllPoints()
+			row.name:SetPoint("LEFT", 8, 0)
+			row.name:SetWidth(300)
+			row.name:SetText((r.closed and "▶ " or "▼ ") .. r.cls
+				.. GM.CC("secondary") .. "  ×" .. r.n .. "|r")
+			row.name:SetTextColor(GM.RGB("accent"))
+			row.c1:SetText("")
+			row.c2:SetText("")
+			row.c3:SetText("")
+			local cls = r.cls
+			row:SetScript("OnClick", function()
+				ui.collapsed[cls] = not ui.collapsed[cls] or nil
+				VU.Refresh()
+			end)
+		elseif r then
 			row:Show()
 			row.tip, row.tipIdx, row.tipID = nil, nil, nil
 			row.act:Show()
 			row.qtyBox:Hide()
+			row.bg:SetColorTexture(GM.RGB(
+				i % 2 == 0 and "contMedium" or "contLowest"))
 			row.icon:SetTexture(r.id and GM.ItemIcon(r.id) or 134400)
+			row.name:ClearAllPoints()
+			row.name:SetPoint("LEFT", 34, 0)
+			row.name:SetWidth(200)
 			row.name:SetText(r.name or "?")
 			row.name:SetTextColor(GM.NameColor(r.id))
 			row.c1:SetText("×" .. (r.qty or 1))
+			-- rows are recycled — shed a previous header's collapse
+			-- handler before the page branch installs its own (sell)
+			row:SetScript("OnClick", nil)
 			if ui.page == "buy" then
 				row.c2:SetText(r.ext and "alt cost"
 					or (r.cost and GM.Money(r.cost) or "—"))

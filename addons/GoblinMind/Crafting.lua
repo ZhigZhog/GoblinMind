@@ -511,6 +511,20 @@ function C.Init()
 		end
 		if e == "TRADE_SKILL_SHOW" then
 			Tr("TRADE_SKILL_SHOW")
+			-- name the open line NOW from the live enum — waiting for
+			-- the debounced recipe scan leaves lastProf stale/nil
+			-- through the settle window, and stale session state can
+			-- arm the OPEN overlay over the line that just opened
+			if C_TradeSkillUI and C_TradeSkillUI.GetAllRecipeIDs then
+				local ok, ids = pcall(C_TradeSkillUI.GetAllRecipeIDs)
+				if ok and type(ids) == "table" and ids[1] then
+					local p = C.Prof(ids[1])
+					if p then
+						Tr("SHOW line =", p)
+						C.lastProf = p
+					end
+				end
+			end
 			-- TSM parity: opening a tradeskill IS opening our crafting
 			-- window (linked/NPC sessions excluded — not ours to drive)
 			local linked = C_TradeSkillUI
@@ -1264,6 +1278,26 @@ local function SecureOpenFor(btn)
 		-- click re-casts the spell onto the (now open) line before
 		-- any refresh can disarm it
 		ov:Hide()
+		-- a cast that produces no SHOW never ran (dead spell name,
+		-- range, whatever) — say so, and clear the stamp so the next
+		-- gate eval re-arms honestly instead of sitting on a
+		-- phantom "open" for the stamp's full 12s
+		local rid = ov._rid
+		GM.After(4.5, function()
+			local p = C.pendingOpenCraft
+			if not (p and p.id == rid) then return end
+			C.pendingOpenCraft = nil
+			if C.recentOpen then C.recentOpen[rid] = nil end
+			Tr("OPEN cast produced no SHOW for", rid)
+			GM.Print(GM.CC("warn") .. (C.Prof(rid) or "tradeskill")
+				.. " didn't open — click OPEN to retry|r")
+			if GM.CraftingUI and GM.CraftingUI.Refresh then
+				GM.CraftingUI.Refresh()
+			end
+			if GM.PlanQueue and GM.PlanQueue.Refresh then
+				GM.PlanQueue.Refresh()
+			end
+		end)
 	end)
 	ov:Hide()
 	btn._gmOpen = ov

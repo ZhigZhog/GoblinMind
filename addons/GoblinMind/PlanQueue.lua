@@ -313,13 +313,24 @@ local function Build()
 	ui.chart:SetHeight(150)
 	GM.Panel(ui.chart, "contLowest")
 	if GM.ChromePanel then GM.ChromePanel(ui.chart) end
-	ui.chart.title = GM.MakeFontString(ui.chart, GM.FONT_MED, 9, "secondary")
+	ui.chart.title = GM.MakeFontString(ui.chart, GM.FONT_MED, 10, "primary")
 	ui.chart.title:SetPoint("TOPLEFT", 8, -5)
 	ui.chart.title:SetText("PRICE · VOLUME")
 	ui.chart.msg = GM.MakeFontString(ui.chart, GM.FONT, 10, "textDim")
 	ui.chart.msg:SetPoint("CENTER", 0, -8)
 	-- nothing drawn may escape the chart region
 	if ui.chart.SetClipsChildren then ui.chart:SetClipsChildren(true) end
+	-- hover surfaces: the chart explains its coverage; the lower band
+	-- explains the derived-metric readouts (armed only when drawn)
+	ui.chart:EnableMouse(true)
+	GM.Widgets.Tip(ui.chart, function() return ui.chart.tipLines end)
+	ui.chart.readsHover = CreateFrame("Frame", nil, ui.chart)
+	ui.chart.readsHover:SetPoint("BOTTOMLEFT", 8, 8)
+	ui.chart.readsHover:SetPoint("BOTTOMRIGHT", -80, 8)
+	ui.chart.readsHover:SetHeight(48)
+	ui.chart.readsHover:EnableMouse(false)
+	GM.Widgets.Tip(ui.chart.readsHover,
+		"Derived at reference price — not realized sales")
 
 	-- Steps header
 	ui.header = CreateFrame("Frame", nil, frame)
@@ -912,30 +923,53 @@ local function DrawChart(entry, itemID)
 	for _, a in ipairs(ui.art) do a:Hide() end
 	wipe(ui.art)
 	ui.chart.msg:SetText("")
+	ui.chart.tipLines = nil
 
-	-- a real 1-week series from GoblinMindHistory once it has ≥2 points;
-	-- until then the three data anchors (hist/recent/est) stand in
-	local pts, weekMode = {}, false
+	-- a real series from GoblinMindHistory once it has ≥2 points; until
+	-- then the three data anchors (hist/recent/est) stand in. The x
+	-- window fits the OBSERVED span — a fixed 7-day axis under a young
+	-- series crams every point into the right edge and implies coverage
+	-- that doesn't exist
+	local WEEK = 7 * 86400
+	local pts, seriesMode, window = {}, false, WEEK
 	if entry and itemID and GM.History then
-		local series = GM.History.Points(itemID, 7 * 86400)
+		local series = GM.History.Points(itemID, WEEK)
 		if #series >= 2 then
-			weekMode = true
-			local t0 = time() - 7 * 86400
+			seriesMode = true
+			local span = series[#series].t - series[1].t
+			if span < 0.85 * WEEK then
+				window = math.max(span * 1.25, 3600)
+			end
+			local t0 = time() - window
 			for _, p in ipairs(series) do
-				local x = (p.t - t0) / (7 * 86400)
+				local x = (p.t - t0) / window
 				tinsert(pts, { x = x < 0 and 0 or x > 1 and 1 or x, v = p.p })
 			end
 			tinsert(pts, { x = 1.0, v = entry.p }) -- live estimate at "now"
+			ui.chart.tipLines = {
+				format("%d snapshots over %s", #series,
+					GM.FmtAge(window)),
+				format("first sample %s ago · latest now",
+					GM.FmtAge(time() - series[1].t)),
+			}
 		end
 	end
-	if not weekMode and entry then
+	if not seriesMode and entry then
 		if entry.hist then tinsert(pts, { x = 0.05, v = entry.hist, tag = "hist" }) end
 		if entry.recent and entry.recent ~= (entry.hist or 0) then
 			tinsert(pts, { x = 0.5, v = entry.recent, tag = "recent" })
 		end
 		tinsert(pts, { x = 0.95, v = entry.p, tag = "est" })
+		ui.chart.tipLines = {
+			"Price references — not a time series",
+			"anchors: hist · recent · live estimate",
+		}
 	end
-	ui.chart.title:SetText(weekMode and "PRICE · VOLUME · 7D" or "PRICE · VOLUME")
+	local fullWeek = seriesMode and window >= WEEK
+	ui.chart.title:SetText(
+		fullWeek and "PRICE · VOLUME · 7D"
+		or seriesMode and "Snapshots · " .. GM.FmtAge(window)
+		or "PRICE REFERENCES")
 	if #pts < 2 then
 		ui.chart.msg:SetText("trend chart — building a 7-day series, check back tomorrow")
 		return
@@ -970,46 +1004,47 @@ local function DrawChart(entry, itemID)
 	-- faint mid-grid + divider between price and volume regions
 	HRule((priceBase + priceTop) / 2, 0.35)
 	HRule(56)
-	-- day-boundary gridlines across the 7-day window
-	if weekMode then
+	-- day-boundary gridlines only when the axis really spans a week
+	if fullWeek then
 		for d = 1, 6 do
 			local gx = pad + d / 7 * W
 			Segment(ui.chart, gx, volBase, gx, priceTop, "outlineVar")
 		end
 	end
-	-- hi/lo scale labels right-aligned inside the gutter
+	-- hi/lo scale labels right-aligned inside the gutter; suppress
+	-- whichever collides (<14u) with the latest-price tag that shares
+	-- the gutter — never two labels stacked in the same right region
 	local gR = ui.chart:GetWidth() - 6
-	Label(ui.chart, gR, priceTop + 2, GM.Money(hi), "textDim", 9, "RIGHT")
-	Label(ui.chart, gR, priceBase - 6, GM.Money(lo), "textDim", 9, "RIGHT")
+	local tagY = pts[#pts].py - 5
+	if math.abs(priceTop + 2 - tagY) >= 14 then
+		Label(ui.chart, gR, priceTop + 2, GM.Money(hi), "textDim", 10, "RIGHT")
+	end
+	if math.abs(priceBase - 6 - tagY) >= 14 then
+		Label(ui.chart, gR, priceBase - 6, GM.Money(lo), "textDim", 10, "RIGHT")
+	end
 
 	for i = 2, #pts do
 		Segment(ui.chart, pts[i - 1].px, pts[i - 1].py, pts[i].px, pts[i].py)
 	end
 	for i, p in ipairs(pts) do
 		local endpoint = i == 1 or i == #pts
-		local hot = (weekMode and i == #pts) or p.tag == "est"
-		if not weekMode or endpoint then
+		local hot = (seriesMode and i == #pts) or p.tag == "est"
+		if not seriesMode or endpoint then
 			Dot(ui.chart, p.px, p.py, hot and 5 or 4, hot and "accent" or "textDim")
-			-- only the latest point earns an in-plot label; the rest
-			-- read from the gutter scale
+			-- the latest price anchors in the gutter at its own y —
+			-- never centered on the dot, never bleeding the plot
 			if hot then
-				local ly = p.py + 9
-				if ly > priceTop - 6 then ly = p.py - 16 end
-				-- latest sits at the plot's right edge — end the label
-				-- just left of the dot so it can't bleed into the gutter
-				Label(ui.chart, p.px - 6, ly, GM.Money(p.v), "accent", nil, "RIGHT")
+				Label(ui.chart, gR, tagY, GM.Money(p.v), "text", 11, "RIGHT")
 			end
 		end
 	end
-	for _, v in ipairs({ entry.p10, entry.p90 }) do
-		if v and v >= lo and v <= hi then
-			HRule(py(v), 0.8)
-		end
-	end
-	-- time axis markers at the plot's true edges
-	if weekMode then
-		Label(ui.chart, pad, 4, "7d ago", "textDim", 9, "LEFT")
-		Label(ui.chart, pad + W, 4, "now", "textDim", 9, "RIGHT")
+	-- time axis markers at the plot's true edges; the left label names
+	-- the actual window, not a pretend week
+	if seriesMode then
+		Label(ui.chart, pad, 4,
+			(fullWeek and "7d ago" or GM.FmtAge(window) .. " ago"),
+			"textDim", 10, "LEFT")
+		Label(ui.chart, pad + W, 4, "now", "textDim", 10, "RIGHT")
 	end
 	-- derived metrics as labeled readouts — region turnover and DB
 	-- listed value are different units, not comparable bar heights
@@ -1025,6 +1060,7 @@ local function DrawChart(entry, itemID)
 			Label(ui.chart, pad, (volBase + volTop) / 2 - 4,
 				table.concat(reads, "  ·  "), "textDim", 9, "LEFT")
 		end
+		ui.chart.readsHover:EnableMouse(#reads > 0)
 	end
 end
 

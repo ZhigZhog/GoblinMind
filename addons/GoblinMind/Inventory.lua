@@ -91,8 +91,57 @@ function GM.Inventory.OwnedByKey(key)
 	return fp and auctionCache[fp] or nil
 end
 
+GM.Inventory.bids = {}
+local bids = GM.Inventory.bids
+
+local lastOwnedAt -- unix time of the last live snapshot (or of the
+                  -- persisted one rehydrated at login)
+
+function GM.Inventory.OwnedAt() return lastOwnedAt end
+
+-- persist the owned snapshot so the MINE surfaces are a real log: the
+-- enum only answers at the AH, but the last-known listings should
+-- stay visible between visits (tLeft rebases off the stored `at`)
+local function SaveOwned()
+	if not GoblinMindSettings then return end
+	GoblinMindSettings.owned = GoblinMindSettings.owned or {}
+	local rows = {}
+	for fp, a in pairs(auctionCache) do
+		if a.itemID then
+			rows[fp] = { itemID = a.itemID, qty = a.qty,
+				buyout = a.buyout, tLeft = a.tLeft, at = a.at,
+				n = a.n }
+		end
+	end
+	local bs = {}
+	for aid, b in pairs(bids) do bs[aid] = b end
+	GoblinMindSettings.owned[GM.CharKey()] =
+		{ rows = rows, bids = bs, at = time() }
+end
+
+-- rehydrate at login — ownedPrimed deliberately stays FALSE: a stale
+-- snapshot must never feed post/sell ledger deltas; the first live
+-- refresh re-primes cleanly
+local function LoadOwned()
+	local snap = GoblinMindSettings and GoblinMindSettings.owned
+		and GoblinMindSettings.owned[GM.CharKey()]
+	if not snap then return end
+	for fp, a in pairs(snap.rows or {}) do
+		auctionCache[fp] = { fp = fp, itemID = a.itemID,
+			qty = a.qty, buyout = a.buyout, tLeft = a.tLeft,
+			at = a.at, n = a.n }
+	end
+	for aid, b in pairs(snap.bids or {}) do bids[aid] = b end
+	GM.Inventory.auctions = auctionCache
+	lastOwnedAt = snap.at
+end
+
 function GM.Inventory.RefreshOwned()
 	if not (C_AuctionHouse and C_AuctionHouse.GetNumOwnedAuctions) then return end
+	-- the enum only answers meaningfully at the AH — a bare call from
+	-- the login ladder would report zero rows and wipe the persisted
+	-- snapshot with them
+	if not GM.AH.open then return end
 	local ok, n = pcall(C_AuctionHouse.GetNumOwnedAuctions)
 	if not ok or not n then return end
 	-- a requery can briefly report zero rows mid-flight; only trust an
@@ -216,6 +265,8 @@ function GM.Inventory.RefreshOwned()
 	auctionCache = now
 	GM.Inventory.auctions = now
 	ownedPrimed = true
+	lastOwnedAt = t
+	SaveOwned()
 	-- one-shot waiter for a fresh snapshot (cancel scan)
 	local cb = GM.Inventory.onOwned
 	GM.Inventory.onOwned = nil
@@ -280,8 +331,8 @@ end
 -- PlaceBid hook (our bids anywhere), BIDS_UPDATED enumeration when the
 -- client exposes GetNumBids/GetBidInfo, and formatted notifications
 -- (AuctionOutbid / AuctionWon / AuctionRemoved) for terminal state.
-GM.Inventory.bids = {}
-local bids = GM.Inventory.bids
+-- The table itself is declared above the owned-snapshot block —
+-- SaveOwned/LoadOwned persist it alongside auctionCache.
 
 local function BidInfoByID(aid)
 	if not (C_AuctionHouse and C_AuctionHouse.GetAuctionInfoByID) then
@@ -607,6 +658,7 @@ f:SetScript("OnEvent", function(_, event, ...)
 	elseif event == "AUCTION_HOUSE_SHOW_FORMATTED_NOTIFICATION" then
 		OnNotification(...)
 	elseif event == "AUCTION_HOUSE_SHOW" or event == "PLAYER_LOGIN" then
+		if event == "PLAYER_LOGIN" then LoadOwned() end
 		GM.Inventory.QueryOwned()
 		GM.Inventory.QueryBids()
 	elseif event == "GUILDBANKBAGSLOTS_CHANGED" then

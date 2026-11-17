@@ -369,6 +369,17 @@ function GM.PullInbox()
 	GM.After(0.7, function()
 		pullArmed = nil
 		pcall(CheckInbox)
+		-- the new-mail flag only re-evaluates on UPDATE_PENDING_MAIL,
+		-- which lags minutes behind a bulk clear — once the headers
+		-- report an empty inbox, hide the minimap icon ourselves
+		-- (harmless if headers lag: it re-arms on the next genuine
+		-- pending-mail event)
+		GM.After(0.5, function()
+			local n = GetInboxNumItems and GetInboxNumItems() or 0
+			if n == 0 and MiniMapMailFrame then
+				MiniMapMailFrame:Hide()
+			end
+		end)
 	end)
 end
 

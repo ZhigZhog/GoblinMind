@@ -1,9 +1,11 @@
 local _, GM = ...
 
 -- Part 13 (frontend parity): the My Auctions surface — TSM's AuctionUI
--- tab 4. POSTED mirrors the AH window's MINE tab exactly: posted
--- auctions on top, our bids underneath, same columns, same
--- CANCEL/REBID buttons. BAGS is the post picker.
+-- tab 4. POSTED is a persistent LOG: posted auctions on top, our bids
+-- underneath — the snapshot persists to SavedVariables (Inventory
+-- SaveOwned/LoadOwned) and refreshes whenever the AH is open; no
+-- cancel/rebid surface here, actions live in the AH window's MINE
+-- tab. BAGS is the post picker.
 --
 -- Owned-auction buyout is PER-ITEM on Forever (same convention the
 -- item-search results proved: qty=147 buyout=200 = 2s/bag). The unit
@@ -90,12 +92,8 @@ local function Build()
 		end
 	end)
 	post:SetPoint("LEFT", refresh, "RIGHT", 6, 0)
-	local cancel = Btn(f, 88, "CANCEL SCAN", function()
-		GM.Auctioning.CancelScan()
-	end)
-	cancel:SetPoint("LEFT", post, "RIGHT", 6, 0)
 	ui.summary = GM.MakeFontString(f, GM.FONT, 9, "textDim")
-	ui.summary:SetPoint("LEFT", cancel, "RIGHT", 12, 0)
+	ui.summary:SetPoint("LEFT", post, "RIGHT", 12, 0)
 	ui.summary:SetJustifyH("LEFT")
 
 	-- column header + scroll host (BAGS page only — POSTED builds its
@@ -123,9 +121,9 @@ local function Build()
 	end)
 	ui.host = host
 
-	-- POSTED page mirrors the AH window's MINE tab exactly: posted
-	-- auctions on top, our bids underneath — same columns, same
-	-- CANCEL/REBID row buttons, same pane geometry (776 wide, 6 rows)
+	-- POSTED page mirrors the AH window's MINE tab columns but is a
+	-- read-only log — no row action buttons; posted auctions on top,
+	-- our bids underneath (776 wide, 6 rows per pane)
 	local PANE_H = 22 + MINE_VISIBLE * ROW_H + 8
 	local fp = CreateFrame("Frame", nil, f)
 	fp:SetSize(776, PANE_H)
@@ -178,14 +176,6 @@ local function Build()
 		row.stat:SetJustifyH("LEFT")
 		row.time = GM.MakeFontString(row, GM.FONT, 9, "textDim")
 		row.time:SetPoint("LEFT", 640, 0)
-		local act = CreateFrame("Button", nil, row)
-		act:SetSize(56, 16)
-		act:SetPoint("RIGHT", -4, 0)
-		GM.Panel(act, "contHigh")
-		act.text = GM.MakeFontString(act, GM.FONT_BOLD, 8, "warn")
-		act.text:SetPoint("CENTER")
-		act.text:SetText("CANCEL")
-		row.act = act
 		row:SetScript("OnEnter", function(self)
 			if self.tipID then
 				GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
@@ -314,7 +304,7 @@ local function Build()
 
 	ui.foot = GM.MakeFontString(f, GM.FONT, 9, "textDim")
 	ui.foot:SetPoint("BOTTOMLEFT", 14, 10)
-	ui.foot:SetText("cancels are one click each · undercuts sort first")
+	ui.foot:SetText("log view — snapshot refreshes at the AH")
 end
 
 -- ============ data ============
@@ -330,6 +320,10 @@ function MA.Refresh()
 		b.text:SetTextColor(GM.RGB(sel and "accent" or "textDim"))
 	end
 	local posted = ui.page == "posted"
+	-- POSTED's two fixed panes end ~442px down; BAGS' scroll host
+	-- needs ~446 — size the frame to the page so neither sits on a
+	-- dead band of empty chrome
+	ui.frame:SetHeight(posted and 456 or 462)
 	ui.fp:SetShown(posted)
 	ui.bp:SetShown(posted)
 	ui.host:SetShown(not posted)
@@ -366,8 +360,17 @@ function MA.RefreshPosted()
 		uc = uc + (r.undercut and 1 or 0)
 		totalVal = totalVal + (r.unit or 0) * (r.qty or 1)
 	end
-	ui.summary:SetText(format("%d auctions · %s listed",
-		#rows, GM.Money(totalVal)))
+	-- log semantics: away from the AH the snapshot is historical —
+	-- say how old it is
+	local snapAt = GM.Inventory.OwnedAt and GM.Inventory.OwnedAt()
+	local age = snapAt and (time() - snapAt)
+	local stale = age and not GM.AH.open and (age > 90
+		and format(" · snapshot %s ago", age >= 3600
+			and format("%dh%02dm", floor(age / 3600), floor(age % 3600 / 60))
+			or format("%dm", floor(age / 60) + 1))
+		or " · live")
+	ui.summary:SetText(format("%d auctions · %s listed%s",
+		#rows, GM.Money(totalVal), stale or ""))
 	for i = 1, #ui.mRows do
 		local row, r = ui.mRows[i], rows[i + ui.scroll]
 		if r then
@@ -393,11 +396,6 @@ function MA.RefreshPosted()
 				and format("%dh%02dm", floor(tl / 3600), floor(tl % 3600 / 60))
 				or tl >= 60 and format("%dm", floor(tl / 60))
 				or "<1m") or "—")
-			local aid = r.aid
-			row.act:SetScript("OnClick", function()
-				GM.AH.Execute({ kind = "cancel", auctionID = aid })
-				MA.Refresh()
-			end)
 			row:SetScript("OnClick", function()
 				if not r.id then return end
 				if IsShiftKeyDown() then GM.ModifiedItemClick(r.id)
@@ -437,7 +435,9 @@ function MA.RefreshPosted()
 				or st == "lost" and (GM.CC("textDim") .. "lost|r")
 				or (GM.CC("pos") .. "winning|r"))
 			local aid, id, cur = r.aid, r.id, r.curBid
-			if st == "outbid" and cur then
+			-- a log, not an action surface: REBID only arms while the
+			-- AH is open (PlaceBid needs the session anyway)
+			if st == "outbid" and cur and GM.AH.open then
 				row.act:Show()
 				row.act:SetScript("OnClick", function()
 					GM.AH.Execute({ kind = "bid", itemID = id,
@@ -456,8 +456,8 @@ function MA.RefreshPosted()
 			row:Hide()
 		end
 	end
-	ui.foot:SetText(format("%d auction%s%s — cancels are one click each · "
-		.. "undercuts sort first (book mbx < your price)",
+	ui.foot:SetText(format("%d auction%s%s — undercuts sort first "
+		.. "(book mbx < your price) · snapshot refreshes at the AH",
 		#rows, #rows == 1 and "" or "s",
 		uc > 0 and format(" · %s%d undercut|r", GM.CC("warn"), uc) or ""))
 end

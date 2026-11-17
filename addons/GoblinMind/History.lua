@@ -9,7 +9,7 @@ local _, GM = ...
 GM.History = {}
 
 local MAX_AGE = 8 * 86400 -- keep a week plus margin
-local MAX_PTS = 40      -- per-item cap (~3/day for a week)
+local MAX_PTS = 56      -- per-item cap — 7d at the 3h minimum gap
 local MIN_GAP = 3 * 3600
 
 function GM.History.Init()

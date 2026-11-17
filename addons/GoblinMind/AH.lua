@@ -22,6 +22,13 @@ GM.AH = {
 
 local EMPTY_SORTS = {}
 
+-- cancel-ledger dedupe: the owned-enum snapshot can rekey or duplicate
+-- a listing between the cancel scan and the click, so the same real
+-- auction reaches Execute under several keys. Record once per emitted
+-- key, and per fingerprint cap at the cached listing count (identical
+-- stacks share one fp — twins may each record, ghosts may not)
+local cancelLedger = {} -- [key] = {count, cap, t}
+
 local function RefreshUIs()
 	GM.PlanQueue.Refresh()
 	if GM.Shopping and GM.Shopping.Refresh then GM.Shopping.Refresh() end
@@ -1054,13 +1061,40 @@ function GM.AH.Execute(step)
 		end
 		return true
 	elseif step.kind == "cancel" then
-		GM.Inventory.recentCancels[step.auctionID] = time()
+		if step.auctionID then
+			GM.Inventory.recentCancels[step.auctionID] = time()
+		end
 		local a = GM.Inventory.OwnedByKey
 			and GM.Inventory.OwnedByKey(step.auctionID)
-		if a then
+		local now = time()
+		for k, c in pairs(cancelLedger) do
+			if now - (c.t or 0) > 600 then cancelLedger[k] = nil end
+		end
+		-- a step already recorded for this key never records again —
+		-- re-emitted steps and ghost rows resolving the same listing
+		-- would otherwise mint a ledger line per click
+		local dup = false
+		local key = a and (step.auctionID
+			or (a.fp and ("fp:" .. a.fp)))
+		if key and cancelLedger[key] then dup = true end
+		if a and not dup and a.fp then
+			local fpk = "fp:" .. a.fp
+			local f = cancelLedger[fpk]
+			local cap = math.max((f and f.cap) or 0, a.n or 1)
+			if f and f.count >= cap then
+				dup = true
+			else
+				cancelLedger[fpk] = { count = (f and f.count or 0) + 1,
+					cap = cap, t = now }
+			end
+		end
+		if a and not dup then
+			if key then
+				cancelLedger[key] = { count = 1, cap = 1, t = now }
+			end
 			-- suppress by fingerprint too — the owned list can rekey
 			-- the listing on the next snapshot
-			if a.fp then GM.Inventory.recentCancels[a.fp] = time() end
+			if a.fp then GM.Inventory.recentCancels[a.fp] = now end
 			GM.Ledger.Add("cancel", a.itemID, a.qty, a.buyout)
 		end
 		C_AuctionHouse.CancelAuction(step.auctionID)
