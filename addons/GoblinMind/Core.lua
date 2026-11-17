@@ -73,13 +73,13 @@ local function ParseItemRef(sub)
 		local name, rest = sub:match("^%[(.-)%]%s*(.*)$")
 		local info = C_Item and C_Item.GetItemInfo or GetItemInfo
 		local link = name and info and select(2, info(name))
-		pid = link and tonumber(link:match("item:(%d+)"))
+		pid = GM.LinkID(link)
 		xpr = strtrim(rest or "")
 	else
 		local arg
 		arg, xpr = sub:match("^(%S+)%s*(.*)$")
 		if arg then
-			pid = tonumber(arg:match("item:(%d+)"))
+			pid = GM.LinkID(arg)
 				or tonumber(arg:match("i:(%d+)")) or tonumber(arg)
 		end
 	end
@@ -153,7 +153,7 @@ SlashCmdList.GOBLINMIND = function(msg)
 		local id = tonumber(msg:match("(%d+)"))
 		if not id then
 			local _, link = GameTooltip and GameTooltip:GetItem()
-			id = link and tonumber(link:match("item:(%d+)")) or GM.lastTooltipItemID
+			id = GM.LinkID(link) or GM.lastTooltipItemID
 		end
 		if not id then GM.Print("usage: /goblin deprobe [itemID] (or hover an item)") return end
 		local info = C_Item and C_Item.GetItemInfo or GetItemInfo
@@ -519,6 +519,40 @@ SlashCmdList.GOBLINMIND = function(msg)
 		GM.AH.DumpRows(pid ~= "" and pid or nil)
 		return
 	end
+	if msg:sub(1, 4) == "bags" then
+		-- per-container dump: settles "is there a carried bag past
+		-- the computed range?" — bank containers show 0 items while
+		-- the bank frame is closed (contents unreadable until open).
+		if not (C_Container and C_Container.GetContainerNumSlots) then
+			GM.Print("C_Container unavailable on this client")
+			return
+		end
+		local max = GM.CarriedBagMax()
+		GM.Print(format("carriedMax=%d (learned=%s) bankOpen=%s",
+			max, tostring(GoblinMindSettings
+				and GoblinMindSettings.carriedMax),
+			tostring(BankFrame and BankFrame:IsShown())))
+		for bag = -3, max + 8 do
+			local n = C_Container.GetContainerNumSlots(bag) or 0
+			if n > 0 then
+				local items, first = 0
+				for slot = 1, n do
+					local info = C_Container.GetContainerItemInfo(
+						bag, slot)
+					if info and info.itemID then
+						items = items + 1
+						if not first then first = info.itemID end
+					end
+				end
+				local tag = bag <= max and "carried" or "?"
+				if bag < 0 or bag > max then tag = "bank?" end
+				GM.Print(format("  bag %d: %d slots, %d items%s — %s",
+					bag, n, items,
+					first and (" first=i:" .. first) or "", tag))
+			end
+		end
+		return
+	end
 	if msg:sub(1, 3) == "inv" then
 		local pid = ParseItemRef(strtrim(msg:sub(4)))
 		if not pid then
@@ -580,7 +614,7 @@ SlashCmdList.GOBLINMIND = function(msg)
 		end
 		return
 	end
-	local id = tonumber(msg:match("item:(%d+)")) or tonumber(msg)
+	local id = GM.LinkID(msg) or tonumber(msg)
 	if id then
 		GM.TargetItem(id, msg)
 	else
@@ -759,25 +793,136 @@ function GM.TSMMarket(itemID)
 	end
 end
 
+-- carried-bag container range: 0 .. NUM_BAG_SLOTS + reagent slots.
+-- Bank bags live PAST it — a hardcoded 0..5 scanned the first bank
+-- bag into "bags" whenever the bank was open (mats looked already
+-- carried → the planner skipped fetches it should have emitted).
+local NUM_CARRIED = (NUM_BAG_SLOTS or 4)
+	+ ((Constants and Constants.InventoryConstants
+		and Constants.InventoryConstants.NumReagentBagSlots) or 0)
+
+-- ...but Constants can under-report: a client with a reagent or
+-- profession bag may carry a container the constants don't know
+-- (NumReagentBagSlots absent → bag index 5 sits past the computed
+-- range → every item in it invisible to BagCount). Bank contents
+-- don't enumerate while the frame is CLOSED, so any container past
+-- NUM_CARRIED that yields items while closed is provably carried —
+-- learn the index once, persist it, keep counting it while empty.
+local function ProbeCarried()
+	if BankFrame and BankFrame:IsShown() then return end
+	if not (C_Container and C_Container.GetContainerItemInfo) then
+		return
+	end
+	local hi = 0
+	for bag = NUM_CARRIED + 1, NUM_CARRIED + 8 do
+		local slots = C_Container.GetContainerNumSlots(bag) or 0
+		if slots <= 0 then break end
+		for slot = 1, slots do
+			if C_Container.GetContainerItemInfo(bag, slot) then
+				hi = bag
+				break
+			end
+		end
+	end
+	if hi > NUM_CARRIED and GoblinMindSettings
+		and hi ~= GoblinMindSettings.carriedMax then
+		GoblinMindSettings.carriedMax = hi
+		GM.Print(GM.CC("textDim")
+			.. format("[bags] extra carried bag learned: "
+				.. "container %d|r", hi))
+	end
+end
+
+function GM.CarriedBagMax()
+	return math.max(NUM_CARRIED,
+		(GoblinMindSettings and GoblinMindSettings.carriedMax) or 0)
+end
+
+-- bank containers: -1 bank frame, -3 reagent bank, then bank bags
+-- starting right after the carried range. One list — BankMap,
+-- Inventory snapshots, and Banking slots all share it so a learned
+-- carried extra shifts the bank range consistently everywhere.
+function GM.BankContainerList()
+	local first = GM.CarriedBagMax() + 1
+	local n = (Constants and Constants.InventoryConstants
+		and Constants.InventoryConstants.NumCharacterBankSlots)
+		or NUM_BANKBAGSLOTS or 7
+	local out = { -1 }
+	for b = first, first + n - 1 do out[#out + 1] = b end
+	if C_Container and C_Container.GetContainerNumSlots
+		and (C_Container.GetContainerNumSlots(-3) or 0) > 0 then
+		out[#out + 1] = -3
+	end
+	return out
+end
+
+-- carried containers as a list (0..CarriedBagMax()) — pairs with
+-- GM.BankContainerList for the iterator below.
+function GM.CarriedContainerList()
+	local out = {}
+	for b = 0, GM.CarriedBagMax() do out[#out + 1] = b end
+	return out
+end
+
+-- Normalized slot enumeration over a bag list — the ONE place that
+-- owns the dual API shape (C_Container table vs legacy tuple).
+-- fn(bag, slot, itemID, stackCount, isLocked, isBound, link);
+-- a truthy return from fn stops iteration early.
+-- Action paths that need raw per-slot detail (FindInBags,
+-- Auctioning.BagItems) iterate this LIVE — counts go through
+-- BagMap/BankMap instead.
+function GM.EachBagSlot(bags, fn)
+	local info = C_Container and C_Container.GetContainerItemInfo
+	local num = C_Container and C_Container.GetContainerNumSlots
+		or GetContainerNumSlots
+	if not (num and bags) then return end
+	for _, bag in ipairs(bags) do
+		for slot = 1, num(bag) or 0 do
+			local id, n, locked, bound, link
+			if info then
+				local i = info(bag, slot)
+				if i then
+					id, n = i.itemID, i.stackCount or 1
+					locked, bound = i.isLocked, i.isBound
+					link = i.hyperlink
+				end
+			elseif GetContainerItemInfo then
+				local _, c, l, _, _, _, lk, _, _, _, b =
+					GetContainerItemInfo(bag, slot)
+				id = GM.LinkID(lk)
+				n, locked, bound, link = c or 1, l, b, lk
+			end
+			if id and fn(bag, slot, id, n, locked, bound, link) then
+				return
+			end
+		end
+	end
+end
+
+-- bags gained since a plan step emitted (bagBase is baked at emit) —
+-- a manual bank pull or mail collect satisfies a step the same as an
+-- executor move, and a covered buy shouldn't spend again.
+function GM.BagDelta(step)
+	if not (step and step.bagBase and step.itemID) then return 0 end
+	return math.max(0, (GM.BagCount(step.itemID) or 0) - step.bagBase)
+end
+
 -- Bag contents as a per-bucket map: callers once iterated every
 -- slot per query (~120 API calls × recipes × mats on a render = the
 -- "insecure scripts exceeded execution limit" kills). One 250ms
 -- bucket rebuild serves every itemID lookup.
+local probeAt = 0
 local BagMap = GM.BucketCache(function()
-	local m = {}
-	if C_Container and C_Container.GetContainerItemInfo then
-		for bag = 0, 5 do
-			for slot = 1,
-				(C_Container.GetContainerNumSlots(bag) or 0) do
-				local info = C_Container.GetContainerItemInfo(
-					bag, slot)
-				if info and info.itemID then
-					m[info.itemID] = (m[info.itemID] or 0)
-						+ (info.stackCount or 1)
-				end
-			end
-		end
+	local now = GetTime()
+	if now - probeAt > 3 then
+		probeAt = now
+		ProbeCarried()
 	end
+	local m = {}
+	GM.EachBagSlot(GM.CarriedContainerList(),
+		function(_, _, id, n)
+			m[id] = (m[id] or 0) + n
+		end)
 	return m
 end)
 
@@ -796,19 +941,11 @@ end
 -- Bank contents are only readable while the bank frame is open.
 local BankMap = GM.BucketCache(function()
 	local m = {}
-	if BankFrame and BankFrame:IsShown()
-		and C_Container and C_Container.GetContainerItemInfo then
-		for _, bag in ipairs({ -1, 6, 7, 8, 9, 10, 11 }) do
-			for slot = 1,
-				(C_Container.GetContainerNumSlots(bag) or 0) do
-				local info = C_Container.GetContainerItemInfo(
-					bag, slot)
-				if info and info.itemID then
-					m[info.itemID] = (m[info.itemID] or 0)
-						+ (info.stackCount or 1)
-				end
-			end
-		end
+	if BankFrame and BankFrame:IsShown() then
+		GM.EachBagSlot(GM.BankContainerList(),
+			function(_, _, id, n)
+				m[id] = (m[id] or 0) + n
+			end)
 	end
 	return m
 end)
@@ -816,6 +953,55 @@ end)
 function GM.BankCount(itemID)
 	if not itemID then return 0 end
 	return (BankMap())[itemID] or 0
+end
+
+-- how much of an extended-cost component we carry — the merchant
+-- checks bags for item costs and the currency ledger for currency
+-- costs, so "have" means the spendable count, not all tracked stock.
+-- link: item: / currency: link or nil; cname: currency name fallback.
+function GM.CostOwned(link, cname)
+	local id = GM.LinkID(link)
+	if id then
+		local c = GM.Inventory and GM.Inventory.Count(id)
+		return (c and c.bags) or 0
+	end
+	local cid = link and tonumber(link:match("currency:(%d+)"))
+	if cid and C_CurrencyInfo and C_CurrencyInfo.GetCurrencyInfo then
+		local ci = C_CurrencyInfo.GetCurrencyInfo(cid)
+		if ci and ci.quantity then return ci.quantity end
+	end
+	-- name-only currency (no parsable link): scan the currency list
+	if cname and C_CurrencyInfo
+		and C_CurrencyInfo.GetCurrencyListSize then
+		for i = 1, C_CurrencyInfo.GetCurrencyListSize() do
+			local e = C_CurrencyInfo.GetCurrencyListInfo(i)
+			if e and e.name == cname and not e.isHeader then
+				return e.quantity or 0
+			end
+		end
+	end
+end
+
+-- merchant slot's extended (alt-currency) cost, decoded:
+-- { {icon, qty, link, name, own}, ... } or nil for plain gold items.
+-- item links resolve `own` through bags; currency links/names
+-- through the currency ledger — the count the merchant checks.
+function GM.MerchantAltCost(index)
+	if not (GetMerchantItemCostInfo and GetMerchantItemCostItem) then
+		return
+	end
+	local alt
+	for j = 1, GetMerchantItemCostInfo(index) or 0 do
+		local tex, val, clink, cname =
+			GetMerchantItemCostItem(index, j)
+		if tex or cname then
+			alt = alt or {}
+			alt[#alt + 1] = { icon = tex, qty = val or 1,
+				link = clink, name = cname,
+				own = GM.CostOwned(clink, cname) }
+		end
+	end
+	return alt
 end
 
 -- Item name/icon resolution: GetItemInfo returns nil for uncached
@@ -921,6 +1107,13 @@ function GM.ModifiedItemClick(id)
 			or UseContainerItem
 		if Use then Use(loc:GetBagAndSlot()) return true end
 	end
+end
+
+-- item:/currency: link (or hyperlink fragment) -> numeric itemID.
+-- The "item:(%d+)" pattern in one place — every call site used to
+-- re-inline it.
+function GM.LinkID(link)
+	return link and tonumber(link:match("item:(%d+)"))
 end
 
 function GM.ItemLink(id)

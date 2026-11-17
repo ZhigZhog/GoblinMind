@@ -20,22 +20,29 @@ end
 
 -- Container IDs computed like TSM's: bags = 0..NUM_BAG_SLOTS +
 -- NumReagentBagSlots, bank bags follow, reagent bank = -3 if present.
-local BAGS, BANK
-do
-	local inv = Constants and Constants.InventoryConstants
-	local numBags = (NUM_BAG_SLOTS or 4) + (inv and inv.NumReagentBagSlots or 0)
+-- The lists rebuild when CarriedBagMax changes — a learned extra
+-- carried bag (reagent/profession bag past the computed range)
+-- shifts the bank-bag start with it.
+local BAGS, BANK, bagsBuiltFor
+local function Ranges()
+	local numBags = (GM.CarriedBagMax and GM.CarriedBagMax())
+		or (NUM_BAG_SLOTS or 4)
+	if bagsBuiltFor == numBags then return BAGS, BANK end
+	bagsBuiltFor = numBags
 	BAGS = {}
 	for b = 0, numBags do BAGS[#BAGS + 1] = b end
-	local numBank = (inv and inv.NumCharacterBankSlots) or NUM_BANKBAGSLOTS or 7
 	BANK = {}
 	-- TSM: BANK_CONTAINER (-1) is a valid drop target on classic only —
 	-- on the modern bank UI (retail/Forever) items live in the bank BAG
 	-- containers and -1 is a phantom that rejects drops.
-	for b = numBags + 1, numBags + numBank do BANK[#BANK + 1] = b end
+	for _, b in ipairs(GM.BankContainerList()) do
+		if b > 0 then BANK[#BANK + 1] = b end
+	end
 	if C_Container and C_Container.GetContainerNumSlots
 		and (C_Container.GetContainerNumSlots(-3) or 0) > 0 then
 		BANK[#BANK + 1] = -3 -- reagent bank
 	end
+	return BAGS, BANK
 end
 
 local function DumpRanges()
@@ -43,6 +50,7 @@ local function DumpRanges()
 	Dbg("NUM_BAG_SLOTS=%s NumReagentBagSlots=%s NumCharacterBankSlots=%s NUM_BANKBAGSLOTS=%s",
 		tostring(NUM_BAG_SLOTS), tostring(inv and inv.NumReagentBagSlots),
 		tostring(inv and inv.NumCharacterBankSlots), tostring(NUM_BANKBAGSLOTS))
+	local BAGS, BANK = Ranges()
 	Dbg("BAGS=%s BANK=%s", table.concat(BAGS, ","), table.concat(BANK, ","))
 end
 
@@ -79,6 +87,7 @@ end
 
 local function Slots(scope)
 	local out = {}
+	local BAGS, BANK = Ranges()
 	for _, bag in ipairs(scope == "bank" and BANK or BAGS) do
 		local n = C_Container and C_Container.GetContainerNumSlots(bag) or 0
 		for slot = 1, n do
@@ -283,11 +292,57 @@ function B.BankSlots()
 	return Slots("bank")
 end
 
+-- plan-queue fetch step: pull step.qty of step.itemID bank→bags, one
+-- stack per click (same protected-call-per-click contract as moves).
+-- Returns true when qty is covered or reachable stacks ran dry,
+-- nil while more stacks remain (stays armed for the next click), or
+-- "bounce", reason when the bank can't help — the queue rotates the
+-- step to the plan tail instead of stalling. Tries a manual
+-- BankFrame:Show() first — some clients expose the bank away from the
+-- banker; when it didn't produce real slots, the fake frame gets
+-- hidden again. A REAL open bank is left open, per the workflow.
+-- fetch progress = bags gained since the step emitted, not just what
+-- this executor moved — a manual bank pull or mail collect satisfies
+-- the step too. MatSteps bakes bagBase (bags-at-emit); legacy steps
+-- without it fall back to moved-only.
+local function FetchDone(step)
+	return math.max(step.moved or 0, GM.BagDelta(step) or 0)
+end
+B.FetchDone = FetchDone
+
+function B.FetchBank(step)
+	if FetchDone(step) >= (step.qty or 1) then return true end
+	local faked
+	if not BankOpen() and BankFrame and BankFrame.Show then
+		pcall(BankFrame.Show, BankFrame)
+		faked = BankOpen() -- shown now; real access is proven by slots
+	end
+	if not BankOpen() then return "bounce", "bank is closed" end
+	local srcSlot
+	for _, s in ipairs(Slots("bank")) do
+		if s.itemID == step.itemID and s.count > 0 then
+			srcSlot = s break
+		end
+	end
+	if not srcSlot then
+		if FetchDone(step) > 0 then return true end
+		if faked then pcall(BankFrame.Hide, BankFrame) end
+		return "bounce", "not in the bank (mail/gbank/alt?)"
+	end
+	local ok, err = MoveStack(srcSlot, "bags")
+	if not ok then
+		if FetchDone(step) > 0 then return true end
+		return "bounce", err or "no room in bags"
+	end
+	step.moved = (step.moved or 0) + srcSlot.count
+	return FetchDone(step) >= (step.qty or 1) or nil
+end
+
 -- move: pick up one stack of itemID from `from`, drop in a free `to`
 -- slot. Advances when the step's total moved reaches qty.
 local function DoMove(step)
 	if not BankOpen() then
-		return nil, "bank is closed"
+		return "bounce", "bank is closed"
 	end
 	DumpRanges()
 	Dbg("move %s %s→%s qty=%s moved=%s", tostring(step.itemID), step.from,
@@ -302,8 +357,8 @@ local function DoMove(step)
 	end
 	local ok, err = MoveStack(srcSlot, step.to)
 	if not ok then
-		GM.Print(GM.CC("warn") .. "[bank] no legal drop slot in " .. step.to .. "|r")
-		return nil, err
+		if (step.moved or 0) > 0 then return true end
+		return "bounce", err or "no legal drop slot"
 	end
 	-- report the src slot state; the move itself is server-confirmed —
 	-- if it bounced, the item reappears and the next click retries
@@ -319,7 +374,7 @@ end
 -- in, the click sends. getSendMailItem counts what's attached.
 local function DoMail(step)
 	if not (MailFrame and MailFrame:IsShown()) then
-		return nil, "mailbox is closed"
+		return "bounce", "mailbox is closed"
 	end
 	local attached = 0
 	for i = 1, 12 do
@@ -355,8 +410,14 @@ end
 local PullInbox = GM.PullInbox
 
 local function DoMailCollect(step)
+	-- bags already grew to cover it — the winnings arrived by another
+	-- path (manual loot, earlier collect). No mailbox trip needed.
+	if step.bagBase and GM.BagDelta
+		and GM.BagDelta(step) >= (step.qty or 1) then
+		return true
+	end
 	if not (MailFrame and MailFrame:IsShown()) then
-		return nil, "mailbox is closed"
+		return "bounce", "mailbox is closed"
 	end
 	local n = GetInboxNumItems and GetInboxNumItems() or 0
 	for i = 1, n do
@@ -367,9 +428,16 @@ local function DoMailCollect(step)
 			if not step.itemID or id == step.itemID then
 				AutoLootMailItem(i)
 				PullInbox()
+				step.got = (step.got or 0) + 1
 				return "confirm" -- looted one mail; more may remain
 			end
 		end
+	end
+	-- an itemID'd collect that never found a thing: the buy is likely
+	-- still in transit — bounce to the plan tail so delivery gets a
+	-- leg or two to land; an untargeted drain is simply done
+	if step.itemID and (step.got or 0) == 0 then
+		return "bounce", "nothing arrived yet"
 	end
 	return true -- inbox has nothing matching → step done
 end
@@ -383,5 +451,5 @@ function B.Execute(step)
 	if ok == nil and reason then
 		GM.Print(GM.CC("warn") .. "[bank] " .. reason .. "|r")
 	end
-	return ok
+	return ok, reason
 end

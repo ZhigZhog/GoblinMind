@@ -1035,7 +1035,10 @@ def delta_record(books):
         if not new_lots:
             continue
         old = prev.get(scope) or {}
-        book_t = int(b.get('t') or now)
+        # lotsT is the fingerprint snapshot's own time — browse
+        # clobbers keep the last replicate's lots under a newer book
+        # t, so book_t must follow the lots, not the book
+        book_t = int(b.get('lotsT') or b.get('t') or now)
         elapsed = max(0, book_t - int(prev_t.get(scope) or 0))
         new_pref = {}
         for fp, n in new_lots.items():
@@ -1274,6 +1277,13 @@ def cmd_book(sv_arg, out_paths, root=None, feed=None, realm=None):
     # 'CAMWOWUS1Realm5PvE-Alliance'). Fold the configured TSM realm
     # scope into every book scope sharing its faction suffix.
     tsm_main = tsm_by_scope.get(realm) if realm else {}
+    if not tsm_main and not realm and len(tsm_by_scope) == 1:
+        # 'watch self' carries no configured realm — a single TSM
+        # realm scope is unambiguous; fold it in like a pinned one
+        # (multiple realms stay unmerged — guessing would cross-wire)
+        realm = next(iter(tsm_by_scope))
+        tsm_main = tsm_by_scope[realm]
+        LOG.info('tsm realm auto-picked: %s', realm)
     tsm_faction = realm.rsplit('-', 1)[-1] if realm else None
     tsm_consumed = set()
 
@@ -1504,10 +1514,17 @@ def self_feed():
         addons_dir, 'TradeSkillMaster_AppHelper', 'AppData.lua')
     watch = (tsm_appdata if os.path.isfile(tsm_appdata)
              else os.path.abspath(__file__))
+    # realm pins which TSM scope folds into the book scopes — read an
+    # optional override from feeds.json ('self' entry or top-level
+    # 'realm'); without it cmd_book auto-picks a single TSM realm
+    cfg = load_feeds() or {}
+    realm = ((cfg.get('self') or {}).get('realm') if isinstance(
+        cfg.get('self'), dict) else None) or cfg.get('realm')
     return {'appdata': watch,
             'root': root,
             'out': [os.path.join(addons_dir, 'GoblinMind_Data',
-                                 'Data.lua')]}
+                                 'Data.lua')],
+            'realm': realm}
 
 
 def resolve_feed(arg, outs):

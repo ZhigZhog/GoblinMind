@@ -1464,13 +1464,7 @@ end
 -- ============ takeover ============
 
 local function EnsureSwitchBtn()
-	if not (AuctionHouseFrame and ui and not ui.switchBtn) then return end
-	ui.switchBtn = W.SwitchBtn(AuctionHouseFrame, function()
-		ui.wantDefault = nil
-		AU.OnAHOpen()
-	end, function()
-		if not ui.wantDefault then GM.FramePark.Park(AuctionHouseFrame) end
-	end)
+	W.EnsureSwitchBtn(ui, AuctionHouseFrame, AU.OnAHOpen)
 end
 
 function AU.OnAHOpen()
@@ -1543,7 +1537,7 @@ end)
 local function LinkHook(link)
 	if not (ui and ui.frame and ui.frame:IsShown()) then return false end
 	if not IsShiftKeyDown() then return false end
-	local id = link and tonumber(link:match("item:(%d+)"))
+	local id = GM.LinkID(link)
 	if not id then return false end
 	local name = GM.ItemName(id) or link:match("%[(.-)%]")
 	if not name then return false end

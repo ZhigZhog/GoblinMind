@@ -201,17 +201,31 @@ local function BuildUI()
 		ui.recOff = 0
 		CU.Refresh()
 	end)
-	local matsOnly = Btn(f, "CRAFTABLE ONLY", 104, 16)
-	matsOnly:SetPoint("LEFT", ui.search, "RIGHT", 8, 0)
-	matsOnly.text:SetTextColor(GM.RGB("textDim"))
-	matsOnly:SetScript("OnClick", function()
-		ui.matsOnly = not ui.matsOnly or nil
-		matsOnly.text:SetTextColor(GM.RGB(ui.matsOnly and "accent" or "textDim"))
-		ui.recOff = 0
-		CU.Refresh()
-	end)
+	-- filter toggles share one shape: dim when off, accent when on,
+	-- each resets paging + repaints
+	local function FilterToggle(text, w, key, anchor)
+		local b = Btn(f, text, w, 16)
+		b:SetPoint("LEFT", anchor, "RIGHT", 8, 0)
+		local function paint()
+			b.text:SetTextColor(GM.RGB(ui[key] and "accent" or "textDim"))
+		end
+		b:SetScript("OnClick", function()
+			ui[key] = not ui[key] or nil
+			ui.recOff = 0
+			paint()
+			CU.Refresh()
+		end)
+		paint()
+		return b
+	end
+	local matsOnly = FilterToggle("CRAFTABLE ONLY", 104, "matsOnly",
+		ui.search)
+	local skillUp = FilterToggle("HAS SKILL UP", 96, "skillUp",
+		matsOnly)
+	local canLearn = FilterToggle("CAN LEARN", 82, "canLearn",
+		skillUp)
 	local blizz = Btn(f, "BLIZZARD UI", 84, 16)
-	blizz:SetPoint("LEFT", matsOnly, "RIGHT", 8, 0)
+	blizz:SetPoint("LEFT", canLearn, "RIGHT", 8, 0)
 	blizz.text:SetTextColor(GM.RGB("secondary"))
 	Tip(blizz, function()
 		return { "Blizzard default UI",
@@ -688,9 +702,20 @@ local function RecipeRows()
 		local inSel = ui.selCat and GM.Crafting.CatHas(ui.selCat, row.recipeID)
 			or (not ui.selCat and (not ui.selProf
 				or GM.Crafting.Prof(row.recipeID) == ui.selProf))
+		-- HAS SKILL UP: relativeDifficulty is authoritative — on this
+		-- client numSkillUps is the recipe's DESIGNED ups (a trivial
+		-- grey recipe still reports 1), so nup only counts when diff
+		-- is absent. Rows with neither signal stay visible — hiding a
+		-- real skill-up is worse than showing an extra recipe.
+		local skillUp
+		if row.diff then skillUp = row.diff <= 2
+		elseif row.nup then skillUp = row.nup > 0
+		else skillUp = true end
 		if inSel
 			and (not ui.matsOnly
 				or (not row.unlearned and (row.craftable or 0) > 0))
+			and (not ui.canLearn or row.unlearned)
+			and (not ui.skillUp or skillUp)
 			and (q == "" or (row.name or ""):lower():find(q, 1, true)) then
 			if row.unlearned then
 				-- "in our level range" = required skill at/below current,
@@ -866,8 +891,8 @@ function CU.Refresh()
 				r.profit:SetTextColor(GM.RGB("textDim"))
 				local vel = row.itemID
 					and GM.Price("dbregionsalerate", row.itemID)
-				r.sale:SetText(vel and vel > 0 and
-					(format("%g", vel) .. "/d") or "—")
+				r.sale:SetText(GM.VelRate(vel)
+					and (GM.VelRate(vel) .. "/d") or "—")
 				r.can:SetText(row.req and ("req " .. row.req) or "learn")
 				r.qbtn:Hide()
 			else
@@ -894,8 +919,8 @@ function CU.Refresh()
 				-- sale volume: ledger feed's units/day for the product
 				local vel = row.itemID
 					and GM.Price("dbregionsalerate", row.itemID)
-				r.sale:SetText(vel and vel > 0 and
-					(format("%g", vel) .. "/d") or "—")
+				r.sale:SetText(GM.VelRate(vel)
+					and (GM.VelRate(vel) .. "/d") or "—")
 				-- on-hand vs raid-everything: bags 2 +5 = 2 craftable now,
 				-- +5 more's worth fetchable from bank/alts
 				local extra = (row.craftableAll or 0) - (row.craftable or 0)
@@ -1105,7 +1130,7 @@ function CU.Refresh()
 		local vel = dr.itemID
 			and GM.Price("dbregionsalerate", dr.itemID)
 		if vel and vel > 0 then
-			tinsert(sub, "sells ~" .. format("%g", vel) .. "/day")
+			tinsert(sub, "sells ~" .. (GM.VelRate(vel) or "?") .. "/day")
 		end
 		ui.detSub:SetText(table.concat(sub, " · "))
 		local craftable = GM.Crafting.Craftable(ui.sel)
@@ -1251,14 +1276,7 @@ end
 -- GOBLINMIND button ON the Blizzard frame — the round-trip back once
 -- the user has switched to default (TSM's defaultUISwitchBtn)
 local function EnsureSwitchBtn()
-	local pf = DefaultFrame()
-	if not (pf and ui and not ui.switchBtn) then return end
-	ui.switchBtn = W.SwitchBtn(pf, function()
-		ui.wantDefault = nil
-		CU.OnTradeSkillOpen()
-	end, function()
-		if not ui.wantDefault then CU.ParkDefault() end
-	end)
+	W.EnsureSwitchBtn(ui, DefaultFrame(), CU.OnTradeSkillOpen, CU.ParkDefault)
 end
 
 -- TRADE_SKILL_CLOSE entry — the session ended, so our window goes

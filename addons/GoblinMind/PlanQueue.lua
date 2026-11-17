@@ -9,6 +9,9 @@ GM.PlanQueue = { plan = nil, stepIndex = 1, itemID = nil, item = nil }
 local PQ = GM.PlanQueue
 local ROWS = 6
 local ui = { art = {} }
+-- forward declarations: Build's OnUpdate tick and Refresh both call
+-- these, but the definitions sit below Build in source order
+local PlanFrac, ApplyProg
 PQ.protectedOk = PQ.protectedOk or {}
 local GetInfo = C_Item and C_Item.GetItemInfo or GetItemInfo
 
@@ -155,6 +158,18 @@ local function Build()
 	-- their own clicks, so last-clicked wins like a normal window
 	frame:SetScript("OnMouseDown", function(f)
 		if f.Raise then f:Raise() elseif RaiseFrame then RaiseFrame(f) end
+	end)
+	-- the bar animates within a step (cast progress) — Refresh is
+	-- event-driven so a 4s cast would sit still between events; a
+	-- 0.1s tick on the window keeps it moving while a plan is armed
+	local tick = 0
+	frame:SetScript("OnUpdate", function(_, dt)
+		tick = tick + dt
+		if tick < 0.1 then return end
+		tick = 0
+		if ui.scanFrac or not ui.planFrac then return end
+		ui.planFrac = PlanFrac()
+		ApplyProg()
 	end)
 	GM.Panel(frame, "contLow", "outlineVar")
 	tinsert(UISpecialFrames, "GoblinMindPlanFrame")
@@ -521,16 +536,75 @@ function PQ.ScanStatus(text)
 	ui.summary:SetText(text)
 end
 
--- scan progress bar: frac in (0,1) shows it, anything else hides it
-function PQ.Progress(frac)
-	Build()
+-- live fraction through the armed craft's current cast — fills the
+-- bar WHILE the spell is channeling instead of only on completion.
+-- spellID (return 9) confirms it's our recipe; clients without it
+-- fall back to any tradeskill cast matching the step's name.
+local function CastFrac(armed)
+	if not (UnitCastingInfo and armed) then return 0 end
+	local ok, name, startMS, endMS, tradeSkill, spellID =
+		pcall(function()
+			local n, _, _, s, e, t, _, _, sp =
+				UnitCastingInfo("player")
+			return n, s, e, t, sp
+		end)
+	if not ok or not (startMS and endMS and endMS > startMS) then
+		return 0
+	end
+	if spellID and armed.recipeID and spellID ~= armed.recipeID then
+		return 0
+	end
+	if not spellID and armed.name and name and name ~= armed.name then
+		return 0
+	end
+	return math.min((GetTime() * 1000 - startMS) / (endMS - startMS), 1)
+end
+
+-- plan completion: finished steps + the armed step's own progress
+-- (craft casts tick crafted + live cast time, fetches tick bag
+-- delta, collects tick mails looted) so the bar moves within a
+-- long step, not just between steps
+PlanFrac = function()
+	local plan = PQ.plan
+	local total = plan and #plan.steps or 0
+	if total == 0 then return nil end
+	local done = math.min(PQ.stepIndex - 1, total)
+	local part = 0
+	local armed = plan.steps[PQ.stepIndex]
+	if armed then
+		local qty = math.max(armed.qty or 1, 1)
+		if armed.kind == "note" and armed.recipeID then
+			part = math.min(
+				((armed.crafted or 0) + CastFrac(armed)) / qty, 0.98)
+		elseif armed.kind == "fetch"
+			and GM.Banking and GM.Banking.FetchDone then
+			part = math.min(GM.Banking.FetchDone(armed) / qty, 0.98)
+		elseif armed.kind == "mailcollect" then
+			part = math.min((armed.got or 0) / qty, 0.98)
+		end
+	end
+	return (done + part) / total
+end
+
+-- progress bar arbitration: scans write a live frac, an active plan
+-- reports step progress through Refresh — a live scan wins. Both
+-- render on the same accent strip under the summary panel.
+ApplyProg = function()
 	if not ui.prog then return end
+	local frac = ui.scanFrac or ui.planFrac
 	if frac and frac > 0 and frac < 1 then
 		ui.prog:SetWidth(LEFT_W * frac)
 		ui.prog:Show()
 	else
 		ui.prog:Hide()
 	end
+end
+
+-- scan progress bar: frac in (0,1) shows it, anything else hides it
+function PQ.Progress(frac)
+	Build()
+	ui.scanFrac = (frac and frac > 0 and frac < 1) and frac or nil
+	ApplyProg()
 end
 
 -- a scan that produced no steps drops the stale plan so the window
@@ -646,11 +720,24 @@ function PQ.Solve(asks, workID)
 	local aOps = GM.Groups.GetOps(workID, "auctioning")
 	local sOps = GM.Groups.GetOps(workID, "shopping")
 	local function ev(f) return GM.Groups.EvalOp(aOps, f, workID) end
+	-- a just-bought lot sits in mail transit — invisible to BagCount
+	-- for the delivery window. Plan.pendingBuy records purchases so
+	-- the post-step rescan's re-solve doesn't re-emit the same buys
+	-- forever (the "loops from the top" report). Delivered units
+	-- rebase into the bag count itself.
+	local pend = PQ.plan and PQ.plan.pendingBuy
+		and PQ.plan.pendingBuy[workID]
+	local pending = 0
+	if pend then
+		pending = math.max(0, pend.qty
+			- math.max(0, GM.BagCount(workID) - pend.base))
+		pend.qty, pend.base = pending, GM.BagCount(workID)
+	end
 	local plan, err = GM.Solver.Plan(asks, p50, entry and entry.p90, gold, vel, {
 		riskBudget = GM.db.riskBudget,
 		minProfitMargin = (tonumber(sOps.belowPct) or 10) / 100,
 		commodity = isCommodity,
-		owned = GM.BagCount(workID),
+		owned = GM.BagCount(workID) + pending,
 		normal = ev("normal"),
 		minP = ev("min"),
 		maxP = ev("max"),
@@ -692,6 +779,7 @@ function PQ.Solve(asks, workID)
 		lot.item = workLink
 	end
 	plan.itemID = workID
+	plan.pendingBuy = pend and PQ.plan.pendingBuy
 	plan.bank = GM.BankCount(workID)
 	plan.deposit = GM.AH.DepositCost(workID, plan.qty + (plan.owned or 0)) or 0
 	plan.ev = plan.ev - plan.deposit
@@ -774,8 +862,25 @@ function PQ.ExecuteNext()
 		if cur and cur.itemID == pc.itemID then
 			if GM.AH.Execute({ kind = "confirm" }) then
 				PQ.submitFlash = GetTime()
+				local plan = PQ.plan
+				if plan and cur.itemID then
+					plan.pendingBuy = plan.pendingBuy or {}
+					local pb = plan.pendingBuy[cur.itemID]
+						or { qty = 0,
+							base = GM.BagCount(cur.itemID) }
+					pb.qty = pb.qty + (cur.qty or 1)
+					plan.pendingBuy[cur.itemID] = pb
+				end
 				PQ.stepIndex = PQ.stepIndex + 1
-				GM.After(1.0, function() PQ.Rescan() end)
+				-- craft plans re-EMIT on rescan (QueueEmit re-derives
+				-- coverage from Inventory.Count) — a just-won item is
+				-- still in transit to the mailbox, invisible to the
+				-- count, so the re-emit produced the same buy step
+				-- again: the duplicate-quote bounce. Scan-mode plans
+				-- skip rescan by design; this matches that.
+				if not (PQ.plan and PQ.plan.mode) then
+					GM.After(1.0, function() PQ.Rescan() end)
+				end
 			end
 		else
 			ui.summary:SetText(GM.CC("warn")
@@ -839,25 +944,67 @@ function PQ.ExecuteNext()
 		PQ.Refresh()
 		return
 	end
-	local result = (step.kind == "move" or step.kind == "mail"
-			or step.kind == "mailcollect")
-		and GM.Banking.Execute(step)
-		or step.kind == "destroy" and GM.Destroying.Execute(step)
-		or (step.kind == "vendbuy" or step.kind == "vendsell")
-			and GM.Vendoring.Execute(step)
-		or GM.AH.Execute(step)
+	-- "bounce" from any executor = its location is unreachable (bank/
+	-- mailbox/merchant closed, item absent). Rotate the step to the
+	-- plan tail so the itinerary continues — after 3 bounces it skips
+	-- outright (at the tail the bounce would loop forever).
+	local result, reason, bagDone
+	if (step.kind == "buy" or step.kind == "vendbuy") and step.bagBase
+		and GM.BagDelta(step) >= (step.qty or 1) then
+		-- bags gained since emit already cover this buy — stock the
+		-- player grabbed by hand or another leg. Don't spend again.
+		result, bagDone = true, true
+	elseif step.kind == "fetch" and GM.Banking and GM.Banking.FetchBank then
+		result, reason = GM.Banking.FetchBank(step)
+	elseif step.kind == "move" or step.kind == "mail"
+			or step.kind == "mailcollect" then
+		result, reason = GM.Banking.Execute(step)
+	elseif step.kind == "destroy" then
+		result, reason = GM.Destroying.Execute(step)
+	elseif step.kind == "vendbuy" or step.kind == "vendsell" then
+		result, reason = GM.Vendoring.Execute(step)
+	else
+		result = GM.AH.Execute(step)
+	end
+	if result == "bounce" then
+		step.bounces = (step.bounces or 0) + 1
+		if step.bounces >= 3 then
+			GM.Print(GM.CC("warn")
+				.. tostring(step.verb or step.kind) .. " "
+				.. tostring(step.name or step.itemID) .. " — "
+				.. tostring(reason) .. " — skipped|r")
+			PQ.stepIndex = PQ.stepIndex + 1
+		else
+			tremove(PQ.plan.steps, PQ.stepIndex)
+			tinsert(PQ.plan.steps, step)
+			GM.Print(GM.CC("warn")
+				.. tostring(step.verb or step.kind) .. " "
+				.. tostring(step.name or step.itemID) .. " — "
+				.. tostring(reason) .. " — bounced to end of plan|r")
+		end
+		PQ.Refresh()
+		return
+	end
 	if result == "confirm" then
 		PQ.Refresh()
 		return
 	end
 	if result then
-		if (step.kind == "buy" or step.kind == "vendbuy") and GM.Budget then
+		if (step.kind == "buy" or step.kind == "vendbuy")
+			and GM.Budget and not bagDone then
 			GM.Budget.Record(step, step.cost
 				or (step.unit or 0) * (step.qty or 1))
 		end
 		PQ.budgetConfirm = nil
 		PQ.budgetWarn = nil
 		PQ.submitFlash = GetTime()
+		if step.kind == "buy" and step.itemID then
+			PQ.plan.pendingBuy = PQ.plan.pendingBuy or {}
+			local pb = PQ.plan.pendingBuy[step.itemID]
+				or { qty = 0, base = GM.BagCount(step.itemID) }
+			pb.qty = pb.qty + (step.qty or 1)
+			PQ.plan.pendingBuy[step.itemID] = pb
+		end
 		PQ.stepIndex = PQ.stepIndex + 1
 		-- single-item plans rescan after each action; scan-mode plans are
 		-- independent steps — re-querying the book per click would stall
@@ -1200,8 +1347,8 @@ function PQ.Refresh()
 		end
 	end
 	if entry and entry.vel then
-		tinsert(sub, "region sales ~" .. (entry.vel >= 1000
-			and format("%.0fk", entry.vel / 1000) or entry.vel) .. "/day")
+		tinsert(sub, "region sales ~" .. (GM.VelRate(entry.vel)
+			or "?") .. "/day")
 	end
 	if book and #book > 0 then tinsert(sub, strtrim(book:gsub("· ", "", 1))) end
 	ui.item.sub:SetText(table.concat(sub, " · "))
@@ -1251,6 +1398,8 @@ function PQ.Refresh()
 	-- row 3 (two finished steps of context above) whenever it changes;
 	-- mousewheel scrolls manually until the next step advance
 	local nSteps = PQ.plan and #PQ.plan.steps or 0
+	ui.planFrac = PlanFrac()
+	ApplyProg()
 	local maxOff = math.max(0, nSteps - ROWS)
 	if ui.lastStep ~= PQ.stepIndex then
 		ui.lastStep = PQ.stepIndex
@@ -1273,6 +1422,7 @@ function PQ.Refresh()
 				or step.kind == "cancel" and "CANCEL"
 				or step.kind == "skip" and "SKIP"
 				or step.kind == "note" and (step.recipeID and "CRAFT" or "DONE")
+				or step.kind == "fetch" and "FETCH"
 				or step.kind == "move" and "MOVE"
 				or step.kind == "mail" and "SEND"
 				or step.kind == "mailcollect" and "COLLECT"
@@ -1288,17 +1438,31 @@ function PQ.Refresh()
 					or step.kind == "skip" and "textDim" or "text") .. verb .. "|r")
 			end
 			if PQ.plan.mode then
-				local nm = step.name
-					or (step.itemID and GM.ItemName and GM.ItemName(step.itemID))
-					or ""
+				-- live lookup FIRST: the emit bakes "item N" into
+				-- step.name when the data wasn't loaded yet — preferring
+				-- it meant the row never called ItemName, never issued
+				-- the load request, and could never resolve. Shopping
+				-- rows already order it this way.
+				local nm = (step.itemID and GM.ItemName
+						and GM.ItemName(step.itemID))
+					or step.name or ""
 				if #nm > 16 then nm = nm:sub(1, 15) .. "…" end
 				row.qty:SetText((GM.QHex(step.itemID) or "")
 					.. nm .. "|r ×" .. step.qty)
 			else
 				row.qty:SetText(step.qty .. (step.kind == "post" and " (relist)" or ""))
 			end
+			-- a staged commodity quote outranks the book estimate the
+			-- row was emitted with — while CONFIRM is armed the row
+			-- shows what the click will actually pay
+			local pc = GM.AH.pendingConfirm
+			local shownUnit = step.unit
+			if pc and pc.quote and active
+				and step.itemID == pc.itemID and step.qty == pc.qty then
+				shownUnit = pc.quote / (step.qty or 1)
+			end
 			row.price:SetText(step.desc or step.text
-				or (GM.Money(step.unit) .. (step.kind == "post" and "" or " /ea")))
+				or (GM.Money(shownUnit) .. (step.kind == "post" and "" or " /ea")))
 		else
 			row:Hide()
 		end
@@ -1338,7 +1502,7 @@ function PQ.Refresh()
 			ui.summary:SetText(format("CRAFT QUEUE · %d step%s — craft is manual",
 				#PQ.plan.steps, #PQ.plan.steps == 1 and "" or "s"))
 			ui.summary2:SetText(#prods > 0 and table.concat(prods, " · ")
-				or "fetch/alt mats first, then buy the shortfall")
+				or "route: AH → bank → vendor → mail → craft")
 		elseif PQ.plan.mode == "warehousing" or PQ.plan.mode == "mailing"
 			or PQ.plan.mode == "destroying" or PQ.plan.mode == "vendoring" then
 			ui.sumEdge:SetColorTexture(GM.RGB("accent"))
@@ -1406,6 +1570,10 @@ function PQ.Refresh()
 					and format("CRAFT · %d/%d", curStep.crafted or 0,
 						curStep.qty or 1)
 					or "DONE")
+				or kind == "fetch" and format("FETCH · %d/%d",
+					GM.Banking and GM.Banking.FetchDone
+						and GM.Banking.FetchDone(curStep) or 0,
+					curStep.qty or 1)
 				or kind == "move" and "MOVE NEXT"
 				or kind == "mail" and "SEND NEXT"
 				or kind == "mailcollect" and "COLLECT NEXT"
@@ -1416,6 +1584,7 @@ function PQ.Refresh()
 			ui.exec.text:SetText(verb)
 		end
 		local moveKind = curStep and (curStep.kind == "note"
+			or curStep.kind == "fetch"
 			or curStep.kind == "move" or curStep.kind == "mail"
 			or curStep.kind == "mailcollect" or curStep.kind == "destroy"
 			or curStep.kind == "vendbuy" or curStep.kind == "vendsell")

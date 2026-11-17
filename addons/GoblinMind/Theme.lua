@@ -63,6 +63,16 @@ function GM.Signed(copper)
 	return GM.CC(key) .. (copper >= 0 and "+" or "-") .. "|r" .. GM.Money(abs(copper))
 end
 
+-- compact units/day: region-scale velocities hit the millions —
+-- "13.2M" / "8.6k" / "1027"; callers append "/d" or "/day"
+function GM.VelRate(vel)
+	if not vel or vel <= 0 then return nil end
+	if vel >= 1e6 then return format("%.1fM", vel / 1e6) end
+	if vel >= 1e4 then return format("%.0fk", vel / 1e3) end
+	if vel >= 1e3 then return format("%.1fk", vel / 1e3) end
+	return format("%g", vel)
+end
+
 -- compact age/span: "7d" / "14h" / "25m" / "40s" — callers add "ago"
 function GM.FmtAge(sec)
 	sec = floor(sec or 0)

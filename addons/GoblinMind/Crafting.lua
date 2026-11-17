@@ -884,14 +884,19 @@ end
 
 -- shared step emission for a mat coverage row: fetch from this char's
 -- bank/mail/gbank/auctions first, note what an alt has, buy only the
--- true shortfall. Fetch/alt are plain note steps — the click
--- acknowledges, no protected call.
+-- true shortfall. Fetch is a real step — the click pulls a stack from
+-- the bank (bounces to the plan tail when the bank is unreachable);
+-- alt stays a manual note.
 local function MatSteps(steps, s)
 	local nm = (GM.ItemName and GM.ItemName(s.id)) or ("item " .. s.id)
 	if s.fetch > 0 then
-		tinsert(steps, { kind = "note", verb = "FETCH", itemID = s.id,
-			qty = s.fetch, name = nm,
-			desc = "from bank/mail/gbank" })
+		local desc = "from bank/mail/gbank"
+		if s.bagged and s.bagged > 0 then
+			desc = desc .. " · " .. s.bagged .. " already in bags"
+		end
+		tinsert(steps, { kind = "fetch", verb = "FETCH", itemID = s.id,
+			qty = s.fetch, name = nm, bagBase = GM.BagCount(s.id),
+			desc = desc })
 	end
 	if s.alt > 0 then
 		tinsert(steps, { kind = "note", verb = "ALT", itemID = s.id,
@@ -901,7 +906,8 @@ local function MatSteps(steps, s)
 	if s.buy > 0 then
 		tinsert(steps, { kind = "buy", itemID = s.id, qty = s.buy,
 			name = nm, unit = C.MatPrice(s.id) or 0,
-			commodity = true, btag = "craft" })
+			commodity = true, btag = "craft",
+			bagBase = GM.BagCount(s.id) })
 	end
 end
 
@@ -925,8 +931,41 @@ local function ResolveSources(entries)
 		agg[id] = t
 	end
 
+	-- shared coverage pool: Count() reports the FULL stock per item,
+	-- but each unit exists once — two demand rows for the same mat
+	-- (queued sub-crafts or a parent resolving its intermediates)
+	-- can't each subtract the same bagged stack. Spend bags →
+	-- retrievable (bank/mail/gbank/AH) → alts → buy, in that order.
+	-- `bagged` records what bags covered so steps can say so.
+	local pool = {}
+	local function Pool(id)
+		local p = pool[id]
+		if not p then
+			local c = GM.Inventory.Count(id)
+			p = { bags = c.bags or 0, bagged = 0,
+				retr = (c.bank or 0) + (c.mail or 0)
+					+ (c.guild or 0) + (c.auction or 0),
+				alts = c.alts or 0 }
+			pool[id] = p
+		end
+		return p
+	end
+
+	local ResolveMat, AllocMat
+	AllocMat = function(itemID, need, inPath)
+		local p = Pool(itemID)
+		local spend = min(need, p.bags)
+		p.bags, p.bagged = p.bags - spend, p.bagged + spend
+		local rem = need - spend
+		if rem <= 0 then return end
+		local f = min(rem, p.retr); p.retr = p.retr - f
+		local a = min(rem - f, p.alts); p.alts = p.alts - a
+		AddAgg(itemID, f, a, 0)
+		local b = rem - f - a
+		if b > 0 then ResolveMat(itemID, b, inPath) end
+	end
+
 	-- satisfy `need` units of itemID: craft when cheaper, else buy
-	local ResolveMat
 	ResolveMat = function(itemID, need, inPath)
 		local rid, r = C.RecipeForItem(itemID)
 		if rid and not inPath[rid] then
@@ -935,9 +974,8 @@ local function ResolveSources(entries)
 			local buyU = C.MatPrice(itemID)
 			if e and e.effCost and buyU and e.effCost < buyU then
 				inPath[rid] = true -- cycle guard: A→B→A buys the mat
-				for _, s2 in ipairs(C.MatSources(rid, crafts)) do
-					AddAgg(s2.id, s2.fetch, s2.alt, 0)
-					if s2.buy > 0 then ResolveMat(s2.id, s2.buy, inPath) end
+				for _, m2 in ipairs(r.mats or {}) do
+					AllocMat(m2.id, (m2.qty or 1) * crafts, inPath)
 				end
 				inPath[rid] = nil
 				subCrafts[rid] = (subCrafts[rid] or 0) + crafts
@@ -951,30 +989,125 @@ local function ResolveSources(entries)
 		AddAgg(itemID, 0, 0, need)
 	end
 
+	-- queued production credits demand elsewhere in the plan: if the
+	-- queue already crafts N of a mat, a parent's mat row must see
+	-- those N as covered instead of re-resolving (and re-demanding
+	-- the parent's mats) for them. Queued producers also have to run
+	-- before queued consumers, so entries allocate in dependency
+	-- order — a queued recipe waits for the queued recipe that makes
+	-- one of its mats.
+	local entryByRid, producedBy = {}, {}
 	for _, q in ipairs(entries) do
+		entryByRid[q.recipeID] = q
+		if q.itemID then producedBy[q.itemID] = q.recipeID end
+	end
+	local ordered, oset, visiting = {}, {}, {}
+	local push
+	push = function(q)
+		local rid = q.recipeID
+		if oset[rid] or visiting[rid] then return end
+		visiting[rid] = true
+		local r = GoblinMindCrafting.recipes[rid]
+		for _, m in ipairs(r and r.mats or {}) do
+			local pr = producedBy[m.id]
+			if pr and pr ~= rid and entryByRid[pr] then
+				push(entryByRid[pr])
+			end
+		end
+		visiting[rid] = nil
+		oset[rid] = true
+		tinsert(ordered, q)
+	end
+	for _, q in ipairs(entries) do push(q) end
+
+	for _, q in ipairs(ordered) do
 		queuedQty[q.recipeID] = q
+		local r = GoblinMindCrafting.recipes[q.recipeID]
+		if r and q.itemID then
+			local p = Pool(q.itemID)
+			p.bags = p.bags + q.qty * (r.numMade or 1)
+		end
+	end
+	for _, q in ipairs(ordered) do
 		local inPath = { [q.recipeID] = true }
-		for _, s in ipairs(C.MatSources(q.recipeID, q.qty)) do
-			AddAgg(s.id, s.fetch, s.alt, 0)
-			if s.buy > 0 then ResolveMat(s.id, s.buy, inPath) end
+		local r = GoblinMindCrafting.recipes[q.recipeID]
+		for _, m in ipairs(r and r.mats or {}) do
+			AllocMat(m.id, (m.qty or 1) * q.qty, inPath)
 		end
 		if not orderSet[q.recipeID] then
 			orderSet[q.recipeID] = true
 			tinsert(craftOrder, q.recipeID)
 		end
 	end
-	return agg, craftOrder, subCrafts, queuedQty
+	return agg, craftOrder, subCrafts, queuedQty, pool
+end
+
+-- itinerary routing: acquisition steps carry an implicit location —
+-- the emitted per-item order interleaved bank, vendor, AH and mailbox
+-- trips (the "running all over Stormwind" report). Group them into
+-- legs by location rank and walk each leg once. AH buys go first so
+-- the mail-delivery clock starts immediately; mailcollect sits last
+-- before crafts so winnings have the whole route to arrive; crafts
+-- keep their post-order dependency chain inside the final leg. A
+-- location that's ALREADY open goes first (adaptive start — the
+-- player standing at the bank shouldn't be walked to the AH for
+-- step 1). Stable: intra-leg order is emit order.
+local LEG_RANK = {
+	buy = 10, post = 10, cancel = 10, bid = 10,    -- AH leg
+	fetch = 20, move = 20,                       -- bank leg
+	vendbuy = 30, vendsell = 30, destroy = 30,   -- vendor leg
+	mailcollect = 40, mail = 40,                 -- mailbox leg
+	-- notes/skips/crafts = 50, emitted last
+}
+
+local function OpenLeg()
+	if GM.AH and GM.AH.open then return 10 end
+	if BankFrame and BankFrame:IsShown() then return 20 end
+	if MerchantFrame and MerchantFrame:IsShown() then return 30 end
+	if MailFrame and MailFrame:IsShown() then return 40 end
+end
+
+local function RouteSteps(steps)
+	-- AH purchases arrive by mail: one targeted collect step per bought
+	-- item, ranked into the mailbox leg — without it the plan silently
+	-- depended on the player remembering to check the box mid-run
+	local seen = {}
+	for _, s in ipairs(steps) do
+		if s.kind == "buy" and s.itemID and not seen[s.itemID] then
+			seen[s.itemID] = true
+			tinsert(steps, { kind = "mailcollect", itemID = s.itemID,
+				qty = s.qty, name = s.name, bagBase = s.bagBase,
+				desc = "collect your winnings" })
+		end
+	end
+	local open = OpenLeg()
+	local order = {}
+	for i = 1, #steps do order[i] = i end
+	table.sort(order, function(a, b)
+		local ra = LEG_RANK[steps[a].kind] or 50
+		local rb = LEG_RANK[steps[b].kind] or 50
+		if ra == open then ra = 0 end
+		if rb == open then rb = 0 end
+		if ra ~= rb then return ra < rb end
+		return a < b
+	end)
+	local out = {}
+	for _, i in ipairs(order) do out[#out + 1] = steps[i] end
+	return out
 end
 
 local function BuildPlanSteps(entries)
 	local steps = {}
-	local agg, craftOrder, subCrafts, queuedQty = ResolveSources(entries)
+	local agg, craftOrder, subCrafts, queuedQty, pool =
+		ResolveSources(entries)
 	local ids = {}
 	for id in pairs(agg) do ids[#ids + 1] = id end
 	-- plan order: all fetches first (bank trip), then buys (AH trip)
 	for _, id in ipairs(ids) do
+		local p = pool and pool[id]
 		MatSteps(steps, { id = id, fetch = agg[id].fetch,
-			alt = agg[id].alt, buy = 0 })
+			alt = agg[id].alt, buy = 0,
+			bagged = p and p.bagged or 0 })
 	end
 	sort(ids, function(a, b)
 		return ((C.MatPrice(a) or 0) * agg[a].buy)
@@ -993,13 +1126,14 @@ local function BuildPlanSteps(entries)
 				-- step so it doesn't read as "go to the auction house"
 				tinsert(steps, { kind = "vendbuy", itemID = id,
 					qty = s.buy, unit = vb, name = nm,
+					bagBase = GM.BagCount(id),
 					desc = format("vendor %s/ea · AH %s",
 						GM.Money(vb), GM.Money(ahU)),
 					btag = "craft" })
 			else
 				tinsert(steps, { kind = "buy", itemID = id, qty = s.buy,
 					name = nm, unit = ahU, commodity = true,
-					btag = "craft" })
+					bagBase = GM.BagCount(id), btag = "craft" })
 			end
 		end
 	end
@@ -1026,8 +1160,9 @@ local function BuildPlanSteps(entries)
 			qty = crafts, recipeID = rid, name = nm,
 			desc = prof or "tradeskill" })
 	end
-	return steps
+	return RouteSteps(steps)
 end
+
 
 -- Emit a plan: fetch/alt/buy missing mats, then a craft step — with
 -- the same sub-craft resolution QueueEmit runs (a short mat that's

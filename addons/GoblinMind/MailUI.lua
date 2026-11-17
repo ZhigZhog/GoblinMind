@@ -769,13 +769,7 @@ end
 -- ============ takeover ============
 
 local function EnsureSwitchBtn()
-	if not (MailFrame and ui and not ui.switchBtn) then return end
-	ui.switchBtn = W.SwitchBtn(MailFrame, function()
-		ui.wantDefault = nil
-		MU.OnMailOpen()
-	end, function()
-		if not ui.wantDefault then GM.FramePark.Park(MailFrame) end
-	end)
+	W.EnsureSwitchBtn(ui, MailFrame, MU.OnMailOpen)
 end
 
 function MU.OnMailOpen()

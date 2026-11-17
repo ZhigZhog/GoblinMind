@@ -63,7 +63,7 @@ local function BuyData()
 			and C_MerchantFrame.GetItemInfo(i)
 		if info then
 			local link = GetMerchantItemLink and GetMerchantItemLink(i)
-			local id = link and tonumber(link:match("item:(%d+)"))
+			local id = GM.LinkID(link)
 			local qty = (info.stackCount and info.stackCount > 0)
 				and info.stackCount or 1
 			local unit = info.price and info.price > 0
@@ -73,12 +73,19 @@ local function BuyData()
 			local flip = unit and mkt and not info.hasExtendedCost
 				and info.numAvailable ~= -1 and info.numAvailable ~= 0
 				and unit < mkt * 0.85
+			-- extended cost: alternative currencies/token items —
+			-- GM.MerchantAltCost decodes icon+qty+owned per component;
+			-- render those instead of the "alt cost" shrug.
+			local alt = info.hasExtendedCost
+				and GM.MerchantAltCost
+				and GM.MerchantAltCost(i) or nil
 			rows[#rows + 1] = {
 				index = i, id = id, cls = ItemClass(id),
 				name = (id and GM.ItemName(id)) or (link and link:match("%[(.-)%]"))
 					or ("slot " .. i),
 				qty = qty, cost = info.price, mkt = mkt and mkt * qty,
 				flip = flip or nil, ext = info.hasExtendedCost or nil,
+				alt = alt,
 				out = info.numAvailable == 0,
 				avail = info.numAvailable,
 			}
@@ -121,7 +128,7 @@ local function BackData()
 		local link = GetBuybackItemLink and GetBuybackItemLink(i)
 		local _, _, price, qty = GetBuybackItemInfo
 			and GetBuybackItemInfo(i)
-		local id = link and tonumber(link:match("item:(%d+)"))
+		local id = GM.LinkID(link)
 		rows[#rows + 1] = {
 			index = i, id = id, cls = ItemClass(id), qty = qty or 1,
 			price = price,
@@ -373,6 +380,17 @@ local function Build()
 		row.c3:SetPoint("LEFT", 380, 0)
 		row.c3:SetWidth(96)
 		row.c3:SetJustifyH("LEFT")
+		-- alt-cost icons: currency/token texture + quantity, pooled
+		-- per row (2 fit in the cost cell; overflow gets a "+N" note)
+		row.alt = {}
+		for k = 1, 2 do
+			local t = row:CreateTexture(nil, "ARTWORK")
+			t:SetSize(12, 12)
+			t:Hide()
+			local fs = GM.MakeFontString(row, GM.FONT, 9, "textDim")
+			fs:Hide()
+			row.alt[k] = { tex = t, fs = fs }
+		end
 		-- per-row action (BUY/SELL/BUYBACK) — one call per click
 		local act = CreateFrame("Button", nil, row)
 		act:SetSize(46, 16)
@@ -479,6 +497,9 @@ function VU.Refresh()
 			row.act:Hide()
 			row.qtyBox:Hide()
 			row.icon:SetTexture(nil)
+			for k = 1, 2 do
+				row.alt[k].tex:Hide() row.alt[k].fs:Hide()
+			end
 			row.bg:SetColorTexture(GM.RGB("contHigh"))
 			row.name:ClearAllPoints()
 			row.name:SetPoint("LEFT", 8, 0)
@@ -502,6 +523,9 @@ function VU.Refresh()
 			row.bg:SetColorTexture(GM.RGB(
 				i % 2 == 0 and "contMedium" or "contLowest"))
 			row.icon:SetTexture(r.id and GM.ItemIcon(r.id) or 134400)
+			for k = 1, 2 do
+				row.alt[k].tex:Hide() row.alt[k].fs:Hide()
+			end
 			row.name:ClearAllPoints()
 			row.name:SetPoint("LEFT", 34, 0)
 			row.name:SetWidth(200)
@@ -512,7 +536,36 @@ function VU.Refresh()
 			-- handler before the page branch installs its own (sell)
 			row:SetScript("OnClick", nil)
 			if ui.page == "buy" then
-				row.c2:SetText(r.ext and "alt cost"
+				local shown = 0
+				if r.alt then
+					for k, comp in ipairs(r.alt) do
+						if k > 2 then break end
+						local w = row.alt[k]
+						w.tex:SetTexture(comp.icon or 134400)
+						w.tex:ClearAllPoints()
+						w.tex:SetPoint("LEFT", 300 + (k - 1) * 40, 0)
+						w.tex:Show()
+						w.fs:ClearAllPoints()
+						w.fs:SetPoint("LEFT", w.tex, "RIGHT", 2, 0)
+						w.fs:SetText("×" .. (comp.qty or 1)
+							.. (comp.own ~= nil and " "
+								.. GM.CC(comp.own >= (comp.qty or 1)
+									and "pos" or "warn")
+								.. "(" .. comp.own .. ")|r" or ""))
+						w.fs:Show()
+						shown = k
+					end
+				end
+				for k = shown + 1, 2 do
+					row.alt[k].tex:Hide() row.alt[k].fs:Hide()
+				end
+				local overflow = r.alt and #r.alt > 2
+					and ("+" .. (#r.alt - 2)) or ""
+				row.c2:ClearAllPoints()
+				row.c2:SetPoint("LEFT", 300 + shown * 40, 0)
+				row.c2:SetText(r.alt and
+					((r.cost and r.cost > 0 and GM.Money(r.cost) or "") .. overflow)
+					or (r.ext and "alt cost")
 					or (r.cost and GM.Money(r.cost) or "—"))
 				row.c2:SetTextColor(GM.RGB(r.ext and "warn" or "text"))
 				row.c3:SetText(r.mkt and GM.Money(r.mkt) or "no market")
@@ -583,13 +636,7 @@ end
 -- GOBLINMIND button ON the Blizzard merchant frame — the round-trip
 -- back once the user has switched to default
 local function EnsureSwitchBtn()
-	if not (MerchantFrame and ui and not ui.switchBtn) then return end
-	ui.switchBtn = W.SwitchBtn(MerchantFrame, function()
-		ui.wantDefault = nil
-		VU.OnMerchantOpen()
-	end, function()
-		if not ui.wantDefault then GM.FramePark.Park(MerchantFrame) end
-	end)
+	W.EnsureSwitchBtn(ui, MerchantFrame, VU.OnMerchantOpen)
 end
 
 function VU.OnMerchantOpen()

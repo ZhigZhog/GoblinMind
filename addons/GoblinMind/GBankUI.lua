@@ -67,7 +67,7 @@ local function GBankRows(tab)
 	for slot = 1, n do
 		local link = GetGuildBankItemLink and GetGuildBankItemLink(tab, slot)
 		if link then
-			local id = tonumber(link:match("item:(%d+)"))
+			local id = GM.LinkID(link)
 			local _, count = GetGuildBankItemInfo(tab, slot)
 			if id then
 				rows[#rows + 1] = {
@@ -88,7 +88,7 @@ local function GDstSlot(tab, itemID)
 		(C_Item and C_Item.GetItemInfo or GetItemInfo)(itemID))
 	for slot = 1, n do
 		local link = GetGuildBankItemLink(tab, slot)
-		local id = link and tonumber(link:match("item:(%d+)"))
+		local id = GM.LinkID(link)
 		if id == itemID then
 			local _, count = GetGuildBankItemInfo(tab, slot)
 			if max and (count or 0) < max then return slot end
@@ -401,13 +401,7 @@ end
 -- ============ takeover ============
 
 local function EnsureSwitchBtn()
-	if not (GuildBankFrame and ui and not ui.switchBtn) then return end
-	ui.switchBtn = W.SwitchBtn(GuildBankFrame, function()
-		ui.wantDefault = nil
-		GU.OnGBankOpen()
-	end, function()
-		if not ui.wantDefault then GM.FramePark.Park(GuildBankFrame) end
-	end)
+	W.EnsureSwitchBtn(ui, GuildBankFrame, GU.OnGBankOpen)
 end
 
 function GU.OnGBankOpen()

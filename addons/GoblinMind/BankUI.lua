@@ -271,13 +271,7 @@ end
 -- ============ takeover ============
 
 local function EnsureSwitchBtn()
-	if not (BankFrame and ui and not ui.switchBtn) then return end
-	ui.switchBtn = W.SwitchBtn(BankFrame, function()
-		ui.wantDefault = nil
-		BU.OnBankOpen()
-	end, function()
-		if not ui.wantDefault then GM.FramePark.Park(BankFrame) end
-	end)
+	W.EnsureSwitchBtn(ui, BankFrame, BU.OnBankOpen)
 end
 
 function BU.OnBankOpen()

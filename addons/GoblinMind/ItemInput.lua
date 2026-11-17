@@ -39,7 +39,7 @@ local origHMI = HandleModifiedItemClick
 if origHMI then
 	HandleModifiedItemClick = function(link)
 		if Capture() then
-			local id = link and tonumber(link:match("item:(%d+)"))
+			local id = GM.LinkID(link)
 			if id then
 				GM.TargetItem(id, link)
 				return true
@@ -54,7 +54,7 @@ end
 if SetItemRef then
 	hooksecurefunc("SetItemRef", function(link)
 		if not Capture() then return end
-		local id = link and tonumber(link:match("item:(%d+)"))
+		local id = GM.LinkID(link)
 		if id then GM.TargetItem(id) end
 	end)
 end

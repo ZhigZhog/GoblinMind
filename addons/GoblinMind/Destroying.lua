@@ -212,7 +212,7 @@ end
 
 local function DoDestroy(step)
 	local sold = D.SellOne(step.itemID)
-	if sold == false then return nil, "open a merchant to vendor" end
+	if sold == false then return "bounce", "open a merchant to vendor" end
 	if sold == true then return true end -- nothing left → done
 	step.sold = (step.sold or 0) + sold
 	return (step.sold or 0) >= step.qty

@@ -86,11 +86,7 @@ end
 local Btn = W.ActionBtn
 local Tip = W.Tip
 
-local function SetMark(eb, state)
-	eb.mark:SetColorTexture(GM.RGB(
-		state == "err" and "err" or state == "ok" and "pos"
-		or state == "dirty" and "accent" or "outlineVar"))
-end
+local SetMark = W.SetMark
 
 local function Footer(msg, err) W.Footer(ui.footer, msg, err) end
 

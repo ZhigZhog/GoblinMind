@@ -334,7 +334,7 @@ function GM.AH.SaveBook()
 	local scope = GM.Scope()
 	GM.db.books[scope] = { t = GM.AH.bookT,
 		kind = GM.AH.bookKind, scope = scope, items = items,
-		lots = GM.AH.bookLots }
+		lots = GM.AH.bookLots, lotsT = GM.AH.bookLotsT }
 	-- migrate legacy flat book once, then drop it
 	GM.db.book = nil
 end
@@ -351,7 +351,7 @@ function GM.AH.RestoreBook()
 			sup = e.sup, n = e.n }
 	end
 	GM.AH.book, GM.AH.bookT, GM.AH.bookKind = book, s.t or time(), s.kind
-	GM.AH.bookLots = s.lots
+	GM.AH.bookLots, GM.AH.bookLotsT = s.lots, s.lotsT
 end
 
 function GM.AH.FullScan()
@@ -501,7 +501,7 @@ local function DumpReplicate(itemID, maxRows)
 	local shown = 0
 	for i = 0, n - 1 do
 		local link = C_AuctionHouse.GetReplicateItemLink(i)
-		local id = link and tonumber(link:match("item:(%d+)"))
+		local id = GM.LinkID(link)
 		if not itemID or id == itemID then
 			local t = { C_AuctionHouse.GetReplicateItemInfo(i) }
 			local o = {}
@@ -634,7 +634,7 @@ function GM.AH.CollectBook()
 		local prevBook, prevLots, prevT =
 			GM.AH.book, GM.AH.bookLots, GM.AH.bookT
 		GM.AH.book, GM.AH.bookT = book, time()
-		GM.AH.bookLots = lots
+		GM.AH.bookLots, GM.AH.bookLotsT = lots, GM.AH.bookT
 		if GM.db then GM.db.lastReplicateOK = time() end
 		pcall(GM.AH.SaveBook) -- persistence failure must not kill completion
 		-- drop expiry estimates for listings that left this scan —
@@ -664,7 +664,7 @@ function GM.AH.CollectBook()
 			-- buyout sits one slot past the retail map (11 vs 10).
 			-- Instead of hardcoding, find the itemID field — it is
 			-- always buyoutIndex + 7 in both layouts.
-			local id = tonumber(link:match("item:(%d+)"))
+			local id = GM.LinkID(link)
 			for j = #t, 11, -1 do
 				if id and t[j] == id then buyIdx = j - 7 break end
 			end
@@ -674,7 +674,7 @@ function GM.AH.CollectBook()
 		end
 		local buyout = buyIdx and t[buyIdx] or nil
 		if link and stackSize and stackSize > 0 and buyout and buyout > 0 then
-			local id = tonumber(link:match("item:(%d+)"))
+			local id = GM.LinkID(link)
 			-- Forever convention is per-item buyout everywhere
 			-- (verified in item-search: qty=147 buyout=200 = 2s/bag);
 			-- replicate follows the same server store — do NOT
@@ -861,9 +861,10 @@ local function FinishBrowse(b)
 	if GM.AH.BookAge() < 60 and GM.AH.bookKind == "replicate" then return end
 	GM.AH.bookKind = "browse"
 	GM.AH.book, GM.AH.bookT = b.book, time()
-	-- browse has no per-lot rows — a stale replicate fingerprint map
-	-- must NOT re-persist against this book's items
-	GM.AH.bookLots = nil
+	-- browse has no per-lot rows, but the last replicate's fingerprint
+	-- map stays valid on its own timestamp — keep bookLots/bookLotsT
+	-- riding persists or the brain's sale-delta engine starves (SV
+	-- flushes nearly always caught the post-browse lots=nil book)
 	pcall(GM.AH.SaveBook) -- persistence failure must not kill completion
 	local items = 0
 	for _ in pairs(b.book) do items = items + 1 end
@@ -931,28 +932,18 @@ function GM.AH.OnBrowseResults()
 end
 
 -- Posting needs a real ItemLocation from the bags, not a link.
--- C_Container is the modern namespace; fall back to legacy globals.
-local CNumSlots = C_Container and C_Container.GetContainerNumSlots or GetContainerNumSlots
-local CItemInfo = C_Container and C_Container.GetContainerItemInfo
-
 function GM.AH.FindInBags(itemID)
-	if not (ItemLocation and CNumSlots) then return end
-	for bag = 0, 5 do -- 4 bags + reagent bag
-		for slot = 1, CNumSlots(bag) do
-			if CItemInfo then
-				local info = CItemInfo(bag, slot)
-				if info and info.itemID == itemID and not info.isLocked then
-					return ItemLocation:CreateFromBagAndSlot(bag, slot), info.stackCount or 1
-				end
-			else
-				local _, stackCount, locked, _, _, _, link = GetContainerItemInfo(bag, slot)
-				local id = link and tonumber(link:match("item:(%d+)"))
-				if id == itemID and not locked then
-					return ItemLocation:CreateFromBagAndSlot(bag, slot), stackCount or 1
-				end
+	if not ItemLocation then return end
+	local loc, count
+	GM.EachBagSlot(GM.CarriedContainerList(),
+		function(bag, slot, id, n, locked)
+			if id == itemID and not locked then
+				loc = ItemLocation:CreateFromBagAndSlot(bag, slot)
+				count = n
+				return true
 			end
-		end
-	end
+		end)
+	return loc, count
 end
 
 -- Listing fee for posting `qty` of itemID (24h listing, duration=2).

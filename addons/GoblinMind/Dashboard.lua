@@ -8,6 +8,7 @@ local _, GM = ...
 
 GM.Dashboard = {}
 local DB = GM.Dashboard
+local W = GM.Widgets
 
 local TABS = {
 	{ key = "dash",   label = "HOME",    short = "HOME" },
@@ -139,13 +140,9 @@ end
 -- ============ home view ============
 
 local function Panel(f, point, w, h, title)
-	local p = CreateFrame("Frame", nil, f)
+	local p = W.TitledPanel(f, title)
 	p:SetSize(w, h)
 	p:SetPoint(unpack(point))
-	GM.Panel(p, "contLowest")
-	local t = GM.MakeFontString(p, GM.FONT_BOLD, 9, "secondary")
-	t:SetPoint("TOPLEFT", 8, -6)
-	t:SetText(title)
 	return p
 end
 

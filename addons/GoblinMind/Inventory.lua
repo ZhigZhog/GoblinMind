@@ -66,7 +66,7 @@ local function scanGuildBank()
 	local tab = GetCurrentGuildBankTab and GetCurrentGuildBankTab() or 1
 	for slot = 1, 98 do
 		local link = GetGuildBankItemLink(tab, slot)
-		local id = link and tonumber(link:match("item:(%d+)"))
+		local id = GM.LinkID(link)
 		if id then
 			local _, count = GetGuildBankItemInfo(tab, slot)
 			guildCache[id] = (guildCache[id] or 0) + (count or 1)
@@ -537,25 +537,23 @@ end
 
 local CharKey = GM.CharKey
 
-local BANK_BAGS = { -1, -3 } -- classic bank container + reagent bank
-do
-	local inv = Constants and Constants.InventoryConstants
-	local first = (NUM_BAG_SLOTS or 4) + (inv and inv.NumReagentBagSlots or 0) + 1
-	local n = (inv and inv.NumCharacterBankSlots) or NUM_BANKBAGSLOTS or 7
-	for b = first, first + n - 1 do tinsert(BANK_BAGS, b) end
+-- container lists are built per call — the carried range is learned
+-- dynamically (a reagent/profession bag past the computed range gets
+-- added the first time items enumerate there while the bank is
+-- closed), so a load-time table would freeze the wrong boundary.
+local function CarriedBags()
+	return GM.CarriedContainerList()
+end
+local function BankBags()
+	return (GM.BankContainerList and GM.BankContainerList())
+		or { -1 }
 end
 
 local function ScanContainers(bags)
 	local t = {}
-	if not (C_Container and C_Container.GetContainerItemInfo) then return t end
-	for _, bag in ipairs(bags) do
-		for slot = 1, (C_Container.GetContainerNumSlots(bag) or 0) do
-			local info = C_Container.GetContainerItemInfo(bag, slot)
-			if info and info.itemID then
-				t[info.itemID] = (t[info.itemID] or 0) + (info.stackCount or 1)
-			end
-		end
-	end
+	GM.EachBagSlot(bags, function(_, _, id, n)
+		t[id] = (t[id] or 0) + n
+	end)
 	return t
 end
 
@@ -567,7 +565,7 @@ local function Snapshot(where)
 	local snap = GoblinMindSettings.inv[me]
 		or { bags = {}, bank = {}, at = 0 }
 	snap[where] = ScanContainers(
-		where == "bags" and { 0, 1, 2, 3, 4, 5 } or BANK_BAGS)
+		where == "bags" and CarriedBags() or BankBags())
 	snap.at = time()
 	GoblinMindSettings.inv[me] = snap
 end
@@ -628,14 +626,10 @@ GM.Inventory.Owned = GM.BucketCache(function()
 	for _, a in pairs(auctionCache) do
 		if a.itemID then set[a.itemID] = true end
 	end
-	if BankFrame and BankFrame:IsShown()
-		and C_Container and C_Container.GetContainerItemInfo then
-		for _, bag in ipairs({ -1, 6, 7, 8, 9, 10, 11 }) do
-			for slot = 1, (C_Container.GetContainerNumSlots(bag) or 0) do
-				local info = C_Container.GetContainerItemInfo(bag, slot)
-				if info and info.itemID then set[info.itemID] = true end
-			end
-		end
+	if BankFrame and BankFrame:IsShown() then
+		GM.EachBagSlot(BankBags(), function(_, _, id)
+			set[id] = true
+		end)
 	end
 	return set
 end)

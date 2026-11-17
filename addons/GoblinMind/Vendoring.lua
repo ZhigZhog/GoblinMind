@@ -19,7 +19,7 @@ end
 
 local function MerchantItemID(index)
 	local link = GetMerchantItemLink and GetMerchantItemLink(index)
-	return link and tonumber(link:match("item:(%d+)"))
+	return GM.LinkID(link)
 end
 
 -- scan merchant stock: items cheaper than our market value
@@ -118,26 +118,25 @@ function V.Scan()
 end
 
 local function DoBuy(step)
-	if not MerchantOpen() then return nil, "merchant closed" end
+	if not MerchantOpen() then return "bounce", "merchant closed" end
 	local idx = step.index
 	if not idx and step.itemID then
 		-- plan-emitted steps carry no slot — find it live
 		for i = 1, GetMerchantNumItems() do
 			local link = GetMerchantItemLink(i)
-			if link and tonumber(link:match("item:(%d+)")) == step.itemID then
+			if GM.LinkID(link) == step.itemID then
 				idx = i break
 			end
 		end
 	end
-	if not idx then return nil, "vendor doesn't stock it" end
+	if not idx then return "bounce", "vendor doesn't stock it" end
 	BuyMerchantItem(idx, step.qty)
 	return true -- one purchase per click
 end
 
 local function DoSell(step)
 	if not MerchantOpen() then
-		GM.Print(GM.CC("warn") .. "needs a merchant open — sell this at a vendor|r")
-		return nil, "merchant closed"
+		return "bounce", "merchant closed"
 	end
 	local s = GM.Banking.FindStack(step.itemID)
 	if not s then return true end

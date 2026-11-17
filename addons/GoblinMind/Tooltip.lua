@@ -375,7 +375,7 @@ end
 
 local function P_RegionSoldPerDay(t, id)
 	local v = Price("dbregionsalerate", id)
-	if v then t:AddTextLine("Region Avg Daily Sold", GM.CC("text") .. format("%0.1f", v) .. "|r") end
+	if v then t:AddTextLine("Region Avg Daily Sold", GM.CC("text") .. (GM.VelRate(v) or format("%0.1f", v)) .. "|r") end
 end
 
 -- GoblinMind extensions

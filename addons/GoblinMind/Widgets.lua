@@ -145,6 +145,14 @@ function W.DirtyEditBox(parent, w, h, onEscape)
 	return eb
 end
 
+-- dirty-mark paint for W.DirtyEditBox: the 2px edge strip reads
+-- accent while typed-dirty; callers repaint it on validate/commit.
+function W.SetMark(eb, state)
+	eb.mark:SetColorTexture(GM.RGB(
+		state == "err" and "err" or state == "ok" and "pos"
+			or state == "dirty" and "accent" or "outlineVar"))
+end
+
 -- text segment button (toggle-strip member) + selected-state paint.
 -- Was an identical Segment/PaintSeg pair in GroupsUI/OpsUI.
 function W.Segment(parent, label, w, h)
@@ -188,6 +196,17 @@ end
 -- when the user wants OUR window back; onShow hooks the native
 -- frame's show so the caller can re-park it. Returns nil if the
 -- native frame doesn't exist yet.
+-- a standalone framed box with a bold title — callers position it.
+-- Returns (panel, titleFS) — the title fs lets callers recolor/wrap.
+function W.TitledPanel(f, title)
+	local p = CreateFrame("Frame", nil, f)
+	GM.Panel(p, "contLowest")
+	local t = GM.MakeFontString(p, GM.FONT_BOLD, 9, "secondary")
+	t:SetPoint("TOPLEFT", 8, -6)
+	t:SetText(title)
+	return p, t
+end
+
 function W.SwitchBtn(native, onClick, onShow)
 	if not native then return nil end
 	local b = CreateFrame("Button", nil, native)
@@ -205,6 +224,25 @@ end
 
 -- subtle hover tint — attach at row creation; the HIGHLIGHT layer
 -- draws itself, no script needed
+-- create ui.switchBtn once on a native Blizzard frame: click
+-- re-opens our window over it; the frame reparks itself when we
+-- didn't explicitly take over (wantDefault stays nil → park).
+-- Shared by every *UI module that overlays a Blizzard window —
+-- the six per-file copies differed only in frame + reopen fn.
+-- onPark: custom "back to default" repark (CraftingUI parks its
+-- tradeskill scaffold, not the stock FramePark path).
+function W.EnsureSwitchBtn(ui, frame, onOpen, onPark)
+	if not (frame and ui and not ui.switchBtn) then return end
+	ui.switchBtn = W.SwitchBtn(frame, function()
+		ui.wantDefault = nil
+		onOpen()
+	end, function()
+		if not ui.wantDefault then
+			if onPark then onPark() else GM.FramePark.Park(frame) end
+		end
+	end)
+end
+
 function W.HoverTint(row)
 	if not HL_R then HL_R, HL_G, HL_B = GM.RGB("contHighest") end
 	row.hl = row:CreateTexture(nil, "HIGHLIGHT")

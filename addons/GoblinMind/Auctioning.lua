@@ -98,36 +98,19 @@ end
 
 -- ============ bag enumeration ============
 
-local CNumSlots = C_Container and C_Container.GetContainerNumSlots or GetContainerNumSlots
-local CItemInfo = C_Container and C_Container.GetContainerItemInfo
-
 -- { itemID -> { total, stacks = {n, ...}, bound } } over unlocked slots.
 function A.BagItems()
 	local out = {}
-	if not CNumSlots then return out end
-	for bag = 0, 5 do
-		for slot = 1, CNumSlots(bag) do
-			local id, n, locked, bound
-			if CItemInfo then
-				local info = CItemInfo(bag, slot)
-				if info then
-					id, n = info.itemID, info.stackCount or 1
-					locked, bound = info.isLocked, info.isBound
-				end
-			else
-				local _, cnt, lkd, _, _, _, link, _, _, _, isB = GetContainerItemInfo(bag, slot)
-				id = link and tonumber(link:match("item:(%d+)"))
-				n, locked, bound = cnt or 1, lkd, isB
-			end
-			if id and not locked then
+	GM.EachBagSlot(GM.CarriedContainerList(),
+		function(_, _, id, n, locked, bound)
+			if not locked then
 				local e = out[id] or { total = 0, stacks = {}, bound = bound }
 				e.total = e.total + n
 				tinsert(e.stacks, n)
 				e.bound = e.bound or bound
 				out[id] = e
 			end
-		end
-	end
+		end)
 	return out
 end
 

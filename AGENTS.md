@@ -185,7 +185,21 @@ Primary data = the in-house book feed below.
   `WTF\Account\*\SavedVariables\` when given the AppData path (or a
   single file when given `...\GoblinMind.lua`). Sources: persisted AH
   book (`GoblinMindSettings.book`, mb/mbx/sup/n) + ledger sells
-  (`GoblinMindLedger.byChar`, sell txns → `vel` = units/day over 7d).
+  (`GoblinMindLedger.byChar`, sell txns → `vel` = units/day over 7d)
+  + sale-delta events (`api_state.sales` — disappeared lot
+  fingerprints between scans → market-wide `vel`/`rsale`/`rsalep`).
+  **`lots` must survive browse clobbers**: `FinishBrowse` persists a
+  browse book over the last replicate but keeps `bookLots`/`bookLotsT`
+  (the fingerprint's own timestamp — `delta_record` reads `lotsT`,
+  not book `t`). Wiping them starved the delta engine entirely —
+  `api_state.sales` stayed empty and SALES/D showed only the 11
+  personal-sell items. **`watch self` has no feeds.json realm**: the
+  TSM→scope merge needs `tsm_faction` to fold regional stats into
+  book scopes — `self_feed` reads a `realm` override from the
+  installed feeds.json, and `cmd_book` auto-picks the TSM realm
+  scope when exactly one exists (unmerged multi-realm = emit
+  standalone, never guess). Found 2026-11-17: CAMWOW scope had 11
+  vel while Normal-Alliance carried 6,144 it never absorbed.
   The brain owns the time series in `brain\book_history.json` (14d of
   snapshots, idempotent by book timestamp); `p`/`mkt` = weighted
   trimmed mean — outliers outside [med/3, 3·med] dropped, survivors

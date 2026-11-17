@@ -7,6 +7,7 @@ local _, GM = ...
 
 GM.Settings = {}
 local S = GM.Settings
+local W = GM.Widgets
 local ui
 
 -- options that only take effect at load — toggling them queues a
@@ -84,29 +85,13 @@ function S.Relayout()
 end
 
 local function Panel(f, x, y, w, h, title)
-	local p = CreateFrame("Frame", nil, f)
+	local p = W.TitledPanel(f, title)
 	p:SetSize(w, h)
 	p:SetPoint("TOPLEFT", x, y)
-	GM.Panel(p, "contLowest")
-	local t = GM.MakeFontString(p, GM.FONT_BOLD, 9, "secondary")
-	t:SetPoint("TOPLEFT", 8, -6)
-	t:SetText(title)
 	return p
 end
 
-local function EditBox(parent, w)
-	local eb = CreateFrame("EditBox", nil, parent)
-	eb:SetSize(w, 20)
-	eb:SetAutoFocus(false)
-	eb:SetFont(GM.FONT, 10, "")
-	eb:SetTextColor(GM.RGB("text"))
-	eb:SetTextInsets(5, 4, 0, 0)
-	local bg = eb:CreateTexture(nil, "BACKGROUND")
-	bg:SetAllPoints()
-	bg:SetColorTexture(GM.RGB("contLowest"))
-	eb:SetScript("OnEscapePressed", function() eb:ClearFocus() end)
-	return eb
-end
+local EditBox = W.EditBox
 
 -- On/Off pair of segment buttons; get()→bool, set(b)
 local function BoolSeg(parent, get, set)

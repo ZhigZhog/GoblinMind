@@ -25,13 +25,9 @@ local PAGES = {
 }
 
 local function Panel(f, x, y, w, h, title)
-	local p = CreateFrame("Frame", nil, f)
+	local p, t = W.TitledPanel(f, title)
 	p:SetSize(w, h)
 	p:SetPoint("TOPLEFT", x, y)
-	GM.Panel(p, "contLowest")
-	local t = GM.MakeFontString(p, GM.FONT_BOLD, 9, "secondary")
-	t:SetPoint("TOPLEFT", 8, -6)
-	t:SetText(title)
 	return p, t
 end
 
