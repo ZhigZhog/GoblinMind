@@ -128,6 +128,7 @@ function GM.MakeFontString(parent, template, size, colorKey)
 end
 
 function GM.FixupFonts()
+	GM._ffRuns = (GM._ffRuns or 0) + 1
 	-- re-apply every custom font once the client is fully up. The
 	-- first-load failure mode heals here: the font that couldn't
 	-- rasterize during Prewarm resolves on a later SetFont; anything
@@ -141,6 +142,7 @@ end
 
 -- C_Timer exists on modern clients; fall back to a no-op rescan delay.
 function GM.After(delay, fn)
+	GM._afterCalls = (GM._afterCalls or 0) + 1
 	if C_Timer and C_Timer.After then
 		C_Timer.After(delay, fn)
 	else

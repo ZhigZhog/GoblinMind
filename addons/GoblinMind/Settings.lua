@@ -258,6 +258,19 @@ function StageReport(desc, title)
 end
 GM.StageReport = StageReport
 
+-- stage a backend-onboarding request the same way reports ride the
+-- SV — "bm-<ts>-<n>|<hex(url\nname\nscope\nkey)>" — the watcher
+-- regexes it out of the file and writes the feeds.json backend
+-- block; GoblinMindDB.backend.url + .ack confirm it landed
+local function StageBackendReq(url, name, scope, key)
+	local id = format("bm-%d-%d", time(), math.random(100, 999))
+	GM.db.backendReqs = GM.db.backendReqs or {}
+	GM.db.backendReqs[#GM.db.backendReqs + 1] = id .. "|"
+		.. HexEnc(url .. "\n" .. name .. "\n" .. scope .. "\n" .. (key or ""))
+	return id
+end
+GM.StageBackendReq = StageBackendReq
+
 
 local function ExportProfile()
 	local t = {}

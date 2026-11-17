@@ -146,6 +146,26 @@ function FP.IsParked(pf)
 	return s and s.parked or false
 end
 
+-- diagnostic: which frames are currently parked, and are they still
+-- shown? A parked frame stays SHOWN — its OnUpdate + events keep
+-- firing, so this list doubles as a churn suspect sheet
+function FP.ParkedList()
+	local out = {}
+	for pf, s in pairs(saved) do
+		if s.parked then
+			-- IsShown/GetName can return secret values on protected
+			-- frames — read + test + tostring inside one pcall
+			local ok, name, shown = pcall(function()
+				return pf:GetName(), pf:IsShown() and true or false
+			end)
+			out[#out + 1] = format("%s(shown=%s)",
+				tostring(ok and name or "?"),
+				tostring(ok and shown or "?"))
+		end
+	end
+	return out
+end
+
 -- deferred moves land after combat drops
 local f = CreateFrame("Frame")
 pcall(f.RegisterEvent, f, "PLAYER_REGEN_ENABLED")

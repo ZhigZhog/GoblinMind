@@ -267,19 +267,21 @@ local function Build()
 	close.text:SetText("x")
 	close:SetScript("OnClick", function() f:Hide() end)
 
-	-- toolbar: page toggles + actions
+	-- toolbar: page toggles + actions — PageTabs strides 62px per tab,
+	-- so host width and the button offset both follow the defs count
 	local x = 12
+	local tabDefs = {
+		{ "inbox", "INBOX" }, { "send", "SEND" }, { "groups", "GROUPS" },
+	}
 	local tabHost = CreateFrame("Frame", nil, f)
-	tabHost:SetSize(124, 20)
+	tabHost:SetSize(#tabDefs * 62, 20)
 	tabHost:SetPoint("TOPLEFT", x, -34)
-	ui.pageTabs = W.PageTabs(tabHost,
-		{ { "inbox", "INBOX" }, { "send", "SEND" }, { "groups", "GROUPS" } },
-		function(key)
-			ui.page = key
-			ui.scroll = 0
-			MU.Refresh()
-		end)
-	x = x + 130
+	ui.pageTabs = W.PageTabs(tabHost, tabDefs, function(key)
+		ui.page = key
+		ui.scroll = 0
+		MU.Refresh()
+	end)
+	x = x + #tabDefs * 62
 	local scan = Btn(f, 88, "MAIL SCAN", function()
 		GM.Banking.MailingScan()
 	end)

@@ -21,8 +21,8 @@ local function Footer(msg, err) W.Footer(ui.footer, msg, err) end
 
 -- ============ window ============
 
-local WIN_W, WIN_H = 970, 560
-local PROF_W, REC_W = 140, 440
+local WIN_W, WIN_H = 1010, 560
+local PROF_W, REC_W = 180, 440
 local PROF_ROWS, LIST_ROWS = 16, 21
 
 local function Panel(parent, x, w, title)
@@ -53,8 +53,9 @@ local function ListRow(parent, w)
 	r.text = GM.MakeFontString(r, GM.FONT, 10, "text")
 	r.text:SetPoint("LEFT", 6, 0)
 	-- width cap + no-wrap: a long name clips instead of bleeding
-	-- into the right-anchored level/count sub (AGENTS header rule)
-	r.text:SetWidth(w - 48)
+	-- into the right-anchored level/count sub (AGENTS header rule) —
+	-- 78px reserve covers "186/225 · 39" in MED 8
+	r.text:SetWidth(w - 78)
 	r.text:SetWordWrap(false)
 	r.text:SetJustifyH("LEFT")
 	return r
@@ -246,7 +247,8 @@ local function BuildUI()
 	addCat:SetScript("OnClick", function()
 		CatPrompt("new category", function(name)
 			GM.Crafting.CatCreate(name)
-			ui.selCat, ui.selProf, ui.recOff = name, nil, 0
+			ui.selCat, ui.selProf, ui.selCatProf, ui.recOff =
+				name, nil, nil, 0
 			CU.Refresh()
 			Footer("category '" .. name .. "' created — CAT+ on a recipe adds it")
 		end)
@@ -377,16 +379,24 @@ local function BuildUI()
 		r.name:SetWidth(130)
 		r.name:SetJustifyH("LEFT")
 		r.qty = CreateFrame("EditBox", nil, r)
-		r.qty:SetSize(32, ROW_H - 4)
+		r.qty:SetSize(34, ROW_H - 4)
 		r.qty:SetPoint("LEFT", 138, 0)
 		r.qty:SetAutoFocus(false)
 		r.qty:SetFont(GM.FONT_BOLD, 10, "")
 		r.qty:SetTextColor(GM.RGB("accent"))
 		r.qty:SetJustifyH("RIGHT")
+		r.qty:EnableMouse(true)
+		GM.Panel(r.qty, "contLow") -- visible field — reads as editable
+		r.qty:SetScript("OnEditFocusGained", function(self)
+			-- bare digits + select-all: typing REPLACES the count —
+			-- leaving "×18" in place meant typing 5 parsed as 185
+			self:SetText(self._q and tostring(self._q) or "")
+			self:HighlightText()
+		end)
 		r.qty:SetScript("OnEnterPressed", function(self)
 			local n = tonumber((self:GetText():gsub("%D", "")))
 			if n and self._id then
-				GM.Crafting.QueueSet(self._id, n)
+				GM.Crafting.QueueSet(self._id, n) -- 0 clears the row
 			end
 			self:ClearFocus()
 			CU.Refresh()
@@ -399,8 +409,8 @@ local function BuildUI()
 		end)
 		W.Tip(r.qty, function()
 			return { "queued quantity",
-				"type a number · Enter commits · Esc reverts",
-				"+/- still fine-adjust by one" }
+				"click · type a number · Enter commits · Esc reverts",
+				"0 removes the row · +/- fine-adjust by one" }
 		end)
 		r.profit = GM.MakeFontString(r, GM.FONT, 9, "textDim")
 		r.profit:SetPoint("LEFT", 172, 0)
@@ -520,9 +530,16 @@ local function BuildUI()
 			Footer("recipe tracking unsupported on this client", true)
 			return
 		end
-		local isTracked = C_TradeSkillUI.IsRecipeTracked
-		local on = isTracked and select(2, pcall(isTracked, ui.sel, false))
+		-- Forever rejects arg 2 outright — ask with it, retry bare
+		local on
+		if C_TradeSkillUI.IsRecipeTracked then
+			on = select(2, pcall(C_TradeSkillUI.IsRecipeTracked, ui.sel, false))
+			if on == nil then
+				on = select(2, pcall(C_TradeSkillUI.IsRecipeTracked, ui.sel))
+			end
+		end
 		local ok = pcall(set, ui.sel, not on, false)
+		if not ok then ok = pcall(set, ui.sel, not on) end
 		if ok then
 			Footer((not on) and "tracking recipe" or "untracked")
 		else
@@ -672,10 +689,24 @@ local function RecipeRows()
 			or (not ui.selCat and (not ui.selProf
 				or GM.Crafting.Prof(row.recipeID) == ui.selProf))
 		if inSel
-			and (not ui.matsOnly or (row.craftable or 0) > 0)
+			and (not ui.matsOnly
+				or (not row.unlearned and (row.craftable or 0) > 0))
 			and (q == "" or (row.name or ""):lower():find(q, 1, true)) then
-			row.queued = queue[row.recipeID] or 0
-			out[#out + 1] = row
+			if row.unlearned then
+				-- "in our level range" = required skill at/below current,
+				-- or — when the client won't give req — not trivial-grey.
+				-- Unknown-both rows still list: an unlearned recipe IS
+				-- learnable info; hiding it helps nobody.
+				local lv = ui.levels and row.prof
+					and ui.levels[row.prof]
+				if (row.req and (not lv or row.req <= lv.lvl))
+					or (not row.req and (not row.diff or row.diff <= 2)) then
+					out[#out + 1] = row
+				end
+			else
+				row.queued = queue[row.recipeID] or 0
+				out[#out + 1] = row
+			end
 		end
 	end
 	return out
@@ -716,6 +747,7 @@ end
 local DIFF_NAMES = { "optimal", "medium", "easy", "trivial" }
 
 function CU.Refresh()
+	CU._refreshes = (CU._refreshes or 0) + 1
 	if not ui then return end
 
 	-- professions + categories (scrolled)
@@ -746,18 +778,22 @@ function CU.Refresh()
 				or (sel and "accent" or "text")))
 			local lv = ui.levels and p.prof and ui.levels[p.prof]
 			r.sub:SetText(lv and lv.lvl
-				and (lv.lvl .. " · " .. p.n)
+				and ((lv.max and lv.max > 0
+					and (lv.lvl .. "/" .. lv.max) or lv.lvl)
+					.. " · " .. p.n)
 				or p.n)
 			local key, cat = p.prof, p.cat
 			r:SetScript("OnClick", function(_, btn)
 				if cat and btn == "RightButton" then
 					GM.Crafting.CatDelete(cat)
-					if ui.selCat == cat then ui.selCat = nil end
+					if ui.selCat == cat then
+						ui.selCat, ui.selCatProf = nil, nil
+					end
 					Footer("category '" .. cat .. "' deleted")
 				elseif cat then
-					ui.selCat, ui.selProf = cat, nil
+					ui.selCat, ui.selProf, ui.selCatProf = cat, nil, key
 				else
-					ui.selProf, ui.selCat = key, nil
+					ui.selProf, ui.selCat, ui.selCatProf = key, nil, nil
 				end
 				ui.recOff = 0
 				CU.Refresh()
@@ -807,65 +843,85 @@ function CU.Refresh()
 		elseif row then
 			r:Show()
 			r._row = row
-			r.qbtn:Show()
 			local isSel = row.recipeID == ui.sel
 			r._gmBg:SetColorTexture(GM.RGB(isSel and "contHigh" or "contLowest"))
 			r.name:ClearAllPoints()
 			r.name:SetPoint("LEFT", 18, 0)
 			r.name:SetWidth(168)
-			r.name:SetText(row.name or ("recipe " .. row.recipeID))
-			-- skill-ups: TradeskillRelativeDifficulty 0-2 grants
-			-- (optimal/medium/easy), 3 = trivial is grayed out;
-			-- optimal recipes may award >1 (numSkillUps)
-			if row.diff and row.diff < 3 then
-				r.skill:SetText("▲" .. ((row.nup or 1) > 1
-					and row.nup or ""))
-				r.skill:Show()
-				r.skill:SetTextColor(GM.RGB(
-					row.diff == 0 and "warn"
-					or row.diff == 1 and "accent" or "pos"))
-			else
-				r.skill:Hide()
-			end
 			-- verdict color: can-craft accent, profitable green, loss red —
 			-- on EFFECTIVE profit (mats you already own don't count as cost)
 			local ep = row.effProfit or row.profit
 			local nc = ep and (ep > 0
 				and ((row.craftable or 0) > 0 and "accent" or "pos") or "err")
 				or "textDim"
-			r.name:SetTextColor(GM.NameColor(row.itemID, nc))
-			-- GM.Signed: +pos/-err colored, abs — GM.Money(-x) renders
-			-- garbage through the floored-modulo math
-			r.profit:SetText(ep and GM.Signed(ep) or "—")
-			r.profit:SetTextColor(GM.RGB("textDim"))
-			-- sale volume: ledger feed's units/day for the product
-			local vel = row.itemID
-				and GM.Price("dbregionsalerate", row.itemID)
-			r.sale:SetText(vel and vel > 0 and
-				(format("%g", vel) .. "/d") or "—")
-			-- on-hand vs raid-everything: bags 2 +5 = 2 craftable now,
-			-- +5 more's worth fetchable from bank/alts
-			local extra = (row.craftableAll or 0) - (row.craftable or 0)
-			r.can:SetText("bags " .. (row.craftable or 0)
-				.. (extra > 0 and " +" .. extra or ""))
-			-- +N queues the suggested amount; ×N shows it's queued
-			if row.queued > 0 then
-				r.qbtn.text:SetText("×" .. row.queued)
-				r.qbtn.text:SetTextColor(GM.RGB("warn"))
+			if row.unlearned then
+				-- missing recipe: ghosted name, "req N" instead of bags,
+				-- no queue button — clicking selects it and the detail
+				-- pane explains where it comes from
+				r.name:SetText("◇ " .. (row.name
+					or ("recipe " .. row.recipeID)))
+				r.name:SetTextColor(GM.RGB("textDim"))
+				r.skill:Hide()
+				r.profit:SetText(ep and GM.Signed(ep) or "—")
+				r.profit:SetTextColor(GM.RGB("textDim"))
+				local vel = row.itemID
+					and GM.Price("dbregionsalerate", row.itemID)
+				r.sale:SetText(vel and vel > 0 and
+					(format("%g", vel) .. "/d") or "—")
+				r.can:SetText(row.req and ("req " .. row.req) or "learn")
+				r.qbtn:Hide()
 			else
-				r.qbtn.text:SetText("+" .. max(1, row.suggest or 1))
-				r.qbtn.text:SetTextColor(GM.RGB("accent"))
+				r.qbtn:Show()
+				r.name:SetText(row.name or ("recipe " .. row.recipeID))
+				-- skill-ups: TradeskillRelativeDifficulty 0-2 grants
+				-- (optimal/medium/easy), 3 = trivial is grayed out;
+				-- optimal recipes may award >1 (numSkillUps)
+				if row.diff and row.diff < 3 then
+					r.skill:SetText("▲" .. ((row.nup or 1) > 1
+						and row.nup or ""))
+					r.skill:Show()
+					r.skill:SetTextColor(GM.RGB(
+						row.diff == 0 and "warn"
+						or row.diff == 1 and "accent" or "pos"))
+				else
+					r.skill:Hide()
+				end
+				r.name:SetTextColor(GM.NameColor(row.itemID, nc))
+				-- GM.Signed: +pos/-err colored, abs — GM.Money(-x) renders
+				-- garbage through the floored-modulo math
+				r.profit:SetText(ep and GM.Signed(ep) or "—")
+				r.profit:SetTextColor(GM.RGB("textDim"))
+				-- sale volume: ledger feed's units/day for the product
+				local vel = row.itemID
+					and GM.Price("dbregionsalerate", row.itemID)
+				r.sale:SetText(vel and vel > 0 and
+					(format("%g", vel) .. "/d") or "—")
+				-- on-hand vs raid-everything: bags 2 +5 = 2 craftable now,
+				-- +5 more's worth fetchable from bank/alts
+				local extra = (row.craftableAll or 0) - (row.craftable or 0)
+				r.can:SetText("bags " .. (row.craftable or 0)
+					.. (extra > 0 and " +" .. extra or ""))
+				-- +N queues the suggested amount; ×N shows it's queued
+				if row.queued > 0 then
+					r.qbtn.text:SetText("×" .. row.queued)
+					r.qbtn.text:SetTextColor(GM.RGB("warn"))
+				else
+					r.qbtn.text:SetText("+" .. max(1, row.suggest or 1))
+					r.qbtn.text:SetTextColor(GM.RGB("accent"))
+				end
+				local id2, sug = row.recipeID, row.suggest
+				r.qbtn:SetScript("OnClick", function()
+					GM.Crafting.QueueAdd(id2, max(1, sug or 1))
+					CU.Refresh()
+				end)
 			end
-			local id, sug = row.recipeID, row.suggest
-			r.qbtn:SetScript("OnClick", function()
-				GM.Crafting.QueueAdd(id, max(1, sug or 1))
-				CU.Refresh()
-			end)
+			local id = row.recipeID
 			r:SetScript("OnClick", function(_, btn)
 				-- right-click in a category view pulls the recipe out
 				if IsShiftKeyDown() and row.itemID then
 					GM.ModifiedItemClick(row.itemID)
-				elseif btn == "RightButton" and ui.selCat then
+				elseif btn == "RightButton" and ui.selCat
+					and not row.unlearned then
 					GM.Crafting.CatUnassign(ui.selCat, id)
 					Footer("removed from '" .. ui.selCat .. "'")
 				else
@@ -960,25 +1016,76 @@ function CU.Refresh()
 			r:Hide()
 		end
 	end
-	ui.qTotals:SetText(#qs > 0 and format(
-		"%d recipes · cost %s · est %s · %d mats short",
-		#qs, GM.Money(totCost), GM.Money(totProfit), matsN)
-		or "queue empty — +N on a recipe adds it")
+	-- bottom line leads with the active profession's skill so the cap
+	-- is visible without the Blizzard pane — context order: selected
+	-- recipe's prof > tree prof > category's parent prof
+	local prof = (ui.sel and GM.Crafting.Prof(ui.sel))
+		or ui.selProf or ui.selCatProf
+	local skill
+	local lv = prof and ui.levels and ui.levels[prof]
+	if lv and lv.lvl and lv.max and lv.max > 0 then
+		skill = lv.lvl >= lv.max and format(
+				"%s %d/%d — %sat cap — train next rank|r",
+				prof, lv.lvl, lv.max, GM.CC("warn"))
+			or format("%s %d/%d", prof, lv.lvl, lv.max)
+	end
+	ui.qTotals:SetText((skill and (skill .. "  ·  ") or "") .. (#qs > 0
+		and format("%d recipes · cost %s · est %s · %d mats short",
+			#qs, GM.Money(totCost), GM.Money(totProfit), matsN)
+		or "queue empty — +N on a recipe adds it"))
 
 	-- selected-recipe detail — Blizzard's right pane
 	local dr = ui.sel and GoblinMindCrafting.recipes
 		and GoblinMindCrafting.recipes[ui.sel]
-	if dr then
+	if dr and dr.unlearned then
+		-- missing-recipe detail: never queues — the pane explains
+		-- acquisition instead of showing craft controls
 		ui.det:Show()
 		ui.detIcon:SetTexture(GM.ItemIcon(dr.itemID) or 134400)
 		ui.detIconBtn.itemID = dr.itemID
-		local tracked = C_TradeSkillUI
-			and C_TradeSkillUI.IsRecipeTracked
-			and select(2, pcall(C_TradeSkillUI.IsRecipeTracked,
+		ui.detName:SetText(dr.name or ("recipe " .. ui.sel))
+		ui.detName:SetTextColor(GM.RGB("textDim"))
+		ui.trackBtn:Hide()
+		ui.craft1:Hide()
+		ui.craftHint:SetText("")
+		local lv = ui.levels and dr.prof and ui.levels[dr.prof]
+		local reach = dr.req
+			and ((lv and lv.lvl >= dr.req and " — learnable now")
+				or (lv and " — above your skill") or "") or ""
+		ui.detSub:SetText(
+			GM.CC("warn") .. "UNLEARNED|r"
+			.. (dr.req and format(" — requires %s (%d)",
+				dr.prof or "profession", dr.req) or "")
+			.. reach .. "\n"
+			.. "Missing recipes in your range are usually trainer-taught"
+			.. " — check a " .. (dr.prof or "profession")
+			.. " trainer first.\n"
+			.. "Not listed there? It's a vendor, drop, or quest recipe —"
+			.. " Blizzard's profession window shows the source on hover.")
+		for _, m in ipairs(ui.detMats) do
+			m.icon:Hide()
+			m.name:Hide()
+			m.have:Hide()
+		end
+	elseif dr then
+		ui.det:Show()
+		ui.detIcon:SetTexture(GM.ItemIcon(dr.itemID) or 134400)
+		ui.detIconBtn.itemID = dr.itemID
+		-- Forever rejects arg 2 outright — ask with it, retry bare
+		local tracked
+		if C_TradeSkillUI and C_TradeSkillUI.IsRecipeTracked then
+			tracked = select(2, pcall(C_TradeSkillUI.IsRecipeTracked,
 				ui.sel, false))
+			if tracked == nil then
+				tracked = select(2, pcall(C_TradeSkillUI.IsRecipeTracked,
+					ui.sel))
+			end
+		end
 		ui.detName:SetText((tracked and "★ " or "")
 			.. (GM.ItemName(dr.itemID) or dr.name or "?"))
 		ui.detName:SetTextColor(GM.NameColor(dr.itemID))
+		ui.trackBtn:Show()
+		ui.craft1:Show()
 		ui.trackBtn.text:SetText(tracked and "TRACKED" or "TRACK")
 		ui.trackBtn.text:SetTextColor(GM.RGB(
 			tracked and "accent" or "textDim"))

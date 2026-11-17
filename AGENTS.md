@@ -220,6 +220,52 @@ Primary data = the in-house book feed below.
   - **Junctions/symlinks not honored for .lua loading** — the addon list
     reads .toc through them but file loads fail silently. Deploy = copy
     (`scripts\sync-addons.bat`), never mklink.
+  - **Deploy must never wipe brain runtime state** — `sync-addons.bat`
+    mirrors the addon dirs with `/MIR /XD brain` and copies the brain's
+    script files by explicit name (no purge). Before the `/XD brain`
+    guard, every sync deleted the installed `brain/` contents that
+    exist only on the machine: `feeds.json` (the in-game backend
+    onboarding writes it!), `api_state.json`, `api_book.json`,
+    `book_history.json`, `brain.log`, `filed_bugs.json`,
+    `goblin_backend.db`. A wiped feeds.json emits `backend={}` → the
+    onboarding popup reappears "unconfigured". Never reintroduce a
+    bare `/MIR` or `/PURGE` over the brain dir. Same rule for
+    `GoblinMind_Data\Data.lua` (`/XF` on the mirror): the installed
+    copy is LIVE watcher output — the dev copy is a stale release
+    artifact, and deploying it makes the client load a day-old DB
+    (stale sync ages + phantom "not configured" popup since the old
+    emit predates the backend block). Verified live 2026-11-17.
+  - **Hard per-script CPU budget** — a script that runs too long
+    dies with "insecure scripts exceeded execution limit"
+    (attribution shows the *handler's* file, `Settings.lua:-1`, not
+    the offender). Render paths must never do O(items×mats×slots)
+    work synchronously: `GM.BagCount` once scanned all ~120 bag
+    slots per call and `C.List` called `Inventory.Count` per mat
+    per recipe → ~150k API calls per render → repeated kills at
+    12fps forever. **The O(1)-by-construction contract** (verified
+    live 2026-11-17): all per-item helpers are bucket-memoized —
+    `BagMap`/`BankMap` (250ms), `Inventory.Count`/`Owned` (250ms),
+    `ItemEntry` (250ms — shared return table, read-only), `C.List`
+    (3s TTL). New helpers that need a scan must memoize on the
+    same `math.floor(GetTime() * 4)` bucket — never scan
+    containers/auctionCache/transactions per call, and never write
+    to memoized return tables.
+  - **Frame API calls can return SECRET values** (`IsShown()`,
+    `GetName()` on protected/Blizzard frames): a "secret boolean/
+    string" throws on ANY boolean test or table-key use while
+    execution is tainted — *including after a successful pcall'd
+    read* (the call succeeds, the test outside it throws). Keep the
+    ENTIRE probe (read + test + use) inside one pcall; a per-frame
+    secret throw is itself an fps bomb. Found 2026-11-17 when the
+    perf frame-walk died at `if okS and shown`.
+  - **The client autosaves ALL SavedVariables ~every 90s**, not just
+    on /reload/logout — and byte-identically when nothing changed.
+    Any SV-mtime watcher must dedupe on CONTENT (sha1 of file bytes),
+    never mtime: an mtime trigger fires an emit every ~90s forever.
+    The watcher does this in `watch_self` (`sv_signature()`);
+    book emits now only run when bytes actually changed. Verified
+    live 2026-11-17 — ~11s CPU emit + 2.7MB write every ~70s
+    before the fix.
   - `/gm` appears shadowed/dead — primary commands are `/goblinmind`
     and `/goblin`.
   - Guard modern APIs: bare `GetItemInfo` is NOT a global — use
@@ -317,6 +363,24 @@ Primary data = the in-house book feed below.
     `(skillLineID, "Profession Name", rootSkillLine)` — the
     authoritative per-recipe profession lookup; `GetTradeSkillLine`
     and `GetBaseProfessionInfo` are dead ends (absent / zero-table).
+  - **No milling, no prospecting — not planned**: herbs and ores
+    have no destroy/consume-to-mats action on Forever. Tooltip
+    `P_Destroy`/`P_Convert` early-return on `GM.Gathering.IsHerb(id)`
+    (herb id set in Gathering.lua); the `destroy` price source only
+    consults TSM's per-item `destroy` (which encodes mill/prospect
+    EV) when `DisenchantDrops(id)` is non-nil, and the tooltip line
+    additionally requires `destroy > vendorSell` — mill-EV flickering
+    in under the vendor price was the original bug.
+  - **Item-load request/render loop (fixed 2026-11-17)**:
+    `C_Item.RequestLoadItemDataByID` must be DEDUPED — every request
+    produces a `GET_ITEM_INFO_RECEIVED` burst, bursts repaint
+    `GM.OnItemInfoLoaded` subscribers, repaints re-render unresolved
+    ids → self-sustaining request/render loop (severe fps drop until
+    /reload once a window shows an id the client can't load — e.g.
+    Forever's custom `25xxxx` items). `Core.lua` `ReqOnce` gates each
+    id to one request per 60s; every `OnItemInfoLoaded` callback MUST
+    gate its refresh on `IsShown` (the unguarded `PQ.Refresh` was the
+    sink that kept the loop alive while the window was closed).
   - **TGA pipeline**: hand-written encoder in the unmatte script —
     uncompressed 32-bit, top-down rows + `0x28` descriptor (matches
     TSM/EllesmereUI convention; the client honors both `0x08`/`0x28`).

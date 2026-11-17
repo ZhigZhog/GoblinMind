@@ -40,6 +40,7 @@ end
 -- ============ mailbox ============
 
 local function scanInbox()
+	GM.Inventory._inboxScans = (GM.Inventory._inboxScans or 0) + 1
 	wipe(mailCache)
 	if not (GetInboxNumItems and GetInboxItem) then return end
 	local n = GetInboxNumItems() or 0
@@ -59,6 +60,7 @@ end
 -- ============ guild bank (current tab only — TSM opens every tab) ============
 
 local function scanGuildBank()
+	GM.Inventory._gbScans = (GM.Inventory._gbScans or 0) + 1
 	wipe(guildCache)
 	if not (GetGuildBankItemInfo and GetGuildBankItemLink) then return end
 	local tab = GetCurrentGuildBankTab and GetCurrentGuildBankTab() or 1
@@ -558,6 +560,7 @@ local function ScanContainers(bags)
 end
 
 local function Snapshot(where)
+	GM.Inventory._snaps = (GM.Inventory._snaps or 0) + 1
 	if not GoblinMindSettings then return end
 	GoblinMindSettings.inv = GoblinMindSettings.inv or {}
 	local me = CharKey()
@@ -593,7 +596,10 @@ end
 
 -- ============ counts ============
 
-function GM.Inventory.Count(itemID)
+-- C.List/Economics ask for the same mat hundreds of times a render;
+-- scanning auctionCache+alts per call was the "execution limit"
+-- killer on window-open — shared BucketMemo, read-only rows.
+local countOf = GM.BucketMemo(function(itemID)
 	local bags = GM.BagCount(itemID)
 	local bank = GM.Inventory.BankStored(itemID)
 	local mail = mailCache[itemID] or 0
@@ -609,12 +615,13 @@ function GM.Inventory.Count(itemID)
 		total = bags + bank + mail + guild + auction,
 		allTotal = bags + bank + mail + guild + auction + alts,
 	}
-end
+end)
+GM.Inventory.Count = countOf
 
 -- Set of owned itemIDs across every location (ledger inventory page).
 -- Bank slots only enumerate while the bank frame is open — same
 -- constraint BankCount has; the set just lacks bank items otherwise.
-function GM.Inventory.Owned()
+GM.Inventory.Owned = GM.BucketCache(function()
 	local set = GM.BagItems and GM.BagItems() or {}
 	for id in pairs(mailCache) do set[id] = true end
 	for id in pairs(guildCache) do set[id] = true end
@@ -631,7 +638,7 @@ function GM.Inventory.Owned()
 		end
 	end
 	return set
-end
+end)
 
 -- ============ events ============
 

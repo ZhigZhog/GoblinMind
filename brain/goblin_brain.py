@@ -19,6 +19,7 @@ Format notes (verified against the live file):
 import argparse
 import base64
 import glob
+import hashlib
 import json
 import logging
 import math
@@ -1421,8 +1422,9 @@ def cmd_book(sv_arg, out_paths, root=None, feed=None, realm=None):
         'regionAge': tsm_region_age or None,
         'feed': feed,
         'meshAck': mesh_seq,
-        # last-attempt backend health for /goblin status
-        'backend': _load_api_state().get('backend') or {},
+        # last-attempt backend health for /goblin status + config
+        # state for the in-game onboarding popup
+        'backend': _backend_emit(),
         'realms': realms,
         'items': flat.get('items', {}),
         # vendorBuy is static data scraped from TSM's own addon files —
@@ -1449,6 +1451,9 @@ def cmd_book(sv_arg, out_paths, root=None, feed=None, realm=None):
 
 REPO = os.environ.get('GOBLINMIND_REPO', 'ZhigZhog/GoblinMind')
 REPORT_RE = re.compile(r'"(gm-[^"|]+)\|([0-9a-fA-F]+)"')
+# in-game backend onboarding stages bm-<ts>-<n>|<hex(url\nname\nscope\nkey)>
+# in the same SavedVariables file — newest request wins
+BACKEND_REQ_RE = re.compile(r'"(bm-(\d+)-[^"|]+)\|([0-9a-fA-F]+)"')
 FILED_PATH = os.path.join(os.path.dirname(
     os.path.abspath(__file__)), 'filed_bugs.json')
 
@@ -1467,6 +1472,13 @@ def load_feeds():
             return json.load(fh)
     except (OSError, ValueError):
         return {}
+
+
+def save_feeds(feeds):
+    tmp = FEEDS_PATH + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as fh:
+        json.dump(feeds, fh, indent=1)
+    os.replace(tmp, FEEDS_PATH)
 
 
 def self_feed():
@@ -1612,6 +1624,74 @@ def process_bugs(appdata, root=None):
     return newly
 
 
+def process_backend_reqs(appdata, root=None):
+    """Scan the SV file(s) for staged backend-onboarding requests.
+    The newest request becomes feeds.json's 'backend' block —
+    {url, name, scopes[], poll_minutes, upload, key?} — which the next
+    poll picks up (the watch loop re-reads _backend_cfg each cycle).
+    Consumed watermark lives in api_state.backend_req_at and emits to
+    the addon as backend.ack."""
+    newest = None  # (ts, rid, url, name, scope, key)
+    for sv in sv_paths(appdata, root):
+        try:
+            with open(sv, encoding='utf-8', errors='replace') as fh:
+                text = fh.read()
+        except OSError:
+            continue
+        for rid, ts, hexbody in BACKEND_REQ_RE.findall(text):
+            try:
+                payload = bytes.fromhex(hexbody).decode('utf-8')
+            except ValueError:
+                continue
+            url, _, rest = payload.partition('\n')
+            name, _, rest = rest.partition('\n')
+            scope, _, key = rest.partition('\n')
+            ts = int(ts)
+            if newest is None or ts > newest[0]:
+                newest = (ts, rid, url.strip(), name.strip(),
+                          scope.strip(), key.strip())
+    if not newest:
+        return
+    ts, rid, url, name, scope, key = newest
+    st = _load_api_state()
+    if int(st.get('backend_req_at') or 0) >= ts:
+        return  # watermark covers this and every older request
+    if not url.startswith(('http://', 'https://')):
+        LOG.warning('backend request %s rejected: bad url %r', rid, url)
+        return
+    feeds = load_feeds()
+    feeds['backend'] = {
+        'url': url,
+        'name': name or 'goblinmind',
+        'scopes': [scope] if scope else [],
+        'poll_minutes': 15,
+        'upload': True,
+    }
+    if key:
+        feeds['backend']['key'] = key
+    save_feeds(feeds)
+    st['backend_req_at'] = ts
+    # a token minted against the old endpoint is wrong for the new one
+    st.pop('backend_token', None)
+    _save_api_state(st)
+    LOG.info('backend configured from in-game request %s: %s', rid, url)
+
+
+def _backend_emit():
+    """The emitted 'backend' block: health records + config state so
+    the addon knows whether onboarding should prompt, plus the
+    newest staged-request timestamp it has consumed (ack)."""
+    st = _load_api_state()
+    out = dict(st.get('backend') or {})
+    cfg = _backend_cfg()
+    if cfg.get('url'):
+        out['url'] = cfg['url']
+        out['name'] = cfg.get('name') or 'goblinmind'
+    if st.get('backend_req_at'):
+        out['ack'] = st['backend_req_at']
+    return out
+
+
 def cmd_bugs(appdata, outs, realm=None):
     """One-shot: file staged reports, then emit so filedBugs reaches
     the addon on its next load."""
@@ -1639,7 +1719,34 @@ def cmd_watch(appdata, outs, interval=5, settle=20, feed='tsm',
     last_beat = time.time()
     last_emit = time.time()  # the startup settle always emits once;
                              # the floor clock starts there
+    # emits are heavy (~11s CPU + a 2.7MB write) and Data.lua is only
+    # consumed at the next /reload — run the whole watcher at idle
+    # priority so emit bursts never preempt the game, and floor
+    # sv-flush emits at 5 min (autosaves tick ~90s while playing)
+    try:
+        import ctypes
+        BELOW_NORMAL = 0x00004000
+        ctypes.windll.kernel32.SetPriorityClass(
+            ctypes.windll.kernel32.GetCurrentProcess(), BELOW_NORMAL)
+        LOG.info('watcher priority: below-normal')
+    except Exception:
+        pass
     sv_mtimes = {}
+    last_sv_emit = [0.0]
+    last_sv_sig = [None]  # content hash at last emit — the client
+                         # autosaves SVs ~90s with identical bytes;
+                         # re-emitting on every flush burned ~11s of
+                         # CPU each minute for zero new data
+
+    def sv_signature():
+        h = hashlib.sha1()
+        for sv in sv_paths(appdata, root):
+            try:
+                with open(sv, 'rb') as fh:
+                    h.update(fh.read())
+            except OSError:
+                continue
+        return h.digest()
     # self-restart on deploy: a copied-over goblin_brain.py never
     # reloads in a live process — a stale watcher once kept emitting
     # with the pre-fix code for a whole day. Re-exec same argv.
@@ -1665,6 +1772,10 @@ def cmd_watch(appdata, outs, interval=5, settle=20, feed='tsm',
             cmd_book(appdata, outs, root, feedname, realm)
             LOG.debug('  book emit (%s) done in %.1fs', why,
                       time.time() - t0)
+            # a successful emit folds current SV state — stamp the
+            # signature so an identical autosave doesn't rebuild it
+            last_sv_sig[0] = sv_signature()
+            last_sv_emit[0] = time.time()
         except Exception:  # never die on a mid-write file
             LOG.exception('book emit failed')
         last_emit = time.time()
@@ -1709,12 +1820,21 @@ def cmd_watch(appdata, outs, interval=5, settle=20, feed='tsm',
             if sv_mtimes.get(sv) != m:
                 sv_mtimes[sv] = m
                 try:
+                    # staged backend-onboarding requests ride the same
+                    # file — consume before emitting so this emit's
+                    # backend block already shows configured
+                    process_backend_reqs(appdata, root)
                     newly = process_bugs(appdata, root)
                     if feed == 'book':
                         # a flush means the session wrote fresh book +
                         # ledger data — re-emit merged across every
-                        # character's SV
-                        emit_book('sv flush')
+                        # character's SV, but only when the bytes
+                        # actually changed (autosaves are identical)
+                        # and the 5-min floor has elapsed — the file
+                        # only feeds the next /reload anyway
+                        if sv_signature() != last_sv_sig[0] and \
+                                now - last_sv_emit[0] >= 300:
+                            emit_book('sv flush')
                     elif newly:
                         LOG.info('re-emitting with filedBugs')
                         for out in outs:
@@ -1734,15 +1854,21 @@ def cmd_watch(appdata, outs, interval=5, settle=20, feed='tsm',
                 emit_book('api poll')
             except Exception:  # network hiccups must not kill the loop
                 LOG.exception('api poll failed')
-        # backend pull: our crowdsourced merged book on its own cadence
-        if feed == 'book' and backend_cfg_raw.get('url') and \
-                now - last_backend_poll >= backend_poll_secs:
-            last_backend_poll = now
-            try:
-                backend_pull(backend_cfg_raw)
-                emit_book('backend pull')
-            except Exception:
-                LOG.exception('backend pull failed')
+        # backend pull: our crowdsourced merged book on its own
+        # cadence — cfg re-read each cycle so an in-game onboarding
+        # request activating feeds.json needs no watcher restart
+        if feed == 'book':
+            backend_cfg_raw = _backend_cfg()
+            backend_poll_secs = float(
+                backend_cfg_raw.get('poll_minutes', 15)) * 60
+            if backend_cfg_raw.get('url') and \
+                    now - last_backend_poll >= backend_poll_secs:
+                last_backend_poll = now
+                try:
+                    backend_pull(backend_cfg_raw)
+                    emit_book('backend pull')
+                except Exception:
+                    LOG.exception('backend pull failed')
         # cadence floor: book mode re-merges at least once an hour —
         # keeps `generated` moving through quiet stretches so the
         # addon's staleness flag means what it says

@@ -248,6 +248,10 @@ local function P_VendorSell(t, id)
 end
 
 local function P_Destroy(t, id)
+	-- herbs: milling doesn't exist on Forever — no destroy output at all
+	if GM.Gathering and GM.Gathering.IsHerb and GM.Gathering.IsHerb(id) then
+		return
+	end
 	local v = Price("destroy", id)
 	-- "full" format appends the disenchant drop table — same shape as
 	-- the gathering node tooltips: name ×lo–hi ~pct% · price ea. The
@@ -256,7 +260,11 @@ local function P_Destroy(t, id)
 	local drops = Opts().destroyTooltipFormat == "full"
 		and GM.Destroying and GM.Destroying.DisenchantDrops
 		and GM.Destroying.DisenchantDrops(id)
-	if v then t:AddItemValueLine("Destroy Value", v) end
+	-- suppress when destroying earns nothing over vendoring — herbs,
+	-- ores, and mats only ever show vendor price (mill/prospect don't
+	-- exist on Forever) and the sell line already carries it
+	local vendor = GetInfo and select(11, GetInfo(id)) or 0
+	if v and v > vendor then t:AddItemValueLine("Destroy Value", v) end
 	if not drops then return end
 	for _, d in ipairs(drops) do
 		local p = Price("dbmarket", d.id)
@@ -270,6 +278,10 @@ local function P_Destroy(t, id)
 end
 
 local function P_Convert(t, id)
+	-- herbs: convert is mill->pigment on TSM; not a Forever action
+	if GM.Gathering and GM.Gathering.IsHerb and GM.Gathering.IsHerb(id) then
+		return
+	end
 	-- mill/prospect/transform source-of-cheapest lands with Part 10
 	local v = Price("convert", id)
 	if not v then return end
@@ -825,6 +837,28 @@ local function Fill(itemID, tooltip)
 		tooltip:HookScript("OnHide", hide)
 		pcall(function() tooltip:HookScript("OnTooltipCleared", hide) end)
 	end
+end
+
+-- authoritative "is this an item tooltip" marker for consumers that
+-- can't trust GetItem on Forever — same-named world objects (a
+-- Kingsblood node vs the bag item) still report an item link there.
+-- The side tip is only built/shown by the Item post-call; embedded
+-- mode instead leaves our "GoblinMind" header inside the tooltip.
+function TT.IsItemTooltip(tt)
+	if sideTip and sideTip._src == tt then
+		return sideTip:IsShown() and true or false
+	end
+	if Opts().embeddedTooltip then
+		for i = 1, tt:NumLines() do
+			local fs = _G["GameTooltipTextLeft" .. i]
+			local ok, hit = pcall(function()
+				local lt = fs and fs:GetText()
+				return lt and lt:find("GoblinMind") ~= nil
+			end)
+			if ok and hit then return true end
+		end
+	end
+	return false
 end
 
 local function Hook(tooltip, data)

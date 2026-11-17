@@ -108,6 +108,12 @@ SlashCmdList.GOBLINMIND = function(msg)
 		if GM.Mesh and GM.Mesh.Status then GM.Mesh.Status() end
 		return
 	end
+	if msg == "backend" then
+		-- onboarding popup doubles as the reconfigure path — a newer
+		-- staged request overwrites feeds.json (newest wins)
+		if GM.Onboard then GM.Onboard.Show() end
+		return
+	end
 	if msg == "minimap" then
 		GM.db.minimapHide = not GM.db.minimapHide
 		if GM.minimapBtn then GM.minimapBtn:SetShown(not GM.db.minimapHide) end
@@ -179,6 +185,189 @@ SlashCmdList.GOBLINMIND = function(msg)
 		else
 			GM.Print("  DisenchantDrops = nil")
 		end
+		return
+	end
+	if msg == "perf" then
+		-- 8s activity sample — every suspect path counters at ~0
+		-- means the degradation lives outside our handlers entirely
+		local dur = 8
+		local c, iw = GM.Crafting, GM.itemWatch
+		local g, inv = GM.Gathering, GM.Inventory
+		local t0 = {
+			scans = c and c._scans or 0,
+			reqs = iw and iw.reqs or 0,
+			bursts = iw and iw.bursts or 0,
+			ievts = iw and iw.evts or 0,
+			ticks = g and g._ticks or 0,
+			shown = g and g._shownTicks or 0,
+			terrs = g and g._tickErrs or 0,
+			cost = g and g._costMs or 0,
+			pqr = GM.PlanQueue and GM.PlanQueue._refreshes or 0,
+			cur = GM.CraftingUI and GM.CraftingUI._refreshes or 0,
+			snaps = inv and inv._snaps or 0,
+			inbox = inv and inv._inboxScans or 0,
+			gb = inv and inv._gbScans or 0,
+			lcalls = c and c._listCalls or 0,
+			lms = c and c._listMs or 0,
+			after = GM._afterCalls or 0,
+			ff = GM._ffRuns or 0,
+			ev = c and c._ev and {} or nil,
+		}
+		if t0.ev then for k, v in pairs(c._ev) do t0.ev[k] = v end end
+		GM.Print("perf — sampling " .. dur .. "s…")
+		GM.After(dur, function()
+			local function rate(n) return format("%.1f/s", (n or 0) / dur) end
+			local fps = GetFramerate and GetFramerate() or -1
+			local tk = (g._ticks or 0) - t0.ticks
+			GM.Print(format(
+				"perf fps=%.0f: tt-ticks %s (shown %s · %.1fms/s · errs %s) · scans %s · item-reqs %s · info-bursts %s",
+				fps,
+				rate(tk),
+				rate((g._shownTicks or 0) - t0.shown),
+				((g._costMs or 0) - t0.cost) / dur,
+				rate((g._tickErrs or 0) - t0.terrs),
+				rate((c._scans or 0) - t0.scans),
+				rate((iw.reqs or 0) - t0.reqs),
+				rate((iw.bursts or 0) - t0.bursts)))
+			GM.Print(format(
+				"  PQ.refresh %s · CU.refresh %s · snaps %s · inbox %s · gbank %s · after %s · fixup %s · C.List %s (%.0fms/s)",
+				rate((GM.PlanQueue._refreshes or 0) - t0.pqr),
+				rate((GM.CraftingUI._refreshes or 0) - t0.cur),
+				rate((inv._snaps or 0) - t0.snaps),
+				rate((inv._inboxScans or 0) - t0.inbox),
+				rate((inv._gbScans or 0) - t0.gb),
+				rate((GM._afterCalls or 0) - t0.after),
+				rate((GM._ffRuns or 0) - t0.ff),
+				rate((c._listCalls or 0) - t0.lcalls),
+				((c._listMs or 0) - t0.lms) / dur))
+			if t0.ev then
+				local rows = {}
+				for k, v in pairs(c._ev or {}) do
+					local d = v - (t0.ev[k] or 0)
+					if d > 0 then rows[#rows + 1] = { n = d, k = k } end
+				end
+				table.sort(rows, function(a, b) return a.n > b.n end)
+				for i = 1, math.min(6, #rows) do
+					GM.Print(format("  ev %s ×%d (%s)",
+						rows[i].k, rows[i].n, rate(rows[i].n)))
+				end
+			end
+			-- frame-tree walk: shown frames carrying an OnUpdate
+			-- script are the only per-frame script cost in the game —
+			-- a stray shown frame (parked, leaked) shows up by name.
+			-- Every per-frame call is pcalled — one oddball frame
+			-- must not silence the whole walk
+			-- frame-tree walk, breadth-first (no depth cap): count
+			-- every live frame, and attribute each SHOWN frame with an
+			-- OnUpdate script to its top-level ancestor — anonymous
+			-- frame leaks still identify their owner by parent name
+			local groups, seen, locked = {}, 0, 0
+			local q, qi = { UIParent }, 1
+			while qi <= #q and seen < 200000 do
+				local fr = q[qi]; qi = qi + 1
+				seen = seen + 1
+				-- the ENTIRE probe must live inside one pcall: this
+				-- client returns SECRET booleans/strings from
+				-- IsShown/GetName on protected frames, and testing
+				-- one outside the pcall throws in tainted context
+				local okP = pcall(function()
+					if not fr:IsShown() then return end
+					if not fr:GetScript("OnUpdate") then return end
+					local top, guard = fr, 0
+					while guard < 12 do
+						guard = guard + 1
+						local p = top:GetParent()
+						if not p or p == UIParent then break end
+						top = p
+					end
+					local nm = top:GetName()
+					if nm == nil then nm = "?" end
+					groups[nm] = (groups[nm] or 0) + 1
+				end)
+				if not okP then locked = locked + 1 end
+				local okK, kids = pcall(function()
+					return { fr:GetChildren() } end)
+				if okK and kids then
+					for _, kid in ipairs(kids) do
+						q[#q + 1] = kid
+					end
+				end
+			end
+			local rows = {}
+			for nm, n in pairs(groups) do
+				rows[#rows + 1] = { n = n, k = nm }
+			end
+			table.sort(rows, function(a, b) return a.n > b.n end)
+			local nupd = 0
+			for _, r in ipairs(rows) do nupd = nupd + r.n end
+			GM.Print(format("  frames=%d  onupdate-shown=%d  locked=%d:",
+				seen, nupd, locked))
+			for i = 1, math.min(8, #rows) do
+				GM.Print(format("    %s ×%d", rows[i].k, rows[i].n))
+			end
+			-- GameTooltip fontstring pool: each AddLine pools a
+			-- GameTooltipTextLeftN fontstring forever — a runaway
+			-- pool means the re-inject path has been growing it
+			local tln = 0
+			while _G["GameTooltipTextLeft" .. (tln + 1)] do
+				tln = tln + 1
+				if tln > 20000 then break end
+			end
+			local nl = 0
+			pcall(function() nl = GameTooltip:NumLines() end)
+			GM.Print(format("  tooltip-lines pooled=%d current=%d",
+				tln, nl or -1))
+			-- Lua heap + per-addon attribution: GC pressure is the
+			-- other silent fps killer, and 727MB doesn't explain
+			-- itself without knowing whose it is
+			GM.Print(format("  lua-mem %.1fMB",
+				(collectgarbage("count") or 0) / 1024))
+			if GetNumAddOns and GetAddOnInfo
+				and GetAddOnMemoryUsage then
+				pcall(function()
+					if UpdateAddOnMemoryUsage then
+						UpdateAddOnMemoryUsage()
+					end
+					local am = {}
+					for i = 1, GetNumAddOns() do
+						local nm, _, _, en = GetAddOnInfo(i)
+						if en ~= false then
+							local m = GetAddOnMemoryUsage(nm)
+								or 0
+							if m > 0 then
+								am[#am + 1] = { n = m, k = nm }
+							end
+						end
+					end
+					table.sort(am, function(a, b)
+						return a.n > b.n end)
+					for i = 1, math.min(6, #am) do
+						GM.Print(format("    mem %s %.1fMB",
+							am[i].k, am[i].n / 1024))
+					end
+				end)
+			end
+			local pl = GM.FramePark and GM.FramePark.ParkedList
+				and GM.FramePark.ParkedList() or {}
+			GM.Print("  parked: "
+				.. (#pl > 0 and table.concat(pl, ", ") or "none"))
+			GM.Print("  tradeskill line: "
+				.. tostring(c and c.lastProf or "closed"))
+		end)
+		return
+	end
+	if msg == "tsclose" then
+		-- perf probe: force-close the held-open tradeskill session
+		-- (Crafting keeps the line alive for queue crafting). If fps
+		-- recovers immediately after this, the engine is burning
+		-- frames on the open line — not our Lua.
+		if C_TradeSkillUI and C_TradeSkillUI.CloseTradeSkill then
+			local ok, err = pcall(C_TradeSkillUI.CloseTradeSkill)
+			GM.Print("tsclose: " .. tostring(ok and "closed" or err))
+		else
+			GM.Print("tsclose: C_TradeSkillUI.CloseTradeSkill missing")
+		end
+		GM.Print("watch fps now — /goblin perf to re-sample")
 		return
 	end
 	if msg:sub(1, 10) == "crafttrace" then
@@ -415,9 +604,24 @@ function GM.PullInbox()
 		-- (harmless if headers lag: it re-arms on the next genuine
 		-- pending-mail event)
 		GM.After(0.5, function()
-			local n = GetInboxNumItems and GetInboxNumItems() or 0
-			if n == 0 and MiniMapMailFrame then
-				MiniMapMailFrame:Hide()
+			-- the flag follows UNREAD headers, not inbox count — a
+			-- text-only mail lingers after looting without relighting
+			-- the icon. Resolve the mail frame on either minimap
+			-- generation (MiniMapMailFrame is absent on the modern
+			-- MinimapCluster layout).
+			local unread = HasNewMail and HasNewMail()
+			if unread == nil then
+				local n = GetInboxNumItems and GetInboxNumItems() or 0
+				for i = 1, n do
+					local wasRead = select(9, GetInboxHeaderInfo(i))
+					if wasRead == false then unread = true break end
+				end
+			end
+			if not unread then
+				local mailFrame = MiniMapMailFrame
+					or (MinimapCluster and MinimapCluster.IndicatorFrame
+						and MinimapCluster.IndicatorFrame.MailFrame)
+				if mailFrame then mailFrame:Hide() end
 			end
 		end)
 	end)
@@ -482,7 +686,38 @@ end
 -- newer than both. Model fields (p/mkt/hist/vel/region stats) stay
 -- emitted — pricing is the brain's job. `_src`/`_srcT` tag which
 -- observation source won, for honest tooltips.
-function GM.ItemEntry(itemID)
+-- Shared memoization shims — the client enforces a hard per-script
+-- CPU budget, so render paths can never scan per call. Both bucket
+-- on 250ms of GetTime; cached return values are READ-ONLY shared
+-- tables by contract (every caller in a bucket gets the same one).
+function GM.BucketCache(buildFn)
+	local t, v = nil, nil
+	return function()
+		local b = math.floor(GetTime() * 4)
+		if b ~= t then t, v = b, buildFn() end
+		return v
+	end
+end
+
+function GM.BucketMemo(computeFn)
+	local t, cache = nil, nil
+	return function(key)
+		local b = math.floor(GetTime() * 4)
+		if b ~= t then t, cache = b, {} end
+		local v = cache[key]
+		if v == nil then
+			v = computeFn(key) or false
+			cache[key] = v
+		end
+		return v or nil
+	end
+end
+
+-- render paths ask for the same entry hundreds of times (List
+-- economics, tooltip sections, queue rows) — the merge is bucket-
+-- memoized like the inventory maps. Book/mesh freshness tolerance
+-- is a quarter second; entries are read-only by contract.
+local itemEntry = GM.BucketMemo(function(itemID)
 	local db = GoblinMindDB
 	if not db then return nil end
 	local r = db.realms and db.realms[GM.Scope()]
@@ -512,7 +747,8 @@ function GM.ItemEntry(itemID)
 		out._src, out._srcT = "mesh", beacon.t
 	end
 	return out
-end
+end)
+GM.ItemEntry = itemEntry
 
 -- TSM fallback price (copper) — the shim's honest baseline before the model lands.
 function GM.TSMMarket(itemID)
@@ -523,48 +759,63 @@ function GM.TSMMarket(itemID)
 	end
 end
 
--- Stack count for itemID across carried bags (0-4) and the reagent bag (5).
-function GM.BagCount(itemID)
-	if not (itemID and C_Container and C_Container.GetContainerItemInfo) then return 0 end
-	local total = 0
-	for bag = 0, 5 do
-		for slot = 1, (C_Container.GetContainerNumSlots(bag) or 0) do
-			local info = C_Container.GetContainerItemInfo(bag, slot)
-			if info and info.itemID == itemID then
-				total = total + (info.stackCount or 1)
+-- Bag contents as a per-bucket map: callers once iterated every
+-- slot per query (~120 API calls × recipes × mats on a render = the
+-- "insecure scripts exceeded execution limit" kills). One 250ms
+-- bucket rebuild serves every itemID lookup.
+local BagMap = GM.BucketCache(function()
+	local m = {}
+	if C_Container and C_Container.GetContainerItemInfo then
+		for bag = 0, 5 do
+			for slot = 1,
+				(C_Container.GetContainerNumSlots(bag) or 0) do
+				local info = C_Container.GetContainerItemInfo(
+					bag, slot)
+				if info and info.itemID then
+					m[info.itemID] = (m[info.itemID] or 0)
+						+ (info.stackCount or 1)
+				end
 			end
 		end
 	end
-	return total
+	return m
+end)
+
+function GM.BagCount(itemID)
+	if not itemID then return 0 end
+	return (BagMap())[itemID] or 0
 end
 
--- Set of itemIDs in carried bags — one pass for catalogue-style filters.
+-- Set of itemIDs in carried bags — keys of the shared BagMap.
 function GM.BagItems()
 	local set = {}
-	if not (C_Container and C_Container.GetContainerItemInfo) then return set end
-	for bag = 0, 5 do
-		for slot = 1, (C_Container.GetContainerNumSlots(bag) or 0) do
-			local info = C_Container.GetContainerItemInfo(bag, slot)
-			if info and info.itemID then set[info.itemID] = true end
-		end
-	end
+	for id in pairs(BagMap()) do set[id] = true end
 	return set
 end
 
 -- Bank contents are only readable while the bank frame is open.
-function GM.BankCount(itemID)
-	if not (itemID and BankFrame and BankFrame:IsShown()) then return 0 end
-	if not (C_Container and C_Container.GetContainerItemInfo) then return 0 end
-	local total = 0
-	for _, bag in ipairs({ -1, 6, 7, 8, 9, 10, 11 }) do
-		for slot = 1, (C_Container.GetContainerNumSlots(bag) or 0) do
-			local info = C_Container.GetContainerItemInfo(bag, slot)
-			if info and info.itemID == itemID then
-				total = total + (info.stackCount or 1)
+local BankMap = GM.BucketCache(function()
+	local m = {}
+	if BankFrame and BankFrame:IsShown()
+		and C_Container and C_Container.GetContainerItemInfo then
+		for _, bag in ipairs({ -1, 6, 7, 8, 9, 10, 11 }) do
+			for slot = 1,
+				(C_Container.GetContainerNumSlots(bag) or 0) do
+				local info = C_Container.GetContainerItemInfo(
+					bag, slot)
+				if info and info.itemID then
+					m[info.itemID] = (m[info.itemID] or 0)
+						+ (info.stackCount or 1)
+				end
 			end
 		end
 	end
-	return total
+	return m
+end)
+
+function GM.BankCount(itemID)
+	if not itemID then return 0 end
+	return (BankMap())[itemID] or 0
 end
 
 -- Item name/icon resolution: GetItemInfo returns nil for uncached
@@ -577,17 +828,32 @@ local ReqLoad = C_Item and C_Item.RequestLoadItemDataByID
 
 GM.itemWatch = { cbs = {} }
 
+-- request each id at most once per TTL — repeat renders of an id the
+-- client can't load must not re-request: every request produces a
+-- GET_ITEM_INFO_RECEIVED burst, bursts repaint subscribers, repaints
+-- re-render the same unresolved ids → a self-sustaining
+-- request/render loop that degrades the client until /reload
+local reqSent = {}
+local function ReqOnce(id)
+	if not ReqLoad then return end
+	local t = reqSent[id]
+	if t and GetTime() - t < 60 then return end
+	reqSent[id] = GetTime()
+	GM.itemWatch.reqs = (GM.itemWatch.reqs or 0) + 1
+	pcall(ReqLoad, id)
+end
+
 function GM.ItemName(id)
 	if not id then return end
 	local n = GetInfo and GetInfo(id)
-	if not n and ReqLoad then pcall(ReqLoad, id) end
+	if not n then ReqOnce(id) end
 	return n
 end
 
 function GM.ItemIcon(id)
 	if not id then return end
 	local icon = GetIcon and GetIcon(id)
-	if not icon and ReqLoad then pcall(ReqLoad, id) end
+	if not icon then ReqOnce(id) end
 	return icon
 end
 
@@ -598,7 +864,7 @@ end
 function GM.ItemQuality(id)
 	if not id then return end
 	local q = GetInfo and select(3, GetInfo(id))
-	if not q and ReqLoad then pcall(ReqLoad, id) end
+	if not q then ReqOnce(id) end
 	return q
 end
 
@@ -666,9 +932,11 @@ function GM.OnItemInfoLoaded(fn) tinsert(GM.itemWatch.cbs, fn) end
 
 local iw = CreateFrame("Frame")
 pcall(iw.RegisterEvent, iw, "GET_ITEM_INFO_RECEIVED")
-iw:SetScript("OnEvent", function()
+iw:SetScript("OnEvent", function(_, e)
+	GM.itemWatch.evts = (GM.itemWatch.evts or 0) + 1
 	if GM.itemWatch.sched then return end
 	GM.itemWatch.sched = true
+	GM.itemWatch.bursts = (GM.itemWatch.bursts or 0) + 1
 	GM.After(0.25, function()
 		GM.itemWatch.sched = nil
 		for _, fn in ipairs(GM.itemWatch.cbs) do pcall(fn) end

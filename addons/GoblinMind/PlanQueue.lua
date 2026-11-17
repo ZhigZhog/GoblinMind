@@ -480,8 +480,13 @@ local function Build()
 	-- is driven by Toggle/Show and the AH window's lifecycle
 	frame:Hide()
 	-- repaint when async item names resolve so bare-id targets
-	-- (/goblin 4238) flip to real names without a rescan
-	GM.OnItemInfoLoaded(function() PQ.Refresh() end)
+	-- (/goblin 4238) flip to real names without a rescan — gated on
+	-- visibility like every other subscriber: an unguarded refresh
+	-- here re-renders (and re-requests) unresolved ids while hidden,
+	-- feeding the same event bursts that triggered it
+	GM.OnItemInfoLoaded(function()
+		if ui and ui.frame and ui.frame:IsShown() then PQ.Refresh() end
+	end)
 end
 
 function PQ.Toggle()
@@ -1070,6 +1075,7 @@ function PQ.SetHome(on)
 end
 
 function PQ.Refresh()
+	PQ._refreshes = (PQ._refreshes or 0) + 1
 	Build()
 	-- home mode: dashboard panels replace the plan inspector
 	if ui.home then

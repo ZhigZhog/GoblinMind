@@ -51,4 +51,5 @@ Tooltip.lua
 Gathering.lua
 TaskListUI.lua
 BugReport.lua
+Onboarding.lua
 Minimap.lua

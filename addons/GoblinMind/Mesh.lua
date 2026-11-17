@@ -271,7 +271,10 @@ function M.Status()
 		st.ev and #st.ev or 0, st.mb and #st.mb or 0,
 		st.seq or 0, tostring(db.meshAck or "—")))
 	local be = db.backend or {}
-	GM.Print(format("backend: upload %s%s · pull %s%s · %d install%s",
+	GM.Print(format("backend: %s%supload %s%s · pull %s%s · %d install%s",
+		be.url and (be.url .. " · ") or "",
+		(not be.url and not be.pull and not be.up and not be.peers)
+			and "not configured (/goblin backend) — " or "",
 		Ago(be.up and be.up.t),
 		be.up and (be.up.ok and "" or " (failed)") or "",
 		Ago(be.pull and be.pull.t),

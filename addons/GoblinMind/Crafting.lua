@@ -21,7 +21,11 @@ local function Tr(...)
 	if not C.trace then return end
 	local parts = {}
 	for i = 1, select("#", ...) do
-		parts[i] = tostring(select(i, ...))
+		-- tostring() on a secret value returns the secret itself, not
+		-- a string — concat then throws "invalid value (secret)"
+		local v = select(i, ...)
+		parts[i] = (issecretvalue and issecretvalue(v))
+			and "<secret>" or tostring(v)
 	end
 	GM.Print(GM.CC("textDim") .. "[craft] "
 		.. table.concat(parts, " ") .. "|r")
@@ -294,10 +298,50 @@ local function ForeignTradeskill()
 	return false
 end
 
+-- required skill isn't in GetRecipeInfo — it lives on the recipe
+-- LINK's tooltip as "Requires Cooking (125)". One hidden probe,
+-- parsed once per recipe (prev.req caching in Scan keeps it off
+-- repeat TRADE_SKILL_UPDATE events). nil when the client won't say.
+local reqProbe
+local function ReqSkillFor(recipeID)
+	if not C_TradeSkillUI.GetRecipeLink then return end
+	local ok, link = pcall(C_TradeSkillUI.GetRecipeLink, recipeID)
+	if not ok or type(link) ~= "string" then return end
+	if reqProbe == nil then
+		local ok2, tt = pcall(CreateFrame, "GameTooltip", "GMReqProbe",
+			UIParent, "GameTooltipTemplate")
+		reqProbe = (ok2 and tt) or false
+	end
+	if not reqProbe then return end
+	reqProbe:SetOwner(UIParent, "ANCHOR_NONE")
+	reqProbe:SetHyperlink(link)
+	for i = 1, reqProbe:NumLines() or 0 do
+		local fs = _G["GMReqProbeTextLeft" .. i]
+		local s = fs and fs:GetText()
+		local n = s and s:match("Requires%s+[^%(]*%((%d+)%)")
+		if n then
+			reqProbe:Hide()
+			return tonumber(n)
+		end
+	end
+	reqProbe:Hide()
+end
+
 local function Scan()
-	if not (C_TradeSkillUI and C_TradeSkillUI.GetFilteredRecipeIDs) then return end
+	C._scans = (C._scans or 0) + 1
+	if not C_TradeSkillUI then return end
 	if ForeignTradeskill() then return end
-	local ok, ids = pcall(C_TradeSkillUI.GetFilteredRecipeIDs)
+	-- GetAllRecipeIDs first: the full line regardless of the Blizzard
+	-- filter — filtered enum can hide unlearned rows from capture
+	-- entirely when the window's filter drops them
+	local ok, ids
+	if C_TradeSkillUI.GetAllRecipeIDs then
+		ok, ids = pcall(C_TradeSkillUI.GetAllRecipeIDs)
+	end
+	if not (ok and type(ids) == "table" and #ids > 0) then
+		if not C_TradeSkillUI.GetFilteredRecipeIDs then return end
+		ok, ids = pcall(C_TradeSkillUI.GetFilteredRecipeIDs)
+	end
 	if not ok or type(ids) ~= "table" then return end
 	-- GetBaseProfessionInfo LAGS the recipe list — at event time it
 	-- still names the previously open profession (off-by-one tagging).
@@ -351,6 +395,38 @@ local function Scan()
 				if p then C.lastProf = p end -- profession this scan saw
 				n = n + 1
 			end
+		elseif info then
+			-- unlearned row: flagged, never queued — CraftingUI lists
+			-- in-range ones with "where to get it" in the detail pane.
+			-- Schematic may still answer (icon + mats) — take what lands.
+			local sc = C_TradeSkillUI.GetRecipeSchematic
+				and select(2, pcall(C_TradeSkillUI.GetRecipeSchematic,
+					recipeID, false))
+			local prev = GoblinMindCrafting.recipes[recipeID] or {}
+			local mats = prev.mats
+			if sc and sc.reagentSlotSchematics then
+				mats = {}
+				for _, slot in ipairs(sc.reagentSlotSchematics) do
+					local r = slot.reagents and slot.reagents[1]
+					if r and r.itemID and slot.quantityRequired then
+						tinsert(mats, { id = r.itemID, qty = slot.quantityRequired })
+					end
+				end
+			end
+			GoblinMindCrafting.recipes[recipeID] = {
+				name = info.name or prev.name,
+				itemID = sc and sc.outputItemID or prev.itemID,
+				unlearned = true,
+				prof = ProfForRecipe(recipeID) or prof
+					or (type(prev.prof) == "string"
+						and prev.prof ~= "" and prev.prof or nil),
+				mats = mats,
+				numMade = sc and sc.quantityMin or prev.numMade or 1,
+				cat = info.categoryID or prev.cat,
+				diff = info.relativeDifficulty or info.difficulty or prev.diff,
+				req = prev.req or ReqSkillFor(recipeID),
+			}
+			n = n + 1
 		end
 	end
 	if n > 0 then GM.Crafting.dirty = true end
@@ -472,6 +548,8 @@ function C.Init()
 		"UNIT_SPELLCAST_FAILED", "UNIT_SPELLCAST_INTERRUPTED",
 	}) do pcall(f.RegisterEvent, f, evt) end
 	f:SetScript("OnEvent", function(_, e, ...)
+		C._ev = C._ev or {}
+		C._ev[e] = (C._ev[e] or 0) + 1
 		if e == "UNIT_SPELLCAST_START"
 			or e == "UNIT_SPELLCAST_CHANNEL_START" then
 			local unit, _, spellID = ...
@@ -687,7 +765,9 @@ end
 
 function C.RecipeForItem(itemID)
 	for id, r in pairs(GoblinMindCrafting and GoblinMindCrafting.recipes or {}) do
-		if r.itemID == itemID then return id, r end
+		-- unlearned rows still carry itemID when the schematic
+		-- answered — they are NOT craft paths
+		if r.itemID == itemID and not r.unlearned then return id, r end
 	end
 end
 
@@ -965,7 +1045,19 @@ function C.Queue(recipeID, qty)
 end
 
 -- list for the market window CRAFT mode
+-- List() prices every recipe's economics + craftability — ~200
+-- recipes × ~6 mats of inventory lookups. Dashboard, CraftingUI,
+-- TaskListUI and Shopping all call it per render; a 3s TTL collapses
+-- the callers into one build (the per-render rebuild was the
+-- "insecure scripts exceeded execution limit" kill on window-open)
+local listCache = { t = 0, data = nil }
 function C.List()
+	local now = GetTime()
+	if listCache.data and now - listCache.t < 3 then
+		return listCache.data
+	end
+	C._listCalls = (C._listCalls or 0) + 1
+	local t0 = GetTime()
 	local out = {}
 	for id, r in pairs(GoblinMindCrafting and GoblinMindCrafting.recipes or {}) do
 		local e = C.Economics(id, 1) or {}
@@ -986,7 +1078,7 @@ function C.List()
 		tinsert(out, {
 			recipeID = id, itemID = r.itemID, name = r.name,
 			prof = r.prof, mats = r.mats, diff = r.diff,
-			nup = r.nup,
+			nup = r.nup, unlearned = r.unlearned, req = r.req,
 			cost = e.fullCost, price = e.price, profit = e.profit,
 			effCost = e.effCost, effProfit = e.effProfit,
 			coverage = e.coverage, eco = e,
@@ -1000,6 +1092,8 @@ function C.List()
 		if ap and bp and ap ~= bp then return ap > bp end
 		return (a.name or "") < (b.name or "")
 	end)
+	listCache.data, listCache.t = out, now
+	C._listMs = (C._listMs or 0) + (GetTime() - t0) * 1000
 	return out
 end
 
@@ -1426,7 +1520,11 @@ local function OrderIndex(id)
 end
 
 function C.QueueSet(recipeID, qty)
-	if not GoblinMindCrafting.recipes[recipeID] then return end
+	local r = GoblinMindCrafting.recipes[recipeID]
+	if not r then return end
+	-- unlearned recipes never queue — they render as info rows and
+	-- clicking them shows where-to-get text instead
+	if r.unlearned and (qty or 0) > 0 then return end
 	if qty and qty > 0 then
 		GoblinMindCrafting.queue[recipeID] = floor(qty)
 		GoblinMindCrafting.queueOrder = GoblinMindCrafting.queueOrder or {}
@@ -1441,6 +1539,8 @@ function C.QueueSet(recipeID, qty)
 end
 
 function C.QueueAdd(recipeID, delta)
+	local r = GoblinMindCrafting.recipes and GoblinMindCrafting.recipes[recipeID]
+	if r and r.unlearned then return end
 	local cur = GoblinMindCrafting.queue[recipeID] or 0
 	C.QueueSet(recipeID, cur + (delta or 0))
 end

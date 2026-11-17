@@ -101,7 +101,12 @@ local SRC = {
 		local de = GM.Destroying and GM.Destroying.DisenchantEV
 			and GM.Destroying.DisenchantEV(id)
 		if de and (not best or de > best) then best = de end
-		if TSMAPI_FOUR and TSMAPI_FOUR.CustomPrice then
+		-- TSM's per-item destroy covers mill/prospect/transform too —
+		-- none exist on Forever, so only trust it where the item is
+		-- actually disenchantable (else herbs flicker mill-EV in)
+		if TSMAPI_FOUR and TSMAPI_FOUR.CustomPrice
+			and GM.Destroying and GM.Destroying.DisenchantDrops
+			and GM.Destroying.DisenchantDrops(id) then
 			local ok, v = pcall(TSMAPI_FOUR.CustomPrice.GetValue,
 				"destroy", "i:" .. id)
 			if ok and type(v) == "number" and v > 0 and (not best or v > best) then

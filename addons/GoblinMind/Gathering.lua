@@ -124,9 +124,91 @@ local NODES = {
 	},
 	["Icecap"]   = { { id = 13467, lo = 1, hi = 4, pct = 100 } },
 	["Plaguebloom"] = { { id = 13466, lo = 1, hi = 4, pct = 100 } },
+	-- fishing pools: wreckage yields zone-scaled trunks (one catch =
+	-- one item; trunk tier drifts up with zone level so the mix is a
+	-- mid-weighted approximation) plus Rumsey/kelp filler; schools
+	-- yield their fish with an occasional trunk
+	["Floating Debris"] = {
+		{ id = 20708, lo = 1, hi = 1, pct = 85 }, -- Tightly Sealed Trunk
+		{ id = 20709, lo = 1, hi = 1, pct = 15 }, -- Rumsey Rum Light
+	},
+	["Floating Wreckage"] = {
+		{ id = 21113, lo = 1, hi = 1, pct = 50 }, -- Watertight Trunk
+		{ id = 21150, lo = 1, hi = 1, pct = 25 }, -- Iron Bound Trunk
+		{ id = 21228, lo = 1, hi = 1, pct = 10 }, -- Mithril Bound Trunk
+		{ id = 21114, lo = 1, hi = 1, pct = 15 }, -- Rumsey Rum Dark
+	},
+	["Schooner Wreckage"] = {
+		{ id = 21113, lo = 1, hi = 1, pct = 70 },
+		{ id = 21150, lo = 1, hi = 1, pct = 15 },
+		{ id = 21114, lo = 1, hi = 1, pct = 15 },
+	},
+	["Waterlogged Wreckage"] = {
+		{ id = 21150, lo = 1, hi = 1, pct = 60 },
+		{ id = 21228, lo = 1, hi = 1, pct = 25 },
+		{ id = 21115, lo = 1, hi = 1, pct = 15 }, -- Rumsey Rum Black Label
+	},
+	["Bloodsail Wreckage"] = {
+		{ id = 21228, lo = 1, hi = 1, pct = 60 },
+		{ id = 21150, lo = 1, hi = 1, pct = 20 },
+		{ id = 3820,  lo = 1, hi = 2, pct = 10 }, -- Stranglekelp
+		{ id = 21115, lo = 1, hi = 1, pct = 10 },
+	},
+	["Oil Spill"] = {
+		{ id = 6358,  lo = 1, hi = 2, pct = 75 }, -- Oily Blackmouth
+		{ id = 20708, lo = 1, hi = 1, pct = 15 },
+		{ id = 20709, lo = 1, hi = 1, pct = 10 },
+	},
+	["Oily Blackmouth"] = {
+		{ id = 6358,  lo = 1, hi = 2, pct = 90 },
+		{ id = 20708, lo = 1, hi = 1, pct = 10 },
+	},
+	["Firefin Snapper"] = {
+		{ id = 6359,  lo = 1, hi = 2, pct = 90 },
+		{ id = 21113, lo = 1, hi = 1, pct = 10 },
+	},
+	["Sagefish"] = {
+		{ id = 21071, lo = 1, hi = 2, pct = 90 }, -- Raw Sagefish
+		{ id = 20708, lo = 1, hi = 1, pct = 10 },
+	},
+	["Greater Sagefish"] = {
+		{ id = 21153, lo = 1, hi = 2, pct = 90 }, -- Raw Greater Sagefish
+		{ id = 21113, lo = 1, hi = 1, pct = 10 },
+	},
+	["Deviate Fish"] = {
+		{ id = 6522,  lo = 1, hi = 2, pct = 90 },
+		{ id = 20708, lo = 1, hi = 1, pct = 10 },
+	},
+	["Stonescale Eel"] = {
+		{ id = 13422, lo = 1, hi = 2, pct = 90 },
+		{ id = 21228, lo = 1, hi = 1, pct = 10 },
+	},
+	["School of Tastyfish"] = {
+		{ id = 19807, lo = 1, hi = 2, pct = 100 }, -- Speckled Tastyfish
+	},
+	["Patch of Elemental Water"] = {
+		{ id = 7070, lo = 1, hi = 2, pct = 70 }, -- Elemental Water
+		{ id = 7079, lo = 1, hi = 1, pct = 20 }, -- Globe of Water
+		{ id = 7080, lo = 1, hi = 1, pct = 10 }, -- Essence of Water
+	},
 }
 
 G.nodes = NODES
+
+-- Herb item ids (node primary drops + herb secondaries). Milling
+-- does not exist on Forever and is not planned, so tooltips suppress
+-- destroy/convert output for these entirely — a mill-EV line can
+-- never be actionable.
+local HERB_ITEMS = {}
+for _, id in ipairs({
+	765, 785, 2447, 2449, 2450, 2452, 2453, 3355, 3356, 3357, 3358,
+	3369, 3818, 3819, 3820, 3821, 4625, 8831, 8836, 8838, 8839,
+	8845, 8846, 13463, 13464, 13465, 13466, 13467, 13468, 8153,
+}) do HERB_ITEMS[id] = true end
+
+function G.IsHerb(itemID)
+	return HERB_ITEMS[itemID] == true
+end
 
 -- skinning yields are level-banded, not per-mob: a corpse's tooltip
 -- says "Skinnable" (or "Requires Skinning (N)" when the skill is
@@ -235,14 +317,78 @@ local function Price(id)
 	return GM.Price("dbmarket", id)
 end
 
-local Name = GM.ItemNameOr
+-- static names for every item id in the tables — uncached items
+-- come back nil from GetItemInfo on Forever and these are all fixed
+-- classic-era ids; the API name still wins when it's cached
+local NAMES = {
+	-- ores, stones, gems
+	[774]="Malachite", [818]="Tigerseye", [1206]="Moss Agate",
+	[1210]="Shadowgem", [1529]="Jade", [1705]="Lesser Moonstone",
+	[2770]="Copper Ore", [2771]="Tin Ore", [2772]="Iron Ore",
+	[2775]="Silver Ore", [2776]="Gold Ore", [7911]="Truesilver Ore",
+	[2835]="Rough Stone", [2836]="Coarse Stone",
+	[2838]="Heavy Stone", [3340]="Incendicite Ore",
+	[3858]="Mithril Ore", [3864]="Citrine", [7909]="Aquamarine",
+	[7910]="Star Ruby", [7912]="Solid Stone", [10620]="Thorium Ore",
+	[11370]="Dark Iron Ore", [11382]="Blood of the Mountain",
+	[12361]="Blue Sapphire", [12364]="Huge Emerald",
+	[12365]="Dense Stone", [12799]="Large Opal",
+	[12800]="Azerothian Diamond",
+	-- herbs
+	[765]="Silverleaf", [785]="Mageroyal", [2447]="Peacebloom",
+	[2449]="Earthroot", [2450]="Briarthorn", [2452]="Swiftthistle",
+	[2453]="Bruiseweed", [3355]="Wild Steelbloom",
+	[3356]="Kingsblood", [3357]="Liferoot",
+	[3358]="Khadgar's Whisker", [3369]="Grave Moss",
+	[3818]="Fadeleaf", [3819]="Wintersbite", [3820]="Stranglekelp",
+	[3821]="Goldthorn", [4625]="Firebloom", [8831]="Purple Lotus",
+	[8836]="Arthas' Tears", [8838]="Sungrass", [8839]="Blindweed",
+	[8845]="Ghost Mushroom", [8846]="Gromsblood",
+	[13463]="Dreamfoil", [13464]="Golden Sansam",
+	[13465]="Mountain Silversage", [13466]="Plaguebloom",
+	[13467]="Icecap", [13468]="Black Lotus", [8153]="Wildvine",
+	-- leathers, hides, scales
+	[783]="Light Hide", [2318]="Light Leather",
+	[2319]="Medium Leather", [2934]="Ruined Leather Scraps",
+	[4232]="Medium Hide", [4234]="Heavy Leather",
+	[4235]="Heavy Hide", [4304]="Thick Leather",
+	[4461]="Raptor Hide", [5784]="Slimy Murloc Scale",
+	[5785]="Thick Murloc Scale", [6470]="Deviate Scale",
+	[6471]="Perfect Deviate Scale", [8154]="Scorpid Scale",
+	[8165]="Worn Dragonscale", [8167]="Turtle Scale",
+	[8169]="Thick Hide", [8170]="Rugged Leather",
+	[8171]="Rugged Hide", [15412]="Green Dragonscale",
+	[15414]="Red Dragonscale", [15415]="Blue Dragonscale",
+	[15416]="Black Dragonscale", [15417]="Devilsaur Leather",
+	[15467]="Chromatic Dragonscale", [17012]="Core Leather",
+	-- fishing: fish, trunks, rum, elementals
+	[6358]="Oily Blackmouth", [6359]="Firefin Snapper",
+	[6522]="Deviate Fish", [13422]="Stonescale Eel",
+	[19807]="Speckled Tastyfish", [21071]="Raw Sagefish",
+	[21153]="Raw Greater Sagefish",
+	[20708]="Tightly Sealed Trunk", [21113]="Watertight Trunk",
+	[21150]="Iron Bound Trunk", [21228]="Mithril Bound Trunk",
+	[20709]="Rumsey Rum Light", [21114]="Rumsey Rum Dark",
+	[21115]="Rumsey Rum Black Label",
+	[7070]="Elemental Water", [7079]="Globe of Water",
+	[7080]="Essence of Water",
+}
 
--- append drop lines + node EV to a tooltip for a known node name
-local function Fill(tt, node)
+local function Name(id)
+	return GM.ItemName(id) or NAMES[id] or ("item " .. id)
+end
+
+-- build drop lines + node EV once per node, cached — the engine
+-- wipes object tooltips every frame, so the hot path just re-adds
+-- the stored strings (price lookups happen at most once/60s)
+local nodeCache, skinCache = {}, {}
+local function NodeLines(node)
+	local c = nodeCache[node]
+	if c and GetTime() - c.t < 60 then return c.lines end
 	local drops = NODES[node]
-	if not drops then return end
+	if not drops then return nil end
+	local lines = { " " }
 	local total, gemPct, gemEV, anyPrice = 0, 0, 0, false
-	tt:AddLine(" ")
 	for _, d in ipairs(drops) do
 		if not d.gem then
 			local p = Price(d.id)
@@ -251,11 +397,11 @@ local function Fill(tt, node)
 			total = total + (p or 0) * qty * d.pct / 100
 			local range = d.lo == d.hi and ("×" .. d.lo)
 				or format("×%d–%d", d.lo, d.hi)
-			tt:AddLine(
+			lines[#lines + 1] =
 				GM.CC("text") .. Name(d.id) .. "|r "
 				.. GM.CC("textDim") .. range
 				.. (d.pct < 100 and (" ~" .. d.pct .. "%") or "") .. "|r"
-				.. (p and ("  " .. GM.Money(p) .. " ea") or ""))
+				.. (p and ("  " .. GM.Money(p) .. " ea") or "")
 		else
 			gemPct = gemPct + d.pct
 			local p = Price(d.id)
@@ -264,29 +410,37 @@ local function Fill(tt, node)
 		end
 	end
 	if gemPct > 0 then
-		tt:AddLine(
+		lines[#lines + 1] =
 			GM.CC("secondary") .. "rare gems ~" .. gemPct .. "%|r"
-			.. (gemEV > 0 and ("  +" .. GM.Money(gemEV) .. " expected") or ""))
+			.. (gemEV > 0 and ("  +" .. GM.Money(gemEV) .. " expected") or "")
 	end
-	tt:AddLine(GM.CC("accent") .. "node EV ≈ "
+	lines[#lines + 1] = GM.CC("accent") .. "node EV ≈ "
 		.. (total > 0 and GM.Money(total) or "?")
-		.. (anyPrice and "" or " (no price data)") .. "|r")
-	tt:Show()
+		.. (anyPrice and "" or " (no price data)") .. "|r"
+	nodeCache[node] = { t = GetTime(), lines = lines }
+	return lines
 end
 
--- append the level-banded skin table to a corpse tooltip; family
--- specials (additive extra rolls) render above the band, EV sums both
-local function FillSkin(tt, lvl, name)
+-- build the level-banded skin table as cached line strings; family
+-- specials (additive extra rolls) render above the band, EV sums
+-- both, and a short skill appends the warning row last
+local function SkinLines(lvl, name, short)
+	local key = tostring(lvl) .. "|" .. tostring(name)
+		.. "|" .. tostring(short)
+	local c = skinCache[key]
+	if c and GetTime() - c.t < 60 then return c.lines end
 	local band = SKIN_BANDS[#SKIN_BANDS]
 	for _, b in ipairs(SKIN_BANDS) do
 		if (lvl or 999) <= b.max then band = b break end
 	end
 	local specIdx, ln = SpecialFor(name)
 	local total, anyPrice = 0, false
-	tt:AddLine(" ")
-	tt:AddLine(GM.CC("secondary") .. "skinning"
-		.. (lvl and lvl > 0 and (" — lvl " .. lvl) or " yields")
-		.. "|r")
+	local lines = {
+		" ",
+		GM.CC("secondary") .. "skinning"
+			.. (lvl and lvl > 0 and (" — lvl " .. lvl) or " yields")
+			.. "|r",
+	}
 	local function Row(d, mark)
 		local id = d.id == "color" and (ln and DragonScaleID(ln))
 			or d.id
@@ -299,11 +453,11 @@ local function FillSkin(tt, lvl, name)
 		total = total + (p or 0) * qty * d.pct / 100
 		local range = d.lo == d.hi and ("×" .. d.lo)
 			or format("×%d–%d", d.lo, d.hi)
-		tt:AddLine(
+		lines[#lines + 1] =
 			GM.CC(mark or "text") .. Name(id) .. "|r "
 			.. GM.CC("textDim") .. range
 			.. (d.pct < 100 and (" ~" .. d.pct .. "%") or "") .. "|r"
-			.. (p and ("  " .. GM.Money(p) .. " ea") or ""))
+			.. (p and ("  " .. GM.Money(p) .. " ea") or "")
 	end
 	if specIdx then
 		for _, d in ipairs(SKIN_SPECIALS[specIdx].drops) do
@@ -311,10 +465,14 @@ local function FillSkin(tt, lvl, name)
 		end
 	end
 	for _, d in ipairs(band.drops) do Row(d) end
-	tt:AddLine(GM.CC("accent") .. "skin EV ≈ "
+	lines[#lines + 1] = GM.CC("accent") .. "skin EV ≈ "
 		.. (total > 0 and GM.Money(total) or "?")
-		.. (anyPrice and "" or " (no price data)") .. "|r")
-	tt:Show()
+		.. (anyPrice and "" or " (no price data)") .. "|r"
+	if short then
+		lines[#lines + 1] = GM.CC("err") .. "skinning skill too low|r"
+	end
+	skinCache[key] = { t = GetTime(), lines = lines }
+	return lines
 end
 
 -- a corpse tooltip is skinnable when any line carries the client's
@@ -337,17 +495,59 @@ local function Skinnable(tt)
 	return false
 end
 
+-- true when our appended block is still physically on the tooltip —
+-- looting a corpse toggles the "Skinnable" marker and rebuilds the
+-- tooltip WITHOUT always wiping appended lines, so bookkeeping state
+-- alone can't dedupe re-injection (the source of duplicate blocks)
+local function BlockPresent(tt)
+	for i = 1, tt:NumLines() do
+		local fs = _G["GameTooltipTextLeft" .. i]
+		local ok, hit = pcall(function()
+			local lt = fs and fs:GetText()
+			return lt and lt:find("EV ≈") ~= nil
+		end)
+		if ok and hit then return true end
+	end
+	return false
+end
+
 -- game-object tooltips have no data-type event — poll the first
 -- line on a throttle and inject once per node-text change
 if GameTooltip then
 	-- the client redraws object tooltips every frame, wiping
-	-- appended lines — re-inject when our block count is gone
+	-- appended lines — the fast path re-injects every frame from the
+	-- cached line strings so the block never visibly blinks; the
+	-- subject-text scan stays throttled
 	local pollT = 0
-	GameTooltip:HookScript("OnUpdate", function(tt, e)
+	local function TooltipTick(tt, e)
+		if not tt:IsShown() then
+			tt._gmInject, tt._gmInjectN, tt._gmInjectTag = nil, nil, nil
+			return
+		end
+		-- item tooltips never take node/skin blocks — a bag item's
+		-- name can equal a node name (Kingsblood etc.). GetItem can't
+		-- be trusted on Forever (world objects still report a link),
+		-- so the check is our own side-tip marker, only built by the
+		-- Item post-call
+		if GM.Tooltip and GM.Tooltip.IsItemTooltip
+			and GM.Tooltip.IsItemTooltip(tt) then
+			tt._gmInject, tt._gmInjectN, tt._gmInjectTag = nil, nil, nil
+			return
+		end
+		-- re-inject ONLY when the whole block is gone — requiring the
+		-- full line-count drop prevents partial client redraws from
+		-- growing the tooltip's fontstring pool every frame (each
+		-- AddLine creates a pooled fontstring that persists until
+		-- /reload — unbounded growth = permanent degrade)
+		local need = tt._gmInject and #tt._gmInject or 0
+		if need > 0 and tt:NumLines() <= tt._gmInjectN - need then
+			for _, s in ipairs(tt._gmInject) do tt:AddLine(s) end
+			tt:Show()
+			tt._gmInjectN = tt:NumLines()
+		end
 		pollT = pollT + e
 		if pollT < 0.15 then return end
 		pollT = 0
-		if not tt:IsShown() then tt._gmNodeN = nil return end
 		local fs = GameTooltipTextLeft1
 		local text = fs and fs:IsShown() and fs:GetText()
 		-- GetText can hand back a "secret string" under taint —
@@ -360,38 +560,65 @@ if GameTooltip then
 			text = ok and clean or nil
 		end
 		if text and NODES[text] then
-			if not tt._gmNodeN or tt:NumLines() < tt._gmNodeN then
-				Fill(tt, text)
-				tt._gmNodeN = tt:NumLines()
+			local tag = "node:" .. text
+			if tt._gmInjectTag ~= tag and not BlockPresent(tt) then
+				local lines = NodeLines(text)
+				if lines then
+					for _, s in ipairs(lines) do tt:AddLine(s) end
+					tt:Show()
+					tt._gmInject, tt._gmInjectTag = lines, tag
+					tt._gmInjectN = tt:NumLines()
+				end
 			end
-			tt._gmSkinN = nil
 		else
-			tt._gmNodeN = nil
 			-- not a node — check for a skinnable corpse (unit tooltip)
 			local skin, shortSkill = Skinnable(tt)
 			if skin then
-				if not tt._gmSkinN or tt:NumLines() < tt._gmSkinN then
-					-- GetUnit/UnitLevel can hand back secrets under
-					-- taint — keep the whole read inside one pcall
-					local okU, name, lvl = pcall(function()
-						local n, u = tt:GetUnit()
-						return n, u and UnitLevel(u)
-					end)
-					FillSkin(tt, lvl, okU and name)
-					if shortSkill then
-						tt:AddLine(GM.CC("err")
-							.. "skinning skill too low|r")
-						tt:Show()
-					end
-					tt._gmSkinN = tt:NumLines()
+				-- GetUnit/UnitLevel can hand back secrets under
+				-- taint — keep the whole read inside one pcall
+				local okU, name, lvl = pcall(function()
+					local n, u = tt:GetUnit()
+					return n, u and UnitLevel(u)
+				end)
+				local tag = "skin:" .. tostring(okU and name)
+					.. ":" .. tostring(lvl)
+				if tt._gmInjectTag ~= tag and not BlockPresent(tt) then
+					local lines = SkinLines(lvl, okU and name, shortSkill)
+					for _, s in ipairs(lines) do tt:AddLine(s) end
+					tt:Show()
+					tt._gmInject, tt._gmInjectTag = lines, tag
+					tt._gmInjectN = tt:NumLines()
 				end
 			else
-				tt._gmSkinN = nil
+				tt._gmInject, tt._gmInjectN, tt._gmInjectTag = nil, nil, nil
 			end
 		end
+	end
+
+	-- timing wrapper: perf reports need to separate "the hook fired"
+	-- (fps, tooltip visibility) from "the hook cost" (our own ms).
+	-- The whole body is pcalled — this client returns SECRET values
+	-- from IsShown/GetName under taint, and a per-frame throw is
+	-- itself a perf bomb (stack walk + error handler each frame)
+	local profStop = debugprofilestop
+		or function() return GetTime() * 1000 end
+	GameTooltip:HookScript("OnUpdate", function(tt, e)
+		local t0 = profStop()
+		G._ticks = (G._ticks or 0) + 1
+		local okT = pcall(function()
+			if tt:IsShown() then
+				G._shownTicks = (G._shownTicks or 0) + 1
+			end
+			TooltipTick(tt, e)
+		end)
+		if not okT then
+			G._tickErrs = (G._tickErrs or 0) + 1
+		end
+		G._costMs = (G._costMs or 0) + profStop() - t0
 	end)
 	GameTooltip:HookScript("OnHide", function(tt)
-		tt._gmNodeN = nil
-		tt._gmSkinN = nil
+		tt._gmInject = nil
+		tt._gmInjectN = nil
+		tt._gmInjectTag = nil
 	end)
 end
