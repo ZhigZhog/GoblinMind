@@ -139,12 +139,11 @@ function A.PreviewPost(id)
 	if not GM.Price("dbmarket", id) then return nil, "no price" end
 	local normal = GM.Groups.EvalOp(aOps, "normal", id)
 		or GM.Price("dbmarket", id)
-	-- freshest listing source: live book when it outranks the
-	-- backend, else the merged DB's cheapest (mbx excl. ours, mb
-	-- incl.) — never a stale scan over a fresher feed
+	-- cheapest non-ours through the resolver: live book when it's the
+	-- freshest source, mesh beacon when newer, emitted row otherwise —
+	-- never a stale scan over a fresher feed
 	local e0 = GM.ItemEntry(id)
-	local cheapest = GM.AH.BookLive() and GM.AH.BookCheapest(id)
-		or (e0 and (e0.mbx or e0.mb))
+	local cheapest = e0 and (e0.mbx ~= math.huge and e0.mbx or e0.mb)
 	local unit, why = A.PriceFor(aOps, id, normal, cheapest)
 	if not unit then return nil, why or "?", normal, cheapest end
 	-- vendor floor: net after 5% cut + deposit must beat vendoring

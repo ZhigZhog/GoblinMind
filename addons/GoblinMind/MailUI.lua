@@ -273,7 +273,7 @@ local function Build()
 	tabHost:SetSize(124, 20)
 	tabHost:SetPoint("TOPLEFT", x, -34)
 	ui.pageTabs = W.PageTabs(tabHost,
-		{ { "inbox", "INBOX" }, { "send", "SEND" } },
+		{ { "inbox", "INBOX" }, { "send", "SEND" }, { "groups", "GROUPS" } },
 		function(key)
 			ui.page = key
 			ui.scroll = 0
@@ -645,6 +645,58 @@ function MU.Refresh()
 						GameTooltip:AddLine("COD due: " .. GM.Money(mail.cod), 1, 0.4, 0.4)
 					end
 					if shown then GameTooltip:Show() end
+				end)
+				row:SetScript("OnLeave", function() GameTooltip:Hide() end)
+			else
+				row:Hide()
+			end
+		end
+	elseif ui.page == "groups" then
+		-- GROUPS page: one row per group with a mailing op — the rule
+		-- it resolves and what's pending above keepQty; SCAN pushes
+		-- just that group's sends into the plan queue
+		for i, t in ipairs({ "GROUP", "RECIPIENT", "RULE", "PENDING", "ITEMS" }) do
+			ui.head[i]:SetText(t)
+		end
+		local rows = GM.Banking.MailableGroups and GM.Banking.MailableGroups()
+			or {}
+		ui.empty:SetText(not open and "open the mailbox"
+			or (#rows == 0 and "no mailing ops — set sendTo on a group" or ""))
+		ui.empty:SetShown(#rows == 0)
+		ui.foot:SetText("mailing ops live on groups (OpsUI) — SCAN sends "
+			.. "only that group's pending units · MAIL SCAN does all")
+		local maxScroll = math.max(0, #rows - vis)
+		ui.scroll = math.min(ui.scroll or 0, maxScroll)
+		W.ScrollText(ui.count, ui.scroll, vis, #rows)
+		for i = 1, VISIBLE do
+			local row = ui.rows[i]
+			local r = i <= vis and rows[i + ui.scroll] or nil
+			if r then
+				row:Show()
+				row.tipID = nil
+				row.c1:SetText(r.name)
+				row.c2:SetText("→ " .. r.to)
+				row.c3:SetText(format("keep %d%s", r.keep,
+					r.maxQ > 0 and (" · cap " .. r.maxQ) or ""))
+				row.c4:SetText(r.pend > 0 and ("×" .. r.pend) or "")
+				row.c4:SetTextColor(GM.RGB(r.pend > 0 and "accent" or "textDim"))
+				row.c5:SetText(r.n .. " it")
+				row.act.text:SetText("SCAN")
+				row.act.text:SetTextColor(GM.RGB(r.pend > 0 and "accent" or "textDim"))
+				local path = r.path
+				row.act:SetScript("OnClick", function()
+					GM.Banking.MailingScan(path)
+				end)
+				row:SetScript("OnEnter", function(self)
+					GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+					GameTooltip:SetText(r.path, 1, 1, 1)
+					GameTooltip:AddLine(
+						format("%d pending unit%s across %d item%s — "
+							.. "SCAN pushes send steps to the plan queue",
+							r.pend, r.pend == 1 and "" or "s",
+							r.n, r.n == 1 and "" or "s"),
+						0.8, 0.8, 0.75, true)
+					GameTooltip:Show()
 				end)
 				row:SetScript("OnLeave", function() GameTooltip:Hide() end)
 			else

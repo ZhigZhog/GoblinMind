@@ -171,6 +171,19 @@ end
 
 -- ============ receive path ============
 
+-- newest staged mb beacon for itemID on our scope — the read side of
+-- the mesh for ItemEntry's observation overlay: a beacon fresher than
+-- the local book AND the emit is the freshest min-buyout we know
+function M.LatestMB(itemID)
+	local st = GM.db and GM.db.mesh and GM.db.mesh.mb
+	if not st then return end
+	local scope = GM.Scope()
+	for i = #st, 1, -1 do
+		local r = st[i]
+		if r.i == itemID and (not r.s or r.s == scope) then return r end
+	end
+end
+
 local me
 local function Stage(list, cap, rec)
 	local st = GM.db.mesh[list]
@@ -209,9 +222,10 @@ local function OnAddon(_, prefix, msg, ctype, sender)
 			local i, m, s = rec:match("^(%d+):(%d+):(%d+)$")
 			if i and m and tonumber(m) > 0
 				and tonumber(m) < 1e12 then
+				-- supply rides as sup — Stage stamps q with the seq
 				Stage("mb", STAGE_CAP, { t = t, s = scope,
 					i = tonumber(i), m = tonumber(m),
-					q = tonumber(s) or 0 })
+					sup = tonumber(s) or 0 })
 			end
 		end
 	end
@@ -226,7 +240,7 @@ function M.Test()
 	Stage("ev", STAGE_CAP, { t = time(), s = GM.Scope(),
 		i = 2318, u = 40, p = 420, l = 2, c = "s" })
 	Stage("mb", STAGE_CAP, { t = time(), s = GM.Scope(),
-		i = 2589, m = 2500, q = 500 })
+		i = 2589, m = 2500, sup = 500 })
 	GM.Print("mesh: staged test event + beacon — reload to flush SV")
 end
 

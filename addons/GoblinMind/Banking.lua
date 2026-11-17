@@ -169,26 +169,64 @@ end
 
 -- ============ mailing scan ============
 
+-- One group's pending send set — shared by the scan and the mail
+-- window's GROUPS preview. Only groups where the path (or an
+-- ancestor) explicitly defines a mailing op participate; merged
+-- defaults would otherwise try to mail every grouped item.
+local function MailPreview(path)
+	if not HasOp(path, "mailing") then return end
+	local ops = GM.Groups.GetOpsForPath(path, "mailing")
+	local to = ops.sendTo
+	if type(to) ~= "string" or #to == 0 then return end
+	local maxQ = tonumber(ops.maxQty) or 0
+	local keep = tonumber(ops.keepQty) or 0
+	local items, pend = {}, 0
+	for id in GM.Groups.IterateItems(path) do
+		local have = CountIn("bags", id)
+		local qty = math.min(have - keep, maxQ > 0 and maxQ or math.huge)
+		if qty > 0 then
+			pend = pend + qty
+			items[#items + 1] = { id = id, qty = qty }
+		end
+	end
+	return { to = to, keep = keep, maxQ = maxQ,
+		pend = pend, items = items }
+end
+
+-- rows for the mail window's GROUPS page: every group with a mailing
+-- op, its resolved recipient/rule and how much is pending now
+function B.MailableGroups()
+	local out = {}
+	for _, g in ipairs(GM.Groups.List()) do
+		local p = MailPreview(g.path)
+		if p then
+			out[#out + 1] = { path = g.path,
+				name = GM.Groups.Leaf(g.path), to = p.to,
+				keep = p.keep, maxQ = p.maxQ,
+				pend = p.pend, n = #p.items }
+		end
+	end
+	return out
+end
+
 -- Items in groups whose mailing op names a recipient and whose bag
 -- count exceeds keepQty → send steps. maxQty caps per-send units.
-function B.MailingScan()
+-- onlyPath restricts the scan to one group (the GROUPS page's row
+-- action); nil scans all op'd groups.
+function B.MailingScan(onlyPath)
 	if not (MailFrame and MailFrame:IsShown()) then
 		GM.Print(GM.CC("warn") .. "mailing needs the mailbox open|r")
 		return
 	end
 	local steps = {}
 	for _, g in ipairs(GM.Groups.List()) do
-		local ops = GM.Groups.GetOpsForPath(g.path, "mailing")
-		local to = ops.sendTo
-		if HasOp(g.path, "mailing") and type(to) == "string" and #to > 0 then
-			local maxQ = tonumber(ops.maxQty) or 0
-			local keep = tonumber(ops.keepQty) or 0
-			for id in GM.Groups.IterateItems(g.path) do
-				local have = CountIn("bags", id)
-				local qty = math.min(have - keep, maxQ > 0 and maxQ or math.huge)
-				if qty > 0 then
-					tinsert(steps, { kind = "mail", itemID = id, qty = qty,
-						to = to, name = GM.ItemName(id) })
+		if not onlyPath or g.path == onlyPath then
+			local p = MailPreview(g.path)
+			if p then
+				for _, it in ipairs(p.items) do
+					tinsert(steps, { kind = "mail", itemID = it.id,
+						qty = it.qty, to = p.to,
+						name = GM.ItemName(it.id) })
 				end
 			end
 		end

@@ -85,14 +85,32 @@ Primary data = the in-house book feed below.
   `addons/GoblinMind_Data/Data.lua` IS tracked on purpose: it's the
   generated data payload, not personal settings.
 - **`GM.AH.BookLive()`** (AH.lua) is the in-game half of that rule:
-  `BookAge() < DataAge()` — freshest source wins. Every "is the book
-  fresh enough" decision gate goes through it (tooltip source labels
-  + `BookMin`, auctioning `cheapest` + sync-scan fast paths,
-  MyAuctions stale warning). Do NOT write `BookAge() < 300`-style
-  fixed thresholds for source selection — a 40m backend beat a 7h
-  book and the fixed gate still picked the book (the bug that
-  prompted this). Dedup gates like `BookAge() < 30` ("don't rebuild
-  a just-built book") are a different semantic — keep them fixed.
+  `BookAge() + 2 < DataAge()` — freshest source wins, with a 2s
+  epsilon because the emit folds the book's own timestamp into
+  `dataAge` (a strict `<` would let the book beat the emit that
+  already contains it by one tick). Every "is the book fresh
+  enough" decision gate goes through it (tooltip source labels,
+  auctioning sync-scan fast paths, MyAuctions stale warning). Do
+  NOT write `BookAge() < 300`-style fixed thresholds for source
+  selection — a 40m backend beat a 7h book and the fixed gate
+  still picked the book (the bug that prompted this). Dedup gates
+  like `BookAge() < 30` ("don't rebuild a just-built book") are a
+  different semantic — keep them fixed.
+- **Universal source pipeline** (Core.lua `GM.ItemEntry`): the
+  emitted DB row is the base, but OBSERVATION fields `mb`/`mbx`/
+  `sup`/`n` are overlaid per-item from the freshest of three
+  sources — live book when `BookLive()`, mesh `M` beacons
+  (`GM.Mesh.LatestMB`) when newer than both book and emit, emitted
+  row otherwise. Book also supplies obs fields when the emit has
+  no row for the item (stale provenance beats a blank). Model
+  fields (`p`/`mkt`/`hist`/`vel`/region) stay emitted — pricing is
+  the brain's job. Winners are tagged `_src`/`_srcT` on the
+  returned row (`"book" | "mesh" | nil`=emit); tooltips and stat
+  panels must read provenance from the tag, never re-decide
+  freshness locally. ALL value lookups (`ef` in Pricing, tooltip
+  lines, PlanQueue stats, Inventory undercut checks) already route
+  through `ItemEntry` — do not bypass it with direct `GM.AH.book`
+  reads for item values.
 - **Feed registry (`brain\feeds.json`)**: named feeds replace raw
   paths — `{"forever": {appdata, root, out[]}}`. Any command arg
   that resolves a feed name (`watch forever`, `book forever`,
@@ -322,6 +340,16 @@ Primary data = the in-house book feed below.
     nil for uncached items — use `GM.ItemName`/`GM.ItemIcon`
     (Core.lua) which call `RequestLoadItemDataByID`, and refresh via
     `GM.OnItemInfoLoaded(fn)` on `GET_ITEM_INFO_RECEIVED`.
+    **Partial-tuple trap (verified 2026-11-16 via `/goblin deprobe`)**:
+    uncached items return a name-only tuple — `name` populated,
+    quality/ilvl/equipLoc/classID all nil — so position-destructured
+    fields look "loaded" but silently gate-check false. Worse,
+    `C_Item.GetItemInfoInstant` is ABSENT. The dedicated static-data
+    APIs DO work: `C_Item.GetItemQualityByID`,
+    `C_Item.GetDetailedItemLevelInfo`, and (pending verify)
+    `C_Item.GetItemInventoryTypeByID` + global `IsEquippableItem`.
+    `Destroying.DisenchantDrops` gates on that matrix — keep new
+    equip-slot/class checks on it, not on tuple positions.
   - **AppData value encoding is BASE-32, not 36** (verified against
     TSM's own `UnpackData` — `tonumber(v,32)`, >6-char tokens split as
     `hi*2^30 + lo` since Lua's tonumber tops out at 32 bits). All

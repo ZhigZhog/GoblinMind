@@ -141,6 +141,46 @@ SlashCmdList.GOBLINMIND = function(msg)
 		GM.Crafting.CraftProbe(strtrim(msg:sub(11)))
 		return
 	end
+	if msg:sub(1, 7) == "deprobe" then
+		-- dump the raw GetItemInfo fields DisenchantDrops gates on, plus
+		-- its result — isolates client return-shape quirks vs table bugs
+		local id = tonumber(msg:match("(%d+)"))
+		if not id then
+			local _, link = GameTooltip and GameTooltip:GetItem()
+			id = link and tonumber(link:match("item:(%d+)")) or GM.lastTooltipItemID
+		end
+		if not id then GM.Print("usage: /goblin deprobe [itemID] (or hover an item)") return end
+		local info = C_Item and C_Item.GetItemInfo or GetItemInfo
+		local n, l, q, il, rl, cl, sc, ms, eq, tx, sp, cid = info and info(id)
+		local cnt = info and select('#', info(id)) or 0
+		local qfn = C_Item and C_Item.GetItemQualityByID
+		local lfn = C_Item and C_Item.GetDetailedItemLevelInfo
+		local tfn = C_Item and C_Item.GetItemInventoryTypeByID
+		local efn = _G.IsEquippableItem
+		GM.Print(format("deprobe %d: name=%s q=%s ilvl=%s equipLoc=%s classID=%s (ret=%d)",
+			id, tostring(n), tostring(q), tostring(il), tostring(eq), tostring(cid), cnt))
+		GM.Print(format("  alt: qByID=%s dlv=%s invType=%s equippable=%s",
+			tostring(qfn and qfn(id)), tostring(lfn and lfn(id)),
+			tostring(tfn and tfn(id)), tostring(efn and efn(id))))
+		for i = 2, min(6, GameTooltip:NumLines() or 0) do
+			local fs = _G["GameTooltipTextLeft" .. i]
+			local s = fs and fs:GetText()
+			if s and s ~= "" and not s:find("Soldier") then
+				GM.Print(format("  tipL%d: %s", i, s:sub(1, 40)))
+			end
+		end
+		local d = GM.Destroying and GM.Destroying.DisenchantDrops
+		local drops = d and d(id)
+		if drops then
+			for _, r in ipairs(drops) do
+				GM.Print(format("  %s x%d-%d ~%d%%", GM.ItemNameOr(r.id),
+					r.lo, r.hi, r.pct))
+			end
+		else
+			GM.Print("  DisenchantDrops = nil")
+		end
+		return
+	end
 	if msg:sub(1, 10) == "crafttrace" then
 		GM.Crafting.trace = not GM.Crafting.trace
 		GM.Print("craft trace " .. (GM.Crafting.trace and "ON" or "OFF"))
@@ -433,13 +473,45 @@ function GM.RegionAge()
 end
 
 -- realm-scoped items win; flat `items` is the single-realm/legacy
--- fallback the brain also fills with the primary scope
+-- fallback the brain also fills with the primary scope.
+--
+-- Universal source pipeline: the emitted row is the base, but
+-- OBSERVATION fields (mb/mbx/sup/n — things the AH reported, not
+-- model outputs) get overlaid from fresher local sources: the live
+-- book when its snapshot is newer than the emit, then mesh beacons
+-- newer than both. Model fields (p/mkt/hist/vel/region stats) stay
+-- emitted — pricing is the brain's job. `_src`/`_srcT` tag which
+-- observation source won, for honest tooltips.
 function GM.ItemEntry(itemID)
 	local db = GoblinMindDB
 	if not db then return nil end
 	local r = db.realms and db.realms[GM.Scope()]
 	local t = (r and r.items) or db.items
-	return t and t[itemID]
+	local e = t and t[itemID]
+	local book = GM.AH and GM.AH.book and GM.AH.book[itemID]
+	local bookLive = book and GM.AH.BookLive and GM.AH.BookLive()
+	local beacon = GM.Mesh and GM.Mesh.LatestMB and GM.Mesh.LatestMB(itemID)
+	if not e and not book and not beacon then return nil end
+	local out = {}
+	if e then for k, v in pairs(e) do out[k] = v end end
+	-- book obs overlay: wins when it's the freshest source (BookLive),
+	-- and is still the fallback when the emit has no row for the item
+	-- at all (stale data with a provenance tag beats a blank)
+	if book and (bookLive or not e) then
+		out.mb, out.mbx, out.sup, out.n =
+			book.mb, book.mbx, book.sup, book.n
+		out._src, out._srcT = "book", GM.AH.bookT
+	end
+	-- a mesh beacon newer than both the book snapshot and the emit is
+	-- the freshest min-buyout known — take it for mb AND mbx (beacons
+	-- report market min, never "our own cheapest") and ride supply
+	if beacon and beacon.t > (out._srcT or db.generated or 0) then
+		out.mb = beacon.m
+		out.mbx = beacon.m
+		if beacon.sup and beacon.sup > 0 then out.sup = beacon.sup end
+		out._src, out._srcT = "mesh", beacon.t
+	end
+	return out
 end
 
 -- TSM fallback price (copper) — the shim's honest baseline before the model lands.

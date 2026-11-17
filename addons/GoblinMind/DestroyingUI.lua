@@ -2,7 +2,7 @@ local _, GM = ...
 
 -- Part 13 #6: the destroying results window — TSM's Destroying module
 -- surface. A browsable table of bag items whose destroy value
--- (max of vendor price and TSM's `destroy` source) beats the market:
+-- (max of vendor price and disenchant EV) beats the market:
 -- vendoring/disenchanting beats listing. Per-row DESTROY is armed
 -- like every irreversible button here — first click arms, second
 -- sells ONE stack at an open merchant. The SCAN → PLAN button keeps

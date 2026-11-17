@@ -1115,7 +1115,6 @@ function PQ.Refresh()
 	end
 	local dbTxt = table.concat(parts, " ")
 	local bAge = GM.AH.BookAge and GM.AH.BookAge()
-	local bookFresh = bAge and bAge < 600
 	local bookTxt = ""
 	if bAge and bAge < math.huge then
 		bookTxt = (bAge > 300 and GM.CC("warn") or GM.CC("textDim")) .. " · "
@@ -1217,16 +1216,19 @@ function PQ.Refresh()
 	set("hist", (entry and entry.hist)
 		and (GM.Money(entry.hist) .. " " .. (pct(p, entry.hist) or "")))
 	set("recent", entry and pct(entry.recent, p))
-	local minBuy = (bookFresh and GM.AH.BookMin(dispID))
-		or (scanMode and curStep.cheapest)
+	-- in-flight scan result is fresher than any stored source;
+	-- entry.mb otherwise (book/mesh overlay already applied by ItemEntry)
+	local minBuy = (scanMode and curStep.cheapest)
 		or (PQ.scan and PQ.scan.cheapest)
+		or (entry and entry.mb)
 	set("min buy", minBuy and GM.Money(minBuy))
 	-- velocity is regional volume, not realm-local sell-time certainty
 	set("region/day", entry and entry.vel and (entry.vel >= 1000
 		and format("%.0fk", entry.vel / 1000) or tostring(entry.vel)))
-	local liveSup = bookFresh and GM.AH.BookSupply(dispID)
-	ui.statLabel["units"]:SetText(liveSup and "live units" or "DB auctions")
-	set("units", (liveSup or (entry and entry.sup)) and tostring(liveSup or entry.sup))
+	local obsSrc = entry and entry._src
+	ui.statLabel["units"]:SetText(obsSrc == "book" and "live units"
+		or obsSrc == "mesh" and "mesh units" or "DB auctions")
+	set("units", entry and entry.sup and tostring(entry.sup))
 	local rs = entry and entry.reset
 	set("reset", type(rs) == "table"
 		and (GM.Money(rs.below) .. " · ev " .. GM.Money(rs.ev))

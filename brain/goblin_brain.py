@@ -1169,7 +1169,7 @@ def cmd_book(sv_arg, out_paths, root=None, feed=None, realm=None):
             't': e.get('t') or time.time(),
             'items': {str(int(iid)): {'mb': e.get('m'),
                                       'mbx': e.get('m'),
-                                      'sup': e.get('q') or 0, 'n': 1}},
+                                      'sup': e.get('sup') or 0, 'n': 1}},
             'remote': True})
     if mesh_ev:
         st = _load_api_state()

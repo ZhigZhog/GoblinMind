@@ -88,11 +88,19 @@ local SRC = {
 		return GM.Crafting and GM.Crafting.MatPrice and GM.Crafting.MatPrice(id)
 			or nil
 	end,
-	disenchant          = function() return nil end,
-	-- destroy = TSM's disenchant/mill/prospect expected value while TSM
-	-- is installed; vendorsell is the honest floor either way
+	-- disenchant EV is ours now — Destroying.DisenchantEV runs the
+	-- vanilla ilvl-bracket table (dust/essence/shard/nexus) priced
+	-- from dbmarket; TSM's per-item destroy table still wins when
+	-- installed and higher
+	disenchant          = function(id)
+		return GM.Destroying and GM.Destroying.DisenchantEV
+			and GM.Destroying.DisenchantEV(id) or nil
+	end,
 	destroy             = function(id)
 		local best = GetInfo and select(11, GetInfo(id)) or nil
+		local de = GM.Destroying and GM.Destroying.DisenchantEV
+			and GM.Destroying.DisenchantEV(id)
+		if de and (not best or de > best) then best = de end
 		if TSMAPI_FOUR and TSMAPI_FOUR.CustomPrice then
 			local ok, v = pcall(TSMAPI_FOUR.CustomPrice.GetValue,
 				"destroy", "i:" .. id)

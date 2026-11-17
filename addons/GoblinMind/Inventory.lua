@@ -439,8 +439,10 @@ function GM.Inventory.MineRows()
 	for fp, a in pairs(auctionCache) do
 		if a.itemID then
 			local mkt = GM.Price("dbmarket", a.itemID)
-			local cheap = GM.AH.BookCheapest
-				and GM.AH.BookCheapest(a.itemID)
+			-- mbx through the resolver: live book when it's freshest,
+			-- mesh beacon when newer still, emitted row otherwise
+			local e0 = GM.ItemEntry(a.itemID)
+			local cheap = e0 and e0.mbx ~= math.huge and e0.mbx
 			local undercut = cheap and a.buyout
 				and cheap < a.buyout or nil
 			-- tLeft is remaining-seconds at capture — rebase it or the

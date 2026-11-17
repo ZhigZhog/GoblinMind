@@ -482,7 +482,7 @@ local function Build()
 	-- SVs populate after file load and would overwrite the frame global,
 	-- leaving UISpecialFrames pointing at a plain table (IsShown crash)
 	local f = CreateFrame("Frame", "GoblinMindSettingsFrame", UIParent)
-	f:SetSize(620, 560)
+	f:SetSize(620, 716)
 	f:SetPoint("CENTER", -60, 10)
 	f:SetFrameStrata("HIGH")
 	f:SetToplevel(true)
@@ -673,6 +673,82 @@ local function Build()
 		if GM.BugReport then GM.BugReport.Show() end
 	end)
 
+	-- ===== CUSTOM PRICE SOURCES =====
+	-- GUI for what used to be slash-only (/goblin price set/unset):
+	-- name + expression rows into GoblinMindPrices.customSources,
+	-- validated through the real parser on add
+	local src = Panel(f, 10, -556, 600, 148, "CUSTOM PRICE SOURCES")
+	ui.srcName = EditBox(src, 110)
+	ui.srcName:SetPoint("TOPLEFT", 12, -26)
+	ui.srcExpr = EditBox(src, 240)
+	ui.srcExpr:SetPoint("TOPLEFT", ui.srcName, "TOPRIGHT", 6, 0)
+	local addBtn = CreateFrame("Button", nil, src)
+	addBtn:SetSize(46, 20)
+	addBtn:SetPoint("TOPLEFT", ui.srcExpr, "TOPRIGHT", 6, 0)
+	GM.Panel(addBtn, "contHigh")
+	addBtn.text = GM.MakeFontString(addBtn, GM.FONT_BOLD, 9, "accent")
+	addBtn.text:SetPoint("CENTER")
+	addBtn.text:SetText("ADD")
+	ui.srcMsg = GM.MakeFontString(src, GM.FONT, 9, "textDim")
+	ui.srcMsg:SetPoint("LEFT", addBtn, "RIGHT", 8, 0)
+	ui.srcMsg:SetWidth(160)
+	ui.srcMsg:SetJustifyH("LEFT")
+	local function AddSource()
+		local name = strtrim(ui.srcName:GetText() or ""):lower()
+		local expr = strtrim(ui.srcExpr:GetText() or "")
+		if not name:match("^[%w]+$") then
+			ui.srcMsg:SetText(GM.CC("warn") .. "name = letters/digits only|r")
+			return
+		end
+		if expr == "" then
+			ui.srcMsg:SetText(GM.CC("warn") .. "expression required|r")
+			return
+		end
+		-- parse before storing: a syntax error lands here, not
+		-- silently in every op field that later names it
+		local _, err = GM.Pricing.Eval(expr, GM.PlanQueue.itemID)
+		if err and err ~= "empty" then
+			ui.srcMsg:SetText(GM.CC("err") .. tostring(err) .. "|r")
+			return
+		end
+		GoblinMindPrices.customSources[name] = expr
+		ui.srcName:SetText("")
+		ui.srcExpr:SetText("")
+		ui.srcMsg:SetText(GM.CC("pos") .. "saved|r")
+		S.Refresh()
+	end
+	addBtn:SetScript("OnClick", AddSource)
+	ui.srcExpr:SetScript("OnEnterPressed", AddSource)
+	-- pooled list rows — name · expression · DEL, sorted
+	ui.srcRows = {}
+	for i = 1, 5 do
+		local row = CreateFrame("Frame", nil, src)
+		row:SetSize(576, 18)
+		row:SetPoint("TOPLEFT", 12, -52 - (i - 1) * 18)
+		row.n = GM.MakeFontString(row, GM.FONT_MED, 10, "accent")
+		row.n:SetPoint("LEFT")
+		row.n:SetWidth(110)
+		row.n:SetJustifyH("LEFT")
+		row.e = GM.MakeFontString(row, GM.FONT, 9, "text")
+		row.e:SetPoint("LEFT", 118, 0)
+		row.e:SetWidth(398)
+		row.e:SetJustifyH("LEFT")
+		row.e:SetWordWrap(false)
+		local del = CreateFrame("Button", nil, row)
+		del:SetSize(30, 14)
+		del:SetPoint("RIGHT")
+		GM.Panel(del, "contHigh")
+		del.text = GM.MakeFontString(del, GM.FONT_BOLD, 8, "err")
+		del.text:SetPoint("CENTER")
+		del.text:SetText("DEL")
+		row.del = del
+		ui.srcRows[i] = row
+	end
+	local hint = GM.MakeFontString(src, GM.FONT, 9, "secondary")
+	hint:SetPoint("BOTTOMLEFT", 12, 6)
+	hint:SetText("usable in any op price field · builtins can't be "
+		.. "shadowed · >5 manage via /goblin price set")
+
 	S.Relayout()
 end
 
@@ -725,6 +801,31 @@ function S.Refresh()
 	ui.fmt.paint()
 	for _, r in ipairs(ui.ttRows or {}) do
 		if r.ctl.paint then r.ctl.paint() end
+	end
+	-- custom price source rows
+	if ui.srcRows then
+		local names = {}
+		for n in pairs((GoblinMindPrices
+			and GoblinMindPrices.customSources) or {}) do
+			names[#names + 1] = n
+		end
+		sort(names)
+		local cs = GoblinMindPrices.customSources
+		for i, row in ipairs(ui.srcRows) do
+			local n = names[i]
+			if n then
+				row:Show()
+				row.n:SetText(n)
+				row.e:SetText(cs[n])
+				local key = n
+				row.del:SetScript("OnClick", function()
+					GoblinMindPrices.customSources[key] = nil
+					S.Refresh()
+				end)
+			else
+				row:Hide()
+			end
+		end
 	end
 end
 

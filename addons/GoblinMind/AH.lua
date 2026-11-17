@@ -460,7 +460,10 @@ end
 -- its snapshot is newer than the backend's upstream data. No DB →
 -- the book always wins; no book → never live.
 function GM.AH.BookLive()
-	return GM.AH.BookAge() < (GM.DataAge() or math.huge)
+	-- +2s epsilon: when the emit folded this very book snapshot in
+	-- (scope dataAge == book_t), the two ages differ by a tick and a
+	-- strict < would let the book beat the emit that already holds it
+	return GM.AH.BookAge() + 2 < (GM.DataAge() or math.huge)
 end
 
 -- a full scan of either kind is in flight — used to disable the button

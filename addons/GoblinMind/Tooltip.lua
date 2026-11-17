@@ -248,11 +248,25 @@ local function P_VendorSell(t, id)
 end
 
 local function P_Destroy(t, id)
-	-- disenchant/mill/prospect/transform value lands with Part 10;
-	-- registered now so the setting + line exist
 	local v = Price("destroy", id)
-	if not v then return end
-	t:AddItemValueLine("Destroy Value", v)
+	-- "full" format appends the disenchant drop table — same shape as
+	-- the gathering node tooltips: name ×lo–hi ~pct% · price ea. The
+	-- table is data (not priced) — render it even when the EV itself
+	-- is honest-nil so the drop chances are never gated on mat prices
+	local drops = Opts().destroyTooltipFormat == "full"
+		and GM.Destroying and GM.Destroying.DisenchantDrops
+		and GM.Destroying.DisenchantDrops(id)
+	if v then t:AddItemValueLine("Destroy Value", v) end
+	if not drops then return end
+	for _, d in ipairs(drops) do
+		local p = Price("dbmarket", d.id)
+		local range = d.lo == d.hi and ("×" .. d.lo)
+			or format("×%d–%d", d.lo, d.hi)
+		t:AddTextLine(
+			"    " .. GM.CC("text") .. GM.ItemNameOr(d.id) .. "|r "
+				.. GM.CC("textDim") .. range .. " ~" .. d.pct .. "%|r",
+			p and (MoneyFmt(p) .. " ea") or nil)
+	end
 end
 
 local function P_Convert(t, id)
@@ -288,25 +302,24 @@ end
 -- ============ section 2: AuctionDB ============
 
 local function A_RightText(id)
+	-- provenance comes from the resolver itself: ItemEntry tags the
+	-- observation source that won (_src/_srcT) — book, mesh, or the
+	-- emitted row — so the label always matches the value shown
 	local e = GM.ItemEntry(id)
-	-- label the winning source: live scan when it's freshest
-	-- (tagged), backend otherwise — never a book age on DB values
-	if GM.AH.BookLive and GM.AH.BookLive() then
-		local age = GM.AH.BookAge()
-		local n = GM.AH.BookSupply(id) or (e and e.sup) or 0
-		return GM.CC("text") .. format("%d auctions", n) .. "|r ("
-			.. GM.CC(age < 300 and "pos" or "warn") .. AgeStr(time() - age)
-			.. GM.CC("pos") .. " live|r)"
-	end
 	local n = e and e.sup or 0
-	local dAge = GM.DataAge()
+	local src, srcT = e and e._src, e and e._srcT
+	local age = srcT and (time() - srcT) or GM.DataAge()
+	local tag = src == "book" and " book" or src == "mesh" and " mesh" or ""
 	return GM.CC("text") .. format("%d auctions", n) .. "|r ("
-		.. GM.CC("warn") .. (dAge and AgeStr(time() - dAge) or "no data") .. "|r)"
+		.. GM.CC(age and age < 300 and "pos" or "warn")
+		.. (age and AgeStr(time() - age) or "no data")
+		.. GM.CC("pos") .. tag .. "|r)"
 end
 
 local function P_MinBuyout(t, id)
-	local v = GM.AH.BookLive and GM.AH.BookLive() and GM.AH.BookMin(id)
-		or Price("dbminbuyout", id)
+	-- observation source resolved inside ItemEntry (book → mesh → emit);
+	-- ef reads the overlaid field
+	local v = Price("dbminbuyout", id)
 	if v then t:AddItemValueLine("Min Buyout", v) end
 end
 
@@ -715,9 +728,18 @@ local function Fill(itemID, tooltip)
 	local lr, lg, lb = GM.RGB("textDim")
 	local rr, rg, rb = GM.RGB("text")
 	local ar, ag, ab = GM.RGB("accent")
-	local age = GM.DataAge()
-	local stale = age and age > (GM.db and GM.db.dataMaxAge or 7200)
-		and format("DB %dm old — /reload or FULL SCAN", age / 60) or nil
+	-- freshness is per-leg: the backend feed (RealmAge) and the local
+	-- book have separate clocks — a fresh DB next to a stale book is
+	-- not stale data, it's a stale book
+	local maxAge = GM.db and GM.db.dataMaxAge or 7200
+	local dbAge = GM.RealmAge() or GM.DataAge()
+	local bAge = GM.AH and GM.AH.BookAge and GM.AH.BookAge() or math.huge
+	local fresh = math.min(dbAge or math.huge, bAge)
+	local parts = {}
+	if dbAge and dbAge > maxAge then tinsert(parts, format("feed %dm", dbAge / 60)) end
+	if bAge < math.huge and bAge > maxAge then tinsert(parts, format("book %dm", bAge / 60)) end
+	local stale = fresh ~= math.huge and fresh > maxAge
+		and table.concat(parts, " + ") .. " old — /reload or FULL SCAN" or nil
 
 	if o.embeddedTooltip then
 		if sideTip then sideTip:Hide() end
