@@ -618,6 +618,15 @@ Primary data = the in-house book feed below.
   silently never fired on this client). The staged report rides the
   ~90s SV autosave to the watcher; the chat message tells the user
   to /reload if they want it sent now.
+- **Centered single-line labels anchor, don't justify**
+  (issue #9 follow-up, 2026-11-18): `SetAllPoints()` +
+  `SetJustifyH("CENTER")` on a fontstring does NOT survive —
+  `FixupFonts` re-runs `SetFont` on every fontstring at login
+  (Core.lua) and on each window's first show (PlanQueue), and the
+  justify doesn't persist through it on this client. Use
+  `SetPoint("CENTER")` + `SetWordWrap(false)` instead — the
+  `W.Btn`/`W.SwitchBtn` pattern; anchor-based centering is
+  justify-independent. Applies to any single-line centered text.
 - **Profession recipe pump** (`Crafting.lua` `ProfPump`, issue #7):
   recipes only enumerate under an OPEN tradeskill line on this
   client, so a fresh profile captures nothing until each prof is
