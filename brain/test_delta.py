@@ -211,6 +211,34 @@ check('unmatched shape unaffected by repeat rule',
 check('matched shape demoted on repeat',
       len(tens) == 2 and tens[1][5] == 'i', repr(ev))
 
+# --- scenario 13: coordinated wall pull -> 'i' --------------------
+# Three distinct large lot shapes vanishing in ONE window is a seller
+# pulling anchors, not three bulk buyers — all demote. A singleton
+# big lot stays 's' (a real bulk buy is possible). Two+ IDENTICAL
+# big lots gone together is self-coordinated too.
+reset()
+run(book({'112:8400:8000:3': 1, '112:7000:8000:3': 1,
+          '112:2400:8000:3': 1, '112:5:4000:3': 4}, NOW - 1800))
+run(book({'112:5:4000:3': 4}, NOW))
+ev = events(112)
+pull = [e for e in ev if e[1] >= 2400]
+check('coordinated pull: all big lots demoted',
+      len(pull) == 3 and all(e[5] == 'i' for e in pull), repr(ev))
+
+reset()
+run(book({'113:8400:8000:3': 2, '113:5:4000:3': 4}, NOW - 1800))
+run(book({'113:5:4000:3': 4}, NOW))
+ev = events(113)
+check('2 identical big lots gone = pull',
+      len(ev) == 1 and ev[0][5] == 'i' and ev[0][3] == 2, repr(ev))
+
+reset()
+run(book({'114:8400:8000:3': 1, '114:5:4000:3': 4}, NOW - 1800))
+run(book({'114:5:4000:3': 4}, NOW))
+ev = events(114)
+check('singleton big lot keeps s',
+      len(ev) == 1 and ev[0][5] == 's', repr(ev))
+
 print()
 if FAILURES:
     print('%d FAILURES' % len(FAILURES))

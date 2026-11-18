@@ -763,6 +763,14 @@ Primary data = the in-house book feed below.
   client). Each row's `gloss` shows on an invisible hover Button
   over the label (the only place glosses surface). Ledger `range`
   rows emit only when `TT.CurrentPreset() ~= "simple"` (R6).
+- **Delta-engine pull rule** (2026-11-18, fifth layer): ≥3 distinct
+  large lot shapes (qty ≥500/lot) vanishing in ONE window = a
+  coordinated anchor pull, not N independent bulk buyers — demote
+  the confident ones to 'i'. Same for ≥2 identical big lots inside
+  one event (`e[3]>=2`). A singleton big lot stays 's' (a real bulk
+  buy is possible). Retro-cleaned 23 events; the ammo-wall churn
+  signature. Layer order: relist-match → tl window → off-market
+  median → repeat fingerprint → coordinated pull.
 - **Delta-engine repeat rule** (2026-11-18): a disappearance whose
   exact lot shape (qty-per-lot + unit price — qty recovered as
   `e[1]//e[3]`) already vanished in an earlier window demotes to

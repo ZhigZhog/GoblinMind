@@ -1137,6 +1137,7 @@ def delta_record(books):
             # relist pools: appeared lots keyed by unit price (restack)
             # and by stack size (reprice). Deduct as they match so one
             # new lot can't explain away two old ones
+            item_events = []
             by_unit, by_qty = {}, {}
             for ap, an in (appt_by_iid.get(iid) or {}).items():
                 _, aq, au = ap.split(':', 2)
@@ -1185,9 +1186,24 @@ def delta_record(books):
                                 and e[1] // (e[3] or 1) == qty):
                             cls = 'i'
                             break
-                scope_sales.setdefault(str(iid), []).append(
+                item_events.append(
                     [now, qty * left, unit, left,
                      prev_lots_iid.get(iid_s, 0), cls])
+            # coordinated pull: several LARGE lot shapes vanishing in
+            # one window is one seller pulling anchor walls, not N
+            # independent bulk buyers — demote the confident ones to
+            # inconclusive. Same story when >=2 identical big lots
+            # vanish together inside one event
+            big = [e for e in item_events
+                   if e[1] // (e[3] or 1) >= 500]
+            for e in big:
+                if e[3] >= 2 and e[5] in ('s', 'u'):
+                    e[5] = 'i'
+            if len(big) >= 3:
+                for e in big:
+                    if e[5] in ('s', 'u'):
+                        e[5] = 'i'
+            scope_sales.setdefault(str(iid), []).extend(item_events)
         for iid_s, ev in scope_sales.items():
             scope_sales[iid_s] = [
                 e for e in ev if now - e[0] < HIST_KEEP]
