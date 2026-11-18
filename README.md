@@ -5,7 +5,7 @@ Forever** (interface `16001`). Price model, execution planner, crafting
 planner, ledger, group/operation system, session takeovers — TSM-styled
 dark UI, **no TSM required**.
 
-**v0.5.0-alpha** — public alpha. Expect rough edges; bug reports file
+**v0.5.3-alpha** — public alpha. Expect rough edges; bug reports file
 themselves to the private tracker (see Bug reports below).
 
 ## Requirements
@@ -33,9 +33,12 @@ themselves to the private tracker (see Bug reports below).
    - To **host** the shared backend on your machine, run
      `install.bat --host` (starts `goblin_server.py` and adds the
      firewall rule — admin shell needed for the rule).
-4. `/reload` (or relog). On first login a **backend onboarding** popup
-   offers CONNECT / SKIP / LATER — optional; every feature works
-   offline. Re-open it any time with `/goblin backend`.
+4. `/reload` (or relog). First login walks a two-page onboarding:
+   **page 1 backend** (CONNECT / SKIP / LATER — optional; every feature
+   works offline — re-open with `/goblin backend`), **page 2 import**
+   (detects TSM and similar addons, lists what each import brings —
+   groups/items/operations/custom price sources/saved searches — with
+   a per-row IMPORT button; re-open with `/goblin import`).
 5. Open the auction house once and hit **FULL SCAN** in the GoblinMind
    AH surface — that builds the first price book. The watcher folds it
    into the emitted DB on the next SavedVariables flush (`/reload`).
@@ -204,6 +207,7 @@ without the backend — your own scans and the mesh are sufficient.
 | `/goblin price <item> <expr>` | per-item custom price source |
 | `/goblin inv <item>` | inventory breakdown for an item |
 | `/goblin backend` | backend onboarding / reconfigure |
+| `/goblin import` | addon-settings import screen (TSM etc.) |
 | `/goblin status` | feed, backend, and mesh health |
 | `/goblin perf` | 8s diagnostic sample (counters, frame walk) |
 | `/goblin settings` / `options` | profiles, import/export, bug reports |
