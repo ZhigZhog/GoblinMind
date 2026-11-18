@@ -188,7 +188,7 @@ local function Panel(parent, x, w, title)
 	return W.ColPanel(parent, x, w, title, -34)
 end
 
-local function ListRow(parent, w)
+local function ListRow(parent, w, textW)
 	local r = CreateFrame("Button", nil, parent)
 	r:SetSize(w, ROW_H)
 	GM.Panel(r, "contLowest")
@@ -198,9 +198,10 @@ local function ListRow(parent, w)
 	r.text:SetJustifyH("LEFT")
 	r.sub = GM.MakeFontString(r, GM.FONT_MED, 8, "textDim")
 	r.sub:SetPoint("RIGHT", -6, 0)
-	r.sub:SetWidth(100)
+	r.sub:SetWidth(70)
+	r.sub:SetJustifyH("RIGHT")
 	r.sub:SetWordWrap(false)
-	r.text:SetWidth(170)
+	r.text:SetWidth(textW or (w - 10))
 	r.text:SetJustifyH("LEFT")
 	r.text:SetWordWrap(false)
 	return r
@@ -259,7 +260,7 @@ local function BuildUI()
 	ui.opPanel = opP
 	ui.opRows = {}
 	for i = 1, OP_ROWS do
-		local r = ListRow(opP, 184)
+		local r = ListRow(opP, 184, 104)
 		r:SetPoint("TOPLEFT", 8, -24 - (i - 1) * (ROW_H + 2))
 		r:Hide()
 		ui.opRows[i] = r

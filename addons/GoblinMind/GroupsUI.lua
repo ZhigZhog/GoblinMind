@@ -445,8 +445,6 @@ local function BuildUI()
 		row.text:SetPoint("LEFT", 2, 0)
 		row.text:SetWidth(168)
 		row.text:SetJustifyH("LEFT")
-		row.text:SetWidth(40)
-		row.text:SetJustifyH("LEFT")
 		row.text:SetWordWrap(false)
 		row:SetScript("OnClick", function(self)
 			-- a drop resolving on this row shouldn't also select it —

@@ -212,13 +212,13 @@ function DB.MountHome(host)
 		fs:SetPoint("TOPLEFT", 10, -24 - (i - 1) * 22)
 		fs:SetWidth(half - 20)
 		fs:SetJustifyH("LEFT")
+		fs:SetWordWrap(false)
 		taskRows[i] = fs
 	end
 
 	local acct = Panel(host, { "TOPLEFT", half + 10, 0 }, half, 170, "ACCOUNT")
 	local gold = GM.MakeFontString(acct, GM.FONT_BOLD, 14, "accent")
 	gold:SetPoint("TOPLEFT", 10, -26)
-	fs:SetWordWrap(false)
 	local acctSub = GM.MakeFontString(acct, GM.FONT, 9, "secondary")
 	acctSub:SetPoint("TOPLEFT", gold, "BOTTOMLEFT", 0, -6)
 	acctSub:SetWidth(half - 20)
