@@ -644,6 +644,18 @@ local function Build()
 	-- ===== TOOLTIP LINES =====
 	local tt = Panel(f, 10, -168, 600, 256, "TOOLTIP LINES")
 	ui.ttPanel = tt
+	-- preset sits with the grid it presets; display is derived —
+	-- any hand-toggled row reads "Custom"
+	local dl = GM.MakeFontString(tt, GM.FONT, 9, "textDim")
+	dl:SetPoint("TOPRIGHT", -96, -4)
+	dl:SetText("Tooltip detail")
+	ui.detail = CycleBtn(tt, 84,
+		function() return GM.Tooltip.CurrentPreset() end,
+		function(v) GM.Tooltip.ApplyPreset(v) end,
+		{ "simple", "trader", "everything" },
+		{ simple = "Simple", trader = "Trader",
+		  everything = "Everything", custom = "Custom" })
+	ui.detail:SetPoint("TOPRIGHT", -8, -2)
 	-- clip host + sliding inner so extra rows scroll instead of
 	-- spilling past the panel edge
 	local ttScroll = CreateFrame("Frame", nil, tt)
@@ -836,6 +848,7 @@ function S.Refresh()
 	ui.embed.paint()
 	ui.mod.paint()
 	ui.fmt.paint()
+	if ui.detail then ui.detail.paint() end
 	for _, r in ipairs(ui.ttRows or {}) do
 		if r.ctl.paint then r.ctl.paint() end
 	end

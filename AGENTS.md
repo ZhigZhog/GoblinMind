@@ -731,5 +731,18 @@ Primary data = the in-house book feed below.
   `OnTradeSkillOpen` UI takeover so the window doesn't flash per
   line. Self-heals partial captures (new profession learned later
   pumps just that line).
+- **Tooltip detail presets** (tooltip-ux R3, 2026-11-19): Simple /
+  Trader / Everything live as fixed key→value maps in Tooltip.lua
+  (`PRESET_SIMPLE`/`PRESET_TRADER`; Everything = every descriptor's
+  richest non-"none" mode via `OnValue`). They write the SAME
+  per-entry keys the grid toggles write — no second render path, no
+  drift — and the control's shown state is derived:
+  `TT.CurrentPreset()` compares every descriptor's current value
+  (nil → registry `default`) against each map, so any hand-toggle
+  reads "Custom". The "Tooltip detail" CycleBtn sits top-right of
+  the TOOLTIP LINES panel; `S.Refresh` paints it and re-paints every
+  grid row (`ui.ttRows` `ctl.paint`), so apply = instant grid
+  update. Registry `default` fields now encode the SIMPLE set —
+  fresh installs get the lean tooltip without a stored preset.
 - Not yet registered on the Codebase Map (project started 2026-11-11,
   post-closure).

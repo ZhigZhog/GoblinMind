@@ -578,7 +578,7 @@ local function Sections()
 	local general = {
 		name = "Item",
 		entries = {
-			{ key = "groupNameTooltip", set = true, default = true,
+			{ key = "groupNameTooltip", set = true, default = false,
 				label = "Group",
 				gloss = "The GoblinMind group this item is filed under; its rules come from here.",
 				fn = P_Group },
@@ -604,15 +604,15 @@ local function Sections()
 		gloss = "Typical AH worth of the materials from disenchanting one. Only shown when it beats the vendor price.",
 		fn = P_Destroy })
 	tinsert(general.entries, { key = "convertTooltipFormat", set = "full",
-		default = "simple", label = "Convert value",
+		default = "none", label = "Convert value",
 		gloss = "Worth of what this turns into (e.g. combining essences). Not active yet.",
 		fn = P_Convert })
 	tinsert(general.entries, { key = "convertTooltipFormat", set = "simple",
-		default = "simple", label = "Convert value",
+		default = "none", label = "Convert value",
 		gloss = "Worth of what this turns into (e.g. combining essences). Not active yet.",
 		fn = P_Convert })
 	tinsert(general.entries, { key = "vendorBuyTooltip", set = true,
-		default = true, label = "Buy from vendor",
+		default = false, label = "Buy from vendor",
 		gloss = "What an NPC merchant charges you for one.",
 		fn = P_VendorBuy })
 	tinsert(general.entries, { key = "vendorSellTooltip", set = true,
@@ -624,12 +624,12 @@ local function Sections()
 		tinsert(general.entries, CustomSourceEntry(name))
 	end
 	tinsert(general.entries, { key = "inventoryTooltipFormat", set = "full",
-		default = "full", label = "You own",
+		default = "simple", label = "You own",
 		settingLabel = "How many you own",
 		gloss = "How many you have, and where.",
 		fn = P_InventoryFull })
 	tinsert(general.entries, { key = "inventoryTooltipFormat", set = "simple",
-		default = "full", label = "You own",
+		default = "simple", label = "You own",
 		settingLabel = "How many you own",
 		gloss = "Count across your bags, bank, mail, guild bank, and live auctions.",
 		fn = P_InventorySimple })
@@ -666,11 +666,11 @@ local function Sections()
 				{ key = "altMarketValue", module = "AuctionDB", set = "noTrend", default = "none", fn = function() end },
 				{ key = "altMarketValue", module = "AuctionDB", set = "withTrend", default = "none", fn = function() end },
 				{ key = "altHistorical", module = "AuctionDB", set = true, default = false, fn = function() end },
-				{ key = "regionMarketValue", module = "AuctionDB", set = "noTrend", default = "withTrend",
+				{ key = "regionMarketValue", module = "AuctionDB", set = "noTrend", default = "none",
 					label = "Typical (region)",
 					gloss = "Typical price averaged across every realm in your region.",
 					fn = function(t, id) P_RegionMarket(t, id, false) end },
-				{ key = "regionMarketValue", module = "AuctionDB", set = "withTrend", default = "withTrend",
+				{ key = "regionMarketValue", module = "AuctionDB", set = "withTrend", default = "none",
 					label = "Typical (region)",
 					gloss = "Typical price averaged across every realm in your region.",
 					fn = function(t, id) P_RegionMarket(t, id, true) end },
@@ -678,7 +678,7 @@ local function Sections()
 					label = "Long-run (region)",
 					gloss = "Long-run price across the whole region.",
 					fn = P_RegionHistorical },
-				{ key = "regionSale", module = "AuctionDB", set = true, default = true,
+				{ key = "regionSale", module = "AuctionDB", set = true, default = false,
 					label = "Sold for (region)",
 					gloss = "Average price that actually sold, not just listed. Can come from this realm's scans when fresher.",
 					fn = P_RegionSale },
@@ -694,15 +694,15 @@ local function Sections()
 					label = "±15% of price", settingLabel = "±15% reference",
 					gloss = "A fixed ±15% around the typical price, for reference only. It is not a forecast.",
 					fn = P_Band },
-				{ key = "vsTSM", module = "AuctionDB", set = true, default = true,
+				{ key = "vsTSM", module = "AuctionDB", set = true, default = false,
 					label = "vs TSM price",
 					gloss = "How GoblinMind's price compares with TradeSkillMaster's. Only shown when TSM is installed.",
 					fn = P_VsTSM },
-				{ key = "resetSignal", module = "AuctionDB", set = true, default = true,
+				{ key = "resetSignal", module = "AuctionDB", set = true, default = false,
 					label = "Bargain listed",
 					gloss = "Someone is listing well under the typical price. Buying those and reposting could earn about this much.",
 					fn = P_Reset },
-				{ key = "liveBook", module = "AuctionDB", set = true, default = true,
+				{ key = "liveBook", module = "AuctionDB", set = true, default = false,
 					label = "Your scan", settingLabel = "Your latest scan",
 					gloss = "Lowest price and count from your own latest AH scan.",
 					fn = P_LiveBook },
@@ -712,7 +712,7 @@ local function Sections()
 			heading = "Your history", name = "Your history",
 			module = "Accounting",
 			entries = {
-				{ key = "purchase", module = "Accounting", set = true, default = true,
+				{ key = "purchase", module = "Accounting", set = true, default = false,
 					label = "You bought",
 					gloss = "How many you've bought on the AH and what you paid on average.",
 					fn = P_Purchase },
@@ -886,6 +886,17 @@ local function Fill(itemID, tooltip)
 		end
 	end
 	if b:Empty() then if sideTip then sideTip:Hide() end return end
+	-- Simple-mode teach moment: the shift-total rows exist but nothing
+	-- on screen says so. One textDim hint, only when a history row is
+	-- actually there to shift-expand
+	if TT.CurrentPreset and TT.CurrentPreset() == "simple" then
+		for _, ln in ipairs(b.lines) do
+			if ln.left and ln.left:match("^You (bought|sold)") then
+				tinsert(b.lines, { left = "Shift: lifetime totals" })
+				break
+			end
+		end
+	end
 
 	local lr, lg, lb = GM.RGB("textDim")
 	local rr, rg, rb = GM.RGB("text")
@@ -1116,6 +1127,103 @@ function TT.OptionEntries()
 		d.set = function(v) TT.SetOption(d.key, d.module, v) end
 	end
 	return out
+end
+
+-- ============ detail presets (tooltip-ux R3) ============
+-- Presets just write the existing per-entry keys — no second render
+-- path, and the settings grid still shows exactly what's on. The
+-- control's displayed state is DERIVED (current values vs preset
+-- maps): toggle anything by hand and it reads "Custom".
+
+local PRESET_SIMPLE = {
+	minBuyout = true,
+	marketValue = "withTrend",
+	regionSoldPerDay = true,
+	regionSalePercent = true,
+	vendorSellTooltip = true,
+	destroyTooltipFormat = "simple",
+	inventoryTooltipFormat = "simple",
+	craftingCost = true,
+	sale = true,
+}
+
+local PRESET_TRADER = {
+	groupNameTooltip = true,
+	vendorBuyTooltip = true,
+	vendorSellTooltip = true,
+	destroyTooltipFormat = "simple",
+	convertTooltipFormat = "simple",
+	inventoryTooltipFormat = "full",
+	minBuyout = true,
+	marketValue = "withTrend",
+	regionMarketValue = "withTrend",
+	regionSale = true,
+	regionSalePercent = true,
+	regionSoldPerDay = true,
+	vsTSM = true,
+	resetSignal = true,
+	purchase = true,
+	sale = true,
+	craftingCost = true,
+}
+
+local PRESET_ORDER = { "simple", "trader", "everything" }
+
+-- "richest" mode per enum when Everything is picked
+local ON_PREF = { withTrend = 1, full = 2, simple = 3, noTrend = 4 }
+
+local function OffValue(d)
+	return d.kind == "bool" and false or "none"
+end
+
+local function OnValue(d)
+	if d.kind == "bool" then return true end
+	local best, bi
+	for i, v in ipairs(d.domain) do
+		if v ~= "none" then
+			local r = ON_PREF[v] or (10 + i)
+			if not best or r < bi then best, bi = v, r end
+		end
+	end
+	return best or "none"
+end
+
+local function PresetMap(name, opts)
+	local fixed = name == "simple" and PRESET_SIMPLE
+		or name == "trader" and PRESET_TRADER
+	local map = {}
+	for _, d in ipairs(opts or TT.OptionEntries()) do
+		if name == "everything" then
+			map[d.key] = OnValue(d)
+		else
+			map[d.key] = fixed and fixed[d.key]
+			if map[d.key] == nil then map[d.key] = OffValue(d) end
+		end
+	end
+	return map
+end
+
+function TT.ApplyPreset(name)
+	local opts = TT.OptionEntries()
+	local map = PresetMap(name, opts)
+	for _, d in ipairs(opts) do
+		d.set(map[d.key])
+	end
+end
+
+function TT.CurrentPreset()
+	local opts = TT.OptionEntries()
+	for _, name in ipairs(PRESET_ORDER) do
+		local map = PresetMap(name, opts)
+		local match = true
+		for _, d in ipairs(opts) do
+			local cur = d.get()
+			if cur == nil then cur = d.default end -- unset → On() default
+			if cur ~= map[d.key] then match = false break end
+		end
+		if match then return name end
+	end
+	return "custom"
 end
 
 if TooltipDataProcessor and TooltipDataProcessor.AddTooltipPostCall and Enum and Enum.TooltipDataType then
