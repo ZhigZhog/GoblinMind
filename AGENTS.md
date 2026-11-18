@@ -763,5 +763,17 @@ Primary data = the in-house book feed below.
   client). Each row's `gloss` shows on an invisible hover Button
   over the label (the only place glosses surface). Ledger `range`
   rows emit only when `TT.CurrentPreset() ~= "simple"` (R6).
+- **Delta-engine repeat rule** (2026-11-18): a disappearance whose
+  exact lot shape (qty-per-lot + unit price — qty recovered as
+  `e[1]//e[3]`) already vanished in an earlier window demotes to
+  `'i'`. Reappearance is proof of a repost — the ammo-wall pattern
+  (post 9,928-stack, cancel, repost identical, cancel) double-counts
+  without it. First occurrence keeps its class (could genuinely have
+  sold); repeats demote. Side benefit: it dedups mesh+local records
+  of the same physical disappearance. **veln↔vel pairing**: `veln`
+  only emits when OUR vel won the TSM merge — feed-fresher merges
+  that keep `regionSoldPerDay` must NOT carry our event count
+  (TSM's number wearing our confidence badge — the 26M/day arrows
+  bug). Retro-cleaned 285 repeat events in the installed store.
 - Not yet registered on the Codebase Map (project started 2026-11-11,
   post-closure).

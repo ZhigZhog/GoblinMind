@@ -1170,6 +1170,21 @@ def delta_record(books):
                 med = med_by_iid.get(iid_s) or 0
                 if cls in ('s', 'u') and med > 0 and unit > med * 10:
                     cls = 'i'  # off-market anchor — a cancel, not a buy
+                # repeat-disappearance: this exact lot shape already
+                # vanished in an earlier window (the ordering guard
+                # above makes same-window re-diffs impossible) — it
+                # must have been reposted identically in between, so
+                # THIS vanishing is the relist coming down, not a new
+                # sale. Doubles as mesh dedup: a peer's relayed event
+                # for the same physical disappearance also demotes.
+                # (qty per lot = units/lots_gone; gone=0 -> qty=units)
+                if cls in ('s', 'u'):
+                    for e in scope_sales.get(str(iid), ()):
+                        if (e[2] == unit
+                                and e[1] % (e[3] or 1) == 0
+                                and e[1] // (e[3] or 1) == qty):
+                            cls = 'i'
+                            break
                 scope_sales.setdefault(str(iid), []).append(
                     [now, qty * left, unit, left,
                      prev_lots_iid.get(iid_s, 0), cls])
@@ -1466,8 +1481,13 @@ def cmd_book(sv_arg, out_paths, root=None, feed=None, realm=None):
                     m[k] = e[k]
             # our self-computed fields (hist/recent/rsale/rsalep/reset)
             # follow the same freshness rule as the shared fields —
-            # fresher book wins outright, fresher feed keeps its own
-            own = ('hist', 'recent', 'rsale', 'rsalep', 'reset', 'veln')
+            # fresher book wins outright, fresher feed keeps its own.
+            # veln is handled separately below: it must only ride when
+            # OUR vel won — TSM's regionSoldPerDay wearing our event
+            # count reads as measured, not inherited
+            own = ('hist', 'recent', 'rsale', 'rsalep', 'reset')
+            our_vel_won = e.get('vel') is not None and (
+                book_fresh or m.get('vel') is None)
             if book_fresh:
                 for k in ('mb', 'sup', 'p', 'mkt', 'vel') + own:
                     if e.get(k) is not None and (
@@ -1479,6 +1499,10 @@ def cmd_book(sv_arg, out_paths, root=None, feed=None, realm=None):
                 for k in ('mb', 'sup', 'p', 'mkt', 'vel') + own:
                     if m.get(k) is None and e.get(k) is not None:
                         m[k] = e[k]
+            if our_vel_won and e.get('veln') is not None:
+                m['veln'] = e['veln']
+            else:
+                m.pop('veln', None)
             merged[iid] = m
         realms[scope] = {
             'items': merged,

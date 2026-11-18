@@ -172,6 +172,45 @@ reset()
 run(book({'107:1:100:3': 5}, NOW))
 check('first snapshot records no sales', events(107) == [])
 
+# --- scenario 12: repeat-disappearance -> 'i' ---------------------
+# The ammo-wall pattern: a lot vanishes in window A (recorded 's'),
+# reappears identical in window B, vanishes again in window C.
+# Reappearance is proof of a repost — the second vanishing is the
+# relist coming down, demoted to 'i'. The first stays 's' — it could
+# genuinely have sold before the repost. (Prices kept near the item
+# median so only the repeat rule is exercised.)
+reset()
+run(book({'110:9928:8000:3': 1, '110:50:5000:3': 3}, NOW - 1800))
+run(book({'110:50:5000:3': 3}, NOW - 900))         # wall gone -> 's'
+run(book({'110:9928:8000:3': 1, '110:50:5000:3': 3}, NOW - 450))  # repost
+run(book({'110:50:5000:3': 3}, NOW))               # gone again -> 'i'
+ev = events(110)
+big = [e for e in ev if e[2] == 8000]
+check('repeat disappearance recorded twice', len(big) == 2, repr(ev))
+check('first disappearance stays s',
+      big and big[0][5] == 's', repr(ev))
+check('repeat disappearance demoted i',
+      len(big) > 1 and big[1][5] == 'i', repr(ev))
+ds = gb.delta_stats(SCOPE).get(110) or {}
+check('repeat excluded from vel', ds.get('vel') == 9928, repr(ds))
+check('veln counts only confident', ds.get('veln') == 1, repr(ds))
+
+# a DIFFERENT lot shape vanishing later is still its own sale —
+# the demotion matches qty per lot, not just unit price
+reset()
+run(book({'111:10:50:3': 1, '111:20:50:3': 1, '111:5:50:3': 3},
+         NOW - 1800))
+run(book({'111:5:50:3': 3}, NOW - 900))   # both gone -> two 's'
+run(book({'111:10:50:3': 1, '111:5:50:3': 3}, NOW - 450))  # 10-stack back
+run(book({'111:5:50:3': 3}, NOW))         # 10-stack gone again -> 'i'
+ev = events(111)
+tens = [e for e in ev if e[2] == 50 and e[1] == 10]
+twe = [e for e in ev if e[2] == 50 and e[1] == 20]
+check('unmatched shape unaffected by repeat rule',
+      len(twe) == 1 and twe[0][5] == 's', repr(ev))
+check('matched shape demoted on repeat',
+      len(tens) == 2 and tens[1][5] == 'i', repr(ev))
+
 print()
 if FAILURES:
     print('%d FAILURES' % len(FAILURES))
