@@ -157,9 +157,14 @@ local function Build()
 		end
 		local id = GM.StageReport(txt, user:gsub("\n.*", ""))
 		f:Hide()
+		local age = GM.EmitAge and GM.EmitAge()
+		local dead = (not age) or age > 900
 		GM.Print("bug report filed (" .. id .. ") — uploads "
 			.. "automatically in ~90s (SavedVariables autosave), or "
-			.. "/reload to send now")
+			.. "/reload to send now"
+			.. (dead and ". " .. GM.CC("warn") .. "no watcher seen — "
+				.. "start brain\\goblin-watch.bat once or it stays "
+				.. "queued|r" or ""))
 	end)
 	file:SetPoint("LEFT", shot, "RIGHT", 8, 0)
 

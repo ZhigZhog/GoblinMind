@@ -732,6 +732,9 @@ local function RecipeRows()
 		elseif row.nup then skillUp = row.nup > 0
 		else skillUp = true end
 		if inSel
+			-- spoiler-free mode (options page / settings): unlearned
+			-- recipes drop out of the list entirely
+			and not (GM.db and GM.db.hideUnlearned and row.unlearned)
 			and (not ui.matsOnly
 				or (not row.unlearned and (row.craftable or 0) > 0))
 			and (not ui.canLearn or row.unlearned)

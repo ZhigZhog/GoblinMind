@@ -306,16 +306,32 @@ def main():
                 pass
         return
 
-    if a.host:
-        # this machine IS the backend — own feed goes via loopback;
-        # the server must be up before the health probe below
-        url = a.backend_url or 'http://127.0.0.1:8765'
-        start_server()
-        firewall_rule()
-    else:
-        url = (a.backend_url or
-               ask('Backend server URL (host\'s LAN IP, e.g. '
-                   'http://192.168.1.10:8765)', 'http://127.0.0.1:8765'))
+    if not a.host:
+        # end-user path: no prompts. Every configurable piece —
+        # backend URL/key, Blizzard API credentials, scopes — stages
+        # through the in-game onboarding wizard and the watcher folds
+        # it into feeds.json itself. This step only registers the
+        # watcher so the player's one manual act is "start the
+        # program once" (or nothing at all, after next login).
+        if addon_root():
+            write_bat(WATCH_BAT, 'GoblinMind Brain',
+                      'python goblin_brain.py watch self -v --feed book')
+            print('watcher registered — starts at next login (or '
+                  'double-click goblin-watch.bat to run it now)')
+            print('all configuration happens in game — the onboarding '
+                  'wizard or /goblin backend')
+            print('to HOST a backend for others, rerun: install.bat '
+                  '--host')
+        else:
+            print('skipped Startup entries — not inside Interface/AddOns')
+        return
+
+    # --host only past this point: this machine IS the backend — own
+    # feed goes via loopback; the server must be up before the health
+    # probe below
+    url = a.backend_url or 'http://127.0.0.1:8765'
+    start_server()
+    firewall_rule()
     if not url:
         sys.exit('backend URL is required')
     if '://' not in url:

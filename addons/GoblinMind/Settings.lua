@@ -258,6 +258,28 @@ local function StageBackendReq(url, name, scope, key)
 end
 GM.StageBackendReq = StageBackendReq
 
+-- same staging pattern for the Blizzard API onboarding page —
+-- "api-<ts>-<n>|<hex(clientId\nsecret\nregion\nscope)>" → feeds.json
+-- 'api' block; GoblinMindDB.api.ack confirms it landed
+local function StageApiReq(clientId, secret, region, scope)
+	local id = format("api-%d-%d", time(), math.random(100, 999))
+	GM.db.apiReqs = GM.db.apiReqs or {}
+	GM.db.apiReqs[#GM.db.apiReqs + 1] = id .. "|"
+		.. HexEnc((clientId or "") .. "\n" .. (secret or "")
+			.. "\n" .. (region or "") .. "\n" .. (scope or ""))
+	return id
+end
+GM.StageApiReq = StageApiReq
+
+-- seconds since the watcher's last emit (nil = never seen) — the
+-- onboarding and bug reporter warn "start the watcher" off this;
+-- a quiet install can go a few minutes between emits, callers pick
+-- their own stale threshold
+function GM.EmitAge()
+	local gen = GoblinMindDB and GoblinMindDB.generated
+	return gen and (time() - gen) or nil
+end
+
 
 local function ExportProfile()
 	local t = {}

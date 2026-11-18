@@ -605,6 +605,20 @@ Primary data = the in-house book feed below.
   `SetItemRef` is hooked separately for chat links (may not delegate
   to the funnel here). The IsShown gate keeps bare
   shift+click-for-linking from popping the planner.
+- **In-game config → brain contract** (issues #15/#16, 2026-11-18):
+  onboarding is a multi-page wizard (`Onboarding.lua` `PAGES` —
+  backend → api → import → options; CONNECT advances to api, SKIP
+  jumps to import). Every config page stages a hex request in the SV
+  (`backendReqs` `bm-`, `apiReqs` `api-` via `GM.StageApiReq`); the
+  watcher's `process_backend_reqs`/`process_api_reqs` fold the newest
+  into `feeds.json` (`api` block: client_id/secret/region/realms
+  `{scope:0}`/poll 30m) and emit `backend.ack`/`api.ack` so the addon
+  clears pending flags. `install.py` non-host path is register-only
+  (no prompts — config is in-game); `--host` keeps the interactive
+  server path. `GM.EmitAge()` (secs since `GoblinMindDB.generated`)
+  drives "start brain\goblin-watch.bat once" hints — >900s = silent.
+  `GM.db.hideUnlearned` = spoiler-free crafting (RecipeRows skips
+  unlearned rows); toggled on the OPTIONS page.
 - **First-install/onboarding contract** (issues #5/#8, 2026-11-18):
   `Onboarding.MaybeShow` runs once per install off a persisted
   `GM.db.onboarded` flag — the in-game flow is the PRIMARY config

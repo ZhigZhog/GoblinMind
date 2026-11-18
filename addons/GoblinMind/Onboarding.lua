@@ -1,14 +1,26 @@
 local _, GM = ...
 
--- Onboarding — two pages. Page 1: backend configuration (optional —
--- the addon can't touch the filesystem, so CONNECT stages a
--- bm-<ts>|<hex> request the brain watcher picks up on the next SV
--- flush and writes into feeds.json; the emitted GoblinMindDB.backend
--- .url + .ack confirm it landed. SKIP is permanent — re-open with
--- /goblin backend; LATER re-asks next login). Page 2: compatible-
--- addon import — detects TSM and similar via their SavedVariables
--- globals and imports settings per-item via GM.Import. Re-open that
--- page directly with /goblin import.
+-- Onboarding — a multi-page first-run wizard; more pages slot in by
+-- appending to PAGES. The addon can't touch the filesystem, so every
+-- config page stages a hex request in SavedVariables — the brain
+-- watcher picks them up on the next SV flush and writes feeds.json:
+--
+--   page 1 BACKEND   — crowdsource price feed (optional). CONNECT
+--                      stages a bm- request and advances to API;
+--                      SKIP is permanent and goes straight to IMPORT
+--                      (/goblin backend re-opens). LATER re-asks next
+--                      login.
+--   page 2 API       — Blizzard auction API credentials (optional,
+--                      reached only after CONNECT). SAVE stages an
+--                      api- request; SKIP goes to IMPORT.
+--   page 3 IMPORT    — compatible-addon settings (TSM etc.) via
+--                      GM.Import; /goblin import opens it directly.
+--   page 4 OPTIONS   — persistent toggles (spoiler-free crafting
+--                      today; more later) + the watcher-start nudge.
+--
+-- The watcher itself is the "external program": every page that
+-- stages something shows a hint when no recent emit exists —
+-- GM.EmitAge() tells us the brain hasn't run yet.
 
 GM.Onboard = {}
 local OB = GM.Onboard
@@ -18,18 +30,40 @@ local Btn = W and W.Btn
 
 local ui
 
+local PAGES = { "backend", "api", "import", "options" }
+local TITLES = {
+	backend = "GOBLINMIND BACKEND",
+	api = "BLIZZARD API",
+	import = "IMPORT SETTINGS",
+	options = "OPTIONS",
+}
+local PAGE_IX = {}
+for i, n in ipairs(PAGES) do PAGE_IX[n] = i end
+
 local function Configured()
 	local be = GoblinMindDB and GoblinMindDB.backend
 	return be and (be.url or be.pull or be.up or (be.peers or 0) > 0)
 		and true or false
 end
 
-local function SetPage(n)
+local function WatchHint(parent)
+	-- one-line "start the brain" hint — Refresh() fills/hides it
+	local fs = GM.MakeFontString(parent, GM.FONT, 9, "warn")
+	fs:SetPoint("BOTTOMLEFT", 12, 30)
+	fs:SetWidth(436)
+	fs:SetJustifyH("LEFT")
+	fs:SetWordWrap(false)
+	return fs
+end
+
+local function SetPage(p)
+	local n = type(p) == "number" and p or PAGE_IX[p] or 1
 	ui.page = n
-	ui.p1:SetShown(n == 1)
-	ui.p2:SetShown(n == 2)
-	ui.title:SetText(n == 2 and "IMPORT SETTINGS" or "GOBLINMIND BACKEND")
-	if n == 2 and ui.RefreshImport then ui.RefreshImport() end
+	for i, pg in ipairs(ui.pages) do pg:SetShown(i == n) end
+	ui.title:SetText(TITLES[PAGES[n]] or "GOBLINMIND")
+	if PAGES[n] == "import" and ui.RefreshImport then
+		ui.RefreshImport()
+	end
 end
 
 local function Build()
@@ -61,13 +95,15 @@ local function Build()
 	close.text:SetText("x")
 	close:SetScript("OnClick", function() f:Hide() end)
 
-	-- page containers swap whole; children anchor inside their page
-	local p1 = CreateFrame("Frame", nil, f)
-	p1:SetAllPoints()
-	local p2 = CreateFrame("Frame", nil, f)
-	p2:SetAllPoints()
-	p2:Hide()
-	ui.p1, ui.p2 = p1, p2
+	ui.pages = {}
+	for i = 1, #PAGES do
+		local pg = CreateFrame("Frame", nil, f)
+		pg:SetAllPoints()
+		pg:Hide()
+		ui.pages[i] = pg
+	end
+	local p1, p2, p3, p4 = ui.pages[1], ui.pages[2], ui.pages[3],
+		ui.pages[4]
 
 	-- ======================= page 1: backend =======================
 
@@ -86,10 +122,12 @@ local function Build()
 		.. "long-term price history, and file bug reports automatically.\n\n"
 		.. GM.CC("textDim")
 		.. "Optional — without it, prices come from your own scans and the "
-		.. "mesh, and every feature still works.|r\n\n"
+		.. "mesh, and every feature still works. SKIP goes straight to "
+		.. "the import page.|r\n\n"
 		.. GM.CC("textDim")
-		.. "The companion watcher (brain\\goblin-watch.bat) applies the "
-		.. "request on your next /reload.|r")
+		.. "CONNECT also asks about the free Blizzard API on the next "
+		.. "page — everything you set here is applied by the companion "
+		.. "watcher, no command-line install needed.|r")
 
 	-- fields cascade off the body's bottom edge — wrapped text height
 	-- varies by width/font, fixed offsets overlapped the body copy
@@ -127,32 +165,95 @@ local function Build()
 			GM.Scope and GM.Scope() or "",
 			strtrim(keyEb:GetText() or ""))
 		GM.db.backendReq = { at = time(), url = url }
-		f:Hide()
-		GM.Print("backend request staged — /reload to activate")
+		SetPage("api")
 	end)
 	connect:SetPoint("BOTTOMLEFT", 12, 10)
 
 	local skip = Btn(p1, 90, "SKIP", function()
 		GM.db.backendSkip = true
-		f:Hide()
-		GM.Print("backend skipped — scans + mesh still drive prices. "
-			.. "/goblin backend re-opens this.")
+		SetPage("import")
 	end)
 	skip:SetPoint("LEFT", connect, "RIGHT", 8, 0)
 
 	local later = Btn(p1, 90, "LATER", function() f:Hide() end)
 	later:SetPoint("LEFT", skip, "RIGHT", 8, 0)
 
-	local toImport = Btn(p1, 90, "IMPORT >", function() SetPage(2) end)
-	toImport:SetPoint("BOTTOMRIGHT", -12, 10)
+	ui.watch1 = WatchHint(p1)
 
-	-- ======================= page 2: import ========================
+	-- ===================== page 2: blizzard api ====================
 
-	local iStatus = GM.MakeFontString(p2, GM.FONT, 9, "textDim")
+	local aStatus = GM.MakeFontString(p2, GM.FONT, 9, "textDim")
+	aStatus:SetPoint("TOPLEFT", 12, -28)
+	ui.aStatus = aStatus
+
+	local aBody = GM.MakeFontString(p2, GM.FONT, 10, "text")
+	aBody:SetPoint("TOPLEFT", 14, -46)
+	aBody:SetWidth(432)
+	aBody:SetJustifyH("LEFT")
+	aBody:SetSpacing(3)
+	aBody:SetText(
+		"The watcher can also pull Blizzard's auction API — it keeps "
+		.. "regional price history fresh even between your own scans.\n\n"
+		.. GM.CC("textDim")
+		.. "Credentials are free: make a client at develop.battle.net "
+		.. "(create application → any name → copy the ID + secret). "
+		.. "SKIP leaves this off — your scans and the mesh still work.|r")
+
+	local idLab = GM.MakeFontString(p2, GM.FONT, 9, "textDim")
+	idLab:SetPoint("TOPLEFT", aBody, "BOTTOMLEFT", 0, -12)
+	idLab:SetText("CLIENT ID")
+	local idEb = W.EditBox(p2, 300)
+	idEb:SetPoint("TOPLEFT", idLab, "BOTTOMLEFT", -2, -4)
+	ui.idEb = idEb
+
+	local secLab = GM.MakeFontString(p2, GM.FONT, 9, "textDim")
+	secLab:SetPoint("TOPLEFT", idEb, "BOTTOMLEFT", 2, -10)
+	secLab:SetText("CLIENT SECRET")
+	local secEb = W.EditBox(p2, 300)
+	secEb:SetPoint("TOPLEFT", secLab, "BOTTOMLEFT", -2, -4)
+	ui.secEb = secEb
+
+	local regLab = GM.MakeFontString(p2, GM.FONT, 9, "textDim")
+	regLab:SetPoint("TOPLEFT", secEb, "BOTTOMLEFT", 2, -10)
+	regLab:SetText("REGION (us / eu / kr / tw)")
+	local regEb = W.EditBox(p2, 80)
+	regEb:SetPoint("TOPLEFT", regLab, "BOTTOMLEFT", -2, -4)
+	regEb:SetText("us")
+	ui.regEb = regEb
+
+	local aSave = Btn(p2, 90, "SAVE", function()
+		local cid = strtrim(idEb:GetText() or "")
+		local sec = strtrim(secEb:GetText() or "")
+		if cid == "" or sec == "" then
+			GM.Print(GM.CC("warn")
+				.. "needs both the client id and secret|r")
+			return
+		end
+		GM.StageApiReq(cid, sec, strtrim(regEb:GetText() or ""):lower(),
+			GM.Scope and GM.Scope() or "")
+		GM.db.apiReq = { at = time() }
+		SetPage("import")
+	end)
+	aSave:SetPoint("BOTTOMLEFT", 12, 10)
+
+	local aSkip = Btn(p2, 90, "SKIP", function()
+		GM.db.apiSkip = true
+		SetPage("import")
+	end)
+	aSkip:SetPoint("LEFT", aSave, "RIGHT", 8, 0)
+
+	local aBack = Btn(p2, 90, "< BACK", function() SetPage("backend") end)
+	aBack:SetPoint("LEFT", aSkip, "RIGHT", 8, 0)
+
+	ui.watch2 = WatchHint(p2)
+
+	-- ======================= page 3: import ========================
+
+	local iStatus = GM.MakeFontString(p3, GM.FONT, 9, "textDim")
 	iStatus:SetPoint("TOPLEFT", 12, -28)
 	ui.iStatus = iStatus
 
-	local iBody = GM.MakeFontString(p2, GM.FONT, 10, "text")
+	local iBody = GM.MakeFontString(p3, GM.FONT, 10, "text")
 	iBody:SetPoint("TOPLEFT", 14, -44)
 	iBody:SetWidth(432)
 	iBody:SetJustifyH("LEFT")
@@ -164,19 +265,19 @@ local function Build()
 
 	local rows = {}
 	ui.rows = rows
-	ui.iStatus2 = GM.MakeFontString(p2, GM.FONT, 9, "textDim")
+	ui.iStatus2 = GM.MakeFontString(p3, GM.FONT, 9, "textDim")
 	ui.iStatus2:SetPoint("BOTTOMLEFT", 12, 36)
 	ui.iStatus2:SetWidth(436)
 	ui.iStatus2:SetJustifyH("LEFT")
 
-	local back = Btn(p2, 90, "< BACK", function() SetPage(1) end)
+	local back = Btn(p3, 90, "< BACK", function() SetPage("api") end)
 	back:SetPoint("BOTTOMLEFT", 12, 10)
 
-	local done = Btn(p2, 90, "DONE", function() f:Hide() end)
-	done:SetPoint("BOTTOMRIGHT", -12, 10)
+	local toOpts = Btn(p3, 90, "NEXT >", function() SetPage("options") end)
+	toOpts:SetPoint("BOTTOMRIGHT", -12, 10)
 
 	local function MakeRow(ix)
-		local r = CreateFrame("Frame", nil, p2)
+		local r = CreateFrame("Frame", nil, p3)
 		r:SetSize(436, 46)
 		r:SetPoint("TOPLEFT", 12, -64 - (ix - 1) * 50)
 		GM.Panel(r, "contLowest")
@@ -204,9 +305,8 @@ local function Build()
 		r.btn:SetPoint("RIGHT", -8, 0)
 		r.result = GM.MakeFontString(r, GM.FONT, 8, "textDim")
 		r.result:SetPoint("TOPRIGHT", r.btn, "BOTTOMRIGHT", 0, -2)
-		r.result:SetWidth(140)
-		r.result:SetJustifyH("RIGHT")
 		r.result:SetWidth(240)
+		r.result:SetJustifyH("RIGHT")
 		r.result:SetWordWrap(false)
 		r:Hide()
 		return r
@@ -240,6 +340,43 @@ local function Build()
 		end
 		ui.iStatus2:SetText(note or "")
 	end
+
+	-- ======================= page 4: options =======================
+
+	local oBody = GM.MakeFontString(p4, GM.FONT, 10, "text")
+	oBody:SetPoint("TOPLEFT", 14, -44)
+	oBody:SetWidth(432)
+	oBody:SetJustifyH("LEFT")
+	oBody:SetSpacing(3)
+	oBody:SetText(
+		"Persistent options — change any of these later from the "
+		.. "SETTINGS tab on the dashboard.\n\n"
+		.. GM.CC("textDim")
+		.. "SPOILER-FREE CRAFTING — hides recipes you haven't learned "
+		.. "yet (and where to get them). Leaves everything else "
+		.. "visible.|r")
+
+	local spoiler = Btn(p4, 220, "", function()
+		GM.db.hideUnlearned = not GM.db.hideUnlearned
+		ui.spoiler.text:SetText("HIDE UNLEARNED RECIPES: "
+			.. (GM.db.hideUnlearned and "ON" or "OFF"))
+		ui.spoiler.text:SetTextColor(GM.RGB(
+			GM.db.hideUnlearned and "accent" or "textDim"))
+		if GM.CraftingUI and GM.CraftingUI.Refresh then
+			GM.CraftingUI.Refresh()
+		end
+	end)
+	spoiler:SetPoint("TOPLEFT", oBody, "BOTTOMLEFT", 0, -10)
+	spoiler.text:SetText("HIDE UNLEARNED RECIPES: "
+		.. (GM.db.hideUnlearned and "ON" or "OFF"))
+	ui.spoiler = spoiler
+
+	ui.watch4 = WatchHint(p4)
+
+	local done = Btn(p4, 90, "DONE", function() f:Hide() end)
+	done:SetPoint("BOTTOMRIGHT", -12, 10)
+	local oBack = Btn(p4, 90, "< BACK", function() SetPage("import") end)
+	oBack:SetPoint("BOTTOMLEFT", 12, 10)
 end
 
 local function Refresh()
@@ -255,14 +392,35 @@ local function Refresh()
 	else
 		ui.status:SetText("not configured")
 	end
+	local ap = GoblinMindDB and GoblinMindDB.api
+	if ap and ap.configured then
+		ui.aStatus:SetText(GM.CC("pos")
+			.. "blizzard api configured|r")
+	elseif GM.db and GM.db.apiReq then
+		ui.aStatus:SetText(GM.CC("warn")
+			.. "request staged — waiting for the watcher (needs /reload)|r")
+	else
+		ui.aStatus:SetText("not configured")
+	end
+	-- "start the external program" — visible whenever the watcher
+	-- hasn't emitted recently and something needs it (or could)
+	local age = GM.EmitAge and GM.EmitAge()
+	local silent = (not age) or age > 900
+	local hint = silent
+		and "the brain watcher hasn't run yet — start "
+		.. "brain\\goblin-watch.bat once, then /reload"
+		or ""
+	if ui.watch1 then ui.watch1:SetText(hint) end
+	if ui.watch2 then ui.watch2:SetText(hint) end
+	if ui.watch4 then ui.watch4:SetText(hint) end
 end
 
--- OB.Show("import") opens page 2 directly (/goblin import); any other
--- argument (or none) lands on page 1, the backend page.
+-- OB.Show("import"|"api"|"options") opens a specific page; no
+-- argument lands on page 1, the backend page.
 function OB.Show(page)
 	Build()
 	Refresh()
-	SetPage(page == "import" and 2 or 1)
+	SetPage(PAGE_IX[page] or 1)
 	ui:Show()
 end
 
@@ -285,8 +443,8 @@ function OB.MaybeShow()
 			gen = GoblinMindDB and GoblinMindDB.generated }
 		return
 	end
-	-- consumed-request ack: drop staged requests the watcher already
-	-- folded into feeds.json, and confirm the pending flag
+	-- consumed-request acks: drop staged requests the watcher already
+	-- folded into feeds.json, and confirm the pending flags
 	local be = GoblinMindDB.backend
 	local req = GM.db.backendReq
 	if be and be.ack then
@@ -299,6 +457,17 @@ function OB.MaybeShow()
 			GM.db.backendReq = nil
 			GM.Print("backend connected — "
 				.. tostring(be.url or req.url))
+		end
+	end
+	local ap = GoblinMindDB.api
+	if ap and ap.ack and GM.db.apiReqs then
+		for i = #GM.db.apiReqs, 1, -1 do
+			local ts = tonumber(GM.db.apiReqs[i]:match("^api%-(%d+)"))
+			if ts and ts <= ap.ack then tremove(GM.db.apiReqs, i) end
+		end
+		if GM.db.apiReq and ap.ack >= GM.db.apiReq.at then
+			GM.db.apiReq = nil
+			GM.Print("blizzard api configured")
 		end
 	end
 	if Configured() or GM.db.backendSkip or GM.db.backendReq then

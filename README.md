@@ -21,25 +21,24 @@ themselves to the private tracker (see Bug reports below).
 1. Extract the zip into `Interface/AddOns/` — you should end up with
    `Interface/AddOns/GoblinMind/` and `Interface/AddOns/GoblinMind_Data/`.
 2. Enable both addons at the character select screen.
-3. **Install the brain watcher** — double-click
-   `Interface/AddOns/GoblinMind/brain/install.bat` once. It picks your
-   realm scope and registers the watcher to auto-start at login. It
-   also offers to set up a free Blizzard API client for the Blizzard
-   feed (`skip` disables that feed — the local + backend feeds work
-   regardless). **Backend configuration happens in game** (step 4) —
-   no URL or key goes in here.
-   - Prefer manual? Skip the installer and double-click
-     `brain/goblin-watch.bat` while you play instead.
+3. **Start the brain** — double-click
+   `Interface/AddOns/GoblinMind/brain/install.bat` once. It just
+   registers the watcher to auto-start at login — **zero prompts,
+   zero configuration**. Everything configurable (backend, Blizzard
+   API, scopes) is staged by the in-game wizard and the watcher
+   folds it into `feeds.json` itself.
+   - Even simpler: double-click `brain/goblin-watch.bat` while you
+     play and skip autostart entirely.
    - To **host** the shared backend on your machine, run
      `install.bat --host` (starts `goblin_server.py` now and opens
      TCP 8765 through Windows Firewall — one UAC prompt), then hand
      players the URL + install key it prints.
-4. `/reload` (or relog). First login walks a two-page onboarding:
-   **page 1 backend** (CONNECT / SKIP / LATER — optional; every feature
-   works offline — re-open with `/goblin backend`), **page 2 import**
-   (detects TSM and similar addons, lists what each import brings —
-   groups/items/operations/custom price sources/saved searches — with
-   a per-row IMPORT button; re-open with `/goblin import`).
+4. `/reload` (or relog). First login walks the onboarding wizard:
+   **backend** (CONNECT → next page; SKIP → import; LATER re-asks —
+   re-open with `/goblin backend`), **Blizzard API** (free creds from
+   develop.battle.net — re-open with `/goblin api`), **import**
+   (TSM and similar — per-row IMPORT; `/goblin import`), **options**
+   (spoiler-free crafting toggle; `/goblin options`).
 5. Open the auction house once and hit **FULL SCAN** in the GoblinMind
    AH surface — that builds the first price book. The watcher folds it
    into the emitted DB on the next SavedVariables flush (`/reload`).

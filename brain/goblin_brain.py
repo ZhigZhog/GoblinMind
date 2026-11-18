@@ -1451,6 +1451,7 @@ def cmd_book(sv_arg, out_paths, root=None, feed=None, realm=None):
         # last-attempt backend health for /goblin status + config
         # state for the in-game onboarding popup
         'backend': _backend_emit(),
+        'api': _api_emit(),
         'realms': realms,
         'items': flat.get('items', {}),
         # vendorBuy is static data scraped from TSM's own addon files —
@@ -1481,6 +1482,8 @@ REPORT_RE = re.compile(r'"(gm-[^"|]+)\|([0-9a-fA-F]+)"')
 # in-game backend onboarding stages bm-<ts>-<n>|<hex(url\nname\nscope\nkey)>
 # in the same SavedVariables file — newest request wins
 BACKEND_REQ_RE = re.compile(r'"(bm-(\d+)-[^"|]+)\|([0-9a-fA-F]+)"')
+# Blizzard-API onboarding stages api-<ts>-<n>|<hex(id\nsecret\nregion\nscope)>
+API_REQ_RE = re.compile(r'"(api-(\d+)-[^"|]+)\|([0-9a-fA-F]+)"')
 FILED_PATH = os.path.join(os.path.dirname(
     os.path.abspath(__file__)), 'filed_bugs.json')
 
@@ -1711,6 +1714,67 @@ def process_backend_reqs(appdata, root=None):
     LOG.info('backend configured from in-game request %s: %s', rid, url)
 
 
+def process_api_reqs(appdata, root=None):
+    """Blizzard-API onboarding requests — newest wins, writes
+    feeds.json's 'api' block {client_id, client_secret, region,
+    realms, poll_minutes}. Watermark in api_state.api_req_at →
+    emitted as api.ack."""
+    newest = None  # (ts, rid, cid, secret, region, scope)
+    for sv in sv_paths(appdata, root):
+        try:
+            with open(sv, encoding='utf-8', errors='replace') as fh:
+                text = fh.read()
+        except OSError:
+            continue
+        for rid, ts, hexbody in API_REQ_RE.findall(text):
+            try:
+                payload = bytes.fromhex(hexbody).decode('utf-8')
+            except ValueError:
+                continue
+            cid, _, rest = payload.partition('\n')
+            secret, _, rest = rest.partition('\n')
+            region, _, scope = rest.partition('\n')
+            ts = int(ts)
+            if newest is None or ts > newest[0]:
+                newest = (ts, rid, cid.strip(), secret.strip(),
+                          region.strip(), scope.strip())
+    if not newest:
+        return
+    ts, rid, cid, secret, region, scope = newest
+    st = _load_api_state()
+    if int(st.get('api_req_at') or 0) >= ts:
+        return
+    if not (cid and secret):
+        LOG.warning('api request %s rejected: missing credentials', rid)
+        return
+    feeds = load_feeds()
+    feeds['api'] = {
+        'client_id': cid,
+        'client_secret': secret,
+        'region': region or 'us',
+        # {scope: connectedRealmId} — 0 = resolve lazily, same as the
+        # installer's api_block()
+        'realms': {scope: 0} if scope else {},
+        'poll_minutes': 30,
+    }
+    save_feeds(feeds)
+    st['api_req_at'] = ts
+    st.pop('token', None)  # creds changed — bearer token is for the old pair
+    _save_api_state(st)
+    LOG.info('blizzard api configured from in-game request %s', rid)
+
+
+def _api_emit():
+    """Emitted 'api' block: whether feeds.json carries credentials +
+    the staged-request watermark (ack)."""
+    st = _load_api_state()
+    cfg = _api_cfg()
+    out = {'configured': bool(cfg.get('client_id'))}
+    if st.get('api_req_at'):
+        out['ack'] = st['api_req_at']
+    return out
+
+
 def _backend_emit():
     """The emitted 'backend' block: health records + config state so
     the addon knows whether onboarding should prompt, plus the
@@ -1858,6 +1922,7 @@ def cmd_watch(appdata, outs, interval=5, settle=20, feed='tsm',
                     # file — consume before emitting so this emit's
                     # backend block already shows configured
                     process_backend_reqs(appdata, root)
+                    process_api_reqs(appdata, root)
                     newly = process_bugs(appdata, root)
                     if feed == 'book':
                         # a flush means the session wrote fresh book +

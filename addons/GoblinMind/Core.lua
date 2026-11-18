@@ -118,6 +118,14 @@ SlashCmdList.GOBLINMIND = function(msg)
 		if GM.Onboard then GM.Onboard.Show("import") end
 		return
 	end
+	if msg == "api" then
+		if GM.Onboard then GM.Onboard.Show("api") end
+		return
+	end
+	if msg == "options" then
+		if GM.Onboard then GM.Onboard.Show("options") end
+		return
+	end
 	if msg == "minimap" then
 		GM.db.minimapHide = not GM.db.minimapHide
 		if GM.minimapBtn then GM.minimapBtn:SetShown(not GM.db.minimapHide) end
