@@ -156,6 +156,7 @@ local function Build()
 			return
 		end
 		local id = GM.StageReport(txt, user:gsub("\n.*", ""))
+		f:Hide()
 		GM.Print("bug report filed (" .. id .. ") — uploads "
 			.. "automatically in ~90s (SavedVariables autosave), or "
 			.. "/reload to send now")
