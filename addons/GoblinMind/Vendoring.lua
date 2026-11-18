@@ -122,8 +122,8 @@ local function DoBuy(step)
 	local idx = step.index
 	if not idx and step.itemID then
 		-- plan-emitted steps carry no slot — find it live
-		for i = 1, GetMerchantNumItems() do
-			local link = GetMerchantItemLink(i)
+		for i = 1, GetMerchantNumItems and GetMerchantNumItems() or 0 do
+			local link = GetMerchantItemLink and GetMerchantItemLink(i)
 			if GM.LinkID(link) == step.itemID then
 				idx = i break
 			end

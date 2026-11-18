@@ -98,15 +98,10 @@ end
 -- global entries read the top-level table; dotted keys nest one level
 -- ("operationTooltips.auctioning" → tbl.operationTooltips.auctioning);
 -- value-entries match a mode ("marketValue" == "withTrend")
+local OptTable -- forward decl (lives with TT.GetOption below)
+
 local function On(e)
-	local o = Opts()
-	local tbl = e.module and o.moduleTooltips[e.module] or o
-	local key = e.key
-	local k1, k2 = strsplit(".", key)
-	if k2 then
-		tbl = tbl[k1]
-		key = k2
-	end
+	local tbl, key = OptTable(e.key, e.module)
 	if type(tbl) ~= "table" then return e.default == e.set end
 	local v = tbl[key]
 	if v == nil then
@@ -886,7 +881,7 @@ end
 -- Writable view of the tooltip option tree: deduped entries with
 -- get/set closures for the settings pane.
 
-local function OptTable(key, module)
+OptTable = function(key, module)
 	local o = Opts()
 	local tbl = module and o.moduleTooltips[module] or o
 	if type(tbl) ~= "table" then return nil end

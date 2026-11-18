@@ -1055,9 +1055,11 @@ function GM.AH.Execute(step)
 		end
 		return true
 	elseif step.kind == "cancel" then
-		if step.auctionID then
-			GM.Inventory.recentCancels[step.auctionID] = time()
+		if not step.auctionID then
+			GM.Print(GM.CC("err") .. "missing auction id — rescan first|r")
+			return false
 		end
+		GM.Inventory.recentCancels[step.auctionID] = time()
 		local a = GM.Inventory.OwnedByKey
 			and GM.Inventory.OwnedByKey(step.auctionID)
 		local now = time()
