@@ -127,8 +127,13 @@ local function Build()
 		-- a protection block (it trips ADDON_ACTION_BLOCKED, not a Lua
 		-- error). issecurefunction checks first; PrintScreen is the
 		-- fallback message.
+		-- no issecurefunction on this client → can't verify the call
+		-- is safe, and Screenshot is protected here → attempting it
+		-- trips ADDON_ACTION_BLOCKED (pcall can't shield that). Treat
+		-- "can't check" as protected; other clients still try.
 		local ok = type(Screenshot) == "function"
-			and not issecurefunction(Screenshot) and pcall(Screenshot)
+			and issecurefunction and not issecurefunction(Screenshot)
+			and pcall(Screenshot)
 		GM.Print(ok and "screenshot saved to WoW\\Screenshots"
 			or "press PrintScreen — saves to WoW\\Screenshots")
 	end)
@@ -172,7 +177,8 @@ local function Build()
 	urlBox:SetScript("OnEscapePressed", function() urlBox:ClearFocus() end)
 	urlBox:SetScript("OnEnterPressed", function() urlBox:ClearFocus() end)
 	local issues = Btn(f, 82, "ISSUES ↗", function()
-		if type(LaunchURL) == "function" and not issecurefunction(LaunchURL) then
+		if type(LaunchURL) == "function" and issecurefunction
+			and not issecurefunction(LaunchURL) then
 			pcall(LaunchURL, "https://" .. ISSUES_URL)
 		end
 		urlBox:SetFocus()

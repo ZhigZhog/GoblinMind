@@ -99,6 +99,7 @@ local function MakeTable(parent, cols, onClick)
 	local body = CreateFrame("Frame", nil, parent)
 	body:SetPoint("TOPLEFT", 6, -34)
 	body:SetPoint("BOTTOMRIGHT", -6, 24)
+	fs:SetWordWrap(false)
 	if body.SetClipsChildren then body:SetClipsChildren(true) end
 	body:EnableMouseWheel(true)
 	body:SetScript("OnMouseWheel", function(_, d)
@@ -122,6 +123,7 @@ local function MakeTable(parent, cols, onClick)
 			fs:SetPoint("LEFT", c[2], 0)
 			if c[3] then fs:SetWidth(c[3]) end
 			fs:SetJustifyH("LEFT")
+			fs:SetWordWrap(false)
 			row.cells[j] = fs
 		end
 		row:SetScript("OnEnter", function()
@@ -362,6 +364,7 @@ function OV.RefreshChart()
 		local fs = GM.MakeFontString(chart, GM.FONT, 8, "secondary")
 		fs:SetPoint(anchor or "BOTTOMLEFT", chart, "BOTTOMLEFT", x, y)
 		fs:SetJustifyH("LEFT")
+		fs:SetWordWrap(false)
 		fs:SetText(txt)
 		tinsert(ui.art, fs)
 	end
@@ -410,6 +413,7 @@ end
 local function Pie(parent, cx, cy, r, title, entries, pool)
 	local fs = GM.MakeFontString(parent, GM.FONT_MED, 9, "secondary")
 	fs:SetPoint("CENTER", parent, "BOTTOMLEFT", cx, cy + r + 12)
+	fs:SetWordWrap(false)
 	local total = 0
 	for _, e in ipairs(entries) do total = total + e.v end
 	if total <= 0 then
@@ -435,6 +439,7 @@ local function Pie(parent, cx, cy, r, title, entries, pool)
 			local fs = GM.MakeFontString(parent, GM.FONT, 8, "text")
 			fs:SetPoint("BOTTOMLEFT", parent, "BOTTOMLEFT", cx + r + 26, ly)
 			fs:SetJustifyH("LEFT")
+			fs:SetWordWrap(false)
 			fs:SetText(format("%s  %s%s|r %s", e.name:sub(1, 10),
 				GM.CC("secondary"),
 				format("%.0f%%", e.v / total * 100),
@@ -504,6 +509,9 @@ local function Build()
 
 	local title = GM.MakeFontString(f, GM.FONT_BOLD, 13, "accent")
 	title:SetPoint("TOPLEFT", 12, -10)
+	title:SetWidth(400)
+	title:SetJustifyH("LEFT")
+	title:SetWordWrap(false)
 	title:SetText("LEDGER")
 	if GM.Dashboard and GM.Dashboard.AddTabs then
 		GM.Dashboard.AddTabs(f, title, "overview")
@@ -579,6 +587,7 @@ local function Build()
 		fs:SetPoint("TOPLEFT", 10, -22 - (i - 1) * 23)
 		fs:SetWidth(700)
 		fs:SetJustifyH("LEFT")
+		fs:SetWordWrap(false)
 		ui.logRows[i] = fs
 	end
 
@@ -636,6 +645,7 @@ local function Build()
 		local fs = GM.MakeFontString(chart, GM.FONT, 9, "textDim")
 		fs:SetPoint("TOPLEFT", 58 + (i - 1) * 62, -20)
 		fs:SetJustifyH("LEFT")
+		fs:SetWordWrap(false)
 		ui.legend[i] = fs
 	end
 	local accts = Panel(acctP, 6, -254, 712, 256, "ACCOUNTS · FUNCTION")
@@ -668,8 +678,14 @@ local function Build()
 	itP.icon:SetPoint("TOPLEFT", 12, -26)
 	itP.name = GM.MakeFontString(itP, GM.FONT_BOLD, 13, "text")
 	itP.name:SetPoint("LEFT", itP.icon, "RIGHT", 10, 10)
+	itP.name:SetWidth(560)
+	itP.name:SetJustifyH("LEFT")
+	itP.name:SetWordWrap(false)
 	itP.mkt = GM.MakeFontString(itP, GM.FONT, 10, "textDim")
 	itP.mkt:SetPoint("TOPLEFT", itP.name, "BOTTOMLEFT", 0, -6)
+	itP.mkt:SetWidth(560)
+	itP.mkt:SetJustifyH("LEFT")
+	itP.mkt:SetWordWrap(false)
 	itP.back = CreateFrame("Button", nil, itP)
 	itP.back:SetSize(56, 18)
 	itP.back:SetPoint("TOPRIGHT", -10, -22)
@@ -708,6 +724,7 @@ local function Build()
 		fs:SetPoint("TOPLEFT", 360, -90 - (i - 1) * 21)
 		fs:SetWidth(350)
 		fs:SetJustifyH("LEFT")
+		fs:SetWordWrap(false)
 		itP.txRows[i] = fs
 	end
 end

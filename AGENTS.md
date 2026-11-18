@@ -280,6 +280,19 @@ Primary data = the in-house book feed below.
     book emits now only run when bytes actually changed. Verified
     live 2026-11-17 — ~11s CPU emit + 2.7MB write every ~70s
     before the fix.
+  - **Fontstring bounding rule** (added 2026-11-17 after the
+    194-group import overflow): every `GM.MakeFontString` that can
+    carry dynamic text must be bounded — `SetWidth` + `SetWordWrap(false)`
+    (hard clip) or `SetMaxLines(n)` (wrapped). `SetWidth` ALONE wraps
+    vertically and bleeds into the next row — width without nowrap is
+    not a bound. Shared buttons (`W.Btn`/`W.ActionBtn`/`W.Segment`)
+    self-bound `b.text` to `w - 8`; one-off buttons still need it.
+    Preserve the anchor's alignment: LEFT-anchored gets
+    `SetJustifyH("LEFT")`, RIGHT-anchored gets `RIGHT`, CENTER-anchored
+    needs no justify (width alone clips evenly). Dual-anchored
+    (LEFT+RIGHT) fontstrings span-bound — nowrap only. Menus/lists
+    sized by content (`4 + N*18`) cap at ~14 visible rows + mousewheel
+    (PopupMenu convention) — never let content size a popup.
   - `/gm` appears shadowed/dead — primary commands are `/goblinmind`
     and `/goblin`.
   - Guard modern APIs: bare `GetItemInfo` is NOT a global — use

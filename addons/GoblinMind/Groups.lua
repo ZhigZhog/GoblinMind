@@ -334,6 +334,7 @@ function GM.Groups.Ops(opType)
 		if u then sort(u) end
 		out[#out + 1] = { name = name,
 			users = u and #u or 0,
+			userPaths = u,
 			groups = u and table.concat(u, ", ") }
 	end
 	sort(out, function(a, b) return a.name < b.name end)
@@ -439,6 +440,8 @@ local function TsmToGmPath(p)
 	p = p:gsub("``", "\1"):gsub("`", "/"):gsub("\1", ",")
 	return p
 end
+
+GM.Groups.TsmToGmPath = TsmToGmPath
 
 local function GmToTsmPath(p)
 	return (p:gsub(",", "``"):gsub("/", "`"))

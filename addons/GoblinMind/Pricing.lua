@@ -136,6 +136,15 @@ local function Tokenize(s)
 			if not num then return nil, "bad number at " .. i end
 			tinsert(toks, { t = "num", v = tonumber(num), u = unit ~= "" and unit or nil })
 			i = i + #num + (unit ~= "" and 1 or 0)
+			-- TSM postfix percent: "120% X" means 1.2 * X — fold to a
+			-- literal + explicit multiply (bare % is not an operator
+			-- here; modulo has no TSM meaning). Money-unit literals
+			-- ("1g50%") are left alone — nonsense either way.
+			if unit == "" and s:sub(i, i) == "%" then
+				toks[#toks].v = toks[#toks].v / 100
+				tinsert(toks, { t = "op", v = "*" })
+				i = i + 1
+			end
 		elseif c:match("[%a_]") then
 			local w = s:match("^([%a_][%w_]*)", i)
 			tinsert(toks, { t = "id", v = w })

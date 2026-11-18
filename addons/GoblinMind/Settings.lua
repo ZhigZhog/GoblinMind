@@ -217,8 +217,10 @@ local PROFILE_KEYS = {
 function StageReport(desc, title)
 	local id = format("gm-%d-%d", time(), math.random(100, 999))
 	local _, _, _, build = GetBuildInfo()
-	local ver = GetAddOnMetadata
-		and GetAddOnMetadata("GoblinMind", "Version") or "?"
+	local getMeta = (C_AddOns and C_AddOns.GetAddOnMetadata)
+		or GetAddOnMetadata
+	local ver = getMeta
+		and getMeta("GoblinMind", "Version") or "?"
 	local body = {
 		desc, "", "---", "### diagnostics",
 		"- addon: GoblinMind " .. tostring(ver),
@@ -691,6 +693,7 @@ local function Build()
 	ui.srcMsg:SetPoint("LEFT", addBtn, "RIGHT", 8, 0)
 	ui.srcMsg:SetWidth(160)
 	ui.srcMsg:SetJustifyH("LEFT")
+	ui.srcMsg:SetWordWrap(false)
 	local function AddSource()
 		local name = strtrim(ui.srcName:GetText() or ""):lower()
 		local expr = strtrim(ui.srcExpr:GetText() or "")

@@ -1,12 +1,14 @@
 local _, GM = ...
 
--- Backend onboarding — the crowdsource server is optional, and the
--- addon can't touch the filesystem to configure it. The bridge is
--- SavedVariables: CONNECT stages a bm-<ts>|<hex> request the brain
--- watcher picks up on the next SV flush and writes into feeds.json;
--- the emitted GoblinMindDB.backend.url + .ack confirm it landed.
--- SKIP is permanent (re-open with /goblin backend); LATER re-asks
--- next login. Re-staging a newer request reconfigures — newest wins.
+-- Onboarding — two pages. Page 1: backend configuration (optional —
+-- the addon can't touch the filesystem, so CONNECT stages a
+-- bm-<ts>|<hex> request the brain watcher picks up on the next SV
+-- flush and writes into feeds.json; the emitted GoblinMindDB.backend
+-- .url + .ack confirm it landed. SKIP is permanent — re-open with
+-- /goblin backend; LATER re-asks next login). Page 2: compatible-
+-- addon import — detects TSM and similar via their SavedVariables
+-- globals and imports settings per-item via GM.Import. Re-open that
+-- page directly with /goblin import.
 
 GM.Onboard = {}
 local OB = GM.Onboard
@@ -22,10 +24,18 @@ local function Configured()
 		and true or false
 end
 
+local function SetPage(n)
+	ui.page = n
+	ui.p1:SetShown(n == 1)
+	ui.p2:SetShown(n == 2)
+	ui.title:SetText(n == 2 and "IMPORT SETTINGS" or "GOBLINMIND BACKEND")
+	if n == 2 and ui.RefreshImport then ui.RefreshImport() end
+end
+
 local function Build()
 	if ui then return end
 	local f = CreateFrame("Frame", "GoblinMindOnboardFrame", UIParent)
-	f:SetSize(460, 318)
+	f:SetSize(460, 400)
 	f:SetPoint("CENTER")
 	f:SetFrameStrata("HIGH")
 	f:SetToplevel(true)
@@ -41,7 +51,7 @@ local function Build()
 
 	local title = GM.MakeFontString(f, GM.FONT_BOLD, 13, "accent")
 	title:SetPoint("TOPLEFT", 12, -10)
-	title:SetText("GOBLINMIND BACKEND")
+	ui.title = title
 
 	local close = CreateFrame("Button", nil, f)
 	close:SetSize(16, 16)
@@ -51,11 +61,21 @@ local function Build()
 	close.text:SetText("x")
 	close:SetScript("OnClick", function() f:Hide() end)
 
-	local status = GM.MakeFontString(f, GM.FONT, 9, "textDim")
+	-- page containers swap whole; children anchor inside their page
+	local p1 = CreateFrame("Frame", nil, f)
+	p1:SetAllPoints()
+	local p2 = CreateFrame("Frame", nil, f)
+	p2:SetAllPoints()
+	p2:Hide()
+	ui.p1, ui.p2 = p1, p2
+
+	-- ======================= page 1: backend =======================
+
+	local status = GM.MakeFontString(p1, GM.FONT, 9, "textDim")
 	status:SetPoint("TOPLEFT", 12, -28)
 	ui.status = status
 
-	local body = GM.MakeFontString(f, GM.FONT, 10, "text")
+	local body = GM.MakeFontString(p1, GM.FONT, 10, "text")
 	body:SetPoint("TOPLEFT", 14, -46)
 	body:SetWidth(432)
 	body:SetJustifyH("LEFT")
@@ -73,30 +93,30 @@ local function Build()
 
 	-- fields cascade off the body's bottom edge — wrapped text height
 	-- varies by width/font, fixed offsets overlapped the body copy
-	local urlLab = GM.MakeFontString(f, GM.FONT, 9, "textDim")
+	local urlLab = GM.MakeFontString(p1, GM.FONT, 9, "textDim")
 	urlLab:SetPoint("TOPLEFT", body, "BOTTOMLEFT", 0, -12)
 	urlLab:SetText("SERVER")
-	local urlEb = W.EditBox(f, 300)
+	local urlEb = W.EditBox(p1, 300)
 	urlEb:SetPoint("TOPLEFT", urlLab, "BOTTOMLEFT", -2, -4)
 	urlEb:SetText("http://127.0.0.1:8765")
 	ui.urlEb = urlEb
 
-	local nameLab = GM.MakeFontString(f, GM.FONT, 9, "textDim")
+	local nameLab = GM.MakeFontString(p1, GM.FONT, 9, "textDim")
 	nameLab:SetPoint("TOPLEFT", urlEb, "BOTTOMLEFT", 2, -10)
 	nameLab:SetText("CALLSIGN")
-	local nameEb = W.EditBox(f, 200)
+	local nameEb = W.EditBox(p1, 200)
 	nameEb:SetPoint("TOPLEFT", nameLab, "BOTTOMLEFT", -2, -4)
 	nameEb:SetText(UnitName and UnitName("player") or "goblinmind")
 	ui.nameEb = nameEb
 
-	local keyLab = GM.MakeFontString(f, GM.FONT, 9, "textDim")
+	local keyLab = GM.MakeFontString(p1, GM.FONT, 9, "textDim")
 	keyLab:SetPoint("TOPLEFT", nameEb, "BOTTOMLEFT", 2, -10)
 	keyLab:SetText("KEY (only if the server gave you one)")
-	local keyEb = W.EditBox(f, 200)
+	local keyEb = W.EditBox(p1, 200)
 	keyEb:SetPoint("TOPLEFT", keyLab, "BOTTOMLEFT", -2, -4)
 	ui.keyEb = keyEb
 
-	local connect = Btn(f, 90, "CONNECT", function()
+	local connect = Btn(p1, 90, "CONNECT", function()
 		local url = strtrim(urlEb:GetText() or "")
 		if not url:match("^https?://[%w%.%-%:]+") then
 			GM.Print(GM.CC("warn")
@@ -112,7 +132,7 @@ local function Build()
 	end)
 	connect:SetPoint("BOTTOMLEFT", 12, 10)
 
-	local skip = Btn(f, 90, "SKIP", function()
+	local skip = Btn(p1, 90, "SKIP", function()
 		GM.db.backendSkip = true
 		f:Hide()
 		GM.Print("backend skipped — scans + mesh still drive prices. "
@@ -120,8 +140,106 @@ local function Build()
 	end)
 	skip:SetPoint("LEFT", connect, "RIGHT", 8, 0)
 
-	local later = Btn(f, 90, "LATER", function() f:Hide() end)
+	local later = Btn(p1, 90, "LATER", function() f:Hide() end)
 	later:SetPoint("LEFT", skip, "RIGHT", 8, 0)
+
+	local toImport = Btn(p1, 90, "IMPORT >", function() SetPage(2) end)
+	toImport:SetPoint("BOTTOMRIGHT", -12, 10)
+
+	-- ======================= page 2: import ========================
+
+	local iStatus = GM.MakeFontString(p2, GM.FONT, 9, "textDim")
+	iStatus:SetPoint("TOPLEFT", 12, -28)
+	ui.iStatus = iStatus
+
+	local iBody = GM.MakeFontString(p2, GM.FONT, 10, "text")
+	iBody:SetPoint("TOPLEFT", 14, -44)
+	iBody:SetWidth(432)
+	iBody:SetJustifyH("LEFT")
+	iStatus:SetWordWrap(false)
+	iBody:SetSpacing(3)
+	iBody:SetText("Settings found in other addons. Each item lists "
+		.. "what comes over — import merges, it never wipes your "
+		.. "existing GoblinMind setup.")
+
+	local rows = {}
+	ui.rows = rows
+	ui.iStatus2 = GM.MakeFontString(p2, GM.FONT, 9, "textDim")
+	ui.iStatus2:SetPoint("BOTTOMLEFT", 12, 36)
+	ui.iStatus2:SetWidth(436)
+	ui.iStatus2:SetJustifyH("LEFT")
+
+	local back = Btn(p2, 90, "< BACK", function() SetPage(1) end)
+	back:SetPoint("BOTTOMLEFT", 12, 10)
+
+	local done = Btn(p2, 90, "DONE", function() f:Hide() end)
+	done:SetPoint("BOTTOMRIGHT", -12, 10)
+
+	local function MakeRow(ix)
+		local r = CreateFrame("Frame", nil, p2)
+		r:SetSize(436, 46)
+		r:SetPoint("TOPLEFT", 12, -64 - (ix - 1) * 50)
+		GM.Panel(r, "contLowest")
+		r.addon = GM.MakeFontString(r, GM.FONT, 8, "textDim")
+		r.addon:SetPoint("TOPLEFT", 8, -4)
+		r.title = GM.MakeFontString(r, GM.FONT_BOLD, 10, "text")
+		r.title:SetPoint("TOPLEFT", 8, -15)
+		r.title:SetWidth(340)
+		r.title:SetJustifyH("LEFT")
+		r.detail = GM.MakeFontString(r, GM.FONT, 9, "textDim")
+		r.detail:SetPoint("TOPLEFT", 8, -29)
+		r.detail:SetWidth(340)
+		r.detail:SetJustifyH("LEFT")
+		r.btn = Btn(r, 70, "IMPORT", function()
+			local summary, err = GM.Import.Run(r.data)
+			if summary then
+				r.btn.text:SetText("DONE")
+				r.btn.text:SetTextColor(GM.RGB("pos"))
+				r.result:SetText(GM.CC("pos") .. summary .. "|r")
+			else
+				r.result:SetText(GM.CC("warn")
+					.. tostring(err or "nothing") .. "|r")
+			end
+		end)
+		r.btn:SetPoint("RIGHT", -8, 0)
+		r.result = GM.MakeFontString(r, GM.FONT, 8, "textDim")
+		r.result:SetPoint("TOPRIGHT", r.btn, "BOTTOMRIGHT", 0, -2)
+		r.result:SetWidth(140)
+		r.result:SetJustifyH("RIGHT")
+		r.result:SetWidth(240)
+		r.result:SetWordWrap(false)
+		r:Hide()
+		return r
+	end
+
+	function ui.RefreshImport()
+		if not GM.Import then return end
+		local items, extras = GM.Import.Detect()
+		for i, item in ipairs(items) do
+			local r = rows[i] or MakeRow(i)
+			rows[i] = r
+			r.data = item
+			r.addon:SetText(item.addon:upper())
+			r.title:SetText(item.title)
+			r.detail:SetText(item.detail)
+			r.result:SetText("")
+			r.btn.text:SetText(item.done and "DONE" or "IMPORT")
+			r.btn.text:SetTextColor(GM.RGB(
+				item.done and "pos" or "textDim"))
+			r:Show()
+		end
+		for i = #items + 1, #rows do rows[i]:Hide() end
+		local note = extras and #extras > 0
+			and table.concat(extras, "\n") or nil
+		if #items == 0 then
+			ui.iStatus:SetText(GM.CC("warn")
+				.. "no compatible addon data found|r")
+		else
+			ui.iStatus:SetText(format("%d importable item%s detected",
+				#items, #items == 1 and "" or "s"))
+		end
+		ui.iStatus2:SetText(note or "")
+	end
 end
 
 local function Refresh()
@@ -139,9 +257,12 @@ local function Refresh()
 	end
 end
 
-function OB.Show()
+-- OB.Show("import") opens page 2 directly (/goblin import); any other
+-- argument (or none) lands on page 1, the backend page.
+function OB.Show(page)
 	Build()
 	Refresh()
+	SetPage(page == "import" and 2 or 1)
 	ui:Show()
 end
 

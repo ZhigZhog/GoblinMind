@@ -295,6 +295,9 @@ local function BuildUI()
 		GM.Panel(r, "contLowest")
 		r.skill = GM.MakeFontString(r, GM.FONT_BOLD, 9, "pos")
 		r.skill:SetPoint("LEFT", 6, 0)
+		r.skill:SetWidth(40)
+		r.skill:SetJustifyH("LEFT")
+		r.skill:SetWordWrap(false)
 		r.skill:SetText("▲")
 		r.skill:Hide()
 		r.name = GM.MakeFontString(r, GM.FONT, 10, "text")
@@ -307,6 +310,7 @@ local function BuildUI()
 		r.profit:SetJustifyH("LEFT")
 		r.sale = GM.MakeFontString(r, GM.FONT, 9, "textDim")
 		r.sale:SetPoint("LEFT", 262, 0)
+		r.name:SetWordWrap(false)
 		r.sale:SetWidth(44) -- "999/d" fits; clips before `can`
 		r.sale:SetJustifyH("LEFT")
 		r.can = GM.MakeFontString(r, GM.FONT_MED, 9, "textDim")
@@ -320,6 +324,8 @@ local function BuildUI()
 		GM.Panel(r.qbtn, "contHigh")
 		r.qbtn.text = GM.MakeFontString(r.qbtn, GM.FONT_BOLD, 9, "accent")
 		r.qbtn.text:SetPoint("CENTER")
+		r.qbtn.text:SetWidth(40)
+		r.qbtn.text:SetWordWrap(false)
 		-- tip bound ONCE — Refresh assigns r._row per slot; hooking
 		-- inside the render loop stacked OnEnter handlers that
 		-- captured stale rows (and group headers need nil tips)
@@ -395,6 +401,7 @@ local function BuildUI()
 		r.qty = CreateFrame("EditBox", nil, r)
 		r.qty:SetSize(34, ROW_H - 4)
 		r.qty:SetPoint("LEFT", 138, 0)
+		r.name:SetWordWrap(false)
 		r.qty:SetAutoFocus(false)
 		r.qty:SetFont(GM.FONT_BOLD, 10, "")
 		r.qty:SetTextColor(GM.RGB("accent"))
@@ -437,6 +444,8 @@ local function BuildUI()
 			GM.Panel(b, "contHigh")
 			b.text = GM.MakeFontString(b, GM.FONT_BOLD, 9, "textDim")
 			b.text:SetPoint("CENTER")
+			b.text:SetWidth(14)
+			b.text:SetWordWrap(false)
 			b.text:SetText(label)
 			return b
 		end
@@ -485,6 +494,7 @@ local function BuildUI()
 	ui.detSub:SetPoint("TOPLEFT", ui.detName, "BOTTOMLEFT", 0, -4)
 	ui.detSub:SetWidth(320)
 	ui.detSub:SetJustifyH("LEFT")
+	ui.detName:SetWordWrap(false)
 	ui.detMats = {}
 	for i = 1, 6 do
 		local m = {}
@@ -497,6 +507,10 @@ local function BuildUI()
 		m.name:SetJustifyH("LEFT")
 		m.have = GM.MakeFontString(det, GM.FONT_MED, 9, "textDim")
 		m.have:SetPoint("TOPRIGHT", det, "TOPRIGHT", -10, -54 - (i - 1) * 15)
+		m.have:SetWidth(40)
+		m.have:SetJustifyH("LEFT")
+		m.have:SetWordWrap(false)
+		m.name:SetWordWrap(false)
 		-- invisible hover region for the location tooltip — anchored
 		-- top+height, NOT top+bottom-right: the latter stretches each
 		-- box to the pane's lower edge and swallows clicks meant for
@@ -544,13 +558,18 @@ local function BuildUI()
 			Footer("recipe tracking unsupported on this client", true)
 			return
 		end
-		-- Forever rejects arg 2 outright — ask with it, retry bare
+		-- Forever's Usage wants (recipeID, isRecraft) — ask with the
+		-- arg first, retry bare for older builds. select(2,pcall) alone
+		-- would hand back the error STRING on failure — truthy, reads
+		-- as "tracked" — so gate on the pcall flag, not the value.
 		local on
 		if C_TradeSkillUI.IsRecipeTracked then
-			on = select(2, pcall(C_TradeSkillUI.IsRecipeTracked, ui.sel, false))
-			if on == nil then
-				on = select(2, pcall(C_TradeSkillUI.IsRecipeTracked, ui.sel))
+			local okq
+			okq, on = pcall(C_TradeSkillUI.IsRecipeTracked, ui.sel, false)
+			if not okq then
+				okq, on = pcall(C_TradeSkillUI.IsRecipeTracked, ui.sel)
 			end
+			if not okq then on = false end
 		end
 		local ok = pcall(set, ui.sel, not on, false)
 		if not ok then ok = pcall(set, ui.sel, not on) end
@@ -613,6 +632,9 @@ local function BuildUI()
 	ui.qTotals:SetPoint("BOTTOMLEFT", 8, 10)
 	ui.qTotals:SetWidth(qw - 160)
 	ui.qTotals:SetJustifyH("LEFT")
+	ui.qTotals:SetWidth(300)
+	ui.qTotals:SetJustifyH("LEFT")
+	ui.qTotals:SetWordWrap(false)
 
 	ui.footer = GM.MakeFontString(f, GM.FONT, 9, "secondary")
 	ui.footer:SetPoint("BOTTOMLEFT", 10, 8)
@@ -1096,15 +1118,19 @@ function CU.Refresh()
 		ui.det:Show()
 		ui.detIcon:SetTexture(GM.ItemIcon(dr.itemID) or 134400)
 		ui.detIconBtn.itemID = dr.itemID
-		-- Forever rejects arg 2 outright — ask with it, retry bare
+		-- Forever's Usage wants (recipeID, isRecraft); a failed pcall's
+		-- error string is truthy — reads as "tracked" — so gate on the
+		-- pcall flag, not the value
 		local tracked
 		if C_TradeSkillUI and C_TradeSkillUI.IsRecipeTracked then
-			tracked = select(2, pcall(C_TradeSkillUI.IsRecipeTracked,
-				ui.sel, false))
-			if tracked == nil then
-				tracked = select(2, pcall(C_TradeSkillUI.IsRecipeTracked,
-					ui.sel))
+			local okq
+			okq, tracked = pcall(C_TradeSkillUI.IsRecipeTracked,
+				ui.sel, false)
+			if not okq then
+				okq, tracked = pcall(C_TradeSkillUI.IsRecipeTracked,
+					ui.sel)
 			end
+			if not okq then tracked = nil end
 		end
 		ui.detName:SetText((tracked and "★ " or "")
 			.. (GM.ItemName(dr.itemID) or dr.name or "?"))
@@ -1141,7 +1167,9 @@ function CU.Refresh()
 				m.icon:SetTexture(GM.ItemIcon(mat.id) or 134400)
 				m.name:Show()
 				m.name:SetText(GM.ItemName(mat.id) or ("item " .. mat.id))
-				local have = GM.Crafting.Owned(mat.id)
+				-- bags-only, matching the row's "bags N" — a banked mat
+				-- still shows via the +N suffix from Available
+				local have = GM.BagCount(mat.id) or 0
 				local all = GM.Crafting.Available
 					and GM.Crafting.Available(mat.id) or have
 				m.have:Show()

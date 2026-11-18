@@ -114,6 +114,10 @@ SlashCmdList.GOBLINMIND = function(msg)
 		if GM.Onboard then GM.Onboard.Show() end
 		return
 	end
+	if msg == "import" then
+		if GM.Onboard then GM.Onboard.Show("import") end
+		return
+	end
 	if msg == "minimap" then
 		GM.db.minimapHide = not GM.db.minimapHide
 		if GM.minimapBtn then GM.minimapBtn:SetShown(not GM.db.minimapHide) end
@@ -521,8 +525,10 @@ SlashCmdList.GOBLINMIND = function(msg)
 	end
 	if msg:sub(1, 4) == "bags" then
 		-- per-container dump: settles "is there a carried bag past
-		-- the computed range?" — bank containers show 0 items while
-		-- the bank frame is closed (contents unreadable until open).
+		-- the computed range?" — FOREVER QUIRK: bank containers DO
+		-- enumerate items while the bank frame is closed (which is
+		-- exactly why the carried-boundary probe needs equip-slot
+		-- ids, not item presence).
 		if not (C_Container and C_Container.GetContainerNumSlots) then
 			GM.Print("C_Container unavailable on this client")
 			return
@@ -804,32 +810,40 @@ local NUM_CARRIED = (NUM_BAG_SLOTS or 4)
 -- ...but Constants can under-report: a client with a reagent or
 -- profession bag may carry a container the constants don't know
 -- (NumReagentBagSlots absent → bag index 5 sits past the computed
--- range → every item in it invisible to BagCount). Bank contents
--- don't enumerate while the frame is CLOSED, so any container past
--- NUM_CARRIED that yields items while closed is provably carried —
--- learn the index once, persist it, keep counting it while empty.
+-- range → every item in it invisible to BagCount). FOREVER QUIRK:
+-- bank bag contents enumerate while the bank is CLOSED, so "items
+-- past NUM_CARRIED while closed" does NOT prove carried — it taught
+-- the probe bank bags 5/6 as carried and BagCount read the bank
+-- (bug 2026-11-17). The discriminator that can't lie is the bag's
+-- own EQUIP slot: carried bags occupy inventory ids 20+ (reagent
+-- 24), bank bags 67+. ContainerIDToInventoryID gives it directly;
+-- GetInventoryItemLink over the equipped-bag slots is the fallback.
 local function ProbeCarried()
 	if BankFrame and BankFrame:IsShown() then return end
-	if not (C_Container and C_Container.GetContainerItemInfo) then
-		return
-	end
+	local CID2Inv = (C_Container and C_Container.ContainerIDToInventoryID)
+		or ContainerIDToInventoryID
 	local hi = 0
-	for bag = NUM_CARRIED + 1, NUM_CARRIED + 8 do
-		local slots = C_Container.GetContainerNumSlots(bag) or 0
-		if slots <= 0 then break end
-		for slot = 1, slots do
-			if C_Container.GetContainerItemInfo(bag, slot) then
-				hi = bag
-				break
-			end
+	if CID2Inv then
+		for bag = NUM_CARRIED + 1, NUM_CARRIED + 8 do
+			local inv = CID2Inv(bag)
+			if not inv then break end
+			if inv >= 20 and inv < 60 then hi = bag end
+		end
+	elseif GetInventoryItemLink then
+		-- equipped bag slots: 20..23 bags, 24 reagent — slot s ↔
+		-- container s-19
+		for slot = NUM_CARRIED + 20, 27 do
+			if not GetInventoryItemLink("player", slot) then break end
+			hi = slot - 19
 		end
 	end
-	if hi > NUM_CARRIED and GoblinMindSettings
-		and hi ~= GoblinMindSettings.carriedMax then
-		GoblinMindSettings.carriedMax = hi
+	if GoblinMindSettings
+		and (hi > NUM_CARRIED and hi or nil)
+			~= GoblinMindSettings.carriedMax then
+		GoblinMindSettings.carriedMax = hi > NUM_CARRIED and hi or nil
 		GM.Print(GM.CC("textDim")
-			.. format("[bags] extra carried bag learned: "
-				.. "container %d|r", hi))
+			.. format("[bags] carried range: containers 0..%d|r",
+				GM.CarriedBagMax()))
 	end
 end
 

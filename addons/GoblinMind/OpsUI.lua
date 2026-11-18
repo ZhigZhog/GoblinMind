@@ -122,36 +122,56 @@ local function PopupMenu(btn, entries)
 		GM.Panel(m, "contLow", "outline")
 		ui.menu, ui.catcher = m, catcher
 	end
-	for _, b in ipairs(m.btns or {}) do b:Hide() end
 	m.btns = m.btns or {}
-	local w = 180
-	for i, e in ipairs(entries) do
-		local b = m.btns[i]
-		if not b then
-			b = CreateFrame("Button", nil, m)
-			b:SetHeight(18)
-			b.text = GM.MakeFontString(b, GM.FONT, 10, "text")
-			b.text:SetPoint("LEFT", 6, 0)
-			b.text:SetJustifyH("LEFT")
-			local hov = b:CreateTexture(nil, "ARTWORK")
-			hov:SetAllPoints()
-			hov:SetColorTexture(GM.RGB("contHigh"))
-			hov:Hide()
-			b:SetScript("OnEnter", function() hov:Show() end)
-			b:SetScript("OnLeave", function() hov:Hide() end)
-			m.btns[i] = b
+	local w = 220
+	-- unbounded lists blow off the screen (a 194-group import); cap
+	-- the window and mousewheel-page through the rest
+	local MAX_ROWS = 14
+	local vis = math.min(#entries, MAX_ROWS)
+	m.off = 0
+	local function Paint()
+		for _, b in ipairs(m.btns) do b:Hide() end
+		for i = 1, vis do
+			local e = entries[m.off + i]
+			if not e then break end
+			local b = m.btns[i]
+			if not b then
+				b = CreateFrame("Button", nil, m)
+				b:SetHeight(18)
+				b.text = GM.MakeFontString(b, GM.FONT, 10, "text")
+				b.text:SetPoint("LEFT", 6, 0)
+				b.text:SetWidth(w - 12)
+				b.text:SetWordWrap(false)
+				-- RIGHT justify: long paths clip the shared PREFIX
+				-- and keep the leaf that tells them apart
+				b.text:SetJustifyH("RIGHT")
+				local hov = b:CreateTexture(nil, "ARTWORK")
+				hov:SetAllPoints()
+				hov:SetColorTexture(GM.RGB("contHigh"))
+				hov:Hide()
+				b:SetScript("OnEnter", function() hov:Show() end)
+				b:SetScript("OnLeave", function() hov:Hide() end)
+				m.btns[i] = b
+			end
+			b:SetWidth(w)
+			b:SetPoint("TOPLEFT", 2, -2 - (i - 1) * 18)
+			b.text:SetText(e.label)
+			b.text:SetTextColor(GM.RGB(e.checked and "accent" or "text"))
+			b:SetScript("OnClick", function()
+				ui.menu:Hide() ui.catcher:Hide()
+				e.cb()
+			end)
+			b:Show()
 		end
-		b:SetWidth(w)
-		b:SetPoint("TOPLEFT", 2, -2 - (i - 1) * 18)
-		b.text:SetText(e.label)
-		b.text:SetTextColor(GM.RGB(e.checked and "accent" or "text"))
-		b:SetScript("OnClick", function()
-			ui.menu:Hide() ui.catcher:Hide()
-			e.cb()
-		end)
-		b:Show()
 	end
-	m:SetSize(w + 4, 4 + #entries * 18)
+	m:EnableMouseWheel(true)
+	m:SetScript("OnMouseWheel", function(_, d)
+		m.off = math.min(math.max(0, #entries - vis),
+			math.max(0, m.off - d))
+		Paint()
+	end)
+	Paint()
+	m:SetSize(w + 4, 4 + vis * 18)
 	m:ClearAllPoints()
 	m:SetPoint("TOPRIGHT", btn, "BOTTOMRIGHT", 0, -2)
 	m.btn = btn
@@ -178,6 +198,11 @@ local function ListRow(parent, w)
 	r.text:SetJustifyH("LEFT")
 	r.sub = GM.MakeFontString(r, GM.FONT_MED, 8, "textDim")
 	r.sub:SetPoint("RIGHT", -6, 0)
+	r.sub:SetWidth(100)
+	r.sub:SetWordWrap(false)
+	r.text:SetWidth(170)
+	r.text:SetJustifyH("LEFT")
+	r.text:SetWordWrap(false)
 	return r
 end
 
@@ -276,8 +301,13 @@ local function BuildUI()
 	ui.fldHeader:SetPoint("TOPLEFT", 8, -20)
 	ui.assignedFs = GM.MakeFontString(fldP, GM.FONT, 9, "secondary")
 	ui.assignedFs:SetPoint("TOPLEFT", ui.fldHeader, "BOTTOMLEFT", 0, -4)
+	ui.fldHeader:SetWidth(300)
+	ui.fldHeader:SetJustifyH("LEFT")
+	ui.fldHeader:SetWordWrap(false)
 	ui.assignedFs:SetWidth(330)
 	ui.assignedFs:SetJustifyH("LEFT")
+	ui.assignedFs:SetMaxLines(2) -- imported ops can have 100+ users;
+	-- uncapped it grew down over every field row
 
 	local assignBtn = Btn(fldP, "ASSIGN", 54, 16)
 	assignBtn:SetPoint("TOPRIGHT", -8, -20)
@@ -355,6 +385,9 @@ local function BuildUI()
 
 	ui.footer = GM.MakeFontString(f, GM.FONT, 9, "secondary")
 	ui.footer:SetPoint("BOTTOMLEFT", 10, 8)
+	ui.footer:SetWidth(520)
+	ui.footer:SetJustifyH("LEFT")
+	ui.footer:SetWordWrap(false)
 	ui.footer:SetText("named ops are shared — assign via ASSIGN or the group's op slot")
 
 	-- scroll for the field host (ops have ≤9 fields — fixed layout ok)
@@ -477,12 +510,22 @@ local function RefreshFields()
 	if not op then return end
 	if not ui.renEb:HasFocus() then ui.renEb:SetText(n) end
 
-	-- assignment summary
-	local users
+	-- assignment summary — count + a bounded preview, not the full
+	-- path dump (a 194-group TSM import overflows the whole panel)
+	local paths
 	for _, o in ipairs(GM.Groups.Ops(SelType())) do
-		if o.name == n then users = o.groups end
+		if o.name == n then paths = o.userPaths end
 	end
-	ui.assignedFs:SetText("assigned to: " .. (users or "—"))
+	if paths and #paths > 0 then
+		local prev = {}
+		for i = 1, math.min(#paths, 3) do prev[i] = paths[i] end
+		ui.assignedFs:SetText(format(
+			"assigned to %d group%s — %s%s", #paths,
+			#paths == 1 and "" or "s", table.concat(prev, ", "),
+			#paths > 3 and (", +" .. (#paths - 3) .. " more") or ""))
+	else
+		ui.assignedFs:SetText("assigned to: —")
+	end
 
 	-- rows for this type's fields
 	local defs = {}

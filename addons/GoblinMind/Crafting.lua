@@ -1232,12 +1232,18 @@ function C.List()
 	return out
 end
 
+-- the "bags N" column + CRAFTABLE ONLY filter + the Craft gate all
+-- mean "castable right now" — BAGS ONLY. The engine won't take bank
+-- mats for a cast even while the frame's open, and our parked-offscreen
+-- BankFrame keeps IsShown() true for the whole BankUI session, so
+-- C.Owned's live-bank leg would count closed-looking bank stock.
+-- Fetchable stock (bank/mail/alts/gbank) is the +N from CraftableAll.
 function C.Craftable(recipeID)
 	local r = GoblinMindCrafting.recipes[recipeID]
 	if not r then return 0 end
 	local n = math.huge
 	for _, m in ipairs(r.mats or {}) do
-		n = min(n, floor(C.Owned(m.id) / m.qty))
+		n = min(n, floor((GM.BagCount(m.id) or 0) / m.qty))
 	end
 	return n == math.huge and 0 or n
 end
