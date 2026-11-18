@@ -754,5 +754,14 @@ Primary data = the in-house book feed below.
   that doesn't update LineW calls silently clips. Rows re-anchor
   off accumulated `y` in PutLine (heading gaps make pitch
   non-uniform) — ClearAllPoints+SetPoint, not the creation anchor.
+- **Tooltip settings grid (R7)**: `BuildTooltipRows` renders
+  descriptors in REGISTRY order with visible `d.heading` group
+  labels — never re-sort (the old alphabetical pass scattered
+  related rows). Entries marked `hidden = true` in the registry
+  stay registered for TSM import parity but draw no settings row
+  (alt-realm ×4, `detailedMats`, `convert` — no-ops on this
+  client). Each row's `gloss` shows on an invisible hover Button
+  over the label (the only place glosses surface). Ledger `range`
+  rows emit only when `TT.CurrentPreset() ~= "simple"` (R6).
 - Not yet registered on the Codebase Map (project started 2026-11-11,
   post-closure).

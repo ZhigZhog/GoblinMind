@@ -802,40 +802,59 @@ local function Build()
 end
 
 -- tooltip-line control rows are built once from the registry —
--- deduped entries, two columns
+-- deduped entries in REGISTRY order with visible group headings
+-- (R7): sorting alphabetically scattered related rows across
+-- columns. Single column because headings can't span two.
 local function BuildTooltipRows()
 	if ui.ttRows then return end
 	ui.ttRows = {}
 	local opts = GM.Tooltip.OptionEntries()
-	sort(opts, function(a, b)
-		if (a.heading or "") ~= (b.heading or "") then
-			return (a.heading or "") < (b.heading or "")
+	local rowH, y = 18, -24
+	local lastHead
+	for _, d in ipairs(opts) do
+		if not d.hidden then
+			if d.heading ~= lastHead then
+				lastHead = d.heading
+				if y < -24 then y = y - 6 end -- air above later groups
+				local h = GM.MakeFontString(ui.ttHost,
+					GM.FONT_BOLD, 9, "accent")
+				h:SetPoint("TOPLEFT", 12, y)
+				h:SetText(strupper(d.heading or ""))
+				y = y - 16
+			end
+			local fs = GM.MakeFontString(ui.ttHost, GM.FONT, 9, "text")
+			fs:SetPoint("TOPLEFT", 24, y)
+			fs:SetWidth(440)
+			fs:SetJustifyH("LEFT")
+			fs:SetText(Label(d))
+			-- invisible hover surface over the label — the ONLY place
+			-- the entry's gloss can live (F10): GameTooltip on hover
+			local hov = CreateFrame("Button", nil, ui.ttHost)
+			hov:SetPoint("TOPLEFT", 20, y + 4)
+			hov:SetSize(468, rowH)
+			hov.d = d
+			hov:SetScript("OnEnter", function(self)
+				local dd = self.d
+				if not dd.gloss then return end
+				GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+				GameTooltip:SetText(Label(dd))
+				GameTooltip:AddLine(dd.gloss, 1, 1, 1, true)
+				GameTooltip:Show()
+			end)
+			hov:SetScript("OnLeave", function() GameTooltip:Hide() end)
+			local ctl
+			if d.kind == "bool" then
+				ctl = BoolSeg(ui.ttHost, d.get, d.set)
+			else
+				ctl = CycleBtn(ui.ttHost, 84, d.get, d.set,
+					d.domain, ENUM_DISP)
+			end
+			ctl:SetPoint("TOPLEFT", 496, y)
+			tinsert(ui.ttRows, { d = d, ctl = ctl })
+			y = y - rowH
 		end
-		return Label(a) < Label(b)
-	end)
-	local colW, rowH, top = 290, 18, 24
-	for i, d in ipairs(opts) do
-		local col = i <= ceil(#opts / 2) and 0 or 1
-		local ri = col == 0 and i or i - ceil(#opts / 2)
-		local x = 6 + col * colW
-		local y = -top - (ri - 1) * rowH
-		local fs = GM.MakeFontString(ui.ttHost, GM.FONT, 9, "text")
-		fs:SetPoint("TOPLEFT", x + 6, y)
-		fs:SetWidth(colW - 90)
-		fs:SetJustifyH("LEFT")
-		fs:SetText(Label(d))
-		local ctl
-		if d.kind == "bool" then
-			ctl = BoolSeg(ui.ttHost, d.get, d.set)
-		else
-			ctl = CycleBtn(ui.ttHost, 84, d.get, d.set, d.domain, ENUM_DISP)
-		end
-		-- same y as the label — the old +3 floated every control into
-		-- the row above (looked like a second, stray button)
-		ctl:SetPoint("TOPLEFT", x + colW - 84, y)
-		tinsert(ui.ttRows, { d = d, ctl = ctl })
 	end
-	ui.ttInnerH = math.max(234, ceil(#opts / 2) * rowH + top + 10)
+	ui.ttInnerH = math.max(234, -y + 10)
 end
 
 function S.Refresh()

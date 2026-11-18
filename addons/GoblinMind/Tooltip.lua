@@ -460,7 +460,9 @@ local function P_Purchase(t, id, stack)
 	else
 		t:AddTextLine("You bought ×" .. s.buyQ,
 			"avg " .. MoneyFmt(s.buyT / s.buyQ))
-		if s.buyMin ~= math.huge and s.buyMin ~= s.buyMax then
+		-- range is trader-level detail (R6) — Simple mode stays lean
+		if (not TT.CurrentPreset or TT.CurrentPreset() ~= "simple")
+			and s.buyMin ~= math.huge and s.buyMin ~= s.buyMax then
 			t:AddTextLine("    range",
 				MoneyFmt(s.buyMin) .. " – " .. MoneyFmt(s.buyMax))
 		end
@@ -479,7 +481,9 @@ local function P_Sale(t, id, stack)
 	else
 		t:AddTextLine("You sold ×" .. s.sellQ,
 			"avg " .. MoneyFmt(s.sellT / s.sellQ))
-		if s.sellMin ~= math.huge and s.sellMin ~= s.sellMax then
+		-- range is trader-level detail (R6) — Simple mode stays lean
+		if (not TT.CurrentPreset or TT.CurrentPreset() ~= "simple")
+			and s.sellMin ~= math.huge and s.sellMin ~= s.sellMax then
 			t:AddTextLine("    range",
 				MoneyFmt(s.sellMin) .. " – " .. MoneyFmt(s.sellMax))
 		end
@@ -607,12 +611,14 @@ local function Sections()
 		default = "simple", label = "Disenchant value",
 		gloss = "Typical AH worth of the materials from disenchanting one. Only shown when it beats the vendor price.",
 		fn = P_Destroy })
+	-- hidden = stays registered for TSM import parity but no settings
+	-- row — the producer is a no-op / not active on this client (R7)
 	tinsert(general.entries, { key = "convertTooltipFormat", set = "full",
-		default = "none", label = "Convert value",
+		default = "none", hidden = true, label = "Convert value",
 		gloss = "Worth of what this turns into (e.g. combining essences). Not active yet.",
 		fn = P_Convert })
 	tinsert(general.entries, { key = "convertTooltipFormat", set = "simple",
-		default = "none", label = "Convert value",
+		default = "none", hidden = true, label = "Convert value",
 		gloss = "Worth of what this turns into (e.g. combining essences). Not active yet.",
 		fn = P_Convert })
 	tinsert(general.entries, { key = "vendorBuyTooltip", set = true,
@@ -665,11 +671,11 @@ local function Sections()
 					label = "Long-run price",
 					gloss = "Average over a longer stretch (up to 60 days on TSM data, 14 on your own scans).",
 					fn = P_Historical },
-				{ key = "altMinBuyout", module = "AuctionDB", set = true, default = false, fn = function() end },
-				{ key = "altMarketValueRecent", module = "AuctionDB", set = true, default = false, fn = function() end },
-				{ key = "altMarketValue", module = "AuctionDB", set = "noTrend", default = "none", fn = function() end },
-				{ key = "altMarketValue", module = "AuctionDB", set = "withTrend", default = "none", fn = function() end },
-				{ key = "altHistorical", module = "AuctionDB", set = true, default = false, fn = function() end },
+				{ key = "altMinBuyout", module = "AuctionDB", set = true, default = false, hidden = true, fn = function() end },
+				{ key = "altMarketValueRecent", module = "AuctionDB", set = true, default = false, hidden = true, fn = function() end },
+				{ key = "altMarketValue", module = "AuctionDB", set = "noTrend", default = "none", hidden = true, fn = function() end },
+				{ key = "altMarketValue", module = "AuctionDB", set = "withTrend", default = "none", hidden = true, fn = function() end },
+				{ key = "altHistorical", module = "AuctionDB", set = true, default = false, hidden = true, fn = function() end },
 				{ key = "regionMarketValue", module = "AuctionDB", set = "noTrend", default = "none",
 					label = "Typical (region)",
 					gloss = "Typical price averaged across every realm in your region.",
@@ -759,7 +765,7 @@ local function Sections()
 					label = "Cost to craft",
 					gloss = "Price of the materials, and what's left after selling at the typical price (before the AH's cut).",
 					fn = P_CraftingCost },
-				{ key = "detailedMats", module = "Crafting", set = true, default = false, fn = function() end },
+				{ key = "detailedMats", module = "Crafting", set = true, default = false, hidden = true, fn = function() end },
 				{ key = "matPrice", module = "Crafting", set = true, default = false,
 					label = "Value as material",
 					gloss = "Price GoblinMind uses for this item when it's an ingredient in a craft.",
@@ -1120,7 +1126,7 @@ function TT.OptionEntries()
 					heading = sec.name or sec.heading, domain = {},
 					default = e.default,
 					label = e.label, settingLabel = e.settingLabel,
-					gloss = e.gloss,
+					gloss = e.gloss, hidden = e.hidden,
 				}
 				tinsert(out, seen[id])
 			end
