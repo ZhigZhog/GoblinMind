@@ -1099,12 +1099,32 @@ def delta_record(books):
         # (rsalep's denominator must be every lot previously listed,
         # not just the prefixes that happened to shrink)
         gone_by_iid, appt_by_iid, prev_lots_iid = {}, {}, {}
+        unit_lots_iid = {}
         for p, on in old_pref.items():
             iid = p.split(':', 1)[0]
             prev_lots_iid[iid] = prev_lots_iid.get(iid, 0) + on
+            try:
+                unit_lots_iid.setdefault(iid, []).append(
+                    (int(p.rsplit(':', 1)[1]), on))
+            except (ValueError, IndexError):
+                pass
             gone = on - new_pref.get(p, 0)
             if gone > 0:
                 gone_by_iid.setdefault(iid, {})[p] = gone
+        # per-item median listed unit price in the OLD snapshot — the
+        # price wall a buyer actually saw. A disappearance priced far
+        # above it isn't a purchase: it's the seller pulling an anchor
+        # listing (10k arrows "sold" at 100x market = a cancelled wall,
+        # reposted under an identical fingerprint the matcher can't see)
+        med_by_iid = {}
+        for iid, lst in unit_lots_iid.items():
+            tot = sum(n for _, n in lst)
+            acc = 0
+            for u, n in sorted(lst):
+                acc += n
+                if acc * 2 >= tot:
+                    med_by_iid[iid] = u
+                    break
         for p, nn in new_pref.items():
             appt = nn - old_pref.get(p, 0)
             if appt > 0:
@@ -1144,6 +1164,9 @@ def delta_record(books):
                     cls = 's'  # every variant had provable time left
                 else:
                     cls = 'i'  # could equally be expiry/cancel/relist
+                med = med_by_iid.get(iid_s) or 0
+                if cls in ('s', 'u') and med > 0 and unit > med * 10:
+                    cls = 'i'  # off-market anchor — a cancel, not a buy
                 scope_sales.setdefault(str(iid), []).append(
                     [now, qty * left, unit, left,
                      prev_lots_iid.get(iid_s, 0), cls])

@@ -624,7 +624,12 @@ Primary data = the in-house book feed below.
   per item, appeared lots in the new book cancel gone lots when
   they share a unit price (restack relist) or stack size (reprice
   relist); each new lot cancels at most one old. Cross-seller
-  collisions suppress too (undercount > inflate). `book_t <= prev_t`
+  collisions suppress too (undercount > inflate). After matching,
+  's'/'u' candidates priced >10x the item's MEDIAN listed unit (old
+  snapshot, count-weighted) demote to 'i' — anchor walls cancelled
+  and reposted under an identical fingerprint are invisible to
+  matching and are the dominant fake-sale source (~30% of events
+  on first live data). `book_t <= prev_t`
   snapshots are skipped (replay guard). Event shape is
   `[t, units, unit, gone, prev_item_lots, cls]` — e[4] is the item's
   TOTAL listed lots (not per-prefix) so `rsalep`'s denominator is

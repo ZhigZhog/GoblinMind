@@ -148,7 +148,26 @@ check('no-tl event class u', ev and ev[0][5] == 'u', repr(ev))
 check('u counted in stats', (gb.delta_stats(SCOPE).get(106) or {})
       .get('vel') == 3)
 
-# --- scenario 10: window without old state -> no events -----------
+# --- scenario 10: off-market anchor cancel -> 'i' -----------------
+# 20 lots at median 100 + one wall at 5000 (50x). The wall
+# disappearing is a cancelled anchor, not a purchase; the 5x-median
+# lot next to it is still a legit sale
+reset()
+old_lots = {'108:1:100:3': 20, '108:1:5000:3': 1, '108:1:500:3': 1}
+run(book(old_lots, NOW - 900))
+run(book({'200:1:10:3': 1}, NOW))
+ev = events(108)
+check('all three prefixes got events', len(ev) == 3, repr(ev))
+anchor = [e for e in ev if e[2] == 5000]
+sale = [e for e in ev if e[2] == 500]
+check('50x-median disappearance -> i', anchor and anchor[0][5] == 'i',
+      repr(ev))
+check('5x-median disappearance stays s', sale and sale[0][5] == 's',
+      repr(ev))
+ds = gb.delta_stats(SCOPE).get(108) or {}
+check('anchor excluded from vel', ds.get('vel') == 21, repr(ds))
+
+# --- scenario 11: window without old state -> no events -----------
 reset()
 run(book({'107:1:100:3': 5}, NOW))
 check('first snapshot records no sales', events(107) == [])
