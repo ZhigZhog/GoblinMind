@@ -192,15 +192,16 @@ end
 local function AgeStr(t0)
 	if not t0 then return nil end
 	local d = time() - t0
-	return d >= 3600 and format("%dh %dm ago", d / 3600, d % 3600 / 60)
-		or d >= 60 and format("%dm ago", d / 60) or format("%ds ago", d)
+	return GM.FmtAge(d) .. " ago"
 end
 
-local function Trend(value, ref) -- "[+9%]" styled like TSM's caret line
-	if not (value and ref and ref > 0) then return "[---]" end
+local function Trend(value, ref)
+	-- signed, colored, no brackets: "1g 20s +9%". nil when there's no
+	-- long-run reference — a bare "[---]" reads as broken, not absent
+	if not (value and ref and ref > 0) then return nil end
 	local d = math.floor((value - ref) / ref * 100 + 0.5)
-	return "[" .. GM.CC(d >= 0 and "pos" or "err") .. (d >= 0 and "+" or "")
-		.. d .. "%|r]"
+	return GM.CC(d >= 0 and "pos" or "err") .. (d >= 0 and "+" or "")
+		.. d .. "%|r"
 end
 
 local function Price(key, itemID)
@@ -213,10 +214,13 @@ end
 local function P_Group(t, id)
 	local path = id and GM.Groups.GroupForItem and GM.Groups.GroupForItem(id)
 	if not path or path == "Base Group" then return end
+	-- deep paths eat the label column — keep the tail: "…/B/C"
+	local a, b = path:match("([^/]+)/([^/]+)$")
+	if a and path:find("/[^/]+/[^/]+") then path = "…/" .. a .. "/" .. b end
 	t:AddTextLine("Group", path)
 end
 
-local function P_Ops(t, id, opType)
+local function P_Ops(t, id, opType, e)
 	local path = id and GM.Groups.GroupForItem and GM.Groups.GroupForItem(id)
 	if not path then return end
 	-- only list op types actually overridden somewhere in the chain,
@@ -228,18 +232,18 @@ local function P_Ops(t, id, opType)
 		if g and g.ops and g.ops[opType] then found = true end
 	end
 	if found then
-		t:AddTextLine(opType:gsub("^%l", strupper) .. " Operation(s)", path)
+		t:AddTextLine(e.label, path)
 	end
 end
 
 local function P_VendorBuy(t, id)
 	local v = Price("vendorbuy", id)
-	if v and v > 0 then t:AddItemValueLine("Vendor Buy Price", v) end
+	if v and v > 0 then t:AddItemValueLine("Buy from vendor", v) end
 end
 
 local function P_VendorSell(t, id)
 	local v = GetInfo and select(11, GetInfo(id))
-	if v and v > 0 then t:AddItemValueLine("Vendor Sell Price", v) end
+	if v and v > 0 then t:AddItemValueLine("Sell to vendor", v) end
 end
 
 local function P_Destroy(t, id)
@@ -259,16 +263,16 @@ local function P_Destroy(t, id)
 	-- ores, and mats only ever show vendor price (mill/prospect don't
 	-- exist on Forever) and the sell line already carries it
 	local vendor = GetInfo and select(11, GetInfo(id)) or 0
-	if v and v > vendor then t:AddItemValueLine("Destroy Value", v) end
+	if v and v > vendor then t:AddItemValueLine("Disenchant value", v) end
 	if not drops then return end
 	for _, d in ipairs(drops) do
 		local p = Price("dbmarket", d.id)
-		local range = d.lo == d.hi and ("×" .. d.lo)
-			or format("×%d–%d", d.lo, d.hi)
+		local range = d.lo == d.hi and tostring(d.lo)
+			or format("%d–%d", d.lo, d.hi)
 		t:AddTextLine(
 			"    " .. GM.CC("text") .. GM.ItemNameOr(d.id) .. "|r "
-				.. GM.CC("textDim") .. range .. " ~" .. d.pct .. "%|r",
-			p and (MoneyFmt(p) .. " ea") or nil)
+				.. GM.CC("textDim") .. range .. " · " .. d.pct .. "%|r",
+			p and (MoneyFmt(p) .. " each") or nil)
 	end
 end
 
@@ -280,30 +284,44 @@ local function P_Convert(t, id)
 	-- mill/prospect/transform source-of-cheapest lands with Part 10
 	local v = Price("convert", id)
 	if not v then return end
-	t:AddItemValueLine("Convert Value", v)
+	t:AddItemValueLine("Convert value", v)
+end
+
+-- inventory "where" parts — omit zero buckets entirely
+local function InvParts(bags, bank, auction, mail)
+	local p = {}
+	if bags > 0 then p[#p + 1] = bags .. " bags" end
+	if bank > 0 then p[#p + 1] = bank .. " bank" end
+	if auction > 0 then p[#p + 1] = auction .. " listed" end
+	if mail > 0 then p[#p + 1] = mail .. " mail" end
+	return table.concat(p, " · ")
 end
 
 local function P_InventoryFull(t, id)
 	local inv = GM.Inventory.Count(id)
 	if inv.total == 0 then return end
-	t:StartSection("Inventory", GM.CC("text") .. format("%d total", inv.total) .. "|r")
+	t:AddTextLine("You own", GM.CC("text") .. inv.total .. "|r")
 	local who = UnitName("player") or "player"
-	t:AddTextLine(who, GM.CC("text") .. format("%d (%d bags, %d bank, %d AH, %d mail)",
-		inv.bags + inv.bank + inv.auction + inv.mail,
-		inv.bags, inv.bank, inv.auction, inv.mail) .. "|r")
+	local mine = InvParts(inv.bags, inv.bank, inv.auction, inv.mail)
+	t:AddTextLine("    " .. who,
+		GM.CC("text") .. (mine ~= "" and mine or "0 held") .. "|r")
 	if inv.guild > 0 then
 		local g = GetGuildInfo("player") or "guild"
-		t:AddTextLine(g, GM.CC("text") .. format("%d in guild vault", inv.guild) .. "|r")
+		t:AddTextLine("    " .. g,
+			GM.CC("text") .. format("%d in guild bank", inv.guild) .. "|r")
 	end
-	t:EndSection()
 end
 
 local function P_InventorySimple(t, id)
 	local inv = GM.Inventory.Count(id)
 	if inv.total == 0 then return end
-	local player = inv.bags + inv.bank + inv.mail
-	t:AddTextLine("Inventory", GM.CC("text") .. format("%d (%d player, %d guild, %d AH)",
-		inv.total, player, inv.guild, inv.auction) .. "|r")
+	local p = {}
+	local mine = inv.bags + inv.bank + inv.mail
+	if mine > 0 then p[#p + 1] = mine .. " yours" end
+	if inv.guild > 0 then p[#p + 1] = inv.guild .. " guild" end
+	if inv.auction > 0 then p[#p + 1] = inv.auction .. " listed" end
+	t:AddTextLine("You own", GM.CC("text") .. inv.total
+		.. (#p > 0 and (" (" .. table.concat(p, " · ") .. ")") or "") .. "|r")
 end
 
 -- ============ section 2: AuctionDB ============
@@ -316,68 +334,78 @@ local function A_RightText(id)
 	local n = e and e.sup or 0
 	local src, srcT = e and e._src, e and e._srcT
 	local age = srcT and (time() - srcT) or GM.DataAge()
-	local tag = src == "book" and " book" or src == "mesh" and " mesh" or ""
-	return GM.CC("text") .. format("%d auctions", n) .. "|r ("
-		.. GM.CC(age and age < 300 and "pos" or "warn")
-		.. (age and AgeStr(time() - age) or "no data")
-		.. GM.CC("pos") .. tag .. "|r)"
+	local maxAge = GM.db and GM.db.dataMaxAge or 7200
+	-- one threshold rule (F6): textDim until dataMaxAge, warn past it
+	local tag = src == "book" and " · your scan"
+		or src == "mesh" and " · shared" or ""
+	return GM.CC("text") .. format("%d listed", n) .. GM.CC("textDim")
+		.. " · " .. GM.CC(age and age >= maxAge and "warn" or "textDim")
+		.. (age and (GM.FmtAge(age) .. " ago") or "no scan yet")
+		.. tag .. "|r"
 end
 
 local function P_MinBuyout(t, id)
 	-- observation source resolved inside ItemEntry (book → mesh → emit);
 	-- ef reads the overlaid field
 	local v = Price("dbminbuyout", id)
-	if v then t:AddItemValueLine("Min Buyout", v) end
+	if v then t:AddItemValueLine("Lowest buyout", v) end
 end
 
 local function P_Recent(t, id)
 	local v = Price("dbrecent", id)
-	if v then t:AddItemValueLine("Recent Value", v) end
+	if v then t:AddItemValueLine("Recent price", v) end
 end
 
 local function P_Market(t, id, trend)
 	local v = Price("dbmarket", id)
 	if not v then return end
-	t:AddItemValueLine("Market Value", v, trend and Trend(v, Price("dbhistorical", id)) or nil)
+	t:AddItemValueLine("Typical price", v, trend and Trend(v, Price("dbhistorical", id)) or nil)
 end
 
 local function P_Historical(t, id)
 	local v = Price("dbhistorical", id)
-	if v then t:AddItemValueLine("Historical Price", v) end
+	if v then t:AddItemValueLine("Long-run price", v) end
 end
 
 local function P_RegionMarket(t, id, trend)
 	local v = Price("dbregionmarketavg", id)
 	if not v then return end
-	t:AddItemValueLine("Region Market Value Avg", v,
+	t:AddItemValueLine("Typical (region)", v,
 		trend and Trend(v, Price("dbregionhistorical", id)) or nil)
 end
 
 local function P_RegionHistorical(t, id)
 	local v = Price("dbregionhistorical", id)
-	if v then t:AddItemValueLine("Region Historical Price", v) end
+	if v then t:AddItemValueLine("Long-run (region)", v) end
 end
 
 local function P_RegionSale(t, id)
 	local v = Price("dbregionsale", id)
-	if v then t:AddItemValueLine("Region Sale Avg", v) end
+	if v then t:AddItemValueLine("Sold for (region)", v) end
 end
 
 local function P_RegionSaleRate(t, id)
 	local v = Price("dbregionsalepercent", id)
-	if v then t:AddTextLine("Region Sale Rate", GM.CC("text") .. format("%0.3f", v) .. "|r") end
+	if v then
+		-- percent reads like a chance; TSM's own docs explain it that way
+		t:AddTextLine("Sell chance (region)", GM.CC("text")
+			.. (v < 0.005 and "<1%" or format("%.0f%%", v * 100)) .. "|r")
+	end
 end
 
 local function P_RegionSoldPerDay(t, id)
 	local v = Price("dbregionsalerate", id)
-	if v then t:AddTextLine("Region Avg Daily Sold", GM.CC("text") .. (GM.VelRate(v) or format("%0.1f", v)) .. "|r") end
+	if v then t:AddTextLine("Sold/day (region)", GM.CC("text") .. (GM.VelRate(v) or format("%0.1f", v)) .. "|r") end
 end
 
 -- GoblinMind extensions
 local function P_Band(t, id)
 	local e = GM.ItemEntry(id)
 	if e and e.p10 and e.p90 then
-		t:AddItemValuesLine("±15% band", e.p10, e.p90)
+		-- placeholder math upstream (p × 0.85 / p × 1.15), NOT a real
+		-- percentile band — the label must not read as a forecast
+		t:AddTextLine("±15% of price",
+			MoneyFmt(e.p10) .. " – " .. MoneyFmt(e.p90))
 	end
 end
 
@@ -386,7 +414,7 @@ local function P_VsTSM(t, id)
 	local m = GM.TSMMarket(id)
 	if e and e.p and m and m > 0 then
 		local d = (e.p - m) / m * 100
-		t:AddTextLine("vs TSM", GM.CC(d >= 0.5 and "pos" or d <= -0.5 and "err" or "textDim")
+		t:AddTextLine("vs TSM price", GM.CC(d >= 0.5 and "pos" or d <= -0.5 and "err" or "textDim")
 			.. format("%+.0f%%", d) .. "|r")
 	end
 end
@@ -395,11 +423,15 @@ local function P_Reset(t, id)
 	local e = GM.ItemEntry(id)
 	local rs = e and e.reset
 	if type(rs) == "table" then
-		t:AddTextLine("reset", GM.CC("warn") .. "below " .. GM.Money(rs.below)
-			.. " · ev " .. GM.Money(rs.ev) .. "|r")
+		t:AddTextLine("Bargain listed", GM.CC("warn") .. GM.Money(rs.below)
+			.. " · flip ~" .. GM.Money(rs.ev) .. "|r")
 	elseif type(rs) == "number" and rs > 0 then
-		-- some feeds emit reset as a bare threshold, not {below, ev}
-		t:AddTextLine("reset", GM.CC("warn") .. "below " .. GM.Money(rs) .. "|r")
+		-- the in-house feed emits reset as a bare flag (=1), not a
+		-- threshold — rendering it as money printed "below 1c" (F5).
+		-- Anchor on the current cheapest listing instead
+		t:AddTextLine("Bargain listed", GM.CC("warn")
+			.. (e.mb and GM.Money(e.mb) or "cheap")
+			.. " · half price or less|r")
 	end
 end
 
@@ -408,8 +440,8 @@ local function P_LiveBook(t, id)
 	if not fresh then return end
 	local mn, sup = GM.AH.BookMin(id), GM.AH.BookSupply(id)
 	if mn then
-		t:AddTextLine("book", GM.CC("pos") .. "min " .. GM.Money(mn)
-			.. (sup and (" · " .. sup .. " listed") or "") .. " · live|r")
+		t:AddTextLine("Your scan", GM.CC("text") .. GM.Money(mn)
+			.. (sup and (" · " .. sup .. " listed") or "") .. "|r")
 	end
 end
 
@@ -419,46 +451,57 @@ local function P_Purchase(t, id, stack)
 	local s = GM.Ledger and GM.Ledger.db and GM.Ledger.db.itemStats[id]
 	if not s or not s.buyQ or s.buyQ == 0 then return end
 	if stack then
-		t:AddQuantityValueLine("Purchased (Total Price)", s.buyQ, s.buyT)
+		t:AddTextLine("You bought ×" .. s.buyQ,
+			MoneyFmt(s.buyT) .. " total")
 	else
-		t:AddQuantityValueLine("Purchased (Min/Avg/Max Price)", s.buyQ,
-			s.buyMin ~= math.huge and s.buyMin or nil, s.buyT / s.buyQ, s.buyMax)
+		t:AddTextLine("You bought ×" .. s.buyQ,
+			"avg " .. MoneyFmt(s.buyT / s.buyQ))
+		if s.buyMin ~= math.huge and s.buyMin ~= s.buyMax then
+			t:AddTextLine("    range",
+				MoneyFmt(s.buyMin) .. " – " .. MoneyFmt(s.buyMax))
+		end
 	end
 	local smart = GM.Ledger.Avg(id, "paid")
-	if smart then t:AddItemValueLine("Smart Avg Buy Price", smart) end
-	if s.lastBuy then t:AddTextLine("Last Purchased", GM.CC("textDim") .. AgeStr(s.lastBuy) .. "|r") end
+	if smart then t:AddItemValueLine("Avg cost (on hand)", smart) end
+	if s.lastBuy then t:AddTextLine("Last bought", GM.CC("textDim") .. AgeStr(s.lastBuy) .. "|r") end
 end
 
 local function P_Sale(t, id, stack)
 	local s = GM.Ledger and GM.Ledger.db and GM.Ledger.db.itemStats[id]
 	if not s or not s.sellQ or s.sellQ == 0 then return end
 	if stack then
-		t:AddQuantityValueLine("Sold (Total Price)", s.sellQ, s.sellT)
+		t:AddTextLine("You sold ×" .. s.sellQ,
+			MoneyFmt(s.sellT) .. " total")
 	else
-		t:AddQuantityValueLine("Sold (Min/Avg/Max Price)", s.sellQ,
-			s.sellMin ~= math.huge and s.sellMin or nil, s.sellT / s.sellQ, s.sellMax)
+		t:AddTextLine("You sold ×" .. s.sellQ,
+			"avg " .. MoneyFmt(s.sellT / s.sellQ))
+		if s.sellMin ~= math.huge and s.sellMin ~= s.sellMax then
+			t:AddTextLine("    range",
+				MoneyFmt(s.sellMin) .. " – " .. MoneyFmt(s.sellMax))
+		end
 	end
-	if s.lastSell then t:AddTextLine("Last Sold", GM.CC("textDim") .. AgeStr(s.lastSell) .. "|r") end
+	if s.lastSell then t:AddTextLine("Last sold", GM.CC("textDim") .. AgeStr(s.lastSell) .. "|r") end
 end
 
 local function P_SaleRate(t, id)
 	local st = GM.Ledger and GM.Ledger.Stats and GM.Ledger.Stats(id)
 	if st and st.saleRate then
-		t:AddTextLine("Sale Rate", GM.CC("text") .. format("%0.2f", st.saleRate) .. "|r")
+		t:AddTextLine("Your sell rate", GM.CC("text")
+			.. format("%.0f%%", st.saleRate * 100) .. "|r")
 	end
 end
 
 local function P_Expired(t, id)
 	local st = GM.Ledger and GM.Ledger.Stats and GM.Ledger.Stats(id)
 	if st and st.expireSinceSell > 0 then
-		t:AddTextLine("Expired Since Last Sale", tostring(st.expireSinceSell))
+		t:AddTextLine("Expired (since sale)", tostring(st.expireSinceSell))
 	end
 end
 
 local function P_Cancelled(t, id)
 	local st = GM.Ledger and GM.Ledger.Stats and GM.Ledger.Stats(id)
 	if st and st.cancelSinceSell > 0 then
-		t:AddTextLine("Cancelled Since Last Sale", tostring(st.cancelSinceSell))
+		t:AddTextLine("Cancelled (since sale)", tostring(st.cancelSinceSell))
 	end
 end
 
@@ -468,15 +511,16 @@ local function P_PostQuantity(t, id)
 	local ops = GM.Groups.GetOps(id, "auctioning")
 	if not ops then return end
 	local cap, stack = tonumber(ops.postCap), tonumber(ops.stackSize)
-	if not cap or cap == 0 then t:AddTextLine("Post Quantity", "—") return end
-	t:AddTextLine("Post Quantity", stack and stack > 0
-		and format("%dx%d", cap, stack) or tostring(cap))
+	if not cap or cap == 0 then
+		t:AddTextLine("Posts at a time", "not set") return end
+	t:AddTextLine("Posts at a time", stack and stack > 0
+		and format("%d stacks of %d", cap, stack) or tostring(cap))
 end
 
 local function P_OpPrices(t, id)
 	local ops = GM.Groups.GetOps(id, "auctioning")
 	if not ops then return end
-	t:AddItemValuesLine("Min/Normal/Max Prices",
+	t:AddItemValuesLine("Post min/normal/max",
 		GM.Groups.EvalOp(ops, "min", id),
 		GM.Groups.EvalOp(ops, "normal", id),
 		GM.Groups.EvalOp(ops, "max", id))
@@ -487,143 +531,254 @@ local function P_CraftingCost(t, id)
 	if not v then return end
 	local p = Price("dbmarket", id)
 	local profit = p and (p - v)
-	t:AddTextLine("Crafting Cost", MoneyFmt(v)
-		.. (profit and (" (" .. GM.CC(profit >= 0 and "pos" or "err")
-			.. MoneyFmt(profit) .. "|r profit)") or ""))
+	t:AddTextLine("Cost to craft", MoneyFmt(v)
+		.. (profit and (" · " .. GM.CC(profit >= 0 and "pos" or "err")
+			.. (profit >= 0 and "+" or "-") .. MoneyFmt(math.abs(profit))
+			.. (profit >= 0 and " profit" or " loss") .. "|r") or ""))
 end
 
 local function P_MatPrice(t, id)
 	local v = Price("matprice", id)
-	if v then t:AddItemValueLine("Material Cost", v) end
+	if v then t:AddItemValueLine("Value as material", v) end
 end
 
 local function P_ShoppingMax(t, id)
 	local v = GM.Groups.EvalOp(GM.Groups.GetOps(id, "shopping"), "maxPrice", id)
-	if v then t:AddItemValueLine("Max Shopping Price", v) end
+	if v then t:AddItemValueLine("Shopping buys under", v) end
 end
 
 local function P_SniperBelow(t, id)
 	local v = GM.Groups.EvalOp(GM.Groups.GetOps(id, "sniper"), "belowPrice", id)
-	if v then t:AddItemValueLine("Sniper Max Price", v) end
+	if v then t:AddItemValueLine("Sniper buys under", v) end
 end
 
 -- ============ registry (order = TSM's registration order) ============
 
 local function CustomSourceEntry(name)
+	local short = #name > 22 and (name:sub(1, 21) .. "…") or name
 	return { key = "customPriceTooltips." .. name, global = true,
 		custom = name, set = true, default = false,
+		label = short, settingLabel = "Custom: " .. name,
+		gloss = 'Your custom price formula "' .. name .. '".',
 		fn = function(t, id)
 			local src = GoblinMindPrices and GoblinMindPrices.customSources
 				and GoblinMindPrices.customSources[name]
 			local v = src and GM.Pricing and GM.Pricing.Eval(src, id)
 			if v and v > 0 then
-				t:AddItemValueLine("Custom Source (" .. name .. ")", v)
+				t:AddItemValueLine(short, v)
 			end
 		end }
 end
 
 local function Sections()
+	-- heading = tooltip section head (nil = straight under the title);
+	-- name = settings group label. label = the row's left-column text
+	-- (≤22 chars); gloss = settings hover text; settingLabel overrides
+	-- label for the settings row when it needs different phrasing
 	local general = {
-		heading = "GoblinMind General",
+		name = "Item",
 		entries = {
-			{ key = "groupNameTooltip", set = true, default = true, fn = P_Group },
+			{ key = "groupNameTooltip", set = true, default = true,
+				label = "Group",
+				gloss = "The GoblinMind group this item is filed under; its rules come from here.",
+				fn = P_Group },
 		},
 	}
 	for _, opType in ipairs(GM.Groups.OP_TYPES or {}) do
+		local cap = opType:gsub("^%l", strupper)
 		tinsert(general.entries, {
 			key = "operationTooltips." .. opType, global = true,
 			set = true, default = false,
-			fn = function(t, id) P_Ops(t, id, opType) end,
+			label = cap .. " rules from",
+			settingLabel = cap .. " rules source",
+			gloss = "This item's " .. opType .. " settings come from this group, not the defaults.",
+			fn = function(t, id, s, e) P_Ops(t, id, opType, e) end,
 		})
 	end
 	tinsert(general.entries, { key = "destroyTooltipFormat", set = "full",
-		default = "simple", fn = P_Destroy })
+		default = "simple", label = "Disenchant value",
+		gloss = "Typical AH worth of the materials from disenchanting one. Only shown when it beats the vendor price.",
+		fn = P_Destroy })
 	tinsert(general.entries, { key = "destroyTooltipFormat", set = "simple",
-		default = "simple", fn = P_Destroy })
+		default = "simple", label = "Disenchant value",
+		gloss = "Typical AH worth of the materials from disenchanting one. Only shown when it beats the vendor price.",
+		fn = P_Destroy })
 	tinsert(general.entries, { key = "convertTooltipFormat", set = "full",
-		default = "simple", fn = P_Convert })
+		default = "simple", label = "Convert value",
+		gloss = "Worth of what this turns into (e.g. combining essences). Not active yet.",
+		fn = P_Convert })
 	tinsert(general.entries, { key = "convertTooltipFormat", set = "simple",
-		default = "simple", fn = P_Convert })
+		default = "simple", label = "Convert value",
+		gloss = "Worth of what this turns into (e.g. combining essences). Not active yet.",
+		fn = P_Convert })
 	tinsert(general.entries, { key = "vendorBuyTooltip", set = true,
-		default = true, fn = P_VendorBuy })
+		default = true, label = "Buy from vendor",
+		gloss = "What an NPC merchant charges you for one.",
+		fn = P_VendorBuy })
 	tinsert(general.entries, { key = "vendorSellTooltip", set = true,
-		default = true, fn = P_VendorSell })
+		default = true, label = "Sell to vendor",
+		gloss = "What an NPC merchant pays you for one.",
+		fn = P_VendorSell })
 	-- custom price sources get one entry each (all default off, like TSM)
 	for name in pairs((GoblinMindPrices and GoblinMindPrices.customSources) or {}) do
 		tinsert(general.entries, CustomSourceEntry(name))
 	end
 	tinsert(general.entries, { key = "inventoryTooltipFormat", set = "full",
-		default = "full", fn = P_InventoryFull })
+		default = "full", label = "You own",
+		settingLabel = "How many you own",
+		gloss = "How many you have, and where.",
+		fn = P_InventoryFull })
 	tinsert(general.entries, { key = "inventoryTooltipFormat", set = "simple",
-		default = "full", fn = P_InventorySimple })
+		default = "full", label = "You own",
+		settingLabel = "How many you own",
+		gloss = "Count across your bags, bank, mail, guild bank, and live auctions.",
+		fn = P_InventorySimple })
 
 	return {
 		general,
 		{
-			heading = "GoblinMind AuctionDB", module = "AuctionDB",
+			heading = "Auction House", name = "Auction House",
+			module = "AuctionDB",
 			right = A_RightText,
 			entries = {
-				{ key = "minBuyout", module = "AuctionDB", set = true, default = true, fn = P_MinBuyout },
-				{ key = "marketValueRecent", module = "AuctionDB", set = true, default = false, fn = P_Recent },
+				{ key = "minBuyout", module = "AuctionDB", set = true, default = true,
+					label = "Lowest buyout",
+					gloss = "Cheapest buyout on the Auction House right now, per item.",
+					fn = P_MinBuyout },
+				{ key = "marketValueRecent", module = "AuctionDB", set = true, default = false,
+					label = "Recent price",
+					gloss = "Market price weighted toward the latest scans.",
+					fn = P_Recent },
 				{ key = "marketValue", module = "AuctionDB", set = "noTrend", default = "withTrend",
+					label = "Typical price",
+					gloss = "What this usually goes for, averaged over recent days with odd listings ignored.",
 					fn = function(t, id) P_Market(t, id, false) end },
 				{ key = "marketValue", module = "AuctionDB", set = "withTrend", default = "withTrend",
+					label = "Typical price",
+					gloss = "What this usually goes for, averaged over recent days with odd listings ignored. The % compares it with the long-run price.",
 					fn = function(t, id) P_Market(t, id, true) end },
-				{ key = "historical", module = "AuctionDB", set = true, default = false, fn = P_Historical },
+				{ key = "historical", module = "AuctionDB", set = true, default = false,
+					label = "Long-run price",
+					gloss = "Average over a longer stretch (up to 60 days on TSM data, 14 on your own scans).",
+					fn = P_Historical },
 				{ key = "altMinBuyout", module = "AuctionDB", set = true, default = false, fn = function() end },
 				{ key = "altMarketValueRecent", module = "AuctionDB", set = true, default = false, fn = function() end },
 				{ key = "altMarketValue", module = "AuctionDB", set = "noTrend", default = "none", fn = function() end },
 				{ key = "altMarketValue", module = "AuctionDB", set = "withTrend", default = "none", fn = function() end },
 				{ key = "altHistorical", module = "AuctionDB", set = true, default = false, fn = function() end },
 				{ key = "regionMarketValue", module = "AuctionDB", set = "noTrend", default = "withTrend",
+					label = "Typical (region)",
+					gloss = "Typical price averaged across every realm in your region.",
 					fn = function(t, id) P_RegionMarket(t, id, false) end },
 				{ key = "regionMarketValue", module = "AuctionDB", set = "withTrend", default = "withTrend",
+					label = "Typical (region)",
+					gloss = "Typical price averaged across every realm in your region.",
 					fn = function(t, id) P_RegionMarket(t, id, true) end },
-				{ key = "regionHistorical", module = "AuctionDB", set = true, default = false, fn = P_RegionHistorical },
-				{ key = "regionSale", module = "AuctionDB", set = true, default = true, fn = P_RegionSale },
-				{ key = "regionSalePercent", module = "AuctionDB", set = true, default = true, fn = P_RegionSaleRate },
-				{ key = "regionSoldPerDay", module = "AuctionDB", set = true, default = true, fn = P_RegionSoldPerDay },
-				{ key = "band", module = "AuctionDB", set = true, default = true, fn = P_Band },
-				{ key = "vsTSM", module = "AuctionDB", set = true, default = true, fn = P_VsTSM },
-				{ key = "resetSignal", module = "AuctionDB", set = true, default = true, fn = P_Reset },
-				{ key = "liveBook", module = "AuctionDB", set = true, default = true, fn = P_LiveBook },
+				{ key = "regionHistorical", module = "AuctionDB", set = true, default = false,
+					label = "Long-run (region)",
+					gloss = "Long-run price across the whole region.",
+					fn = P_RegionHistorical },
+				{ key = "regionSale", module = "AuctionDB", set = true, default = true,
+					label = "Sold for (region)",
+					gloss = "Average price that actually sold, not just listed. Can come from this realm's scans when fresher.",
+					fn = P_RegionSale },
+				{ key = "regionSalePercent", module = "AuctionDB", set = true, default = true,
+					label = "Sell chance (region)",
+					gloss = "How often a listing actually sells instead of expiring. 33% ≈ 1 sale per 3 posts.",
+					fn = P_RegionSaleRate },
+				{ key = "regionSoldPerDay", module = "AuctionDB", set = true, default = true,
+					label = "Sold/day (region)",
+					gloss = "Average number sold per day per Auction House. High = sells fast.",
+					fn = P_RegionSoldPerDay },
+				{ key = "band", module = "AuctionDB", set = true, default = false,
+					label = "±15% of price", settingLabel = "±15% reference",
+					gloss = "A fixed ±15% around the typical price, for reference only. It is not a forecast.",
+					fn = P_Band },
+				{ key = "vsTSM", module = "AuctionDB", set = true, default = true,
+					label = "vs TSM price",
+					gloss = "How GoblinMind's price compares with TradeSkillMaster's. Only shown when TSM is installed.",
+					fn = P_VsTSM },
+				{ key = "resetSignal", module = "AuctionDB", set = true, default = true,
+					label = "Bargain listed",
+					gloss = "Someone is listing well under the typical price. Buying those and reposting could earn about this much.",
+					fn = P_Reset },
+				{ key = "liveBook", module = "AuctionDB", set = true, default = true,
+					label = "Your scan", settingLabel = "Your latest scan",
+					gloss = "Lowest price and count from your own latest AH scan.",
+					fn = P_LiveBook },
 			},
 		},
 		{
-			heading = "GoblinMind Accounting", module = "Accounting",
+			heading = "Your history", name = "Your history",
+			module = "Accounting",
 			entries = {
-				{ key = "purchase", module = "Accounting", set = true, default = true, fn = P_Purchase },
-				{ key = "sale", module = "Accounting", set = true, default = true, fn = P_Sale },
-				{ key = "saleRate", module = "Accounting", set = true, default = false, fn = P_SaleRate },
-				{ key = "expiredAuctions", module = "Accounting", set = true, default = false, fn = P_Expired },
-				{ key = "cancelledAuctions", module = "Accounting", set = true, default = false, fn = P_Cancelled },
+				{ key = "purchase", module = "Accounting", set = true, default = true,
+					label = "You bought",
+					gloss = "How many you've bought on the AH and what you paid on average.",
+					fn = P_Purchase },
+				{ key = "sale", module = "Accounting", set = true, default = true,
+					label = "You sold",
+					gloss = "How many you've sold and the average you got.",
+					fn = P_Sale },
+				{ key = "saleRate", module = "Accounting", set = true, default = false,
+					label = "Your sell rate",
+					gloss = "Share of your posts that sold, versus expired or cancelled.",
+					fn = P_SaleRate },
+				{ key = "expiredAuctions", module = "Accounting", set = true, default = false,
+					label = "Expired (since sale)",
+					gloss = "Your posts that expired unsold since your last sale. Many = priced too high.",
+					fn = P_Expired },
+				{ key = "cancelledAuctions", module = "Accounting", set = true, default = false,
+					label = "Cancelled (since sale)",
+					gloss = "Your posts you cancelled since your last sale.",
+					fn = P_Cancelled },
 			},
 		},
 		{
-			heading = "GoblinMind Auctioning", module = "Auctioning",
+			heading = "Your posting rules", name = "Your posting rules",
+			module = "Auctioning",
 			entries = {
-				{ key = "postQuantity", module = "Auctioning", set = true, default = false, fn = P_PostQuantity },
-				{ key = "operationPrices", module = "Auctioning", set = true, default = false, fn = P_OpPrices },
+				{ key = "postQuantity", module = "Auctioning", set = true, default = false,
+					label = "Posts at a time",
+					gloss = "How many auctions your rules post in one go.",
+					fn = P_PostQuantity },
+				{ key = "operationPrices", module = "Auctioning", set = true, default = false,
+					label = "Post min/normal/max",
+					gloss = "The floor, normal, and ceiling prices your auctioning rules use.",
+					fn = P_OpPrices },
 			},
 		},
 		{
-			heading = "GoblinMind Crafting", module = "Crafting",
+			heading = "Crafting", name = "Crafting", module = "Crafting",
 			entries = {
-				{ key = "craftingCost", module = "Crafting", set = true, default = true, fn = P_CraftingCost },
+				{ key = "craftingCost", module = "Crafting", set = true, default = true,
+					label = "Cost to craft",
+					gloss = "Price of the materials, and what's left after selling at the typical price (before the AH's cut).",
+					fn = P_CraftingCost },
 				{ key = "detailedMats", module = "Crafting", set = true, default = false, fn = function() end },
-				{ key = "matPrice", module = "Crafting", set = true, default = false, fn = P_MatPrice },
+				{ key = "matPrice", module = "Crafting", set = true, default = false,
+					label = "Value as material",
+					gloss = "Price GoblinMind uses for this item when it's an ingredient in a craft.",
+					fn = P_MatPrice },
 			},
 		},
 		{
-			heading = "GoblinMind Shopping", module = "Shopping",
+			heading = "Shopping list", name = "Shopping list",
+			module = "Shopping",
 			entries = {
-				{ key = "maxPrice", module = "Shopping", set = true, default = false, fn = P_ShoppingMax },
+				{ key = "maxPrice", module = "Shopping", set = true, default = false,
+					label = "Shopping buys under",
+					gloss = "Your shopping list only buys this below this price.",
+					fn = P_ShoppingMax },
 			},
 		},
 		{
-			heading = "GoblinMind Sniper", module = "Sniper",
+			heading = "Sniper", name = "Sniper", module = "Sniper",
 			entries = {
-				{ key = "belowPrice", module = "Sniper", set = true, default = false, fn = P_SniperBelow },
+				{ key = "belowPrice", module = "Sniper", set = true, default = false,
+					label = "Sniper buys under",
+					gloss = "Your sniper flags listings below this price.",
+					fn = P_SniperBelow },
 			},
 		},
 	}
@@ -721,7 +876,7 @@ local function Fill(itemID, tooltip)
 	for _, sec in ipairs(Sections()) do
 		local before = #b.lines
 		for _, e in ipairs(sec.entries) do
-			if On(e) then e.fn(b, itemID, stack) end
+			if On(e) then e.fn(b, itemID, stack, e) end
 		end
 		if #b.lines > before and sec.heading then
 			tinsert(b.lines, before + 1, {
@@ -742,15 +897,21 @@ local function Fill(itemID, tooltip)
 	local dbAge = GM.RealmAge() or GM.DataAge()
 	local bAge = GM.AH and GM.AH.BookAge and GM.AH.BookAge() or math.huge
 	local fresh = math.min(dbAge or math.huge, bAge)
-	local parts = {}
-	if dbAge and dbAge > maxAge then tinsert(parts, format("feed %dm", dbAge / 60)) end
-	if bAge < math.huge and bAge > maxAge then tinsert(parts, format("book %dm", bAge / 60)) end
-	local stale = fresh ~= math.huge and fresh > maxAge
-		and table.concat(parts, " + ") .. " old — /reload or FULL SCAN" or nil
+	-- stale line: the freshest leg is what the shown prices rest on —
+	-- two short rows so neither sets the panel width (§4.6)
+	local staleMain, staleSub
+	if fresh ~= math.huge and fresh > maxAge then
+		staleMain = "Prices " .. GM.FmtAge(fresh) .. " old"
+		staleSub = "Scan at the AH to refresh"
+	end
 
 	if o.embeddedTooltip then
 		if sideTip then sideTip:Hide() end
 		tooltip:AddLine(" ")
+		-- F11: IsItemTooltip keys on a "GoblinMind" line in embedded
+		-- mode — the old "GoblinMind <Section>" heads provided it, the
+		-- friendly heads don't, so emit the marker explicitly
+		tooltip:AddLine("GoblinMind", ar, ag, ab)
 		for _, ln in ipairs(b.lines) do
 			if ln.section then
 				tooltip:AddDoubleLine(ln.left, ln.right or "", ar, ag, ab, lr, lg, lb)
@@ -761,8 +922,9 @@ local function Fill(itemID, tooltip)
 				tooltip:AddLine(ln.left, lr, lg, lb)
 			end
 		end
-		if stale then
-			tooltip:AddLine(stale, GM.RGB("warn"))
+		if staleMain then
+			tooltip:AddLine(staleMain, GM.RGB("warn"))
+			tooltip:AddLine(staleSub, GM.RGB("textDim"))
 		end
 		tooltip:Show()
 		-- widen past the client's broken |T|t measuring — icon-mode
@@ -815,7 +977,10 @@ local function Fill(itemID, tooltip)
 			PutLine(ln.left, nil, LC)
 		end
 	end
-	if stale then PutLine(stale, nil, { GM.RGB("warn") }) end
+	if staleMain then
+		PutLine(staleMain, nil, { GM.RGB("warn") })
+		PutLine(staleSub, nil, { GM.RGB("textDim") })
+	end
 	for j = ri + 1, #sideTip.rows do
 		sideTip.rows[j].left:Hide()
 		sideTip.rows[j].right:Hide()
@@ -921,8 +1086,10 @@ function TT.OptionEntries()
 			if not seen[id] then
 				seen[id] = {
 					key = e.key, module = e.module,
-					heading = sec.heading, domain = {},
+					heading = sec.name or sec.heading, domain = {},
 					default = e.default,
+					label = e.label, settingLabel = e.settingLabel,
+					gloss = e.gloss,
 				}
 				tinsert(out, seen[id])
 			end

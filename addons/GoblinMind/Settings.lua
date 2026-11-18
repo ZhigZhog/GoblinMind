@@ -124,14 +124,15 @@ local function BoolSeg(parent, get, set)
 end
 
 -- single button cycling a domain; get()→value
-local function CycleBtn(parent, w, get, set, domain)
+local function CycleBtn(parent, w, get, set, domain, disp)
 	local b = CreateFrame("Button", nil, parent)
 	b:SetSize(w or 76, 18)
 	GM.Panel(b, "contHigh")
 	b.text = GM.MakeFontString(b, GM.FONT_MED, 9, "textDim")
 	b.text:SetPoint("CENTER")
 	local function paint()
-		b.text:SetText(tostring(get()))
+		local v = get()
+		b.text:SetText(disp and disp[v] or tostring(v))
 		b.text:SetTextColor(GM.RGB("text"))
 	end
 	b:SetScript("OnClick", function()
@@ -451,6 +452,14 @@ end
 
 -- ============ window ============
 
+-- friendly names for stored enum values (stored keys never change —
+-- only the display). "none"→"off" is the tooltip-line sense; the
+-- modifier control passes its own map ("none"→"always")
+local ENUM_DISP = {
+	withTrend = "with trend", noTrend = "price only", none = "off",
+	full = "detailed", simple = "short",
+}
+
 local LABELS = {
 	groupNameTooltip = "Group name",
 	destroyTooltipFormat = "Destroy value",
@@ -489,6 +498,10 @@ local LABELS = {
 	belowPrice = "Sniper threshold",
 }
 local function Label(d)
+	-- registry is authoritative (tooltip-ux R1): the same label the
+	-- tooltip row shows, so settings and tip can't drift apart
+	if d.settingLabel then return d.settingLabel end
+	if d.label then return d.label end
 	if LABELS[d.key] then return LABELS[d.key] end
 	local op = d.key:match("^operationTooltips%.(.+)$")
 	if op then return "Ops: " .. op end
@@ -607,7 +620,7 @@ local function Build()
 			if GM.minimapBtn then GM.minimapBtn:SetShown(v) end
 		end)
 	ui.mmHide:SetPoint("TOPLEFT", 500, -24)
-	RowAt(gen, "Tooltip side panel", 320, 50)
+	RowAt(gen, "Show beside tooltip", 320, 50)
 	ui.embed = BoolSeg(gen,
 		-- the stored flag is INVERTED (embeddedTooltip=true embeds
 		-- into the native tip); the checkbox reads as "side panel"
@@ -618,13 +631,14 @@ local function Build()
 	ui.mod = CycleBtn(gen, 76,
 		function() return (GM.db.tooltip and GM.db.tooltip.tooltipShowModifier) or "none" end,
 		function(v) GM.Tooltip.SetOption("tooltipShowModifier", nil, v) end,
-		{ "none", "alt", "ctrl" })
+		{ "none", "alt", "ctrl" },
+		{ none = "always", alt = "hold Alt", ctrl = "hold Ctrl" })
 	ui.mod:SetPoint("TOPLEFT", 500, -72)
 	RowAt(gen, "Price format", 320, 98)
 	ui.fmt = CycleBtn(gen, 76,
 		function() return (GM.db.tooltip and GM.db.tooltip.tooltipPriceFormat) or "text" end,
 		function(v) GM.Tooltip.SetOption("tooltipPriceFormat", nil, v) end,
-		{ "text", "icon" })
+		{ "text", "icon" }, { text = "text", icon = "coin icons" })
 	ui.fmt:SetPoint("TOPLEFT", 500, -96)
 
 	-- ===== TOOLTIP LINES =====
@@ -802,7 +816,7 @@ local function BuildTooltipRows()
 		if d.kind == "bool" then
 			ctl = BoolSeg(ui.ttHost, d.get, d.set)
 		else
-			ctl = CycleBtn(ui.ttHost, 84, d.get, d.set, d.domain)
+			ctl = CycleBtn(ui.ttHost, 84, d.get, d.set, d.domain, ENUM_DISP)
 		end
 		-- same y as the label — the old +3 floated every control into
 		-- the row above (looked like a second, stray button)
