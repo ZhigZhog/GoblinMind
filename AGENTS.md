@@ -744,5 +744,15 @@ Primary data = the in-house book feed below.
   grid row (`ui.ttRows` `ctl.paint`), so apply = instant grid
   update. Registry `default` fields now encode the SIMPLE set —
   fresh installs get the lean tooltip without a stored preset.
+- **Tooltip typography (R4)**: side tip renders 11u — labels
+  `GM.FONT` textDim, values `GM.FONT_MED` (weight separates value
+  from label when colors collide), section heads `GM.FONT_BOLD`
+  (=SemiBold) accent with +4u above, title 12u + 1px `outlineVar`
+  rule, pitch 15. `LineW(text, font, size)` must be called with the
+  SAME font+size the row renders at — it's the width oracle for
+  both panel sizing and icon-mode clamping, so a typography change
+  that doesn't update LineW calls silently clips. Rows re-anchor
+  off accumulated `y` in PutLine (heading gaps make pitch
+  non-uniform) — ClearAllPoints+SetPoint, not the creation anchor.
 - Not yet registered on the Codebase Map (project started 2026-11-11,
   post-closure).

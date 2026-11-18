@@ -174,12 +174,16 @@ end
 -- so a GameTooltip auto-sizes icon-mode money lines too narrow and
 -- the right column overhangs the frame. Measure with the tags
 -- stripped, sum the icon widths back in, and widen the tip ourselves.
-local mfs
-local function LineW(text)
+local measurers = {}
+local function LineW(text, font, size)
 	if not text then return 0 end
+	font, size = font or GM.FONT, size or 11
+	local key = font .. "|" .. size
+	local mfs = measurers[key]
 	if not mfs then
 		mfs = UIParent:CreateFontString(nil, "OVERLAY")
-		mfs:SetFont(GM.FONT, 10, "")
+		mfs:SetFont(font, size, "")
+		measurers[key] = mfs
 	end
 	local icons = 0
 	mfs:SetText((text:gsub("|T[^|]-|t", function(tag)
@@ -821,7 +825,7 @@ local function AnchorSideTip()
 	end
 end
 
-local SIDE_ROW_H = 13
+local SIDE_ROW_H = 15
 
 local function BuildSideTip()
 	if sideTip then return end
@@ -833,9 +837,15 @@ local function BuildSideTip()
 	tip:SetFrameStrata("TOOLTIP")
 	tip:SetClampedToScreen(true)
 	GM.Panel(tip, "contLowest", "outlineVar")
-	tip.title = GM.MakeFontString(tip, GM.FONT_BOLD, 11, "accent")
+	tip.title = GM.MakeFontString(tip, GM.FONT_BOLD, 12, "accent")
 	tip.title:SetPoint("TOPLEFT", 8, -6)
 	tip.title:SetText("GoblinMind")
+	-- 1px rule under the title — cheap hierarchy separator (R4)
+	tip.rule = tip:CreateTexture(nil, "ARTWORK")
+	tip.rule:SetColorTexture(GM.RGB("outlineVar"))
+	tip.rule:SetPoint("TOPLEFT", 8, -19)
+	tip.rule:SetPoint("TOPRIGHT", -8, -19)
+	tip.rule:SetHeight(1)
 	tip.rows = {}
 	tip:Hide()
 	sideTip = tip
@@ -851,12 +861,12 @@ local function SideRow(i)
 	local r = sideTip.rows[i]
 	if not r then
 		r = {}
-		r.left = GM.MakeFontString(sideTip, GM.FONT, 10, "textDim")
+		r.left = GM.MakeFontString(sideTip, GM.FONT, 11, "textDim")
 		r.left:SetPoint("TOPLEFT", 8, -20 - (i - 1) * SIDE_ROW_H)
 		r.left:SetJustifyH("LEFT")
 		-- right-anchored + right-justified: the text ends at the inset
 		-- regardless of the fontstring's (mis-measured) own width
-		r.right = GM.MakeFontString(sideTip, GM.FONT, 10, "text")
+		r.right = GM.MakeFontString(sideTip, GM.FONT_MED, 11, "text")
 		r.right:SetPoint("TOPRIGHT", -8, -20 - (i - 1) * SIDE_ROW_H)
 		r.right:SetJustifyH("RIGHT")
 		sideTip.rows[i] = r
@@ -944,7 +954,7 @@ local function Fill(itemID, tooltip)
 		if o.tooltipPriceFormat == "icon" then
 			local need = 0
 			for _, ln in ipairs(b.lines) do
-				local w = LineW(ln.left) + LineW(ln.right) + 40
+				local w = LineW(ln.left) + LineW(ln.right, GM.FONT_MED, 11) + 40
 				if w > need then need = w end
 			end
 			if need > (tooltip:GetWidth() or 0) then
@@ -959,10 +969,19 @@ local function Fill(itemID, tooltip)
 	BuildSideTip()
 	if not sideTip then return end
 	sideTip._src = tooltip
-	local need, ri = 0, 0
-	local function PutLine(left, right, lc, rc)
+	local need, ri, y = 0, 0, 0
+	local function PutLine(left, right, lc, rc, section)
 		ri = ri + 1
+		-- +4u of air above each heading after the first (R4); rows
+		-- re-anchor off accumulated y since pitch is no longer uniform
+		if section and ri > 1 then y = y + 4 end
 		local row = SideRow(ri)
+		row.left:SetFont(section and GM.FONT_BOLD or GM.FONT, 11, "")
+		row.left:ClearAllPoints()
+		row.left:SetPoint("TOPLEFT", 8, -22 - y)
+		row.right:ClearAllPoints()
+		row.right:SetPoint("TOPRIGHT", -8, -22 - y)
+		y = y + SIDE_ROW_H
 		row.left:Show()
 		row.left:SetText(left or "")
 		row.left:SetTextColor(lc[1], lc[2], lc[3])
@@ -973,7 +992,8 @@ local function Fill(itemID, tooltip)
 		else
 			row.right:Hide()
 		end
-		local w = LineW(left) + LineW(right) + (right and 32 or 16)
+		local w = LineW(left, section and GM.FONT_BOLD or GM.FONT, 11)
+			+ LineW(right, GM.FONT_MED, 11) + (right and 32 or 16)
 		if w > need then need = w end
 	end
 	local LC = { lr, lg, lb }
@@ -981,7 +1001,7 @@ local function Fill(itemID, tooltip)
 	local AC = { ar, ag, ab }
 	for _, ln in ipairs(b.lines) do
 		if ln.section then
-			PutLine(ln.left, ln.right, AC, LC)
+			PutLine(ln.left, ln.right, AC, LC, true)
 		elseif ln.right then
 			PutLine(ln.left, ln.right, LC, ln.accent and AC or RC)
 		else
@@ -996,9 +1016,9 @@ local function Fill(itemID, tooltip)
 		sideTip.rows[j].left:Hide()
 		sideTip.rows[j].right:Hide()
 	end
-	local titleW = LineW("GoblinMind") + 16
+	local titleW = LineW("GoblinMind", GM.FONT_BOLD, 12) + 16
 	if titleW > need then need = titleW end
-	sideTip:SetSize(need, 20 + ri * SIDE_ROW_H + 6)
+	sideTip:SetSize(need, 22 + y + 6)
 	sideTip:Show()
 	AnchorSideTip()
 
