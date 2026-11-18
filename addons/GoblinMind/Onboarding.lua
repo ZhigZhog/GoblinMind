@@ -268,6 +268,15 @@ end
 
 function OB.MaybeShow()
 	if not GM.db then return end
+	-- first install: show once regardless of any config state — the
+	-- in-game flow IS the primary path (install.bat exists for the
+	-- server host + autostart, not for the connect step itself).
+	-- Flag before Show so a mid-login crash can't loop the prompt.
+	if not GM.db.onboarded then
+		GM.db.onboarded = true
+		OB.Show()
+		return
+	end
 	-- can't determine config state without an emit carrying a backend
 	-- block: a missing/stale DB isn't "not configured" — don't nag.
 	-- (backend={} in the emit IS a determination — watcher checked.)

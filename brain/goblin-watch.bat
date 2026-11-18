@@ -10,7 +10,10 @@ REM Inside a WoW install (.../Interface/AddOns/<addon>/brain/) the
 REM 'self' feed derives every path from the script location — no
 REM feeds.json needed. In the dev tree that check would exit with an
 REM error, so fall back to the named dev feed.
-echo %~dp0 | findstr /i /c:"\Interface\AddOns\" >nul
+REM NOTE: no trailing backslash in the pattern — \" escapes the
+REM closing quote in CommandLineToArgvW, so findstr searched for a
+REM literal quote and every install took the dev-tree branch.
+echo %~dp0 | findstr /i /c:"\Interface\AddOns" >nul
 if errorlevel 1 (
 	echo Dev tree detected - 'self' feed needs a WoW install; using 'forever' feed from feeds.json
 	python goblin_brain.py watch forever -v --feed book

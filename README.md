@@ -21,18 +21,19 @@ themselves to the private tracker (see Bug reports below).
 1. Extract the zip into `Interface/AddOns/` — you should end up with
    `Interface/AddOns/GoblinMind/` and `Interface/AddOns/GoblinMind_Data/`.
 2. Enable both addons at the character select screen.
-3. **Run the installer** — double-click
-   `Interface/AddOns/GoblinMind/brain/install.bat` once. It writes
-   `feeds.json` (your realm scope, the shared backend's address, and
-   the install key if the host uses one) and registers the brain
-   watcher to auto-start at login. It also offers to set up a free
-   Blizzard API client for the Blizzard feed (`skip` disables that
-   feed — the local + backend feeds work regardless).
+3. **Install the brain watcher** — double-click
+   `Interface/AddOns/GoblinMind/brain/install.bat` once. It picks your
+   realm scope and registers the watcher to auto-start at login. It
+   also offers to set up a free Blizzard API client for the Blizzard
+   feed (`skip` disables that feed — the local + backend feeds work
+   regardless). **Backend configuration happens in game** (step 4) —
+   no URL or key goes in here.
    - Prefer manual? Skip the installer and double-click
      `brain/goblin-watch.bat` while you play instead.
    - To **host** the shared backend on your machine, run
      `install.bat --host` (starts `goblin_server.py` now and opens
-     TCP 8765 through Windows Firewall — one UAC prompt).
+     TCP 8765 through Windows Firewall — one UAC prompt), then hand
+     players the URL + install key it prints.
 4. `/reload` (or relog). First login walks a two-page onboarding:
    **page 1 backend** (CONNECT / SKIP / LATER — optional; every feature
    works offline — re-open with `/goblin backend`), **page 2 import**

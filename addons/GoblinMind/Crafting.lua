@@ -529,6 +529,49 @@ local function OnCastComplete(unit, castGUID, spellID)
 	end
 end
 
+-- first-login profession pump: recipes only enumerate while a line
+-- is OPEN, so a fresh profile (or a profession learned since the
+-- last capture) needs one open pass per missing line. The opens land
+-- in the normal TRADE_SKILL_SHOW path — C._pumping just suppresses
+-- the UI takeover so the window doesn't flash once per line.
+local function ProfPump()
+	if C._pumping or not (GetProfessions and GetProfessionInfo
+		and C_TradeSkillUI and C_TradeSkillUI.OpenTradeSkill) then
+		return
+	end
+	local seen = {}
+	for id in pairs(GoblinMindCrafting.recipes) do
+		local p = C.Prof(id)
+		if p and p ~= "?" then seen[p] = true end
+	end
+	local missing = {}
+	for _, idx in ipairs({ GetProfessions() }) do
+		local name, _, lvl, _, _, _, line = GetProfessionInfo(idx)
+		if line and (lvl or 0) > 0 and name and not seen[name] then
+			tinsert(missing, line)
+		end
+	end
+	if #missing == 0 then return end
+	C._pumping = true
+	GM.Print("first load — scanning " .. #missing .. " profession"
+		.. (#missing == 1 and "" or "s") .. "…")
+	local i = 0
+	local function step()
+		i = i + 1
+		local line = missing[i]
+		if not line then
+			C._pumping = nil
+			if C_TradeSkillUI.CloseTradeSkill then
+				pcall(C_TradeSkillUI.CloseTradeSkill)
+			end
+			return
+		end
+		pcall(C_TradeSkillUI.OpenTradeSkill, line)
+		GM.After(1.0, step)
+	end
+	step()
+end
+
 function C.Init()
 	GoblinMindCrafting = GoblinMindCrafting or {}
 	GoblinMindCrafting.recipes = GoblinMindCrafting.recipes or {}
@@ -610,7 +653,7 @@ function C.Init()
 				and C_TradeSkillUI.IsTradeSkillLinked()
 			local npc = C_TradeSkillUI and C_TradeSkillUI.IsNPCCrafting
 				and C_TradeSkillUI.IsNPCCrafting()
-			if not (linked or npc)
+			if not (linked or npc or C._pumping)
 				and GM.CraftingUI and GM.CraftingUI.OnTradeSkillOpen then
 				GM.CraftingUI.OnTradeSkillOpen()
 			end
@@ -674,6 +717,14 @@ function C.Init()
 				GM.PlanQueue.Refresh()
 			end
 			return -- no scan on close
+		end
+		if e == "PLAYER_LOGIN" then
+			-- recipes only enumerate under an open tradeskill line —
+			-- a fresh profile captures nothing until each prof has
+			-- been opened once, so pump the missing lines ourselves
+			-- (delayed: the login event burst races profession data)
+			GM.After(6, ProfPump)
+			return
 		end
 		-- trailing debounce: profession context settles sometime during
 		-- the event burst — only scan 0.5s after the LAST event, never

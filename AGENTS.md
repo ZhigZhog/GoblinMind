@@ -605,5 +605,27 @@ Primary data = the in-house book feed below.
   `SetItemRef` is hooked separately for chat links (may not delegate
   to the funnel here). The IsShown gate keeps bare
   shift+click-for-linking from popping the planner.
+- **First-install/onboarding contract** (issues #5/#8, 2026-11-18):
+  `Onboarding.MaybeShow` runs once per install off a persisted
+  `GM.db.onboarded` flag — the in-game flow is the PRIMARY config
+  path (install.bat only registers the watcher + Blizzard API;
+  `install.bat --host` is the server-host path). Never gate the
+  first-run prompt on `GoblinMindDB.backend` presence — the shipped
+  Data.lua may not carry the block, which silently skipped
+  onboarding for every fresh install.
+- **`/goblin bug` files immediately**: FILE + RELOAD stages via
+  `GM.StageReport` then `GM.After(1.5, ReloadUI)` — the reload flushes
+  SVs so the watcher's `process_bugs` files within seconds instead of
+  waiting for the ~90s autosave.
+- **Profession recipe pump** (`Crafting.lua` `ProfPump`, issue #7):
+  recipes only enumerate under an OPEN tradeskill line on this
+  client, so a fresh profile captures nothing until each prof is
+  opened. PLAYER_LOGIN → 6s delay → for each `GetProfessionInfo`
+  skillLine missing from `GoblinMindCrafting.recipes` (by prof NAME
+  via `C.Prof`), `C_TradeSkillUI.OpenTradeSkill(line)` paced 1s,
+  then `CloseTradeSkill`. `C._pumping` suppresses the
+  `OnTradeSkillOpen` UI takeover so the window doesn't flash per
+  line. Self-heals partial captures (new profession learned later
+  pumps just that line).
 - Not yet registered on the Codebase Map (project started 2026-11-11,
   post-closure).

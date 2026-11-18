@@ -142,7 +142,7 @@ local function Build()
 	-- stage into SavedVariables — the brain watcher picks it up on
 	-- the next /reload and files it to GitHub. Title comes from the
 	-- user's own text under the prompt line.
-	local file = Btn(f, 96, "FILE REPORT", function()
+	local file = Btn(f, 96, "FILE + RELOAD", function()
 		local txt = strtrim(eb:GetText() or "")
 		local user = strtrim(txt:match(
 			"what I did / expected / got:%s*\n?(.*)") or "")
@@ -156,8 +156,11 @@ local function Build()
 			return
 		end
 		local id = GM.StageReport(txt, user:gsub("\n.*", ""))
-		GM.Print("bug report staged (" .. id .. ") — /reload to send "
-			.. "(the brain watcher files it to GitHub)")
+		GM.Print("bug report staged (" .. id .. ") — reloading so the "
+			.. "watcher can file it to GitHub…")
+		if ReloadUI and GM.After then
+			GM.After(1.5, ReloadUI)
+		end
 	end)
 	file:SetPoint("LEFT", shot, "RIGHT", 8, 0)
 
