@@ -1097,16 +1097,46 @@ function CU.Refresh()
 		local reach = dr.req
 			and ((lv and lv.lvl >= dr.req and " — learnable now")
 				or (lv and " — above your skill") or "") or ""
+		-- emitted acquisition data (import_recipe_db → GoblinMindDB
+		-- .recipeSources) beats the generic fallback — coverage is
+		-- partial by design, so the generic text stays for misses
+		local srcs = GoblinMindDB and GoblinMindDB.recipeSources
+			and GoblinMindDB.recipeSources[ui.sel]
+		local srcTxt
+		if srcs and #srcs > 0 then
+			local parts = {}
+			for _, s in ipairs(srcs) do
+				local p
+				if s.kind == "trainer" then
+					p = "• trained by " .. (s.name or "a trainer")
+						.. (s.cost and s.cost > 0
+							and " (" .. GM.Money(s.cost) .. ")" or "")
+				elseif s.kind == "vendor" then
+					p = "• sold by " .. (s.name or "a vendor")
+				elseif s.kind == "drop" then
+					p = "• drops from " .. (s.name or "?")
+						.. (s.chance and " (~" .. s.chance .. "%)"
+							or "")
+				elseif s.kind == "quest" then
+					p = "• quest reward — " .. (s.name or "?")
+				end
+				if p then parts[#parts + 1] = p end
+			end
+			if #parts > 0 then srcTxt = table.concat(parts, "\n") end
+		end
 		ui.detSub:SetText(
 			GM.CC("warn") .. "UNLEARNED|r"
 			.. (dr.req and format(" — requires %s (%d)",
 				dr.prof or "profession", dr.req) or "")
 			.. reach .. "\n"
-			.. "Missing recipes in your range are usually trainer-taught"
-			.. " — check a " .. (dr.prof or "profession")
-			.. " trainer first.\n"
-			.. "Not listed there? It's a vendor, drop, or quest recipe —"
-			.. " Blizzard's profession window shows the source on hover.")
+			.. (srcTxt
+				or ("Missing recipes in your range are usually "
+					.. "trainer-taught — check a "
+					.. (dr.prof or "profession")
+					.. " trainer first.\n"
+					.. "Not listed there? It's a vendor, drop, or "
+					.. "quest recipe — Blizzard's profession window "
+					.. "shows the source on hover.")))
 		for _, m in ipairs(ui.detMats) do
 			m.icon:Hide()
 			m.name:Hide()

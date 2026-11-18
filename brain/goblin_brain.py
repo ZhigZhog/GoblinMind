@@ -249,6 +249,21 @@ def _first(rows, *keys):
 
 VENDOR_BUY_PATH = os.path.join(os.path.dirname(
     os.path.abspath(__file__)), 'vendor_buy.json')
+RECIPE_SOURCES_PATH = os.path.join(os.path.dirname(
+    os.path.abspath(__file__)), 'recipe_sources.json')
+
+
+def load_recipe_sources():
+    """recipe-acquisition table — frozen artifact built by
+    import_recipe_db.py from a cmangos classic-db dump; shipped with
+    the release like vendor_buy.json. Keys are recipe spell ids (the
+    same ids C_TradeSkillUI returns as recipeID); values are lists of
+    {kind,name,cost?/chance?} source records."""
+    try:
+        with open(RECIPE_SOURCES_PATH, encoding='utf-8') as fh:
+            return {int(k): v for k, v in json.load(fh).items()}
+    except (OSError, ValueError):
+        return {}
 
 
 def load_vendor_buy(path):
@@ -406,6 +421,7 @@ def cmd_emit(path, out_path, realm=None):
         'realms': realms,
         'items': flat.get('items', {}),
         'vendorBuy': load_vendor_buy(path),  # TSM VendorSell.Retail → id=cost
+        'recipeSources': load_recipe_sources(),
     }
 
     write_db(db, out_path)
@@ -1443,6 +1459,7 @@ def cmd_book(sv_arg, out_paths, root=None, feed=None, realm=None):
         'vendorBuy': load_vendor_buy(os.path.join(
             _sv_root(sv_arg, root), 'Interface', 'AddOns',
             'TradeSkillMaster_AppHelper', 'AppData.lua')),
+        'recipeSources': load_recipe_sources(),
     }
     for out in out_paths:
         write_db(db, out)
