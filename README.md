@@ -31,8 +31,8 @@ themselves to the private tracker (see Bug reports below).
    - Prefer manual? Skip the installer and double-click
      `brain/goblin-watch.bat` while you play instead.
    - To **host** the shared backend on your machine, run
-     `install.bat --host` (starts `goblin_server.py` and adds the
-     firewall rule — admin shell needed for the rule).
+     `install.bat --host` (starts `goblin_server.py` now and opens
+     TCP 8765 through Windows Firewall — one UAC prompt).
 4. `/reload` (or relog). First login walks a two-page onboarding:
    **page 1 backend** (CONNECT / SKIP / LATER — optional; every feature
    works offline — re-open with `/goblin backend`), **page 2 import**

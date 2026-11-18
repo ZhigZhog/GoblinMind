@@ -9,7 +9,7 @@ Run from the installed addon dir — Interface/AddOns/GoblinMind/brain/
                         your realm+faction scope(s)
   * Startup entries   — the brain watcher always; goblin_server only
                         with --host (one machine per community hosts)
-  * Firewall rule     --host only, and only when run elevated
+  * Firewall rule     --host only; one UAC prompt if not elevated
 
 Everything is idempotent — re-running updates in place. Paths derive
 from __file__ the same way `watch self` does, so no path questions
@@ -23,6 +23,7 @@ import os
 import re
 import socket
 import subprocess
+import time
 import sys
 import urllib.request
 import webbrowser
@@ -205,25 +206,64 @@ def write_bat(path, title, cmd):
     print(f'  wrote {path}')
 
 
+def start_server():
+    """Launch goblin_server.py now — the Startup bat only fires at
+    login, and the installer's own probe + first upload need it up."""
+    if sys.platform == 'win32':
+        subprocess.Popen(
+            f'start "GoblinMind Server" /min cmd /k '
+            f'python goblin_server.py {PORT}', shell=True, cwd=HERE)
+    else:
+        subprocess.Popen([sys.executable, 'goblin_server.py',
+                          str(PORT)], cwd=HERE)
+    print(f'  server started on :{PORT}')
+
+
 def firewall_rule():
+    """Inbound TCP rule for the backend. Admin shell adds it directly;
+    otherwise one UAC prompt runs delete+add via an elevated helper."""
+    rule = f'GoblinMind Backend {PORT}'
+    cmds = (f'netsh advfirewall firewall delete rule name="{rule}"; '
+            f'netsh advfirewall firewall add rule name="{rule}" '
+            f'dir=in action=allow protocol=TCP localport={PORT}')
     windll = getattr(ctypes, 'windll', None)
-    if windll is None or not windll.shell32.IsUserAnAdmin():
-        print('  firewall rule needs an admin shell — run once as admin:')
-        print(f'    netsh advfirewall firewall add rule '
-              f'name="GoblinMind Backend {PORT}" dir=in action=allow '
-              f'protocol=TCP localport={PORT}')
+    if windll and windll.shell32.IsUserAnAdmin():
+        # netsh has no upsert — delete first so re-runs stay idempotent
+        subprocess.run(['netsh', 'advfirewall', 'firewall', 'delete',
+                        'rule', f'name={rule}'], capture_output=True)
+        r = subprocess.run(
+            ['netsh', 'advfirewall', 'firewall', 'add', 'rule',
+             f'name={rule}', 'dir=in', 'action=allow',
+             'protocol=TCP', f'localport={PORT}'],
+            capture_output=True, text=True)
+        print('  firewall rule added' if r.returncode == 0
+              else f'  netsh failed: '
+                   f'{r.stdout.strip() or r.stderr.strip()}')
         return
-    # netsh has no upsert — delete first so re-runs stay idempotent
-    subprocess.run(['netsh', 'advfirewall', 'firewall', 'delete',
-                    'rule', f'name=GoblinMind Backend {PORT}'],
-                   capture_output=True)
-    r = subprocess.run(
-        ['netsh', 'advfirewall', 'firewall', 'add', 'rule',
-         f'name=GoblinMind Backend {PORT}', 'dir=in', 'action=allow',
-         'protocol=TCP', f'localport={PORT}'],
-        capture_output=True, text=True)
-    print('  firewall rule added' if r.returncode == 0
-          else f'  netsh failed: {r.stdout.strip() or r.stderr.strip()}')
+    if windll:
+        r = windll.shell32.ShellExecuteW(
+            None, 'runas', 'powershell.exe',
+            '-NoProfile -WindowStyle Hidden -Command "' + cmds + '"',
+            None, 0)
+        if r and r > 32:
+            print('  firewall rule — approve the UAC prompt to open '
+                  f'TCP {PORT}')
+            for _ in range(20):
+                time.sleep(0.5)
+                q = subprocess.run(
+                    ['netsh', 'advfirewall', 'firewall', 'show',
+                     'rule', f'name={rule}'],
+                    capture_output=True, text=True)
+                if rule in (q.stdout or ''):
+                    print('  firewall rule added')
+                    return
+            print(f'  still pending — verify: netsh advfirewall '
+                  f'firewall show rule name="{rule}"')
+            return
+        print('  UAC declined — firewall stays closed')
+    print('  run once as admin to open the port:')
+    print(f'    netsh advfirewall firewall add rule name="{rule}" '
+          f'dir=in action=allow protocol=TCP localport={PORT}')
 
 
 def main():
@@ -266,9 +306,16 @@ def main():
                 pass
         return
 
-    url = (a.backend_url or
-           ask('Backend server URL (host\'s LAN IP, e.g. '
-               'http://192.168.1.10:8765)', 'http://127.0.0.1:8765'))
+    if a.host:
+        # this machine IS the backend — own feed goes via loopback;
+        # the server must be up before the health probe below
+        url = a.backend_url or 'http://127.0.0.1:8765'
+        start_server()
+        firewall_rule()
+    else:
+        url = (a.backend_url or
+               ask('Backend server URL (host\'s LAN IP, e.g. '
+                   'http://192.168.1.10:8765)', 'http://127.0.0.1:8765'))
     if not url:
         sys.exit('backend URL is required')
     if '://' not in url:
