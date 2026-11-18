@@ -5,7 +5,7 @@ Forever** (interface `16001`). Price model, execution planner, crafting
 planner, ledger, group/operation system, session takeovers — TSM-styled
 dark UI, **no TSM required**.
 
-**v0.5.3-alpha** — public alpha. Expect rough edges; bug reports file
+**v0.5.3** — public alpha. Expect rough edges; bug reports file
 themselves to the private tracker (see Bug reports below).
 
 ## Requirements
