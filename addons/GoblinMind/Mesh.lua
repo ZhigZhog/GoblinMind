@@ -280,6 +280,22 @@ function M.Status()
 		Ago(be.pull and be.pull.t),
 		be.pull and (be.pull.ok and "" or " (failed)") or "",
 		be.peers or 0, be.peers == 1 and "" or "s"))
+	-- staged work waiting on the companion app — reports, connect
+	-- and api requests queue in the SV until the watcher consumes them
+	local q = 0
+	for _, k in ipairs({ "bugReports", "backendReqs", "apiReqs" }) do
+		local l = GM.db and GM.db[k]
+		if l then q = q + #l end
+	end
+	if q > 0 then
+		local age = GM.EmitAge and GM.EmitAge()
+		GM.Print(format("queued: %d request%s/report%s — %s",
+			q, q == 1 and "" or "s", q == 1 and "" or "s",
+			(age and age <= 900)
+				and "the companion app picks them up next cycle"
+				or GM.CC("warn") .. "no companion app seen — start "
+					.. "it from the app page (/goblin backend)|r"))
+	end
 end
 
 -- ============ consume handshake + boot ============

@@ -288,7 +288,19 @@ def main():
                     help='proceed even outside Interface/AddOns')
     ap.add_argument('--remove', action='store_true',
                     help='remove the Startup entries and exit')
+    ap.add_argument('--register', action='store_true',
+                    help='write only the watcher Startup entry and '
+                         'exit — called by goblin-watch.bat on first '
+                         'run so one double-click is ever needed')
     a = ap.parse_args()
+
+    if a.register:
+        if addon_root():
+            write_bat(WATCH_BAT, 'GoblinMind Brain',
+                      'python goblin_brain.py watch self -v --feed book')
+        else:
+            print('skipped — not inside Interface/AddOns')
+        return
 
     if not addon_root() and not a.remove and not a.dev:
         print(f'warning: {HERE} is not inside Interface/AddOns — the '
@@ -379,10 +391,30 @@ def main():
             firewall_rule()
             secret = ensure_server_secret()
             ip = lan_ip()
-            print('  share with friends — they run install.bat and enter:')
-            print(f'    backend URL : '
-                  f'http://{ip or "<this-PC-LAN-IP>"}:{PORT}')
+            invite_url = f'http://{ip or "<this-PC-LAN-IP>"}:{PORT}'
+            print('  share with friends — they enter these in the')
+            print('  GoblinMind setup window in game (or /goblin backend):')
+            print(f'    backend URL : {invite_url}')
             print(f'    install key : {secret}')
+            # durable copy — console output scrolls away, this file
+            # sits beside the bat and can be re-opened or shared
+            # verbatim any time a friend joins later
+            try:
+                with open(os.path.join(HERE, 'backend-invite.txt'),
+                          'w', encoding='utf-8') as fh:
+                    fh.write('GoblinMind backend invite\n'
+                             '===========================\n'
+                             'Give friends these two values — they\n'
+                             'type them into the GoblinMind setup\n'
+                             'window in game (or /goblin backend):\n\n'
+                             f'  server address : {invite_url}\n'
+                             f'  key            : {secret}\n\n'
+                             'Their install never needs the command\n'
+                             'line — the in-game wizard writes the\n'
+                             'config for them.\n')
+                print('  (also saved to backend-invite.txt here)')
+            except OSError:
+                pass
             print('  (delete goblin_server.json beside the server for '
                   'open registration)')
     else:

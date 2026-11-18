@@ -7,16 +7,17 @@ local _, GM = ...
 --
 --   page 1 BACKEND   — crowdsource price feed (optional). CONNECT
 --                      stages a bm- request and advances to API;
---                      SKIP is permanent and goes straight to IMPORT
---                      (/goblin backend re-opens). LATER re-asks next
---                      login.
---   page 2 API       — Blizzard auction API credentials (optional,
---                      reached only after CONNECT). SAVE stages an
---                      api- request; SKIP goes to IMPORT.
+--                      SKIP is permanent and also goes to API (the
+--                      Blizzard feed is independent — solo players
+--                      deserve it too). LATER re-asks next login.
+--   page 2 API       — Blizzard auction API credentials (optional).
+--                      SAVE stages an api- request; SKIP goes to IMPORT.
 --   page 3 IMPORT    — compatible-addon settings (TSM etc.) via
 --                      GM.Import; /goblin import opens it directly.
---   page 4 OPTIONS   — persistent toggles (spoiler-free crafting
---                      today; more later) + the watcher-start nudge.
+--   page 4 APP       — the companion app: where it lives, one
+--                      double-click to start, self-registers.
+--   page 5 OPTIONS   — persistent toggles (spoiler-free crafting
+--                      today; more later).
 --
 -- The watcher itself is the "external program": every page that
 -- stages something shows a hint when no recent emit exists —
@@ -30,11 +31,12 @@ local Btn = W and W.Btn
 
 local ui
 
-local PAGES = { "backend", "api", "import", "options" }
+local PAGES = { "backend", "api", "import", "app", "options" }
 local TITLES = {
-	backend = "GOBLINMIND BACKEND",
-	api = "BLIZZARD API",
-	import = "IMPORT SETTINGS",
+	backend = "CONNECT TO A PRICE SERVER",
+	api = "BLIZZARD PRICE FEED",
+	import = "BRING YOUR OLD SETUP",
+	app = "START THE COMPANION APP",
 	options = "OPTIONS",
 }
 local PAGE_IX = {}
@@ -56,6 +58,8 @@ local function WatchHint(parent)
 	return fs
 end
 
+local Refresh  -- forward decl — SetPage calls it on every switch
+
 local function SetPage(p)
 	local n = type(p) == "number" and p or PAGE_IX[p] or 1
 	ui.page = n
@@ -64,6 +68,9 @@ local function SetPage(p)
 	if PAGES[n] == "import" and ui.RefreshImport then
 		ui.RefreshImport()
 	end
+	-- the app page's status/path lines read live emit state —
+	-- recompute on every page switch, not just on open
+	Refresh()
 end
 
 local function Build()
@@ -102,8 +109,8 @@ local function Build()
 		pg:Hide()
 		ui.pages[i] = pg
 	end
-	local p1, p2, p3, p4 = ui.pages[1], ui.pages[2], ui.pages[3],
-		ui.pages[4]
+	local p1, p2, p3, p4, p5 = ui.pages[1], ui.pages[2], ui.pages[3],
+		ui.pages[4], ui.pages[5]
 
 	-- ======================= page 1: backend =======================
 
@@ -117,23 +124,20 @@ local function Build()
 	body:SetJustifyH("LEFT")
 	body:SetSpacing(3)
 	body:SetText(
-		"GoblinMind can join a shared price feed — installs that opt in "
-		.. "pool their auction books into a crowdsourced realm book, keep "
-		.. "long-term price history, and file bug reports automatically.\n\n"
+		"Team up: GoblinMind installs that join the same server pool "
+		.. "their price scans into a shared book — prices stay fresh "
+		.. "even while you're offline.\n\n"
 		.. GM.CC("textDim")
-		.. "Optional — without it, prices come from your own scans and the "
-		.. "mesh, and every feature still works. SKIP goes straight to "
-		.. "the import page.|r\n\n"
-		.. GM.CC("textDim")
-		.. "CONNECT also asks about the free Blizzard API on the next "
-		.. "page — everything you set here is applied by the companion "
-		.. "watcher, no command-line install needed.|r")
+		.. "Only fill this in if a friend gave you a server address "
+		.. "and key. Playing solo? Press SKIP — everything still works "
+		.. "on your own scans, the mesh, and the free Blizzard feed on "
+		.. "the next page.|r")
 
 	-- fields cascade off the body's bottom edge — wrapped text height
 	-- varies by width/font, fixed offsets overlapped the body copy
 	local urlLab = GM.MakeFontString(p1, GM.FONT, 9, "textDim")
 	urlLab:SetPoint("TOPLEFT", body, "BOTTOMLEFT", 0, -12)
-	urlLab:SetText("SERVER")
+	urlLab:SetText("SERVER ADDRESS")
 	local urlEb = W.EditBox(p1, 300)
 	urlEb:SetPoint("TOPLEFT", urlLab, "BOTTOMLEFT", -2, -4)
 	urlEb:SetText("http://127.0.0.1:8765")
@@ -141,7 +145,7 @@ local function Build()
 
 	local nameLab = GM.MakeFontString(p1, GM.FONT, 9, "textDim")
 	nameLab:SetPoint("TOPLEFT", urlEb, "BOTTOMLEFT", 2, -10)
-	nameLab:SetText("CALLSIGN")
+	nameLab:SetText("YOUR NAME (shown to the server)")
 	local nameEb = W.EditBox(p1, 200)
 	nameEb:SetPoint("TOPLEFT", nameLab, "BOTTOMLEFT", -2, -4)
 	nameEb:SetText(UnitName and UnitName("player") or "goblinmind")
@@ -149,7 +153,7 @@ local function Build()
 
 	local keyLab = GM.MakeFontString(p1, GM.FONT, 9, "textDim")
 	keyLab:SetPoint("TOPLEFT", nameEb, "BOTTOMLEFT", 2, -10)
-	keyLab:SetText("KEY (only if the server gave you one)")
+	keyLab:SetText("KEY (only if your friend gave you one)")
 	local keyEb = W.EditBox(p1, 200)
 	keyEb:SetPoint("TOPLEFT", keyLab, "BOTTOMLEFT", -2, -4)
 	ui.keyEb = keyEb
@@ -171,12 +175,19 @@ local function Build()
 
 	local skip = Btn(p1, 90, "SKIP", function()
 		GM.db.backendSkip = true
-		SetPage("import")
+		SetPage("api")
 	end)
 	skip:SetPoint("LEFT", connect, "RIGHT", 8, 0)
 
 	local later = Btn(p1, 90, "LATER", function() f:Hide() end)
 	later:SetPoint("LEFT", skip, "RIGHT", 8, 0)
+
+	-- self-host share line — filled by Refresh() only when the emit
+	-- carries backend.invite (loopback host provenance)
+	ui.invite = GM.MakeFontString(p1, GM.FONT, 9, "accent")
+	ui.invite:SetPoint("BOTTOMLEFT", 12, 44)
+	ui.invite:SetWidth(436)
+	ui.invite:SetJustifyH("LEFT")
 
 	ui.watch1 = WatchHint(p1)
 
@@ -192,12 +203,16 @@ local function Build()
 	aBody:SetJustifyH("LEFT")
 	aBody:SetSpacing(3)
 	aBody:SetText(
-		"The watcher can also pull Blizzard's auction API — it keeps "
-		.. "regional price history fresh even between your own scans.\n\n"
+		"Free, official, and the best data you can get without a "
+		.. "group: the companion app can pull Blizzard's auction feed "
+		.. "so prices stay fresh even when you haven't scanned.\n\n"
 		.. GM.CC("textDim")
-		.. "Credentials are free: make a client at develop.battle.net "
-		.. "(create application → any name → copy the ID + secret). "
-		.. "SKIP leaves this off — your scans and the mesh still work.|r")
+		.. "One-time setup on the web — the game can't open it for you:\n"
+		.. "1. Go to develop.battle.net and sign in\n"
+		.. "2. Create Client (any name, any redirect link)\n"
+		.. "3. Copy the Client ID and Client Secret here|r\n\n"
+		.. GM.CC("textDim")
+		.. "SKIP keeps it off — your own scans still work.|r")
 
 	local idLab = GM.MakeFontString(p2, GM.FONT, 9, "textDim")
 	idLab:SetPoint("TOPLEFT", aBody, "BOTTOMLEFT", 0, -12)
@@ -259,9 +274,8 @@ local function Build()
 	iBody:SetJustifyH("LEFT")
 	iStatus:SetWordWrap(false)
 	iBody:SetSpacing(3)
-	iBody:SetText("Settings found in other addons. Each item lists "
-		.. "what comes over — import merges, it never wipes your "
-		.. "existing GoblinMind setup.")
+	iBody:SetText("Found settings in other addons. Importing adds "
+		.. "to GoblinMind — it never deletes anything you already made.")
 
 	local rows = {}
 	ui.rows = rows
@@ -273,7 +287,7 @@ local function Build()
 	local back = Btn(p3, 90, "< BACK", function() SetPage("api") end)
 	back:SetPoint("BOTTOMLEFT", 12, 10)
 
-	local toOpts = Btn(p3, 90, "NEXT >", function() SetPage("options") end)
+	local toOpts = Btn(p3, 90, "NEXT >", function() SetPage("app") end)
 	toOpts:SetPoint("BOTTOMRIGHT", -12, 10)
 
 	local function MakeRow(ix)
@@ -341,9 +355,57 @@ local function Build()
 		ui.iStatus2:SetText(note or "")
 	end
 
-	-- ======================= page 4: options =======================
+	-- ================= page 4: companion app ==================
 
-	local oBody = GM.MakeFontString(p4, GM.FONT, 10, "text")
+	local cStatus = GM.MakeFontString(p4, GM.FONT, 9, "textDim")
+	cStatus:SetPoint("TOPLEFT", 12, -28)
+	ui.cStatus = cStatus
+
+	local cBody = GM.MakeFontString(p4, GM.FONT, 10, "text")
+	cBody:SetPoint("TOPLEFT", 14, -46)
+	cBody:SetWidth(432)
+	cBody:SetJustifyH("LEFT")
+	cBody:SetSpacing(3)
+	cBody:SetText(
+		"One last thing — GoblinMind's number-cruncher lives outside "
+		.. "the game, and it hasn't started yet.\n\n"
+		.. "1. Open this folder:\n"
+		.. "2. Double-click goblin-watch.bat\n\n"
+		.. GM.CC("textDim")
+		.. "That's the only time you ever have to. It sets itself to "
+		.. "start with Windows, then keeps prices and bug reports "
+		.. "moving on its own. Come back and /reload once it's "
+		.. "running.|r")
+
+	-- selectable path box — the watcher emits its absolute brain dir
+	-- (GoblinMindDB.brain); before any emit we can only show the
+	-- relative location inside the WoW install
+	local pathLab = GM.MakeFontString(p4, GM.FONT, 9, "textDim")
+	pathLab:SetPoint("TOPLEFT", cBody, "BOTTOMLEFT", 0, -8)
+	pathLab:SetText("FOLDER (click the box, ctrl+a, ctrl+c)")
+	local pathEb = W.EditBox(p4, 432)
+	pathEb:SetPoint("TOPLEFT", pathLab, "BOTTOMLEFT", -2, -4)
+	pathEb:SetAutoFocus(false)
+	pathEb:SetScript("OnEditFocusGained", function(eb)
+		eb:HighlightText()
+	end)
+	pathEb:SetScript("OnTextChanged", function(eb, user)
+		-- read-only: restore the real path if the player types
+		if user then eb:SetText(ui.pathText or "") eb:HighlightText() end
+	end)
+	pathEb:SetScript("OnEscapePressed", function(eb)
+		eb:ClearFocus()
+	end)
+	ui.pathEb = pathEb
+
+	local cBack = Btn(p4, 90, "< BACK", function() SetPage("import") end)
+	cBack:SetPoint("BOTTOMLEFT", 12, 10)
+	local cNext = Btn(p4, 90, "NEXT >", function() SetPage("options") end)
+	cNext:SetPoint("BOTTOMRIGHT", -12, 10)
+
+	-- ======================= page 5: options =======================
+
+	local oBody = GM.MakeFontString(p5, GM.FONT, 10, "text")
 	oBody:SetPoint("TOPLEFT", 14, -44)
 	oBody:SetWidth(432)
 	oBody:SetJustifyH("LEFT")
@@ -356,7 +418,7 @@ local function Build()
 		.. "yet (and where to get them). Leaves everything else "
 		.. "visible.|r")
 
-	local spoiler = Btn(p4, 220, "", function()
+	local spoiler = Btn(p5, 220, "", function()
 		GM.db.hideUnlearned = not GM.db.hideUnlearned
 		ui.spoiler.text:SetText("HIDE UNLEARNED RECIPES: "
 			.. (GM.db.hideUnlearned and "ON" or "OFF"))
@@ -371,48 +433,79 @@ local function Build()
 		.. (GM.db.hideUnlearned and "ON" or "OFF"))
 	ui.spoiler = spoiler
 
-	ui.watch4 = WatchHint(p4)
+	ui.watch5 = WatchHint(p5)
 
-	local done = Btn(p4, 90, "DONE", function() f:Hide() end)
+	local done = Btn(p5, 90, "DONE", function() f:Hide() end)
 	done:SetPoint("BOTTOMRIGHT", -12, 10)
-	local oBack = Btn(p4, 90, "< BACK", function() SetPage("import") end)
+	local oBack = Btn(p5, 90, "< BACK", function() SetPage("app") end)
 	oBack:SetPoint("BOTTOMLEFT", 12, 10)
 end
 
-local function Refresh()
+-- shared staged-request copy — the ~2 min figure is the SV
+-- autosave cadence; /reload flushes immediately
+local STAGED = "saved — the companion app picks this up within "
+	.. "~2 min; /reload once it's running"
+
+function Refresh()
 	if not ui then return end
 	local req = GM.db and GM.db.backendReq
 	local be = GoblinMindDB and GoblinMindDB.backend
-	if Configured() then
-		ui.status:SetText(GM.CC("pos")
-			.. "connected: " .. tostring(be.url or be.name or "?") .. "|r")
-	elseif req then
+	if be and be.lastError then
 		ui.status:SetText(GM.CC("warn")
-			.. "request staged — waiting for the watcher (needs /reload)|r")
+			.. "can't reach that server — " .. GM.CC("textDim")
+			.. tostring(be.lastError):sub(1, 80) .. "|r")
+	elseif Configured() then
+		ui.status:SetText(GM.CC("pos")
+			.. "connected: " .. tostring(be.url or be.name or "?")
+			.. " · " .. tostring(be.peers or 1) .. " installs|r")
+	elseif req then
+		ui.status:SetText(GM.CC("warn") .. STAGED .. "|r")
 	else
 		ui.status:SetText("not configured")
 	end
+	-- R5: on the loopback host the emit carries the share invite —
+	-- show it so the player can hand friends the URL + key in game
+	if be and be.invite and ui.invite then
+		ui.invite:SetText(GM.CC("accent") .. "hosting — friends use: "
+			.. tostring(be.invite.url)
+			.. " · key " .. tostring(be.invite.key) .. "|r")
+	end
 	local ap = GoblinMindDB and GoblinMindDB.api
-	if ap and ap.configured then
+	if ap and ap.ok == false then
+		ui.aStatus:SetText(GM.CC("warn")
+			.. "those credentials were rejected — re-check both"
+			.. (ap.error and (" " .. GM.CC("textDim") .. "("
+				.. tostring(ap.error):sub(1, 60) .. ")") or "") .. "|r")
+	elseif ap and ap.configured then
 		ui.aStatus:SetText(GM.CC("pos")
 			.. "blizzard api configured|r")
 	elseif GM.db and GM.db.apiReq then
-		ui.aStatus:SetText(GM.CC("warn")
-			.. "request staged — waiting for the watcher (needs /reload)|r")
+		ui.aStatus:SetText(GM.CC("warn") .. STAGED .. "|r")
 	else
 		ui.aStatus:SetText("not configured")
 	end
-	-- "start the external program" — visible whenever the watcher
-	-- hasn't emitted recently and something needs it (or could)
+	-- companion-app page: fill the selectable path box and the
+	-- running/not-yet status line
+	local br = GoblinMindDB and GoblinMindDB.brain
+	ui.pathText = (br and br.dir)
+		or "Interface\\AddOns\\GoblinMind\\brain"
+	ui.pathEb:SetText(ui.pathText)
+	ui.pathEb:SetCursorPosition(0)
 	local age = GM.EmitAge and GM.EmitAge()
 	local silent = (not age) or age > 900
+	ui.cStatus:SetText(silent
+		and (GM.CC("warn") .. "not running yet — one double-click "
+			.. "starts it|r")
+		or (GM.CC("pos") .. "running — latest data "
+			.. floor(age) .. "s old|r"))
+	-- "start the external program" — visible whenever the watcher
+	-- hasn't emitted recently and something needs it (or could)
 	local hint = silent
-		and "the brain watcher hasn't run yet — start "
-		.. "brain\\goblin-watch.bat once, then /reload"
+		and "the companion app hasn't run yet — see step 4"
 		or ""
 	if ui.watch1 then ui.watch1:SetText(hint) end
 	if ui.watch2 then ui.watch2:SetText(hint) end
-	if ui.watch4 then ui.watch4:SetText(hint) end
+	if ui.watch5 then ui.watch5:SetText(hint) end
 end
 
 -- OB.Show("import"|"api"|"options") opens a specific page; no

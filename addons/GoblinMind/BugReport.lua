@@ -162,9 +162,9 @@ local function Build()
 		GM.Print("bug report filed (" .. id .. ") — uploads "
 			.. "automatically in ~90s (SavedVariables autosave), or "
 			.. "/reload to send now"
-			.. (dead and ". " .. GM.CC("warn") .. "no watcher seen — "
-				.. "start brain\\goblin-watch.bat once or it stays "
-				.. "queued|r" or ""))
+			.. (dead and ". " .. GM.CC("warn") .. "no companion app "
+				.. "seen — it'll upload once the app is running "
+				.. "(see setup step 4, /goblin backend)|r" or ""))
 	end)
 	file:SetPoint("LEFT", shot, "RIGHT", 8, 0)
 

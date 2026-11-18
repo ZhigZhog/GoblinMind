@@ -605,20 +605,40 @@ Primary data = the in-house book feed below.
   `SetItemRef` is hooked separately for chat links (may not delegate
   to the funnel here). The IsShown gate keeps bare
   shift+click-for-linking from popping the planner.
-- **In-game config → brain contract** (issues #15/#16, 2026-11-18):
+- **In-game config → brain contract** (issues #15/#16, 2026-11-18;
+  reworked per `WoWVault\Proposals\onboarding-ux-proposal.md`):
   onboarding is a multi-page wizard (`Onboarding.lua` `PAGES` —
-  backend → api → import → options; CONNECT advances to api, SKIP
-  jumps to import). Every config page stages a hex request in the SV
-  (`backendReqs` `bm-`, `apiReqs` `api-` via `GM.StageApiReq`); the
-  watcher's `process_backend_reqs`/`process_api_reqs` fold the newest
-  into `feeds.json` (`api` block: client_id/secret/region/realms
+  backend → api → import → app → options; CONNECT advances to api,
+  SKIP also goes to api — the Blizzard feed is independent of the
+  backend so solo players must still see it). Every config page
+  stages a hex request in the SV (`backendReqs` `bm-`, `apiReqs`
+  `api-` via `GM.StageApiReq`); the watcher's
+  `process_backend_reqs`/`process_api_reqs` fold the newest into
+  `feeds.json` (`api` block: client_id/secret/region/realms
   `{scope:0}`/poll 30m) and emit `backend.ack`/`api.ack` so the addon
   clears pending flags. `install.py` non-host path is register-only
   (no prompts — config is in-game); `--host` keeps the interactive
-  server path. `GM.EmitAge()` (secs since `GoblinMindDB.generated`)
-  drives "start brain\goblin-watch.bat once" hints — >900s = silent.
-  `GM.db.hideUnlearned` = spoiler-free crafting (RecipeRows skips
-  unlearned rows); toggled on the OPTIONS page.
+  server path + writes `backend-invite.txt` (durable URL+key share
+  card beside the bat). **`goblin-watch.bat` self-registers**: on
+  first run inside a WoW install it calls `install.py --register`
+  (writes the per-user Startup bat only) and prints the undo path —
+  one double-click is ever needed. `GM.EmitAge()` (secs since
+  `GoblinMindDB.generated`) drives companion-app hints — >900s =
+  silent. `GM.db.hideUnlearned` = spoiler-free crafting (RecipeRows
+  skips unlearned rows); toggled on the OPTIONS page.
+  **Emit surface for the wizard**: `GoblinMindDB.brain` = watcher
+  absolute dir + bat path (the app page shows it in a selectable
+  box — the addon can't resolve its own install dir);
+  `backend.lastError`/`api.error` = last failed direction's err
+  string (`_backend_health` records err on ok=False; `api_last`
+  records poll ok/err in the watch loop) so a bad secret or dead
+  host surfaces as "rejected"/"can't reach" instead of false
+  "configured"; `backend.invite` = {url,key} emitted ONLY when
+  `_local_server_secret` proves this machine hosts the server —
+  the install secret must never ride the emit otherwise. BugReport
+  `Collect()` must never include `GoblinMindDB.brain` (username in
+  the path). `/goblin status` prints a queued-count line from
+  `bugReports`+`backendReqs`+`apiReqs` lengths.
 - **Sale-delta engine semantics** (2026-11-18, `delta_record`):
   disappeared lots are sale candidates ONLY after relist matching —
   per item, appeared lots in the new book cancel gone lots when

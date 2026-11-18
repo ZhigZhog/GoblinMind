@@ -26,6 +26,7 @@ import math
 import logging.handlers
 import os
 import re
+import socket
 import subprocess
 import sys
 import tempfile
@@ -938,8 +939,8 @@ def backend_pull(cfg=None):
         try:
             d = _backend_req(cfg, '/v1/book?' + urllib.parse.urlencode(
                 {'scope': scope}))
-        except Exception:
-            _backend_health('pull', False)
+        except Exception as e:
+            _backend_health('pull', False, err=str(e))
             raise
         if d.get('items'):
             books[scope] = {'t': int(d.get('t') or time.time()),
@@ -974,12 +975,14 @@ def backend_pull(cfg=None):
     return books
 
 
-def _backend_health(kind, ok, n=0):
+def _backend_health(kind, ok, n=0, err=None):
     """last-attempt status per direction, surfaced in the emitted DB
-    so /goblin status can report backend health."""
+    so /goblin status can report backend health — err text lets the
+    wizard distinguish 'connected, 0 peers' from 'can't reach it'."""
     st = _load_api_state()
     st.setdefault('backend', {})[kind] = {
-        't': int(time.time()), 'n': n, 'ok': ok}
+        't': int(time.time()), 'n': n, 'ok': ok,
+        'err': None if ok else err}
     _save_api_state(st)
 
 
@@ -1020,8 +1023,8 @@ def backend_upload_books(books_by_scope, cfg=None):
             LOG.info('backend upload %s: %d items%s', scope,
                      r.get('items', 0),
                      '' if fresh else ' (hourly re-push)')
-        except Exception:
-            _backend_health('up', False)
+        except Exception as e:
+            _backend_health('up', False, err=str(e))
             LOG.exception('backend upload failed: %s', scope)
     # _backend_health wrote 'up' to state inside the loop — reload so
     # the stale st loaded above doesn't clobber it on save
@@ -1543,6 +1546,9 @@ def cmd_book(sv_arg, out_paths, root=None, feed=None, realm=None):
         # state for the in-game onboarding popup
         'backend': _backend_emit(),
         'api': _api_emit(),
+        # where the companion app lives — absolute paths so the
+        # wizard can show them in a copyable box
+        'brain': _brain_emit(),
         'realms': realms,
         'items': flat.get('items', {}),
         # vendorBuy is static data scraped from TSM's own addon files —
@@ -1856,20 +1862,51 @@ def process_api_reqs(appdata, root=None):
 
 
 def _api_emit():
-    """Emitted 'api' block: whether feeds.json carries credentials +
-    the staged-request watermark (ack)."""
+    """Emitted 'api' block: whether feeds.json carries credentials,
+    the staged-request watermark (ack), and last-poll health so a
+    typo'd secret shows as an error in game, not 'configured'."""
     st = _load_api_state()
     cfg = _api_cfg()
     out = {'configured': bool(cfg.get('client_id'))}
     if st.get('api_req_at'):
         out['ack'] = st['api_req_at']
+    last = st.get('api_last')
+    if last:
+        out['ok'] = last.get('ok')
+        if last.get('err'):
+            out['error'] = last['err']
     return out
+
+
+def _brain_emit():
+    """Where the companion app lives — the onboarding wizard shows
+    the absolute path in a copyable box (the addon can't resolve its
+    own install dir, but the watcher knows exactly where it sits)."""
+    d = os.path.dirname(os.path.abspath(__file__))
+    return {'dir': d, 'bat': os.path.join(d, 'goblin-watch.bat')}
+
+
+def _lan_ip():
+    """Primary LAN address — duplicate of install.py's helper; the
+    watcher needs it to build the host's share URL for the emit."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(('8.8.8.8', 80))  # no traffic is sent
+            return s.getsockname()[0]
+        finally:
+            s.close()
+    except OSError:
+        return None
 
 
 def _backend_emit():
     """The emitted 'backend' block: health records + config state so
     the addon knows whether onboarding should prompt, plus the
-    newest staged-request timestamp it has consumed (ack)."""
+    newest staged-request timestamp it has consumed (ack), the most
+    recent failure string (lastError — 'connected, 0 peers' must be
+    distinguishable from 'can't reach the host'), and — only when
+    this machine IS the server — the share invite for friends."""
     st = _load_api_state()
     out = dict(st.get('backend') or {})
     cfg = _backend_cfg()
@@ -1878,6 +1915,22 @@ def _backend_emit():
         out['name'] = cfg.get('name') or 'goblinmind'
     if st.get('backend_req_at'):
         out['ack'] = st['backend_req_at']
+    # newest failed direction wins — its err string rides the record
+    fails = [r for r in (out.get('up'), out.get('pull'))
+             if isinstance(r, dict) and r.get('ok') is False]
+    if fails:
+        newest = max(fails, key=lambda r: r.get('t') or 0)
+        out['lastError'] = newest.get('err') or 'unreachable'
+    # the invite carries the install secret — emit it ONLY on the
+    # loopback host where the secret file already sits locally
+    secret = _local_server_secret(cfg)
+    if secret:
+        ip = _lan_ip()
+        port = urllib.parse.urlparse(
+            cfg.get('url') or '').port or 8765
+        if ip:
+            out['invite'] = {'url': 'http://%s:%d' % (ip, port),
+                             'key': secret}
     return out
 
 
@@ -1943,6 +1996,7 @@ def cmd_watch(appdata, outs, interval=5, settle=20, feed='tsm',
     api_cfg_raw = _api_cfg() if feed == 'book' else {}
     api_poll_secs = float(api_cfg_raw.get('poll_minutes', 30)) * 60
     last_api_poll = time.time()  # first poll after one full interval
+    api_last_cid = api_cfg_raw.get('client_id')  # change → immediate poll
     backend_cfg_raw = _backend_cfg() if feed == 'book' else {}
     backend_poll_secs = float(
         backend_cfg_raw.get('poll_minutes', 15)) * 60
@@ -2036,13 +2090,30 @@ def cmd_watch(appdata, outs, interval=5, settle=20, feed='tsm',
                     LOG.exception('bug pass failed')
         # api poll: pull the connected-realm dump on its own cadence,
         # then re-emit so the merge picks the fresh book up
-        if feed == 'book' and api_cfg_raw and \
+        if feed == 'book':
+            # cfg re-read each cycle — a staged in-game api request
+            # must take effect without a watcher restart, and fresh
+            # credentials should be validated now, not in 30 min
+            api_cfg_raw = _api_cfg()
+            if api_cfg_raw.get('client_id') != api_last_cid:
+                api_last_cid = api_cfg_raw.get('client_id')
+                last_api_poll = 0
+        if feed == 'book' and api_cfg_raw.get('client_id') and \
                 now - last_api_poll >= api_poll_secs:
+            api_poll_secs = float(
+                api_cfg_raw.get('poll_minutes', 30)) * 60
             last_api_poll = now
             try:
                 api_poll(api_cfg_raw)
+                st = _load_api_state()
+                st['api_last'] = {'t': int(now), 'ok': True}
+                _save_api_state(st)
                 emit_book('api poll')
-            except Exception:  # network hiccups must not kill the loop
+            except Exception as e:  # network hiccups must not kill the loop
+                st = _load_api_state()
+                st['api_last'] = {'t': int(now), 'ok': False,
+                                  'err': str(e)}
+                _save_api_state(st)
                 LOG.exception('api poll failed')
         # backend pull: our crowdsourced merged book on its own
         # cadence — cfg re-read each cycle so an in-game onboarding

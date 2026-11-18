@@ -18,6 +18,13 @@ if errorlevel 1 (
 	echo Dev tree detected - 'self' feed needs a WoW install; using 'forever' feed from feeds.json
 	python goblin_brain.py watch forever -v --feed book
 ) else (
+	REM first run on this machine = the last manual start you'll ever
+	REM need: register the watcher to launch with Windows (per-user
+	REM Startup, no admin). install.py --register writes the bat only.
+	if not exist "%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\goblinmind-brain-watch.bat" (
+		python install.py --register
+		if not errorlevel 1 echo Registered to start with Windows - undo with install.bat --remove
+	)
 	python goblin_brain.py watch self -v --feed book
 )
 echo.
