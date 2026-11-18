@@ -409,7 +409,12 @@ function GM.AH.FullScan()
 		if n > 0 then
 			if n == lastN then
 				stable = stable + 1
-				if stable >= 2 then GM.AH.CollectBook(); return end
+				-- this server trickles the buffer in bursts — a flat
+				-- second is not "done". 4s stable (~8 polls) before
+				-- declaring the stream complete; a premature collect
+				-- still self-heals (the buffer keeps filling and the
+				-- next click re-collects over it)
+				if stable >= 8 then GM.AH.CollectBook(); return end
 			else
 				lastN, stable = n, 0
 				GM.PlanQueue.ScanStatus(GM.CC("textDim") ..
@@ -434,13 +439,19 @@ function GM.AH.FullScan()
 				format("waiting for the auction house… (%ds)|r",
 					floor(polls / 2)))
 		end
-		if polls < 40 then
+		-- give-up while the buffer is EMPTY stays a flat timer (20s);
+		-- once data is flowing, stable-count collect handles the end
+		-- and the only bail left is a 4m absolute cap on a stream
+		-- that never finishes trickling
+		if polls < 480 and not (lastN <= 0 and polls >= 40) then
 			GM.After(0.5, Poll)
 		else
 			GM.AH.wantBook = nil
 			if GM.AH.bookT == prevT and GM.AH.open and not GM.AH.browse then
-				local warn = GM.CC("warn") ..
-					"the auction house didn't answer — try again|r"
+				local warn = GM.CC("warn") .. (lastN > 0
+					and format("stream paused at %d auctions — "
+						.. "click FULL SCAN to resume|r", lastN)
+					or "the auction house didn't answer — try again|r")
 				GM.PlanQueue.ScanStatus(warn)
 				if GM.Shopping and GM.Shopping.Status then GM.Shopping.Status(warn) end
 				GM.PlanQueue.Progress(nil)
@@ -799,12 +810,13 @@ function GM.AH.CollectBook()
 			if i == lastI then
 				stalled = stalled + 1
 				if stalled == 2 then
-					-- 10s no progress — revive the chain where it stopped
+					-- 10s no progress — revive the chain where it
+					-- stopped, and keep the dog alive: a second
+					-- stall must not become permanent
 					stalled = 0
 					GM.Print(GM.CC("warn") ..
 						format("book collect stalled at %d/%d — resuming|r", i, n))
 					Chunk()
-					return
 				end
 			else
 				lastI, stalled = i, 0
@@ -885,6 +897,8 @@ function GM.AH.OnBrowseResults()
 	if #results < b.seen then
 		b.seen, b.book, b.rows = 0, {}, {}
 	end
+	b.tries = 0 -- any delivered page resets the retry budget —
+	-- pauses between pages are normal on a slow server
 	for i = b.seen + 1, #results do
 		local r = results[i]
 		local id = r.itemKey and r.itemKey.itemID
@@ -921,10 +935,11 @@ function GM.AH.OnBrowseResults()
 				if b.tries <= 3 then
 					pcall(C_AuctionHouse.RequestMoreBrowseResults)
 				else
+					-- keep the partial book — hundreds of priced items
+					-- beat throwing the whole build away
 					GM.PlanQueue.ScanStatus(GM.CC("warn") ..
-						format("scan stalled at %d items — try again|r", mySeen))
-					GM.AH.browse = nil
-					GM.PlanQueue.Refresh()
+						format("scan stalled at %d items — keeping partial book|r", mySeen))
+					FinishBrowse(b)
 				end
 			end
 		end)

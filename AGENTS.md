@@ -619,6 +619,21 @@ Primary data = the in-house book feed below.
   drives "start brain\goblin-watch.bat once" hints — >900s = silent.
   `GM.db.hideUnlearned` = spoiler-free crafting (RecipeRows skips
   unlearned rows); toggled on the OPTIONS page.
+- **Self-host backend auth** (2026-11-18): `_backend_token` falls
+  back to `_local_server_secret` — a loopback `backend.url` with a
+  `goblin_server.json` beside the script reuses its `install_secret`
+  automatically. Self-hosters connect in-game with no key typing;
+  remote servers still need the staged `key` field.
+- **Full-scan stall fixes** (2026-11-18): the replicate poll gives
+  up only on 20s of EMPTY buffer (40 polls) or a 4m absolute cap —
+  never while the buffer still grows; `stable >= 8` (4s flat) marks
+  stream end since this server trickles in bursts and 1s flat used
+  to collect partial books. The Chunk watchdog (`Dog`) keeps
+  rescheduling after a revive — an early `return` used to kill it,
+  making a second stall permanent. Browse `b.tries` resets on every
+  delivered page (three cumulative 4s pauses used to abort a
+  healthy slow browse) and a hard stall now `FinishBrowse`s the
+  partial book instead of discarding it.
 - **First-install/onboarding contract** (issues #5/#8, 2026-11-18):
   `Onboarding.MaybeShow` runs once per install off a persisted
   `GM.db.onboarded` flag — the in-game flow is the PRIMARY config

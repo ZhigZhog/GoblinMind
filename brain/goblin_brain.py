@@ -877,14 +877,31 @@ def _backend_cfg():
     return (load_feeds() or {}).get('backend') or {}
 
 
+def _local_server_secret(cfg):
+    """Self-host convenience: when the backend URL is loopback and a
+    goblin_server.json sits beside this script, the client IS the
+    host — hand over the local install secret so in-game CONNECT
+    works without the player typing the key the installer printed."""
+    host = urllib.parse.urlparse(cfg.get('url') or '').hostname or ''
+    if host not in ('127.0.0.1', 'localhost', '::1'):
+        return None
+    try:
+        p = os.path.join(os.path.dirname(
+            os.path.abspath(__file__)), 'goblin_server.json')
+        return json.load(open(p)).get('install_secret')
+    except Exception:
+        return None
+
+
 def _backend_token(cfg):
     st = _load_api_state()
     tok = st.get('backend_token')
     if tok:
         return tok
     body = {'name': cfg.get('name') or 'goblinmind'}
-    if cfg.get('key'):
-        body['key'] = cfg['key']  # shared install secret (server-gated)
+    key = cfg.get('key') or _local_server_secret(cfg)
+    if key:
+        body['key'] = key  # shared install secret (server-gated)
     req = urllib.request.Request(
         cfg['url'].rstrip('/') + '/v1/register',
         data=json.dumps(body).encode(),
