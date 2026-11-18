@@ -1055,9 +1055,18 @@ def _fp_pref(fp):
 def delta_record(books):
     """books = {scope: book}. Diffs each book's `lots` against the last
     snapshot for that scope and appends sale events to api_state.json.
-    Events: [t, units, unit_price, lots_gone, prev_lots, cls] where
+    Events: [t, units, unit_price, lots_gone, prev_item_lots, cls] where
     cls: 's' confident sale, 'i' inconclusive (expiry/cancel fit too),
-    'u' no tl data (legacy 3-field fps — counted like 's')."""
+    'u' no tl data (legacy 3-field fps — counted like 's').
+
+    Relist suppression: disappeared lots are only sale candidates
+    AFTER matching against the same item's appeared lots — same unit
+    price means a restacked relist (seller split/merged stacks at one
+    price), same stack size means a repriced relist. Each appeared
+    lot cancels at most one gone lot; the residual is the sale. A
+    cross-seller collision (A's lot sells while B reposts the same
+    shape) suppresses too — undercounting beats the 218k-gold fake
+    sale a bulk cancel used to record."""
     st = _load_api_state()
     prev = st.get('lots') or {}
     prev_t = st.get('lotsT') or {}
@@ -1072,7 +1081,10 @@ def delta_record(books):
         # clobbers keep the last replicate's lots under a newer book
         # t, so book_t must follow the lots, not the book
         book_t = int(b.get('lotsT') or b.get('t') or now)
-        elapsed = max(0, book_t - int(prev_t.get(scope) or 0))
+        pt = int(prev_t.get(scope) or 0)
+        if old and book_t <= pt:
+            continue  # stale/replayed snapshot — already diffed
+        elapsed = max(0, book_t - pt)
         new_pref = {}
         for fp, n in new_lots.items():
             p = _fp_pref(fp)
@@ -1083,26 +1095,58 @@ def delta_record(books):
             old_pref[p] = old_pref.get(p, 0) + on
             old_tlbs.setdefault(p, []).append(
                 fp.rsplit(':', 1)[1] if fp.count(':') >= 3 else 'x')
-        scope_sales = sales.setdefault(scope, {})
+        # per-item gone/appeared maps + the item's full old lot count
+        # (rsalep's denominator must be every lot previously listed,
+        # not just the prefixes that happened to shrink)
+        gone_by_iid, appt_by_iid, prev_lots_iid = {}, {}, {}
         for p, on in old_pref.items():
+            iid = p.split(':', 1)[0]
+            prev_lots_iid[iid] = prev_lots_iid.get(iid, 0) + on
             gone = on - new_pref.get(p, 0)
-            if gone <= 0:
-                continue
-            try:
-                iid_s, qty_s, unit_s = p.split(':', 2)
-                iid, qty, unit = int(iid_s), int(qty_s), int(unit_s)
-            except ValueError:
-                continue
-            tlbs = [int(t) for t in old_tlbs.get(p) or []
-                    if t != 'x' and t.isdigit() and int(t) in TL_LOWER]
-            if not tlbs:
-                cls = 'u'  # no tl data — pre-refinement semantics
-            elif elapsed < min(TL_LOWER[t] for t in tlbs):
-                cls = 's'  # every variant had provable time left
-            else:
-                cls = 'i'  # could equally be expiry/cancel/relist
-            scope_sales.setdefault(str(iid), []).append(
-                [now, qty * gone, unit, gone, on, cls])
+            if gone > 0:
+                gone_by_iid.setdefault(iid, {})[p] = gone
+        for p, nn in new_pref.items():
+            appt = nn - old_pref.get(p, 0)
+            if appt > 0:
+                appt_by_iid.setdefault(p.split(':', 1)[0], {})[p] = appt
+        scope_sales = sales.setdefault(scope, {})
+        for iid, gone_map in gone_by_iid.items():
+            # relist pools: appeared lots keyed by unit price (restack)
+            # and by stack size (reprice). Deduct as they match so one
+            # new lot can't explain away two old ones
+            by_unit, by_qty = {}, {}
+            for ap, an in (appt_by_iid.get(iid) or {}).items():
+                _, aq, au = ap.split(':', 2)
+                by_unit[au] = by_unit.get(au, 0) + an
+                by_qty[aq] = by_qty.get(aq, 0) + an
+            for p, gone in gone_map.items():
+                try:
+                    iid_s, qty_s, unit_s = p.split(':', 2)
+                    iid, qty, unit = int(iid_s), int(qty_s), int(unit_s)
+                except ValueError:
+                    continue
+                left = gone
+                take = min(left, by_unit.get(unit_s, 0))
+                if take:
+                    by_unit[unit_s] -= take
+                    left -= take
+                take = min(left, by_qty.get(qty_s, 0))
+                if take:
+                    by_qty[qty_s] -= take
+                    left -= take
+                if left <= 0:
+                    continue  # fully explained by relisting
+                tlbs = [int(t) for t in old_tlbs.get(p) or []
+                        if t != 'x' and t.isdigit() and int(t) in TL_LOWER]
+                if not tlbs:
+                    cls = 'u'  # no tl data — pre-refinement semantics
+                elif elapsed < min(TL_LOWER[t] for t in tlbs):
+                    cls = 's'  # every variant had provable time left
+                else:
+                    cls = 'i'  # could equally be expiry/cancel/relist
+                scope_sales.setdefault(str(iid), []).append(
+                    [now, qty * left, unit, left,
+                     prev_lots_iid.get(iid_s, 0), cls])
         for iid_s, ev in scope_sales.items():
             scope_sales[iid_s] = [
                 e for e in ev if now - e[0] < HIST_KEEP]
@@ -1117,7 +1161,9 @@ def delta_record(books):
 def delta_stats(scope):
     """7d sale-derived stats per item: vel (units/day, market-wide),
     rsale (median disappeared unit price), rsalep (permille — lots
-    disappeared / lots previously listed)."""
+    disappeared / lots previously listed), veln (event count — the
+    confidence signal: vel=5000 on veln=1 is one bulk lot, on veln=40
+    it's a real market)."""
     st = _load_api_state()
     events = (st.get('sales') or {}).get(scope) or {}
     now = time.time()
@@ -1131,7 +1177,10 @@ def delta_stats(scope):
             continue
         units = sum(e[1] for e in win)
         gone = sum(e[3] for e in win)
-        prev = sum(e[4] for e in win)
+        # e[4] is the item's total listed lots at that window (mesh
+        # events carry 0 and never pad this) — take the max over the
+        # period as the denominator, never a per-event sum
+        prev = max((e[4] for e in win), default=0)
         prices = sorted(e[2] for e in win)
         # units/day over the observed span (earliest event -> now),
         # not the full 7d window — and floored at 1 day so a hot
@@ -1143,6 +1192,7 @@ def delta_stats(scope):
             continue
         out[iid] = {
             'vel': round(units / span_d, 4),
+            'veln': len(win),
             'rsale': prices[len(prices) // 2] if prices else None,
             'rsalep': min(1000, int(gone * 1000 / prev)) if prev else None,
         }
@@ -1353,6 +1403,7 @@ def cmd_book(sv_arg, out_paths, root=None, feed=None, realm=None):
                 'recent': recent,
                 'rsale': ds.get('rsale'),
                 'rsalep': ds.get('rsalep'),
+                'veln': ds.get('veln'),
                 # market-wide delta velocity wins; personal ledger
                 # rate remains when the delta engine has no window yet
                 'vel': ds.get('vel') or vel.get(scope, {}).get(iid),
@@ -1390,7 +1441,7 @@ def cmd_book(sv_arg, out_paths, root=None, feed=None, realm=None):
             # our self-computed fields (hist/recent/rsale/rsalep/reset)
             # follow the same freshness rule as the shared fields —
             # fresher book wins outright, fresher feed keeps its own
-            own = ('hist', 'recent', 'rsale', 'rsalep', 'reset')
+            own = ('hist', 'recent', 'rsale', 'rsalep', 'reset', 'veln')
             if book_fresh:
                 for k in ('mb', 'sup', 'p', 'mkt', 'vel') + own:
                     if e.get(k) is not None and (
