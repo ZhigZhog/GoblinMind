@@ -618,6 +618,18 @@ Primary data = the in-house book feed below.
   silently never fired on this client). The staged report rides the
   ~90s SV autosave to the watcher; the chat message tells the user
   to /reload if they want it sent now.
+- **Recipe-acquisition data pipeline** (beta phase 1, 2026-11-18):
+  `brain/import_recipe_db.py` streams the cmangos classic-db dump
+  (`brain/data/classicdb.sql.gz` — gitignored, download once from
+  cmangos/classic-db `Full_DB/`) → `brain/recipe_sources.json`
+  (tracked, shipped via BRAIN_FILES) → `load_recipe_sources()`
+  folds it into both emit paths as `GoblinMindDB.recipeSources`.
+  Join graph: npc_trainer/_template, npc_vendor/_template,
+  creature+reference loot, quest rewards → item_template class=9
+  teach-spells (trigger is ON_USE=0 on cmangos, NOT 6); template
+  ids resolve through creature_template Trainer/VendorTemplateId.
+  Gap: skill-line-gated recipes (bandages) come through DBC
+  SkillLineAbility — no world-DB rows, so they emit no source.
 - **Centered single-line labels anchor, don't justify**
   (issue #9 follow-up, 2026-11-18): `SetAllPoints()` +
   `SetJustifyH("CENTER")` on a fontstring does NOT survive —
