@@ -139,7 +139,7 @@ local function MakeTable(parent, cols, onClick)
 		end)
 		row:SetScript("OnLeave", function() GameTooltip:Hide() end)
 		row:SetScript("OnClick", function()
-			if IsShiftKeyDown() then
+			if IsModifiedClick() then
 				if row.id then GM.ModifiedItemClick(row.id) end
 			elseif row.id and onClick then
 				onClick(row.id)
@@ -676,6 +676,26 @@ local function Build()
 	itP.icon = itP:CreateTexture(nil, "ARTWORK")
 	itP.icon:SetSize(32, 32)
 	itP.icon:SetPoint("TOPLEFT", 12, -26)
+	-- icon cover: hover = item tooltip, modified click = Blizzard's
+	-- item action (ctrl+click dress-up, shift+click chat link)
+	itP.iconBtn = CreateFrame("Button", nil, itP)
+	itP.iconBtn:SetAllPoints(itP.icon)
+	itP.iconBtn:SetScript("OnEnter", function(self)
+		if not ui.itemID then return end
+		GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+		if GameTooltip.SetItemByID then
+			GameTooltip:SetItemByID(ui.itemID)
+		else
+			GameTooltip:SetHyperlink("item:" .. ui.itemID)
+		end
+		GameTooltip:Show()
+	end)
+	itP.iconBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+	itP.iconBtn:SetScript("OnClick", function()
+		if IsModifiedClick() and ui.itemID then
+			GM.ModifiedItemClick(ui.itemID)
+		end
+	end)
 	itP.name = GM.MakeFontString(itP, GM.FONT_BOLD, 13, "text")
 	itP.name:SetPoint("LEFT", itP.icon, "RIGHT", 10, 10)
 	itP.name:SetWidth(560)

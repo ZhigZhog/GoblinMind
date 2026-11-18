@@ -329,8 +329,18 @@ local function Build()
 	end
 	ui.item:SetScript("OnReceiveDrag", DropItem)
 	ui.item:SetScript("OnClick", function()
-		if IsShiftKeyDown() then
+		if IsModifiedClick() then
 			GM.ModifiedItemClick(ui.iconBtn and ui.iconBtn.itemID)
+		elseif CursorHasItem() then
+			DropItem()
+		end
+	end)
+	-- the icon button sits on top of the item box — mirror the same
+	-- click/drop handling or clicks landing on the icon are dead
+	ui.iconBtn:SetScript("OnReceiveDrag", DropItem)
+	ui.iconBtn:SetScript("OnClick", function()
+		if IsModifiedClick() then
+			GM.ModifiedItemClick(ui.iconBtn.itemID)
 		elseif CursorHasItem() then
 			DropItem()
 		end

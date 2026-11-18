@@ -486,6 +486,13 @@ local function BuildUI()
 		GameTooltip:Show()
 	end)
 	ui.detIconBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+	-- ctrl+click = dress-up preview, shift+click = chat link —
+	-- Blizzard's modified-click chain via the shared helper
+	ui.detIconBtn:SetScript("OnClick", function(self)
+		if IsModifiedClick() and self.itemID then
+			GM.ModifiedItemClick(self.itemID)
+		end
+	end)
 	ui.detName = GM.MakeFontString(det, GM.FONT_BOLD, 10, "text")
 	ui.detName:SetPoint("LEFT", ui.detIcon, "RIGHT", 8, 0)
 	ui.detName:SetWidth(280)
@@ -519,6 +526,11 @@ local function BuildUI()
 		m.hit:SetPoint("TOPLEFT", det, "TOPLEFT", 6, -52 - (i - 1) * 15)
 		m.hit:SetPoint("RIGHT", det, "RIGHT", -6, 0)
 		m.hit:SetHeight(14)
+		m.hit:SetScript("OnClick", function(self)
+			if IsModifiedClick() and self.itemID then
+				GM.ModifiedItemClick(self.itemID)
+			end
+		end)
 		ui.detMats[i] = m
 	end
 	-- CRAFT ×N: Blizzard's multicraft call — one click, one protected
@@ -966,7 +978,7 @@ function CU.Refresh()
 			local id = row.recipeID
 			r:SetScript("OnClick", function(_, btn)
 				-- right-click in a category view pulls the recipe out
-				if IsShiftKeyDown() and row.itemID then
+				if IsModifiedClick() and row.itemID then
 					GM.ModifiedItemClick(row.itemID)
 				elseif btn == "RightButton" and ui.selCat
 					and not row.unlearned then
@@ -1030,7 +1042,7 @@ function CU.Refresh()
 				CU.Refresh()
 			end)
 			r:SetScript("OnClick", function()
-				if IsShiftKeyDown() and q.itemID then
+				if IsModifiedClick() and q.itemID then
 					GM.ModifiedItemClick(q.itemID)
 				else
 					ui.sel = id
@@ -1196,6 +1208,7 @@ function CU.Refresh()
 			if mat then
 				m.icon:Show()
 				m.icon:SetTexture(GM.ItemIcon(mat.id) or 134400)
+				m.hit.itemID = mat.id
 				m.name:Show()
 				m.name:SetText(GM.ItemName(mat.id) or ("item " .. mat.id))
 				-- bags-only, matching the row's "bags N" — a banked mat

@@ -103,7 +103,7 @@ local function BuildRow(parent, i)
 	-- keep mouse free for the buy button and tooltip only
 	row:SetScript("OnMouseUp", function()
 		local d = row.data
-		if IsShiftKeyDown() then
+		if IsModifiedClick() then
 			if d and d.itemID then GM.ModifiedItemClick(d.itemID) end
 			return
 		end

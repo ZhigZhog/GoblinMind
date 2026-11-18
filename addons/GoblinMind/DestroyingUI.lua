@@ -232,7 +232,7 @@ function DU.Refresh()
 			end)
 			row:SetScript("OnClick", function()
 				if not r.id then return end
-				if IsShiftKeyDown() then GM.ModifiedItemClick(r.id)
+				if IsModifiedClick() then GM.ModifiedItemClick(r.id)
 				else GM.TargetItem(r.id) end
 			end)
 		else

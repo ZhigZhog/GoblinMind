@@ -619,7 +619,7 @@ function VU.Refresh()
 					if btn == "RightButton" then
 						GM.Vendoring.BlacklistToggle(r.id)
 						VU.Refresh()
-					elseif IsShiftKeyDown() and r.id then
+					elseif IsModifiedClick() and r.id then
 						GM.ModifiedItemClick(r.id)
 					end
 				end)

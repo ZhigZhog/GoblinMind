@@ -1276,7 +1276,7 @@ function AU.Refresh()
 				end
 				local sel = r
 				row:SetScript("OnClick", function()
-					if IsShiftKeyDown() then
+					if IsModifiedClick() then
 						if sel.id then GM.ModifiedItemClick(sel.id) end
 						return
 					end
@@ -1406,7 +1406,7 @@ function AU.Refresh()
 				end)
 				row:SetScript("OnClick", function()
 					if not r.id then return end
-					if IsShiftKeyDown() then GM.ModifiedItemClick(r.id)
+					if IsModifiedClick() then GM.ModifiedItemClick(r.id)
 					else GM.TargetItem(r.id) end
 				end)
 			else
@@ -1456,7 +1456,7 @@ function AU.Refresh()
 				end
 				row:SetScript("OnClick", function()
 					if not r.id then return end
-					if IsShiftKeyDown() then GM.ModifiedItemClick(r.id)
+					if IsModifiedClick() then GM.ModifiedItemClick(r.id)
 					else GM.TargetItem(r.id) end
 				end)
 			else

@@ -649,6 +649,19 @@ Primary data = the in-house book feed below.
   delivered page (three cumulative 4s pauses used to abort a
   healthy slow browse) and a hard stall now `FinishBrowse`s the
   partial book instead of discarding it.
+- **Modified-click contract** (2026-11-18): any item row/icon
+  handles modified clicks via `GM.ModifiedItemClick(id)` gated on
+  `IsModifiedClick()` — NOT `IsShiftKeyDown()` (that silently drops
+  ctrl+click dress-up and alt+click compare). Shared hooks:
+  `W.ModifiedClick(row, idFn)` for rows with no own OnClick;
+  dedicated icon-cover buttons (`detIconBtn`, `iconBtn`,
+  `itP.iconBtn`, `m.hit`) carry their own gated OnClick since a
+  child Button without one swallows the parent's handler.
+  Intentional shift-only gates that stay: the qty-input box on
+  vendoring buy buttons, `LinkHook`'s shift→search, `ItemInput`'s
+  shift-capture, `Tooltip`'s shift-stack. Snipe/browse rows swallow
+  ALL modified clicks unconditionally — a missed modifier must
+  never fall through to a buy.
 - **First-install/onboarding contract** (issues #5/#8, 2026-11-18):
   `Onboarding.MaybeShow` runs once per install off a persisted
   `GM.db.onboarded` flag — the in-game flow is the PRIMARY config

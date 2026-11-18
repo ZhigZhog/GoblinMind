@@ -81,13 +81,14 @@ function W.Tip(f, linesFn)
 	f:HookScript("OnLeave", function() GameTooltip:Hide() end)
 end
 
--- shift+click = Blizzard's default modified-click item action
--- (chat link / context transfer). For rows with no own OnClick —
--- rows that have one guard inside their handler instead.
--- idFn may be an id or fn() -> id, resolved at click time.
-function W.ShiftItem(f, idFn)
+-- any modified click = Blizzard's default item action (ctrl+click =
+-- dress-up preview, shift+click = chat link / context transfer).
+-- For rows with no own OnClick — rows that have one guard inside
+-- their handler instead. idFn may be an id or fn() -> id, resolved
+-- at click time.
+function W.ModifiedClick(f, idFn)
 	f:HookScript("OnMouseDown", function(_, btn)
-		if btn ~= "LeftButton" or not IsShiftKeyDown() then return end
+		if btn ~= "LeftButton" or not IsModifiedClick() then return end
 		local id = type(idFn) == "function" and idFn() or idFn
 		if id then GM.ModifiedItemClick(id) end
 	end)

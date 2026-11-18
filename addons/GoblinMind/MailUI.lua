@@ -398,7 +398,7 @@ local function Build()
 		act.text = GM.MakeFontString(act, GM.FONT_BOLD, 8, "accent")
 		act.text:SetPoint("CENTER")
 		row.act = act
-		W.ShiftItem(row, function() return row.tipID end)
+		W.ModifiedClick(row, function() return row.tipID end)
 		ui.rows[i] = row
 	end
 

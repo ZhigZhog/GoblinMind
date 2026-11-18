@@ -371,9 +371,9 @@ function SU.Refresh()
 					if h.itemID then GM.TargetItem(h.itemID) end
 					return
 				end
-				-- shift+click = Blizzard's modified-click action
-				-- (chat link / context transfer), never a buy
-				if IsShiftKeyDown() then
+				-- modified click = Blizzard's item action (chat link /
+				-- dress-up / context transfer), never a buy
+				if IsModifiedClick() then
 					if h.itemID then GM.ModifiedItemClick(h.itemID) end
 					return
 				end

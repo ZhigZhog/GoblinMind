@@ -355,7 +355,7 @@ local function FillItemRow(row, id, right, sub)
 		or "Interface\\Icons\\INV_Misc_QuestionMark")
 	row.name:SetText(RowName(id))
 	row.name:SetTextColor(GM.NameColor(id))
-	W.ShiftItem(row, function() return row.id end)
+	W.ModifiedClick(row, function() return row.id end)
 	row.sub:SetText(sub or "")
 	row.right:SetText(right or "")
 end
@@ -1147,10 +1147,10 @@ function GU.RefreshCatalogue(skipRebuild)
 					or (ui.lastDrop and GetTime() - ui.lastDrop < 0.3) then
 					return
 				end
-				-- shift+click already handled by FillItemRow's
-				-- ShiftItem hook on mousedown — just swallow the
+				-- modified click already handled by FillItemRow's
+				-- ModifiedClick hook on mousedown — just swallow the
 				-- assign click
-				if IsShiftKeyDown() then return end
+				if IsModifiedClick() then return end
 				GM.Groups.Assign(e.id, GM.Groups.Ensure(editPath()))
 				ui.catDirty = true
 				GU.Refresh()
