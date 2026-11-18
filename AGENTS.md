@@ -613,10 +613,11 @@ Primary data = the in-house book feed below.
   first-run prompt on `GoblinMindDB.backend` presence — the shipped
   Data.lua may not carry the block, which silently skipped
   onboarding for every fresh install.
-- **`/goblin bug` files immediately**: FILE + RELOAD stages via
-  `GM.StageReport` then `GM.After(1.5, ReloadUI)` — the reload flushes
-  SVs so the watcher's `process_bugs` files within seconds instead of
-  waiting for the ~90s autosave.
+- **`/goblin bug` staging cadence**: FILE REPORT stages via
+  `GM.StageReport` only — no forced reload (`GM.After(1.5, ReloadUI)`
+  silently never fired on this client). The staged report rides the
+  ~90s SV autosave to the watcher; the chat message tells the user
+  to /reload if they want it sent now.
 - **Profession recipe pump** (`Crafting.lua` `ProfPump`, issue #7):
   recipes only enumerate under an OPEN tradeskill line on this
   client, so a fresh profile captures nothing until each prof is
