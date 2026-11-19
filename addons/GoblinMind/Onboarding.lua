@@ -209,16 +209,18 @@ local function Build()
 	aBody:SetJustifyH("LEFT")
 	aBody:SetSpacing(3)
 	aBody:SetText(
-		"Free, official, and the best data you can get without a "
-		.. "group: the companion app can pull Blizzard's auction feed "
-		.. "so prices stay fresh even when you haven't scanned.\n\n"
+		"Optional — most players should SKIP this page. When a "
+		.. "backend shares your group's prices (previous page) you "
+		.. "already get crowd data; this is an advanced extra.\n\n"
+		.. "It pulls Blizzard's official auction API — only useful on "
+		.. "realms Blizzard actually covers. Private realms aren't "
+		.. "in it, so your own scans + the shared feed carry you.\n\n"
 		.. GM.CC("textDim")
-		.. "One-time setup on the web — the game can't open it for you:\n"
+		.. "Still want it? You'd need your own free client "
+		.. "credentials:\n"
 		.. "1. Go to develop.battle.net and sign in\n"
 		.. "2. Create Client (any name, any redirect link)\n"
-		.. "3. Copy the Client ID and Client Secret here|r\n\n"
-		.. GM.CC("textDim")
-		.. "SKIP keeps it off — your own scans still work.|r")
+		.. "3. Copy the Client ID and Client Secret here|r")
 
 	local idLab = GM.MakeFontString(p2, GM.FONT, 9, "textDim")
 	idLab:SetPoint("TOPLEFT", aBody, "BOTTOMLEFT", 0, -12)

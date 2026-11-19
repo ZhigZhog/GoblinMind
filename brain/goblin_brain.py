@@ -854,12 +854,24 @@ def api_poll(cfg=None):
             fp = '%s:%s:%s' % (iid, qty, u)
             lots[fp] = lots.get(fp, 0) + 1
         books[scope] = {'t': now, 'items': items, 'lots': lots,
-                        'remote': True}
+                        'api': True}
         LOG.info('api poll %s: %d lots, %d items', scope,
                  sum(lots.values()), len(items))
+    # merge — this file also holds backend-pulled remote books; a
+    # wholesale replace would clobber them every api cycle. 'api'
+    # (not 'remote') keeps the book upload-eligible: one install's
+    # Blizzard credential fans the dump out to the whole backend —
+    # players never need API keys of their own.
+    try:
+        with open(API_BOOK_PATH, encoding='utf-8') as fh:
+            cur = json.load(fh)
+    except (OSError, ValueError):
+        cur = {}
+    cur['t'] = now
+    cur.setdefault('books', {}).update(books)
     tmp = API_BOOK_PATH + '.tmp'
     with open(tmp, 'w', encoding='utf-8') as fh:
-        json.dump({'t': now, 'books': books}, fh)
+        json.dump(cur, fh)
     os.replace(tmp, API_BOOK_PATH)
     return books
 
