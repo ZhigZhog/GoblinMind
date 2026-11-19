@@ -5,8 +5,8 @@ Forever** (interface `16001`). Price model, execution planner, crafting
 planner, ledger, group/operation system, session takeovers — TSM-styled
 dark UI, **no TSM required**.
 
-**v0.5.3** — public alpha. Expect rough edges; bug reports file
-themselves to the private tracker (see Bug reports below).
+**0.1 Beta** — first public beta (CurseForge). Expect rough edges;
+bug reports file themselves to the issue tracker (see Bug reports).
 
 ## Requirements
 
@@ -22,13 +22,15 @@ themselves to the private tracker (see Bug reports below).
    `Interface/AddOns/GoblinMind/` and `Interface/AddOns/GoblinMind_Data/`.
 2. Enable both addons at the character select screen.
 3. **Start the brain** — double-click
-   `Interface/AddOns/GoblinMind/brain/install.bat` once. It just
-   registers the watcher to auto-start at login — **zero prompts,
-   zero configuration**. Everything configurable (backend, Blizzard
-   API, scopes) is staged by the in-game wizard and the watcher
-   folds it into `feeds.json` itself.
-   - Even simpler: double-click `brain/goblin-watch.bat` while you
-     play and skip autostart entirely.
+   `Interface/AddOns/GoblinMind/brain/goblin-watch.bat` once while
+   you play. On first run it self-registers to start with Windows,
+   then keeps prices and bug reports moving on its own — **zero
+   prompts, zero configuration**. Everything configurable (backend,
+   Blizzard API, scopes) is staged by the in-game wizard and the
+   watcher folds it into `feeds.json` itself. Point it at a backend
+   on the same PC and it starts the server for you, too.
+   - `install.bat` does the same registration non-interactively;
+     use `install.bat --remove` to undo.
    - To **host** the shared backend on your machine, run
      `install.bat --host` (starts `goblin_server.py` now and opens
      TCP 8765 through Windows Firewall — one UAC prompt), then hand
@@ -37,8 +39,11 @@ themselves to the private tracker (see Bug reports below).
    **backend** (CONNECT → next page; SKIP → import; LATER re-asks —
    re-open with `/goblin backend`), **Blizzard API** (free creds from
    develop.battle.net — re-open with `/goblin api`), **import**
-   (TSM and similar — per-row IMPORT; `/goblin import`), **options**
-   (spoiler-free crafting toggle; `/goblin options`).
+   (TSM and similar — per-row IMPORT; `/goblin import`), **app**
+   (the watcher folder + status — copy it if it isn't running),
+   **options** (spoiler-free crafting toggle; `/goblin options`).
+   Closing the wizard before the last page re-opens it next login —
+   DONE on the final page is the only way out.
 5. Open the auction house once and hit **FULL SCAN** in the GoblinMind
    AH surface — that builds the first price book. The watcher folds it
    into the emitted DB on the next SavedVariables flush (`/reload`).
@@ -218,8 +223,10 @@ without the backend — your own scans and the mesh are sufficient.
 
 Settings → BUG REPORT (or `/goblin bug`) opens the report window —
 diagnostics block + screenshot shortcut. FILE REPORT stages the report
-in SavedVariables; the watcher files it to the private issue tracker
-on the next flush and the addon clears it once filed.
+in SavedVariables; the watcher files it to the **GitHub issue
+tracker** on the next flush and the addon clears it once filed. The
+full beta test protocol lives in
+[`WoWVault/beta-test-plan.md`](WoWVault/beta-test-plan.md).
 
 ## Rules of the road
 
@@ -230,13 +237,14 @@ on the next flush and the addon clears it once filed.
 - **Honest-nil** — no fabricated prices; fields stay `—`/`?` until real
   data exists.
 
-## For hackers (private repo)
+## For hackers
 
 ```
 addons/GoblinMind/        the in-game addon (Lua)
 addons/GoblinMind_Data/   generated price database addon (Data.lua is emitted)
 brain/goblin_brain.py     SV watcher + book emitter + bug filer + backend client
 brain/goblin_server.py    crowdsource backend (optional, self-hostable)
+brain/install.py          watcher/server Startup registration + --host setup
 scripts/                  deploy helpers (sync-addons.bat, package-release.py)
 WoWVault/                 design notes — architecture, Forever API surface,
                           TSM theme palette, code notes, API reference
