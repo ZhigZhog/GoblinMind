@@ -142,7 +142,14 @@ Primary data = the in-house book feed below.
   the book with a
   future date). Auto-starts via `Startup\goblinmind-server.bat`
   from the installed brain dir; **self-restarts on file change**
-  like the watcher. The watcher pulls on a 15m cadence (remote
+  like the watcher. **Watcher auto-spawns it too**: when the
+  configured `backend.url` is loopback (`127.0.0.1`/`localhost`/
+  `::1`) and a request hits ConnectionRefused, the watcher spawns
+  the sibling `goblin_server.py` itself (120s throttle, gives up
+  for the run if the port doesn't open). Never fires for remote
+  URLs. This is what makes "run goblin-watch.bat once" the whole
+  manual story — found 2026-11-18 when onboarding told testers to
+  start the watcher but never mentioned the server. The watcher pulls on a 15m cadence (remote
   books marked `remote: True` — never re-uploaded) and uploads
   only genuinely newer local books. Peer upload → merge → pull →
   emitted DB verified end-to-end. Config: `feeds.json` `backend`

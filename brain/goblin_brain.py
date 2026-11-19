@@ -901,6 +901,62 @@ def _local_server_secret(cfg):
         return None
 
 
+_BE_SPAWN = {'at': 0.0, 'gave_up': False}
+
+
+def _port_open(host, port, timeout=2):
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _maybe_start_local_backend(cfg, err):
+    """'Run goblin-watch.bat once' is the whole manual story — so when
+    the configured backend URL is loopback but refuses connections,
+    and goblin_server.py sits beside this script, spawn it ourselves.
+    Never fires for remote URLs (that host is someone else's machine)
+    and gives up for the rest of the run if a spawned server doesn't
+    open the port (e.g. the port is squatted by something else)."""
+    reason = getattr(err, 'reason', err)
+    if not isinstance(reason, ConnectionRefusedError):
+        return
+    if _BE_SPAWN['gave_up'] or time.time() - _BE_SPAWN['at'] < 120:
+        return
+    parts = urllib.parse.urlparse(cfg.get('url') or '')
+    host = parts.hostname or ''
+    if host not in ('127.0.0.1', 'localhost', '::1'):
+        return
+    d = os.path.dirname(os.path.abspath(__file__))
+    srv = os.path.join(d, 'goblin_server.py')
+    if not os.path.exists(srv):
+        return
+    _BE_SPAWN['at'] = time.time()
+    port = parts.port or 8765
+    LOG.info('backend %s is loopback but refused — auto-starting '
+             'local goblin_server on :%d', cfg.get('url'), port)
+    try:
+        if os.name == 'nt':
+            subprocess.Popen(
+                'start "GoblinMind Server" /min cmd /k '
+                f'python goblin_server.py {port}',
+                shell=True, cwd=d)
+        else:
+            subprocess.Popen([sys.executable, srv, str(port)], cwd=d)
+    except OSError as e:
+        LOG.warning('local backend spawn failed: %s', e)
+        _BE_SPAWN['gave_up'] = True
+        return
+    time.sleep(2)
+    if _port_open(host, port):
+        LOG.info('local backend is up on :%d', port)
+    else:
+        LOG.warning('local backend spawn did not open :%d — not '
+                    'retrying this run', port)
+        _BE_SPAWN['gave_up'] = True
+
+
 def _backend_token(cfg):
     st = _load_api_state()
     tok = st.get('backend_token')
@@ -914,7 +970,11 @@ def _backend_token(cfg):
         cfg['url'].rstrip('/') + '/v1/register',
         data=json.dumps(body).encode(),
         headers={'Content-Type': 'application/json'}, method='POST')
-    resp = json.load(urllib.request.urlopen(req, timeout=30))
+    try:
+        resp = json.load(urllib.request.urlopen(req, timeout=30))
+    except urllib.error.URLError as e:
+        _maybe_start_local_backend(cfg, e)
+        raise
     st['backend_token'] = resp['token']
     _save_api_state(st)
     return resp['token']
@@ -929,7 +989,11 @@ def _backend_req(cfg, path, body=None):
     req = urllib.request.Request(cfg['url'].rstrip('/') + path,
                                  data=data, headers=headers,
                                  method='POST' if data else 'GET')
-    return json.load(urllib.request.urlopen(req, timeout=120))
+    try:
+        return json.load(urllib.request.urlopen(req, timeout=120))
+    except urllib.error.URLError as e:
+        _maybe_start_local_backend(cfg, e)
+        raise
 
 
 def backend_pull(cfg=None):

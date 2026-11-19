@@ -374,8 +374,9 @@ local function Build()
 		.. GM.CC("textDim")
 		.. "That's the only time you ever have to. It sets itself to "
 		.. "start with Windows, then keeps prices and bug reports "
-		.. "moving on its own. Come back and /reload once it's "
-		.. "running.|r")
+		.. "moving on its own — and if you gave it a backend address "
+		.. "on this PC, it starts the server for you too. Come back "
+		.. "and /reload once it's running.|r")
 
 	-- selectable path box — the watcher emits its absolute brain dir
 	-- (GoblinMindDB.brain); before any emit we can only show the
