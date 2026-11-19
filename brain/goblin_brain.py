@@ -937,13 +937,26 @@ def _maybe_start_local_backend(cfg, err):
     LOG.info('backend %s is loopback but refused — auto-starting '
              'local goblin_server on :%d', cfg.get('url'), port)
     try:
-        if os.name == 'nt':
-            subprocess.Popen(
-                'start "GoblinMind Server" /min cmd /k '
-                f'python goblin_server.py {port}',
-                shell=True, cwd=d)
-        else:
-            subprocess.Popen([sys.executable, srv, str(port)], cwd=d)
+        log = open(os.path.join(d, 'goblin_server.log'), 'ab',
+                   buffering=0)
+        try:
+            if os.name == 'nt':
+                # CREATE_NO_WINDOW, not a minimized cmd /k console:
+                # clicking a console window on Windows can freeze the
+                # process in QuickEdit select mode — port stays bound
+                # while the server never answers (looks like a hang).
+                subprocess.Popen(
+                    [sys.executable, srv, str(port)], cwd=d,
+                    stdin=subprocess.DEVNULL, stdout=log,
+                    stderr=subprocess.STDOUT,
+                    creationflags=subprocess.CREATE_NO_WINDOW)
+            else:
+                subprocess.Popen([sys.executable, srv, str(port)],
+                                 cwd=d, stdin=subprocess.DEVNULL,
+                                 stdout=log, stderr=subprocess.STDOUT,
+                                 start_new_session=True)
+        finally:
+            log.close()
     except OSError as e:
         LOG.warning('local backend spawn failed: %s', e)
         _BE_SPAWN['gave_up'] = True
@@ -955,6 +968,18 @@ def _maybe_start_local_backend(cfg, err):
         LOG.warning('local backend spawn did not open :%d — not '
                     'retrying this run', port)
         _BE_SPAWN['gave_up'] = True
+
+
+def _backend_fail_hint(cfg, e):
+    """A refused loopback backend gets auto-started; a TIMEOUT means
+    the port answered the handshake but never sent a response — a
+    hung local server, not a missing one. Say so in the log."""
+    host = urllib.parse.urlparse(cfg.get('url') or '').hostname or ''
+    if host in ('127.0.0.1', 'localhost', '::1') and \
+            'timed out' in str(e).lower():
+        return (' — loopback server accepted but never answered '
+                '(hung? restart goblin_server.py)')
+    return ''
 
 
 def _backend_token(cfg):
@@ -1012,6 +1037,8 @@ def backend_pull(cfg=None):
                 {'scope': scope}))
         except Exception as e:
             _backend_health('pull', False, err=str(e))
+            LOG.warning('backend pull %s failed: %s%s', scope, e,
+                        _backend_fail_hint(cfg, e))
             raise
         if d.get('items'):
             books[scope] = {'t': int(d.get('t') or time.time()),
@@ -1096,7 +1123,8 @@ def backend_upload_books(books_by_scope, cfg=None):
                      '' if fresh else ' (hourly re-push)')
         except Exception as e:
             _backend_health('up', False, err=str(e))
-            LOG.exception('backend upload failed: %s', scope)
+            LOG.exception('backend upload failed: %s%s', scope,
+                          _backend_fail_hint(cfg, e))
     # _backend_health wrote 'up' to state inside the loop — reload so
     # the stale st loaded above doesn't clobber it on save
     st = _load_api_state()
@@ -2060,6 +2088,48 @@ EMIT_PERIOD = 3600  # book-mode cadence floor — a quiet install (no
                     # so the DB's generated stamp stays honest
 
 
+_WATCH_LOCK_FH = None
+
+
+def _watch_single_instance():
+    """Only one watcher per brain dir — a second goblin-watch.bat
+    double-click (the onboarding app page says to!) while a watcher
+    already runs would race emits and double-hit the backend rate
+    limit. Byte-locks watcher.lock for the process lifetime; a
+    self-restart's child retries briefly while the parent exits."""
+    global _WATCH_LOCK_FH
+    d = os.path.dirname(os.path.abspath(__file__))
+    p = os.path.join(d, 'watcher.lock')
+    deadline = time.time() + 15  # self-restart: parent lets go on exit
+    while True:
+        fh = open(p, 'a+b')
+        try:
+            fh.seek(0, 2)
+            if fh.tell() == 0:
+                fh.write(b'0')
+                fh.flush()
+            fh.seek(0)
+            if os.name == 'nt':
+                import msvcrt
+                msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            fh.close()
+            if time.time() < deadline:
+                time.sleep(1)
+                continue
+            print('another watcher already holds', p, '— exiting')
+            sys.exit(0)
+        fh.seek(0)
+        fh.truncate()
+        fh.write(str(os.getpid()).encode())
+        fh.flush()
+        _WATCH_LOCK_FH = fh
+        return
+
+
 def cmd_watch(appdata, outs, interval=5, settle=20, feed='tsm',
               root=None, feedname=None, realm=None):
     """Poll AppData mtime; emit after the file goes quiet. The TSM
@@ -2067,6 +2137,7 @@ def cmd_watch(appdata, outs, interval=5, settle=20, feed='tsm',
     only trusted once it stops moving for `settle` seconds. Book mode
     emits on BOTH settled AppData (TSM backend refresh merges in) and
     SavedVariables flushes (our own scans/ledger)."""
+    _watch_single_instance()
     last_mtime = 0
     quiet_since = None
     last_beat = time.time()

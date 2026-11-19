@@ -198,9 +198,17 @@ def api_block(scopes, region):
             'realms': {s: 0 for s in scopes}, 'poll_minutes': 30}
 
 
-def write_bat(path, title, cmd):
-    body = (f'@echo off\r\ncd /d "{HERE}"\r\n'
-            f'start "{title}" /min cmd /k {cmd}\r\n')
+def write_bat(path, title, cmd, console=True):
+    if console:
+        body = (f'@echo off\r\ncd /d "{HERE}"\r\n'
+                f'start "{title}" /min cmd /k {cmd}\r\n')
+    else:
+        # server: no interactive console — a clicked-on cmd window can
+        # freeze the process in QuickEdit select mode while the port
+        # stays bound (clients hang on timeouts, not refused).
+        body = (f'@echo off\r\ncd /d "{HERE}"\r\n'
+                f'start "" /min cmd /c "{cmd} >> goblin_server.log '
+                f'2>&1"\r\n')
     with open(path, 'w') as fh:
         fh.write(body)
     print(f'  wrote {path}')
@@ -208,14 +216,26 @@ def write_bat(path, title, cmd):
 
 def start_server():
     """Launch goblin_server.py now — the Startup bat only fires at
-    login, and the installer's own probe + first upload need it up."""
-    if sys.platform == 'win32':
-        subprocess.Popen(
-            f'start "GoblinMind Server" /min cmd /k '
-            f'python goblin_server.py {PORT}', shell=True, cwd=HERE)
-    else:
-        subprocess.Popen([sys.executable, 'goblin_server.py',
-                          str(PORT)], cwd=HERE)
+    login, and the installer's own probe + first upload need it up.
+    Hidden windowless process (same QuickEdit-freeze hazard as the
+    bat), output lands in goblin_server.log beside the script."""
+    log = open(os.path.join(HERE, 'goblin_server.log'), 'ab',
+               buffering=0)
+    try:
+        if sys.platform == 'win32':
+            subprocess.Popen(
+                [sys.executable, 'goblin_server.py', str(PORT)],
+                cwd=HERE, stdin=subprocess.DEVNULL, stdout=log,
+                stderr=subprocess.STDOUT,
+                creationflags=subprocess.CREATE_NO_WINDOW)
+        else:
+            subprocess.Popen([sys.executable, 'goblin_server.py',
+                              str(PORT)], cwd=HERE,
+                             stdin=subprocess.DEVNULL, stdout=log,
+                             stderr=subprocess.STDOUT,
+                             start_new_session=True)
+    finally:
+        log.close()
     print(f'  server started on :{PORT}')
 
 
@@ -387,7 +407,8 @@ def main():
                   'python goblin_brain.py watch self -v --feed book')
         if a.host:
             write_bat(SERVER_BAT, 'GoblinMind Server',
-                      f'python goblin_server.py {PORT}')
+                      f'python goblin_server.py {PORT}',
+                      console=False)
             firewall_rule()
             secret = ensure_server_secret()
             ip = lan_ip()

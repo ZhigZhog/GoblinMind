@@ -149,7 +149,20 @@ Primary data = the in-house book feed below.
   for the run if the port doesn't open). Never fires for remote
   URLs. This is what makes "run goblin-watch.bat once" the whole
   manual story — found 2026-11-18 when onboarding told testers to
-  start the watcher but never mentioned the server. The watcher pulls on a 15m cadence (remote
+  start the watcher but never mentioned the server.
+  **Spawned hidden + logged**: the spawn uses CREATE_NO_WINDOW
+  with stdout→`brain/goblin_server.log`, NOT `cmd /k` — a clicked
+  console window can freeze the process in QuickEdit select mode;
+  the port stays bound but the server never answers (uploads time
+  out rather than refuse, so no re-spawn fires — `_backend_fail_hint`
+  flags that signature in brain.log). install.py's server bat +
+  `start_server()` follow the same hidden+log pattern.
+  **Single-instance**: `cmd_watch` byte-locks `brain/watcher.lock`
+  (msvcrt LK_NBLCK / flock) — a second bat double-click or stray
+  process exits after a 15s grace (the grace covers the
+  self-restart handoff where the child starts before the parent
+  dies). Two live watchers once raced emits and double-hit the
+  backend rate limit. The watcher pulls on a 15m cadence (remote
   books marked `remote: True` — never re-uploaded) and uploads
   only genuinely newer local books. Peer upload → merge → pull →
   emitted DB verified end-to-end. Config: `feeds.json` `backend`
