@@ -1112,10 +1112,15 @@ end
 -- path is gated on a frame being open because bare
 -- UseContainerItem would otherwise USE the item. Returns true
 -- when something fired.
+-- rawHMIC is captured at load, BEFORE AHUI wraps the global for
+-- its shop-search hook: this function wants Blizzard's default
+-- chain, not every installed hook — calling the wrapped global
+-- can recurse (C stack overflow on a mat-row click, 2026-11-19).
+local rawHMIC = HandleModifiedItemClick
 function GM.ModifiedItemClick(id)
 	local link = id and GM.ItemLink(id)
-	if link and HandleModifiedItemClick
-		and HandleModifiedItemClick(link) then
+	local h = rawHMIC or HandleModifiedItemClick
+	if link and h and h(link) then
 		return true
 	end
 	local open = (BankFrame and BankFrame:IsShown())

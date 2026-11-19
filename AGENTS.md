@@ -287,6 +287,15 @@ Primary data = the in-house book feed below.
     artifact, and deploying it makes the client load a day-old DB
     (stale sync ages + phantom "not configured" popup since the old
     emit predates the backend block). Verified live 2026-11-17.
+  - **Global hooks need re-entry guards** — wrapping
+    `HandleModifiedItemClick`/`ChatEdit_InsertLink` without a
+    re-entry flag overflows the C stack: the client impl (or a
+    chained addon hook) can re-enter the global, and wrapper→orig→
+    global→wrapper→orig loops forever. AHUI's wrappers return
+    `false` for inner calls; `GM.ModifiedItemClick` bypasses the
+    wrap entirely via `rawHMIC` captured at Core.lua load — it
+    wants Blizzard's default chain, not every installed hook.
+    Found 2026-11-19: C stack overflow on a crafting mat-row click.
   - **Hard per-script CPU budget** — a script that runs too long
     dies with "insecure scripts exceeded execution limit"
     (attribution shows the *handler's* file, `Settings.lua:-1`, not

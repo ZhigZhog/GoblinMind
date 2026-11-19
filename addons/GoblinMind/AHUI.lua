@@ -1589,13 +1589,26 @@ end
 
 if type(HandleModifiedItemClick) == "function" then
 	local orig = HandleModifiedItemClick
+	local in_orig = false
 	HandleModifiedItemClick = function(link, ...)
-		return orig(link, ...) or LinkHook(link)
+		-- the client impl (or another addon's hook) can re-enter the
+		-- global internally — returning false for inner calls bounds
+		-- the recursion at depth 1 instead of a C stack overflow
+		if in_orig then return false end
+		in_orig = true
+		local r = orig(link, ...)
+		in_orig = false
+		return r or LinkHook(link)
 	end
 end
 if type(ChatEdit_InsertLink) == "function" then
 	local orig = ChatEdit_InsertLink
+	local in_orig = false
 	ChatEdit_InsertLink = function(link, ...)
-		return orig(link, ...) or LinkHook(link)
+		if in_orig then return false end
+		in_orig = true
+		local r = orig(link, ...)
+		in_orig = false
+		return r or LinkHook(link)
 	end
 end
