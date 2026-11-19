@@ -702,6 +702,12 @@ Primary data = the in-house book feed below.
   first-run prompt on `GoblinMindDB.backend` presence — the shipped
   Data.lua may not carry the block, which silently skipped
   onboarding for every fresh install.
+  **Dismiss ≠ done** (2026-11-18): `obDone` is only set by the DONE
+  button on the last page; every other hide (x / ESC / LATER)
+  records `obDismissed`, and MaybeShow re-opens the wizard each
+  login until DONE — configured/skipped/pending-req state does NOT
+  suppress a dismissed wizard. `onboarded` still guards only the
+  very first auto-show (crash-loop protection).
 - **`/goblin bug` staging cadence**: FILE REPORT stages via
   `GM.StageReport` only — no forced reload (`GM.After(1.5, ReloadUI)`
   silently never fired on this client). The staged report rides the

@@ -101,6 +101,12 @@ local function Build()
 	close.text:SetPoint("CENTER")
 	close.text:SetText("x")
 	close:SetScript("OnClick", function() f:Hide() end)
+	-- every hide that isn't the DONE button = dismissed mid-flow;
+	-- MaybeShow re-opens it at login until the wizard is finished
+	f:SetScript("OnHide", function()
+		if f._done then return end
+		if GM.db then GM.db.obDismissed = time() end
+	end)
 
 	ui.pages = {}
 	for i = 1, #PAGES do
@@ -436,7 +442,14 @@ local function Build()
 
 	ui.watch5 = WatchHint(p5)
 
-	local done = Btn(p5, 90, "DONE", function() f:Hide() end)
+	local done = Btn(p5, 90, "DONE", function()
+		f._done = true
+		if GM.db then
+			GM.db.obDone = true
+			GM.db.obDismissed = nil
+		end
+		f:Hide()
+	end)
 	done:SetPoint("BOTTOMRIGHT", -12, 10)
 	local oBack = Btn(p5, 90, "< BACK", function() SetPage("app") end)
 	oBack:SetPoint("BOTTOMLEFT", 12, 10)
@@ -513,6 +526,7 @@ end
 -- argument lands on page 1, the backend page.
 function OB.Show(page)
 	Build()
+	ui._done = nil
 	Refresh()
 	SetPage(PAGE_IX[page] or 1)
 	ui:Show()
@@ -563,6 +577,19 @@ function OB.MaybeShow()
 			GM.db.apiReq = nil
 			GM.Print("blizzard api configured")
 		end
+	end
+	-- DONE on the last page = finished — never auto-show again
+	if GM.db.obDone then
+		return
+	end
+	-- closed mid-flow (x / ESC / LATER): re-show each login until the
+	-- wizard is completed, whatever the config state — dismissing a
+	-- half-finished wizard mustn't count as finishing it
+	if GM.db.obDismissed then
+		GM.db.obDbg = { t = time(), why = "reshow-dismissed",
+			gen = GoblinMindDB.generated }
+		OB.Show()
+		return
 	end
 	if Configured() or GM.db.backendSkip or GM.db.backendReq then
 		return
