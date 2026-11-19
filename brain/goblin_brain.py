@@ -802,9 +802,15 @@ def api_resolve_realms(cfg):
             if rname == wl or rname == realm_part or rslug == realm_part:
                 known[wl] = crid
     st['realm_ids'] = known
-    _save_api_state(st)
     missing = [n for n in names if n.lower() not in known]
-    if missing:
+    prev_missing = st.get('realm_missing') or []
+    st['realm_missing'] = missing
+    _save_api_state(st)
+    # a realm absent from Blizzard's index never resolves — emulator
+    # realms aren't Blizzard realms. Warn once per change, and let the
+    # watch loop mark api_last ok=False so the emit stops saying
+    # 'configured' means 'working'
+    if missing and missing != prev_missing:
         LOG.warning('api: realms not found in %s index: %s',
                     cfg.get('namespace'), ', '.join(missing))
     return {n: known[n.lower()] for n in names if n.lower() in known}
@@ -1601,8 +1607,6 @@ def cmd_book(sv_arg, out_paths, root=None, feed=None, realm=None):
             # OUR vel won — TSM's regionSoldPerDay wearing our event
             # count reads as measured, not inherited
             own = ('hist', 'recent', 'rsale', 'rsalep', 'reset')
-            our_vel_won = e.get('vel') is not None and (
-                book_fresh or m.get('vel') is None)
             if book_fresh:
                 for k in ('mb', 'sup', 'p', 'mkt', 'vel') + own:
                     if e.get(k) is not None and (
@@ -1614,6 +1618,20 @@ def cmd_book(sv_arg, out_paths, root=None, feed=None, realm=None):
                 for k in ('mb', 'sup', 'p', 'mkt', 'vel') + own:
                     if m.get(k) is None and e.get(k) is not None:
                         m[k] = e[k]
+            # vel divergence bound: TSM's regionSoldPerDay is a REGION
+            # figure — it can sit orders of magnitude from a realm-
+            # measured delta vel (ammo showed 22M/day feed vs ~30k/day
+            # measured). Same >25x cross-source rule as p/mkt: a gap
+            # that large means the feed number isn't about this
+            # market — our measured vel wins and veln pairs with it.
+            vel_diverged = False
+            if (m.get('vel') and e.get('vel') and e['vel'] > 0 and
+                    (m['vel'] > e['vel'] * 25 or
+                     m['vel'] < e['vel'] / 25)):
+                m['vel'] = e['vel']
+                vel_diverged = True
+            our_vel_won = e.get('vel') is not None and (
+                book_fresh or vel_diverged or m.get('vel') is None)
             if our_vel_won and e.get('veln') is not None:
                 m['veln'] = e['veln']
             else:
@@ -2288,7 +2306,12 @@ def cmd_watch(appdata, outs, interval=5, settle=20, feed='tsm',
             try:
                 api_poll(api_cfg_raw)
                 st = _load_api_state()
-                st['api_last'] = {'t': int(now), 'ok': True}
+                missing = st.get('realm_missing') or []
+                st['api_last'] = {
+                    't': int(now),
+                    'ok': not missing,
+                    'err': ('realms not in Blizzard index: '
+                            + ', '.join(missing)) if missing else None}
                 _save_api_state(st)
                 emit_book('api poll')
             except Exception as e:  # network hiccups must not kill the loop

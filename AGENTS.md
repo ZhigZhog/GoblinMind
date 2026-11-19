@@ -232,6 +232,20 @@ Primary data = the in-house book feed below.
   dropped (TSM's number kept). Found when item 8120 emitted
   p=8e9 copper from a stale mean while mb/hist/recent were
   sane — divergence that large is a data bug, never a market.
+  Same bound mirrored for `vel` (2026-11-19): TSM's
+  `regionSoldPerDay` is a REGION figure — ammo emitted
+  vel=22M/day vs ~30k/day realm-measured. When both exist and
+  diverge >25x either direction, the measured vel wins and
+  `veln` pairs with it.
+- **Blizzard API realm resolution**: `api.realms[scope]=0` in
+  feeds.json means "resolve lazily" against Blizzard's realm
+  index — emulator realms aren't IN that index, so resolution
+  can never succeed on scopes like `CAMWOWUS1Realm5PvE-Alliance`.
+  Unresolvable realms record `api_state.realm_missing` (warned
+  once per change, not per poll) and the watch loop marks
+  `api_last.ok=false` with the reason — the emit's api block
+  then shows `ok=false, error=` instead of a misleading
+  `configured=true, ok=true` (2026-11-19).
 
 - Layout: `brain\` (Python emit/watch CLI) · `addons\GoblinMind\`
   (shim addon, scaffolded — TSM-styled UI) · `addons\GoblinMind_Data\`
