@@ -95,8 +95,12 @@ function DB.AddTabs(frame, titleFs, currentKey)
 		meas:SetTextColor(0, 0, 0, 0) -- measure-only, never painted
 		frame._gmTabMeas = meas
 	end
-	local avail = (frame:GetWidth() or 640)
-		- (titleFs.GetStringWidth and titleFs:GetStringWidth() or 120) - 36
+	-- anchor against the title's TEXT extent, not its region edge —
+	-- callers SetWidth the title fontstring to 400+, so anchoring to
+	-- its RIGHT pushed the whole strip to mid-window ("right aligned")
+	local titleW = titleFs.GetStringWidth
+		and titleFs:GetStringWidth() or 120
+	local avail = (frame:GetWidth() or 640) - titleW - 48
 	local total = 0
 	for _, t in ipairs(TABS) do
 		meas:SetText(t.label)
@@ -111,7 +115,11 @@ function DB.AddTabs(frame, titleFs, currentKey)
 		local anchor = titleFs
 		for _, t in ipairs(TABS) do
 			local b = CreateFrame("Button", nil, frame)
-			b:SetPoint("LEFT", anchor, "RIGHT", 5, 0)
+			if anchor == titleFs then
+				b:SetPoint("LEFT", titleFs, "LEFT", titleW + 8, 0)
+			else
+				b:SetPoint("LEFT", anchor, "RIGHT", 5, 0)
+			end
 			b:SetHeight(14)
 			local cur = t.key == currentKey
 			b.text = GM.MakeFontString(b, GM.FONT_BOLD, 9,
