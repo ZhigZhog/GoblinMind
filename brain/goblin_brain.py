@@ -460,7 +460,14 @@ def _enc(v):
     if isinstance(v, (list, tuple)):
         return '{' + ','.join(_enc(x) for x in v) + '}'
     if isinstance(v, str):
-        return '"' + v + '"'
+        # Lua string literal — raw backslashes are invalid escapes
+        # ("E:\Battle.net" fails the whole file at load; \b is a
+        # real escape that mangles to a control char). Keys already
+        # escape via _enc_key; values needed the same.
+        return '"' + (v.replace('\\', '\\\\')
+                       .replace('"', '\\"')
+                       .replace('\n', '\\n')
+                       .replace('\r', '\\r')) + '"'
     if v is True:
         return 'true'
     if v is False:

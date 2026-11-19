@@ -783,5 +783,12 @@ Primary data = the in-house book feed below.
   that keep `regionSoldPerDay` must NOT carry our event count
   (TSM's number wearing our confidence badge — the 26M/day arrows
   bug). Retro-cleaned 285 repeat events in the installed store.
+- **`_enc` string rule** (2026-11-18): emitted string VALUES must be
+  escaped Lua literals — `\\`, `"`, `\n`, `\r`. Keys already were
+  (`_enc_key`); values weren't until `brain.dir`'s `E:\Battle.net`
+  shipped `invalid escape sequence` — strict lexers reject the whole
+  Data.lua; lenient ones parse `\b`→0x08 and render mangled text
+  (the empty onboarding path box). Any new emitted string field
+  with user paths/URLs must round-trip through `_enc` untouched.
 - Not yet registered on the Codebase Map (project started 2026-11-11,
   post-closure).
