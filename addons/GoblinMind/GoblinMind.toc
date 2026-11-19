@@ -2,7 +2,7 @@
 ## Title: |cffe1ba00GoblinMind|r
 ## Notes: Model-driven price estimates in tooltips and a guided, click-per-step auction plan queue. Standalone — in-house book feed via the GoblinMind brain.
 ## Author: ZhigZhog
-## Version: 0.5.4
+## Version: 0.5.5
 ## SavedVariables: GoblinMindSettings, GoblinMindPrices, GoblinMindLedger, GoblinMindGroups, GoblinMindHistory, GoblinMindCrafting
 ## Dependencies: GoblinMind_Data
 
