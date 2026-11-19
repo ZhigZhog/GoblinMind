@@ -1,9 +1,10 @@
 local _, GM = ...
 
--- Live drop-rate capture: loot windows are attributed per SLOT to a
--- source GUID (shared taps can mix sources in one window, so the
--- window itself is never the unit of attribution). Rates mature in
--- SavedVariables — see WoWVault/Proposals/drop-rates-proposal.md.
+-- Live drop-rate capture: loot windows attribute to a source per
+-- slot when the modern API exists (GetLootSourceInfo), else per
+-- window via the loot target — this client ships the old surface.
+-- Rates mature in SavedVariables — see
+-- WoWVault/Proposals/drop-rates-proposal.md.
 --
 -- Store shape:
 --   GM.db.drops[itemID][srcKey]  = { k = windows containing item,
@@ -62,49 +63,88 @@ local function PruneItem(map)
 	end
 end
 
+-- per-slot GUID attribution when the modern API exists; this client
+-- ships the old loot surface instead (GetLootSlotLink, name at slot
+-- pos 2, no GetLootSourceInfo), so the fallback attributes the whole
+-- window to the loot target — GUID-parseable unit -> c/o/i key,
+-- else name-keyed "n<name>" (merges same-named mobs/objects, which
+-- is also the display granularity)
+local function WinSource()
+	for _, unit in ipairs({ "target", "mouseover" }) do
+		local g = UnitGUID and UnitGUID(unit)
+		local k = g and SrcKey(g)
+		if k then return k, UnitName(unit) end
+		local nm = UnitName and UnitName(unit)
+		if nm then return "n" .. nm, nm end
+	end
+end
+
+local function SlotSource(i)
+	if not GetLootSourceInfo then return end
+	local g = GetLootSourceInfo(i)
+	if type(g) == "table" then g = g[1] end
+	return SrcKey(g)
+end
+
+local lastLoot -- { sig, t } — LOOT_READY+LOOT_OPENED double-fire guard
+
 local function Record()
 	if not GM.db then return end
-	if not (GetNumLootItems and GetLootSlotInfo and GetLootSourceInfo) then
-		return
-	end
+	if not (GetNumLootItems and GetLootSlotInfo) then return end
 	local n = GetNumLootItems()
 	if not n or n < 1 then return end
 
-	-- per-window aggregates: one window counts once per source (k)
-	-- even when the item arrives across several slots
-	local winSrc, hits = {}, {}
+	local winSrc, winName = WinSource()
+	local hits, firstID = {}, nil
 	for i = 1, n do
-		local _, link, qty = GetLootSlotInfo(i)
-		local id = ItemOfLink(link)
-		-- first source GUID only; handles both varargs and
-		-- table-returning client flavors
-		local g = GetLootSourceInfo(i)
-		if type(g) == "table" then g = g[1] end
-		local src = SrcKey(g)
-		if id and src then
-			winSrc[src] = true
+		-- slot 2 is the item NAME on this client, not a link
+		local _, lName, lQty, _, _, _, isQuest = GetLootSlotInfo(i)
+		local link = GetLootSlotLink and GetLootSlotLink(i) or lName
+		local id = ItemOfLink(link) or ItemOfLink(lName)
+		local src = SlotSource(i) or winSrc
+		if id and src and not isQuest then
+			firstID = firstID or id
 			local h = hits[id]
 			if not h then
 				h = { qty = 0, srcs = {} }
 				hits[id] = h
 			end
-			h.qty = h.qty + (tonumber(qty) or 1)
+			h.qty = h.qty + (tonumber(lQty) or 1)
 			h.srcs[src] = true
 		end
 	end
+	if not firstID then return end
 
-	if not next(winSrc) then return end
+	-- dedup: same window reported by both loot events (or a re-open
+	-- within the same instant) records once
+	local t = GetTime and GetTime() or 0
+	local sig = n .. ":" .. firstID
+	if lastLoot and lastLoot.sig == sig and t - lastLoot.t < 0.5 then
+		return
+	end
+	lastLoot = { sig = sig, t = t }
+
+	local winSrcSet = {}
+	for _, h in pairs(hits) do
+		for src in pairs(h.srcs) do winSrcSet[src] = true end
+	end
+
 	GM.db.drops = GM.db.drops or {}
 	GM.db.dropsN = GM.db.dropsN or {}
 	GM.db.dropsName = GM.db.dropsName or {}
 
-	for src in pairs(winSrc) do
+	for src in pairs(winSrcSet) do
 		GM.db.dropsN[src] = (GM.db.dropsN[src] or 0) + 1
+		-- name-keyed sources carry the name in the key; GUID-keyed
+		-- get the best-effort target name (hit-sources only)
+		if not GM.db.dropsName[src] then
+			if src:sub(1, 1) == "n" then
+				GM.db.dropsName[src] = src:sub(2)
+			elseif winName and src:sub(1, 1) ~= "i" then
+				GM.db.dropsName[src] = winName
+			end
+		end
 	end
-
-	-- creature/object names aren't in the GUID — best-effort from
-	-- the loot target; only needed for sources that produce hits
-	local tgt = UnitName and (UnitName("target") or UnitName("mouseover"))
 
 	for id, h in pairs(hits) do
 		local m = GM.db.drops[id]
@@ -114,10 +154,6 @@ local function Record()
 			if not st then st = { k = 0, q = 0 } m[src] = st end
 			st.k = st.k + 1
 			st.q = st.q + h.qty
-			if tgt and not GM.db.dropsName[src]
-				and src:sub(1, 1) ~= "i" then
-				GM.db.dropsName[src] = tgt
-			end
 		end
 		PruneItem(m)
 	end
@@ -148,11 +184,10 @@ function D.TopSources(itemID, count)
 end
 
 local f = CreateFrame("Frame")
--- LOOT_READY is the modern event; fall back to LOOT_OPENED if this
--- client only knows the old name (pcall: unknown events error)
-if not pcall(f.RegisterEvent, f, "LOOT_READY") then
-	pcall(f.RegisterEvent, f, "LOOT_OPENED")
-end
+-- this client fires LOOT_OPENED (GatherLite et al); LOOT_READY is
+-- the modern twin — register both and dedup inside Record
+pcall(f.RegisterEvent, f, "LOOT_OPENED")
+pcall(f.RegisterEvent, f, "LOOT_READY")
 f:SetScript("OnEvent", function()
 	local ok, err = pcall(Record)
 	if not ok then GM.Print(GM.CC("err") .. "drop capture: " ..
