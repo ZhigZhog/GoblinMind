@@ -836,12 +836,9 @@ local function BuildTooltipRows()
 			hov:SetScript("OnEnter", function(self)
 				local dd = self.d
 				if not dd.gloss then return end
-				GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-				GameTooltip:SetText(Label(dd))
-				GameTooltip:AddLine(dd.gloss, 1, 1, 1, true)
-				GameTooltip:Show()
+				GM.Widgets.HintShow(self, { Label(dd), dd.gloss })
 			end)
-			hov:SetScript("OnLeave", function() GameTooltip:Hide() end)
+			hov:SetScript("OnLeave", GM.Widgets.HintHide)
 			local ctl
 			if d.kind == "bool" then
 				ctl = BoolSeg(ui.ttHost, d.get, d.set)

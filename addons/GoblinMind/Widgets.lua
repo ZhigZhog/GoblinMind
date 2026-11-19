@@ -60,7 +60,55 @@ function W.EditBox(parent, w, hint)
 	return eb
 end
 
--- hover tooltip: linesFn() returns {title, line, line…} or nil
+-- hover tooltip: linesFn() returns {title, line, line…} or nil.
+-- Renders into an owned frame, NOT GameTooltip — SetText there runs
+-- the shared hook chain of every installed addon, and a foreign
+-- chain looped into a C stack overflow (Questie/FDJ/EnhanceQoL all
+-- hook this tooltip; the trigger was a simple Bronze Tube hint).
+-- Hints are static text and don't need the engine's machinery.
+local hint
+local function HintTip()
+	if hint then return hint end
+	hint = CreateFrame("Frame", "GoblinMindHint", UIParent)
+	GM.Panel(hint, "contHigh")
+	hint:SetFrameStrata("TOOLTIP")
+	pcall(hint.SetClampedToScreen, hint, true)
+	hint.lines = {}
+	hint:Hide()
+	return hint
+end
+
+-- direct show/hide for sites that used to SetOwner+SetText on
+-- GameTooltip (same foreign-chain exposure as W.Tip's old path)
+function W.HintShow(f, lines)
+	if not lines or not lines[1] then return end
+	local tip = HintTip()
+	local w, n = 0, math.min(#lines, 12)
+	for i = 1, n do
+		local fs = tip.lines[i]
+		if not fs then
+			fs = GM.MakeFontString(tip, GM.FONT, 10, "text")
+			fs:SetPoint("TOPLEFT", 8, -7 - (i - 1) * 13)
+			tip.lines[i] = fs
+		end
+		fs:SetText(tostring(lines[i]):sub(1, 96))
+		fs:SetTextColor(i == 1 and 1 or 0.8,
+			i == 1 and 1 or 0.8, i == 1 and 1 or 0.75)
+		fs:Show()
+		local sw = fs.GetStringWidth and fs:GetStringWidth() or 0
+		if sw > w then w = sw end
+	end
+	for j = n + 1, #tip.lines do tip.lines[j]:Hide() end
+	tip:SetSize(w + 16, 10 + n * 13)
+	tip:ClearAllPoints()
+	tip:SetPoint("BOTTOMLEFT", f, "TOPLEFT", 0, 4)
+	tip:Show()
+end
+
+function W.HintHide()
+	if hint then hint:Hide() end
+end
+
 function W.Tip(f, linesFn)
 	-- accepts a fn returning lines, a plain string, or nil (no tip)
 	if type(linesFn) == "string" then
@@ -69,16 +117,9 @@ function W.Tip(f, linesFn)
 	end
 	if type(linesFn) ~= "function" then return end
 	f:HookScript("OnEnter", function()
-		local lines = linesFn()
-		if not lines then return end
-		GameTooltip:SetOwner(f, "ANCHOR_TOP")
-		GameTooltip:SetText(lines[1], 1, 1, 1)
-		for i = 2, #lines do
-			GameTooltip:AddLine(lines[i], 0.8, 0.8, 0.75, true)
-		end
-		GameTooltip:Show()
+		W.HintShow(f, linesFn())
 	end)
-	f:HookScript("OnLeave", function() GameTooltip:Hide() end)
+	f:HookScript("OnLeave", W.HintHide)
 end
 
 -- any modified click = Blizzard's default item action (ctrl+click =

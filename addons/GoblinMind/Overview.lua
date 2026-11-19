@@ -128,16 +128,19 @@ local function MakeTable(parent, cols, onClick)
 		end
 		row:SetScript("OnEnter", function()
 			if row.id then
-				GameTooltip:SetOwner(row, "ANCHOR_RIGHT")
 				if GameTooltip.SetItemByID then
+					GameTooltip:SetOwner(row, "ANCHOR_RIGHT")
 					GameTooltip:SetItemByID(row.id)
+					GameTooltip:Show()
 				else
-					GameTooltip:SetText(row.cells[1]:GetText() or "")
+					GM.Widgets.HintShow(row,
+						{ row.cells[1]:GetText() or "" })
 				end
-				GameTooltip:Show()
 			end
 		end)
-		row:SetScript("OnLeave", function() GameTooltip:Hide() end)
+		row:SetScript("OnLeave", function()
+			GameTooltip:Hide() GM.Widgets.HintHide()
+		end)
 		row:SetScript("OnClick", function()
 			if IsModifiedClick() then
 				if row.id then GM.ModifiedItemClick(row.id) end
