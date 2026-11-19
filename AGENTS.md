@@ -130,8 +130,13 @@ Primary data = the in-house book feed below.
   split `C:\Program Files\` on Windows). Deploy = copy the file
   over; no manual restart needed.
 - **Crowdsource backend (`brain\goblin_server.py`)**: persistent
-  merged-book service on `127.0.0.1:8765` (binds `0.0.0.0` — LAN
-  needs a firewall rule for TCP 8765). Endpoints: `/v1/register`,
+  merged-book service on `127.0.0.1:8765`. Bind rule: explicit
+  `goblin_server.json "bind"` wins; config file present without
+  bind = `0.0.0.0` (a deliberately `--host`ed server — `install.py
+  --host` pins it); NO config file = `127.0.0.1` so a solo
+  install's watcher-spawned backend can never be joined. Optional
+  `"allow": ["cidr"]` fences every request (register + reads).
+  LAN hosts need a firewall rule for TCP 8765. Endpoints: `/v1/register`,
   `/v1/upload`, `/v1/book?scope=`, `/v1/health`, `/v1/scopes`.
   `/v1/health` also lists installs (name, attributed scopes, upload
   count, last-upload `t`); `/v1/scopes` is the open scope list that

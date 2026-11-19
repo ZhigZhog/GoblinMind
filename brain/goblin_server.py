@@ -16,6 +16,7 @@ Endpoints (all JSON):
 Usage: goblin_server.py [port]          (default 8765)
 State: goblin_backend.db (sqlite) next to the script.
 """
+import ipaddress
 import json
 import os
 import re
@@ -43,13 +44,48 @@ MERGE_MAX_AGE = 7 * 86400  # uploads older than the stat window are
 
 def _server_cfg():
     """Machine-local server config (never shipped): {"install_secret":
-    "..."}. Read lazily so key rotation needs no restart. Missing or
-    empty secret = open registration (trusted-LAN mode)."""
+    "...", "bind": "0.0.0.0", "allow": ["cidr", ...]}. Read lazily so
+    edits need no restart. Missing or empty secret = open
+    registration; missing allow = no IP restriction."""
     try:
         with open(CFG_PATH, encoding='utf-8') as fh:
             return json.load(fh)
     except (OSError, ValueError):
         return {}
+
+
+def _bind_addr(cli=None):
+    """Listen address. Explicit config 'bind' (or a CLI arg) wins; a
+    config file present without bind means a deliberately --host'd
+    server -> all interfaces; NO config file means an auto-spawned
+    personal backend -> loopback only, so a solo install's backend
+    can never be joined over the network."""
+    if cli:
+        return cli
+    cfg = _server_cfg()
+    if cfg.get('bind'):
+        return str(cfg['bind'])
+    return '0.0.0.0' if os.path.exists(CFG_PATH) else '127.0.0.1'
+
+
+def _allowed_ip(ip):
+    """Optional CIDR fence: goblin_server.json 'allow' lists the only
+    networks that may talk to this server at all — belt and suspenders
+    on top of install_secret for LAN-exposed guild hosts."""
+    nets = _server_cfg().get('allow')
+    if not nets:
+        return True
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    for n in nets:
+        try:
+            if addr in ipaddress.ip_network(str(n), strict=False):
+                return True
+        except ValueError:
+            continue
+    return False
 
 
 def db():
@@ -287,6 +323,9 @@ class Handler(BaseHTTPRequestHandler):
                                       fmt % args))
 
     def do_GET(self):
+        if not _allowed_ip(self.client_address[0]):
+            self._send(403, {'error': 'ip'})
+            return
         u = urllib.parse.urlparse(self.path)
         q = urllib.parse.parse_qs(u.query)
         conn = db()
@@ -326,6 +365,9 @@ class Handler(BaseHTTPRequestHandler):
             conn.close()
 
     def do_POST(self):
+        if not _allowed_ip(self.client_address[0]):
+            self._send(403, {'error': 'ip'})
+            return
         u = urllib.parse.urlparse(self.path)
         conn = db()
         try:
@@ -437,7 +479,8 @@ def _self_restart():
 
 if __name__ == '__main__':
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8765
-    srv = ThreadingHTTPServer(('0.0.0.0', port), Handler)
+    bind = _bind_addr(sys.argv[2] if len(sys.argv) > 2 else None)
+    srv = ThreadingHTTPServer((bind, port), Handler)
     threading.Thread(target=_self_restart, daemon=True).start()
-    print('goblin backend on :%d -> %s' % (port, DB_PATH))
+    print('goblin backend on %s:%d -> %s' % (bind, port, DB_PATH))
     srv.serve_forever()

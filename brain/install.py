@@ -154,6 +154,21 @@ def ensure_server_secret():
     return cfg['install_secret']
 
 
+def ensure_server_bind(addr='0.0.0.0'):
+    """--host = a deliberate listener: pin 'bind' in goblin_server.json
+    so the no-config loopback default can never strand the server.
+    Keeps any other config fields (install_secret, allow) intact."""
+    cfgp = os.path.join(HERE, 'goblin_server.json')
+    try:
+        cfg = json.load(open(cfgp, encoding='utf-8'))
+    except (OSError, ValueError):
+        cfg = {}
+    if cfg.get('bind') != addr:
+        cfg['bind'] = addr
+        with open(cfgp, 'w', encoding='utf-8') as fh:
+            json.dump(cfg, fh, indent=1)
+
+
 def open_server_registration():
     """--open host mode: strip install_secret so any install can
     register itself — the right mode for a backend facing beyond a
@@ -437,6 +452,7 @@ def main():
                 secret = None
             else:
                 secret = ensure_server_secret()
+            ensure_server_bind()  # --host listens on all interfaces
             ip = lan_ip()
             invite_url = f'http://{ip or "<this-PC-LAN-IP>"}:{PORT}'
             print('  share with friends — they enter these in the')
