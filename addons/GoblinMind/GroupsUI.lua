@@ -548,8 +548,9 @@ local function BuildUI()
 		GU.RefreshTree()
 	end)
 	Tip(protG, function() return { "Protect group",
-		"Plan steps that would SELL or POST an item in this",
-		"group (or a subgroup) ask for confirmation first" } end)
+		"Items in this group (or a subgroup) are excluded",
+		"from post scans — things that shouldn't be on the",
+		"AH. A manual sell/post step still asks once." } end)
 	ui.protBtn = protG
 
 	-- col B: members of selected group — also a drop target

@@ -166,6 +166,11 @@ function A.PostScan(only)
 			-- unchecked on the bag table — not a skip, just excluded
 		elseif e.bound then
 			skipped[id] = "soulbound"
+		elseif GM.Groups and GM.Groups.IsProtected(id) then
+			-- protected groups (shipped vendor supplies, user-flagged)
+			-- are ignored, not merely confirmed — a post scan should
+			-- never plan things that shouldn't be on the AH
+			skipped[id] = "protected"
 		elseif not GM.Price("dbmarket", id) then
 			skipped[id] = "no price"
 		else
