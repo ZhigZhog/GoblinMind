@@ -139,21 +139,6 @@ function GM.Groups.Unassign(itemID)
 	for _, g in pairs(GM.Groups.db.groups) do g.items[itemID] = nil end
 end
 
--- seed shipped groups once — see SHIPPED_GROUPS for provenance
-function GM.Groups.SeedShipped()
-	local db = GM.Groups.db
-	if (db.shippedV or 0) >= GM.Groups.SHIPPED_VERSION then return end
-	db.shippedV = GM.Groups.SHIPPED_VERSION
-	for path, ids in pairs(SHIPPED_GROUPS) do
-		GM.Groups.Ensure(path)
-		local g = db.groups[path]
-		g.protected = true
-		for _, id in ipairs(ids) do
-			if not GroupFor(id) then g.items[id] = true end
-		end
-	end
-end
-
 -- shipped protected groups: tools + vendor-bought supplies that should
 -- never hit the AH. Seeded once (versioned), add-only, and only claims
 -- ungrouped ids — user edits (delete group, unprotect, unassign) stick.
@@ -161,7 +146,7 @@ end
 -- the realm's own MapWise vendor survey; raw mats that vendors happen
 -- to sell (strange dust, blasting powder, raw fish) are deliberately
 -- excluded — they trade legitimately.
-GM.Groups.SHIPPED_VERSION = 1
+GM.Groups.SHIPPED_VERSION = 2 -- v1 shippedV was persisted by a broken run
 local SHIPPED_GROUPS = {
 	["Crafting Supplies"] = {
 		-- profession tools
@@ -318,6 +303,21 @@ local SHIPPED_GROUPS = {
 		5173,   -- Deathweed
 	},
 }
+
+-- seed shipped groups once — see SHIPPED_GROUPS for provenance
+function GM.Groups.SeedShipped()
+	local db = GM.Groups.db
+	if (db.shippedV or 0) >= GM.Groups.SHIPPED_VERSION then return end
+	for path, ids in pairs(SHIPPED_GROUPS) do
+		GM.Groups.Ensure(path)
+		local g = db.groups[path]
+		g.protected = true
+		for _, id in ipairs(ids) do
+			if not GroupFor(id) then g.items[id] = true end
+		end
+	end
+	db.shippedV = GM.Groups.SHIPPED_VERSION
+end
 
 -- protected groups shield member items from sell/post plan steps —
 -- post scan excludes them outright; manual sell/post steps on one
