@@ -9,6 +9,16 @@ GM.Solver = {}
 -- Returns { steps = { {kind, qty, unit, auctionID?}, ... }, spend, ev, postPrice, daysToClear }
 function GM.Solver.Plan(asks, p50, p90, gold, vel, opts)
 	opts = opts or {}
+	-- our own auctions aren't buyable supply — buying your own
+	-- listing just burns the AH cut and reports fake volume. The
+	-- right verb for an underpriced own listing is cancel+repost,
+	-- which the undercut flow owns (not this plan).
+	local ownOnly = false
+	local filtered = {}
+	for _, a in ipairs(asks or {}) do
+		if a.own then ownOnly = true else tinsert(filtered, a) end
+	end
+	asks = filtered
 	local riskBudget   = opts.riskBudget or 0.40
 	local minMargin    = opts.minProfitMargin or 0.10
 	local ahCut        = opts.ahCut or 0.05
@@ -59,7 +69,11 @@ function GM.Solver.Plan(asks, p50, p90, gold, vel, opts)
 	end
 
 	if qty == 0 and owned == 0 then
-		if #asks == 0 then return nil, "book is empty and you own none" end
+		if #asks == 0 then
+			return nil, ownOnly
+				and "only listings up are yours — cancel and repost"
+				or "book is empty and you own none"
+		end
 		local first = asks[1]
 		if (resale - first.unit) / first.unit < minMargin then
 			return nil, format("no buy path — cheapest %s > ceiling %s",
