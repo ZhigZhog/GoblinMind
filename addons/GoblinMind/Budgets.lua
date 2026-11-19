@@ -273,6 +273,19 @@ function B.Sample()
 		f[#f + 1] = { t = t, v = free }
 		if #f > HIST_CAP then tremove(f, 1) end
 	end
+	-- wealth series for the account chart: real gold on hand + the
+	-- posted-buyout snapshot, so the plot shows what you'd be worth
+	-- if every listing sold at asking
+	local w = GM.db.wealthHist
+	if not w then w = {} GM.db.wealthHist = w end
+	local gold = GetMoney and GetMoney() or 0
+	local posted = GM.Inventory and GM.Inventory.PostedValue
+		and GM.Inventory.PostedValue() or 0
+	if #w == 0 or w[#w].g ~= gold or w[#w].a ~= posted
+		or t - w[#w].t > 3600 then
+		w[#w + 1] = { t = t, g = gold, a = posted }
+		if #w > HIST_CAP then tremove(w, 1) end
+	end
 end
 
 function B.Init()

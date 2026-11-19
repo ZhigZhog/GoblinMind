@@ -500,11 +500,9 @@ function W.AcctRow(parent, idx, compact)
 	row.alloc:SetJustifyH("LEFT")
 	if compact then row.alloc:Hide() end
 
-	row.left = GM.MakeFontString(row, GM.FONT, 10, "textDim")
+	row.left = GM.MakeFontString(row, GM.FONT, 9, "textDim")
 	row.left:SetPoint("LEFT",
 		compact and grp or row.alloc, "RIGHT", 6, 0)
-	row.left:SetJustifyH("LEFT")
-	row.left:SetWidth(180)
 	row.left:SetJustifyH("LEFT")
 	row.left:SetWordWrap(false)
 
@@ -549,11 +547,11 @@ function W.PaintAcctRow(row, a)
 	row.alloc:SetText(GM.Budget.AllocText(a))
 	local rem = GM.Budget.Remaining(a)
 	if a.kind == "save" then
-		row.left:SetText("reserved " .. GM.Money(rem))
+		row.left:SetText("reserved " .. GM.MoneyShort(rem))
 		row.left:SetTextColor(GM.RGB("accent"))
 	else
-		row.left:SetText("left " .. GM.Money(rem)
-			.. " · spent " .. GM.Money(a.spent or 0))
+		row.left:SetText("left " .. GM.MoneyShort(rem)
+			.. " · spent " .. GM.MoneyShort(a.spent or 0))
 		row.left:SetTextColor(GM.RGB(rem > 0 and "textDim" or "err"))
 	end
 end

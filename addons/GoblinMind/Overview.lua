@@ -331,30 +331,23 @@ function OV.RefreshChart()
 	local gx, gy = 56, 24
 	local w = chart:GetWidth() - gx - 14
 	local h = chart:GetHeight() - gy - 30
-	local series = {}
-	series[#series + 1] = { name = "free", color = "textDim",
-		hist = GM.db.budgetFree }
-	for _, a in ipairs(GM.Budget.List()) do
-		series[#series + 1] = { name = a.name, hist = a.hist,
-			color = SERIES_COLORS[(#series % #SERIES_COLORS) + 1] }
-	end
+	-- one gold series + a gold+posted overlay (≥ gold always, so the
+	-- lines never cross — the gap is the pending-AH upside). Per-
+	-- account series produced mirror-image step lines that read as
+	-- an unreadable lattice of crossings.
+	local hist = GM.db.wealthHist or {}
 	local tMin, tMax, vMax = math.huge, 0, 0
-	for _, s in ipairs(series) do
-		for _, p in ipairs(s.hist or {}) do
-			if p.t < tMin then tMin = p.t end
-			if p.t > tMax then tMax = p.t end
-			if p.v > vMax then vMax = p.v end
-		end
+	for _, p in ipairs(hist) do
+		if p.t < tMin then tMin = p.t end
+		if p.t > tMax then tMax = p.t end
+		local wv = (p.g or 0) + (p.a or 0)
+		if wv > vMax then vMax = wv end
 	end
-	for i, fs in ipairs(ui.legend) do
-		local s = series[i]
-		if s then
-			fs:SetText(s.name:sub(1, 8))
-			fs:SetTextColor(GM.RGB(s.color))
-		else
-			fs:SetText("")
-		end
-	end
+	ui.legend[1]:SetText("gold")
+	ui.legend[1]:SetTextColor(GM.RGB("accent"))
+	ui.legend[2]:SetText("+posted")
+	ui.legend[2]:SetTextColor(GM.RGB("textDim"))
+	for i = 3, #ui.legend do ui.legend[i]:SetText("") end
 	if vMax <= 0 or tMax <= tMin then
 		ui.chartMsg:SetText("samples build as budgets see activity")
 		return
@@ -384,20 +377,49 @@ function OV.RefreshChart()
 	-- step interpolation: balance is constant between samples, so draw
 	-- flat runs then vertical jumps — honest to the data and far
 	-- cleaner than diagonals slashing across empty time gaps
-	for _, s in ipairs(series) do
-		local hist = s.hist or {}
+	local function StepSeries(valFn, color)
 		local px, py
 		for _, p in ipairs(hist) do
 			local x = gx + (p.t - tMin) / (tMax - tMin) * w
-			local y = gy + p.v / vMax * h
+			local y = gy + valFn(p) / vMax * h
 			if px then
-				tinsert(ui.art, Line(chart, px, py, x, py, s.color))
+				tinsert(ui.art, Line(chart, px, py, x, py, color))
 				if y ~= py then
-					tinsert(ui.art, Line(chart, x, py, x, y, s.color))
+					tinsert(ui.art, Line(chart, x, py, x, y, color))
 				end
 			end
 			px, py = x, y
 		end
+	end
+	StepSeries(function(p) return p.g or 0 end, "accent")
+	StepSeries(function(p) return (p.g or 0) + (p.a or 0) end, "textDim")
+	-- trendline: least-squares fit on gold over the window, drawn
+	-- dashed with a g/day label — "how fast am I gaining" at a glance
+	local n, st, sv, stt, stv = 0, 0, 0, 0, 0
+	for _, p in ipairs(hist) do
+		local g = p.g or 0
+		n = n + 1; st = st + p.t; sv = sv + g
+		stt = stt + p.t * p.t; stv = stv + p.t * g
+	end
+	if n >= 2 then
+		local mt, mv = st / n, sv / n
+		local var = stt - n * mt * mt
+		local slope = var ~= 0 and (stv - n * mt * mv) / var or 0
+		local function vy(t)
+			return math.max(0, math.min(vMax, mv + slope * (t - mt)))
+		end
+		local ya = gy + vy(tMin) / vMax * h
+		local yb = gy + vy(tMax) / vMax * h
+		for i = 0, 12, 2 do -- dashed: every other seventh
+			local xa = gx + w * i / 14
+			local xb = gx + w * (i + 1) / 14
+			tinsert(ui.art, Line(chart, xa, ya + (yb - ya) * i / 14,
+				xb, ya + (yb - ya) * (i + 1) / 14, "secondary", 1))
+		end
+		local gpd = slope * 86400 / 10000 -- copper/sec → gold/day
+		ui.legend[3]:SetText(format("%s%.1fg/d",
+			gpd >= 0 and "+" or "", gpd))
+		ui.legend[3]:SetTextColor(GM.RGB("secondary"))
 	end
 end
 
@@ -638,7 +660,7 @@ local function Build()
 	-- ---- page: accounts (chart + function controls) ----
 	local acctP = Panel(host, 0, 0, 724, 516, "ACCOUNTS")
 	ui.pageAccounts = acctP
-	local chart = Panel(acctP, 6, -20, 712, 226, "ACCOUNT TRENDS")
+	local chart = Panel(acctP, 6, -20, 712, 226, "WEALTH TREND")
 	if chart.SetClipsChildren then chart:SetClipsChildren(true) end
 	ui.chart = chart
 	ui.chartMsg = GM.MakeFontString(chart, GM.FONT, 10, "textDim")

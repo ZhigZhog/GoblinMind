@@ -101,6 +101,18 @@ local lastOwnedAt -- unix time of the last live snapshot (or of the
 
 function GM.Inventory.OwnedAt() return lastOwnedAt end
 
+-- total buyout value of currently listed auctions (last snapshot —
+-- stale between AH visits, rebased whenever the enum answers)
+function GM.Inventory.PostedValue()
+	local t = 0
+	for _, a in pairs(auctionCache) do
+		if a.itemID and a.buyout then
+			t = t + a.buyout * (a.qty or 1) * (a.n or 1)
+		end
+	end
+	return t
+end
+
 -- persist the owned snapshot so the MINE surfaces are a real log: the
 -- enum only answers at the AH, but the last-known listings should
 -- stay visible between visits (tLeft rebases off the stored `at`)

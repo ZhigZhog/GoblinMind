@@ -296,6 +296,17 @@ Primary data = the in-house book feed below.
     wrap entirely via `rawHMIC` captured at Core.lua load — it
     wants Blizzard's default chain, not every installed hook.
     Found 2026-11-19: C stack overflow on a crafting mat-row click.
+  - **`GetStringWidth` under-measures** the vendored Montserrat fonts
+    (~10-20%) — layout decisions made from measured widths can still
+    overflow at render. Dashboard's `AddTabs` builds, then verifies the
+    strip's real `GetRight` extent post-layout and rebuilds compact on
+    overrun. Trust real extents, not the metric (found 2026-11-19: tab
+    strip ran off the ledger window edge).
+  - **FontStrings don't hard-clip** — overflowing text draws past the
+    region bounds into neighbouring widgets. Bound the TEXT (compact
+    `GM.MoneyShort`, `SetWordWrap(false)`, width discipline), not just
+    the box — found on the ACCOUNTS row where "left … spent …" ran
+    under the reset/del buttons.
   - **Hard per-script CPU budget** — a script that runs too long
     dies with "insecure scripts exceeded execution limit"
     (attribution shows the *handler's* file, `Settings.lua:-1`, not

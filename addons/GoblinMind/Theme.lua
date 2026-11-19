@@ -57,6 +57,25 @@ function GM.Money(copper)
 	return table.concat(parts, " ")
 end
 
+-- two-unit money for tight columns: "10g 85s" / "85s 20c" / "34c" —
+-- same color split as Money, truncated to the top two units
+function GM.MoneyShort(copper)
+	if not copper then return GM.CC("textDim") .. "—|r" end
+	copper = floor(copper + 0.5)
+	local g = floor(copper / 10000)
+	local s = floor(copper % 10000 / 100)
+	if g > 0 then
+		return GM.CC("accent") .. g .. "g|r"
+			.. (s > 0 and (" " .. GM.CC("textDim") .. s .. "s|r") or "")
+	end
+	if s > 0 then
+		return GM.CC("textDim") .. s .. "s|r"
+			.. (copper % 100 > 0
+				and (" " .. GM.CC("textDim") .. copper % 100 .. "c|r") or "")
+	end
+	return GM.CC("textDim") .. copper .. "c|r"
+end
+
 function GM.Signed(copper)
 	copper = copper or 0
 	local key = copper >= 0 and "pos" or "err"
