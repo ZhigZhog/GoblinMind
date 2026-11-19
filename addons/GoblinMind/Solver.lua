@@ -5,6 +5,10 @@ local _, GM = ...
 GM.Solver = {}
 
 -- asks: array of { id?, qty, unit } sorted ascending by unit price (copper).
+--   own-flagged rows are stripped from buys; opts.ownAsks hands them
+--   back for the cancel-merge (see below).
+-- opts.cancelUndercut + opts.ownAsks: cancel own off-target listings
+--   and fold their units into the relist pool.
 -- p50/p90: model estimate, copper. gold: player copper. vel: expected units/day.
 -- Returns { steps = { {kind, qty, unit, auctionID?}, ... }, spend, ev, postPrice, daysToClear }
 function GM.Solver.Plan(asks, p50, p90, gold, vel, opts)
@@ -68,10 +72,32 @@ function GM.Solver.Plan(asks, p50, p90, gold, vel, opts)
 		qty = qty + take
 	end
 
-	if qty == 0 and owned == 0 then
+	-- own listings priced off the plan's post target aren't bought —
+	-- they're canceled and their units join the relist pool. Any
+	-- mismatch counts: below target = repost higher, above target =
+	-- the plan's posts would undercut our own listing. Gated on the
+	-- auctioning cancelUndercut op; each cancel is still its own
+	-- hardware click.
+	local relisted = 0
+	if opts.cancelUndercut then
+		for _, o in ipairs(opts.ownAsks or {}) do
+			if o.id and o.unit and o.qty and o.qty > 0
+				and o.unit ~= guard then
+				tinsert(steps, {
+					kind = "cancel",
+					auctionID = o.id,
+					qty = o.qty,
+					unit = o.unit,
+				})
+				relisted = relisted + o.qty
+			end
+		end
+	end
+
+	if qty == 0 and owned == 0 and relisted == 0 then
 		if #asks == 0 then
 			return nil, ownOnly
-				and "only listings up are yours — cancel and repost"
+				and "only listings up are yours — nothing to buy"
 				or "book is empty and you own none"
 		end
 		local first = asks[1]
@@ -89,10 +115,19 @@ function GM.Solver.Plan(asks, p50, p90, gold, vel, opts)
 	local buyLots
 	if qty > 0 and opts.commodity then
 		buyLots = lots  -- real lot totals for PlaceBid fallback
+		-- the aggregate replaces per-lot buys but keeps non-buy
+		-- steps (own-listing cancels) already emitted
+		local keep = {}
+		for _, s in ipairs(steps) do
+			if s.kind ~= "buy" then tinsert(keep, s) end
+		end
 		steps = { { kind = "buy", qty = qty, unit = ceil(spend / qty), commodity = true } }
+		for _, s in ipairs(keep) do tinsert(steps, s) end
 	end
 
-	local postQty = math.min(qty + owned, postCap)
+	-- relisted units post outside the cap — they were already listed,
+	-- so cancel+repost is net-zero against the posted-count budget
+	local postQty = math.min(qty + owned, postCap) + relisted
 	-- stackSize splits the post leg into per-stack clicks (items only —
 	-- commodities post in one call regardless)
 	local stack = opts.stackSize and opts.stackSize > 0 and opts.stackSize
@@ -118,6 +153,7 @@ function GM.Solver.Plan(asks, p50, p90, gold, vel, opts)
 		postPrice = guard,
 		qty = qty,
 		owned = owned,
+		relisted = relisted,
 		daysToClear = daysToClear,
 	}
 end

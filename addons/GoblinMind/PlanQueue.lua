@@ -764,6 +764,15 @@ function PQ.Solve(asks, workID)
 			- math.max(0, GM.BagCount(workID) - pend.base))
 		pend.qty, pend.base = pending, GM.BagCount(workID)
 	end
+	-- the solver strips own asks from buys itself; hand them back
+	-- separately so the cancel-merge can repost off-target listings
+	local ownAsks
+	for _, a in ipairs(asks) do
+		if a.own then
+			ownAsks = ownAsks or {}
+			tinsert(ownAsks, a)
+		end
+	end
 	local plan, err = GM.Solver.Plan(asks, p50, entry and entry.p90, gold, vel, {
 		riskBudget = GM.db.riskBudget,
 		minProfitMargin = (tonumber(sOps.belowPct) or 10) / 100,
@@ -774,6 +783,8 @@ function PQ.Solve(asks, workID)
 		maxP = ev("max"),
 		postCap = tonumber(aOps.postCap),
 		stackSize = tonumber(aOps.stackSize),
+		ownAsks = ownAsks,
+		cancelUndercut = aOps.cancelUndercut,
 	})
 	if plan then
 		plan.undercut = ev("undercut") or 0
@@ -812,7 +823,8 @@ function PQ.Solve(asks, workID)
 	plan.itemID = workID
 	plan.pendingBuy = pend and PQ.plan.pendingBuy
 	plan.bank = GM.BankCount(workID)
-	plan.deposit = GM.AH.DepositCost(workID, plan.qty + (plan.owned or 0)) or 0
+	plan.deposit = GM.AH.DepositCost(workID,
+		plan.qty + (plan.owned or 0) + (plan.relisted or 0)) or 0
 	plan.ev = plan.ev - plan.deposit
 	PQ.plan = plan
 	PQ.stepIndex = 1

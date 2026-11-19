@@ -10,7 +10,7 @@ GM.Groups = {}
 local OP_DEFAULTS = {
 	auctioning = {
 		postCap = 0,               -- 0 = no cap
-		cancelUndercut = false,
+		cancelUndercut = true,     -- also gates the planner's cancel-merge
 		min = "100% vendorsell",
 		normal = "100% dbmarket",
 		max = "500% dbmarket",
