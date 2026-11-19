@@ -262,9 +262,12 @@ Primary data = the in-house book feed below.
   (same layout `sync-addons.bat` deploys — `watch self` derives the
   install root from it). An addons-only zip is broken — v0.2.0's first
   upload missed it. Release flow: merge → bump `## Version:` in both
-  .tocs → package → tag `v<version>` → `git push origin main
-  --follow-tags` → create the GitHub release via REST with the zip
-  attached (token via `git credential fill`; the MCP is read-only).
+  .tocs → package → `git tag -a v<version>` (ANNOTATED — a lightweight
+  `git tag` is silently skipped by --follow-tags; v0.1.1-beta needed
+  a manual `git push origin v0.1.1-beta` because of this) →
+  `git push origin main --follow-tags` → create the GitHub release
+  via REST with the zip attached (token via `git credential fill`;
+  the MCP is read-only).
   **Branching** (2026-11-18, user directive): every new feature gets
   its own branch and merges to main only when the feature is fully
   working — no partial feature work on main. Versioning restarted
