@@ -49,6 +49,7 @@ Settings.lua
 ItemInput.lua
 Tooltip.lua
 Gathering.lua
+Drops.lua
 TaskListUI.lua
 BugReport.lua
 Import.lua

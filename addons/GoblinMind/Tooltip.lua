@@ -28,6 +28,7 @@ local OPT_DEFAULTS = {
 	vendorSellTooltip = true,
 	groupNameTooltip = true,
 	destroyTooltipFormat = "simple", -- "full" | "simple" | "none"
+	dropSourceTooltipFormat = "simple",
 	convertTooltipFormat = "simple",
 	inventoryTooltipFormat = "full", -- "full" | "simple" | "none"
 	operationTooltips = {},          -- [opType] = bool, all default false
@@ -278,6 +279,25 @@ local function P_Destroy(t, id)
 				.. GM.CC("textDim") .. range .. " · " .. d.pct .. "%|r",
 			p and (MoneyFmt(p) .. " each") or nil)
 	end
+end
+
+local function P_Drops(t, id)
+	local src = GM.Drops and GM.Drops.TopSources
+		and GM.Drops.TopSources(id, 3)
+	if not src then return end
+	local full = Opts().dropSourceTooltipFormat == "full"
+	local parts = {}
+	for _, s in ipairs(src) do
+		local nm = s.name or ("#" .. s.src:sub(2))
+		local pct = format("%d%%", floor(s.rate * 100 + 0.5))
+		if s.low then pct = "~" .. pct end
+		tinsert(parts, nm .. " " .. pct
+			.. (full and GM.CC("textDim") .. " n=" .. s.n .. "|r" or ""))
+	end
+	-- whole line bounded: names truncated, joined list clipped
+	local line = "Drops: " .. table.concat(parts, " · ")
+	if #line > 96 then line = line:sub(1, 93) .. "…" end
+	t:AddTextLine(GM.CC("text") .. line .. "|r")
 end
 
 local function P_Convert(t, id)
@@ -611,6 +631,14 @@ local function Sections()
 		default = "simple", label = "Disenchant value",
 		gloss = "Typical AH worth of the materials from disenchanting one. Only shown when it beats the vendor price.",
 		fn = P_Destroy })
+	tinsert(general.entries, { key = "dropSourceTooltipFormat", set = "full",
+		default = "simple", label = "Drop sources",
+		gloss = "Mobs/objects you've actually looted this item from, with observed rates (sample counts shown).",
+		fn = P_Drops })
+	tinsert(general.entries, { key = "dropSourceTooltipFormat", set = "simple",
+		default = "simple", label = "Drop sources",
+		gloss = "Mobs/objects you've actually looted this item from, with observed rates.",
+		fn = P_Drops })
 	-- hidden = stays registered for TSM import parity but no settings
 	-- row — the producer is a no-op / not active on this client (R7)
 	tinsert(general.entries, { key = "convertTooltipFormat", set = "full",
