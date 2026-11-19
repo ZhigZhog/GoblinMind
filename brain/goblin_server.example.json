@@ -1,4 +1,6 @@
 {
-  "_comment": "Host-side config for goblin_server.py — copy to goblin_server.json beside the script. install_secret gates /v1/register: clients must send it as 'key' in the register body (install.py --key or the feeds.json backend 'key'). Omit or empty = open registration (trusted LAN). Rotating = edit the file; the server re-reads it per register.",
-  "install_secret": ""
+  "_comment": "Host-side config for goblin_server.py — copy to goblin_server.json beside the script. install_secret gates /v1/register: clients must send it as 'key' in the register body (install.py --key or the feeds.json backend 'key'). Omit or empty = open registration (trusted LAN). 'bind' sets the listen address — config file present without bind = 0.0.0.0 (a --host'd server); NO config file = 127.0.0.1 so a solo install's auto-spawned backend can never be joined. 'allow' optionally CIDR-fences every request (registrations AND reads) — e.g. [\"192.168.1.0/24\"]. Rotating any field = edit the file; the server re-reads it per request.",
+  "install_secret": "",
+  "bind": "0.0.0.0",
+  "allow": []
 }

@@ -144,12 +144,12 @@ local function Build()
 		act.text:SetPoint("CENTER")
 		act.text:SetText("DESTROY")
 		act:SetScript("OnEnter", function()
-			GameTooltip:SetOwner(act, "ANCHOR_TOP")
-			GameTooltip:SetText("sell one stack to the open merchant", 1, 1, 1)
-			GameTooltip:AddLine("click to arm, click again to sell", 0.6, 0.6, 0.6)
-			GameTooltip:Show()
+			GM.Widgets.HintShow(act, {
+				"sell one stack to the open merchant",
+				"click to arm, click again to sell",
+			})
 		end)
-		act:SetScript("OnLeave", function() GameTooltip:Hide() end)
+		act:SetScript("OnLeave", GM.Widgets.HintHide)
 		row.act = act
 		ui.rows[i] = row
 	end

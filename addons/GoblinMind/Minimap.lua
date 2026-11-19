@@ -67,14 +67,14 @@ function GM.MinimapInit()
 		self:SetScript("OnUpdate", nil)
 	end)
 	b:SetScript("OnEnter", function(self)
-		GameTooltip:SetOwner(self, "ANCHOR_LEFT")
-		GameTooltip:AddLine(GM.CC("accent") .. "GoblinMind|r")
-		GameTooltip:AddLine("Left-click: GoblinMind home", 1, 1, 1)
-		GameTooltip:AddLine("Drag: move around the minimap", 0.7, 0.7, 0.7)
-		GameTooltip:AddLine("/goblin minimap — show/hide this button", 0.7, 0.7, 0.7)
-		GameTooltip:Show()
+		GM.Widgets.HintShow(self, {
+			GM.CC("accent") .. "GoblinMind|r",
+			"Left-click: GoblinMind home",
+			"Drag: move around the minimap",
+			"/goblin minimap — show/hide this button",
+		})
 	end)
-	b:SetScript("OnLeave", function() GameTooltip:Hide() end)
+	b:SetScript("OnLeave", GM.Widgets.HintHide)
 
 	GM.minimapBtn = b
 	b:SetShown(not (GM.db and GM.db.minimapHide))

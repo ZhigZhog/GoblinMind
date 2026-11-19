@@ -854,12 +854,24 @@ def api_poll(cfg=None):
             fp = '%s:%s:%s' % (iid, qty, u)
             lots[fp] = lots.get(fp, 0) + 1
         books[scope] = {'t': now, 'items': items, 'lots': lots,
-                        'remote': True}
+                        'api': True}
         LOG.info('api poll %s: %d lots, %d items', scope,
                  sum(lots.values()), len(items))
+    # merge — this file also holds backend-pulled remote books; a
+    # wholesale replace would clobber them every api cycle. 'api'
+    # (not 'remote') keeps the book upload-eligible: one install's
+    # Blizzard credential fans the dump out to the whole backend —
+    # players never need API keys of their own.
+    try:
+        with open(API_BOOK_PATH, encoding='utf-8') as fh:
+            cur = json.load(fh)
+    except (OSError, ValueError):
+        cur = {}
+    cur['t'] = now
+    cur.setdefault('books', {}).update(books)
     tmp = API_BOOK_PATH + '.tmp'
     with open(tmp, 'w', encoding='utf-8') as fh:
-        json.dump({'t': now, 'books': books}, fh)
+        json.dump(cur, fh)
     os.replace(tmp, API_BOOK_PATH)
     return books
 
@@ -1050,6 +1062,7 @@ def backend_pull(cfg=None):
             books[scope] = {'t': int(d.get('t') or time.time()),
                             'items': d['items'],
                             'lots': d.get('lots') or {},
+                            'drops': d.get('drops') or {},
                             'remote': True}
             LOG.info('backend pull %s: %d items', scope,
                      len(d['items']))
@@ -1090,7 +1103,8 @@ def _backend_health(kind, ok, n=0, err=None):
     _save_api_state(st)
 
 
-def backend_upload_books(books_by_scope, cfg=None):
+def backend_upload_books(books_by_scope, drops_by_scope=None,
+                         cfg=None):
     """POST each scope's newest LOCAL book (remote-flagged entries are
     pulled, not ours). Runs inside cmd_book so uploads piggyback every
     emit but only fire when a scope's book is genuinely newer — or
@@ -1107,6 +1121,7 @@ def backend_upload_books(books_by_scope, cfg=None):
     last_at = st.get('backend_up_at') or {}
     heartbeat = float(cfg.get('upload_heartbeat_minutes', 60)) * 60
     now = time.time()
+    pending_acks = {}
     for scope, books in books_by_scope.items():
         local = [b for b in books
                  if not b.get('remote') and b.get('t')]
@@ -1116,13 +1131,22 @@ def backend_upload_books(books_by_scope, cfg=None):
         fresh = newest['t'] > last_up.get(scope, 0)
         if not fresh and now - last_at.get(scope, 0) < heartbeat:
             continue
-        try:
-            r = _backend_req(cfg, '/v1/upload', {
-                'scope': scope, 't': newest['t'],
+        body = {'scope': scope, 't': newest['t'],
                 'items': newest['items'],
-                'lots': newest.get('lots') or {}})
+                'lots': newest.get('lots') or {}}
+        # drop stats hitchhike the same upload — cumulative counters
+        # the server REPLACEs per install and SUMs at read time
+        drops = (drops_by_scope or {}).get(scope)
+        if drops:
+            body['drops'] = drops
+        try:
+            r = _backend_req(cfg, '/v1/upload', body)
             last_up[scope] = newest['t']
             last_at[scope] = now
+            if drops:
+                # what the server now knows about us — the addon
+                # subtracts this from local counts when merging
+                pending_acks[scope] = drops
             _backend_health('up', True, r.get('items', 0))
             LOG.info('backend upload %s: %d items%s', scope,
                      r.get('items', 0),
@@ -1136,6 +1160,10 @@ def backend_upload_books(books_by_scope, cfg=None):
     st = _load_api_state()
     st['backend_up'] = last_up
     st['backend_up_at'] = last_at
+    if pending_acks:
+        acked = st.get('drops_acked') or {}
+        acked.update(pending_acks)
+        st['drops_acked'] = acked
     _save_api_state(st)
 
 
@@ -1374,6 +1402,7 @@ def cmd_book(sv_arg, out_paths, root=None, feed=None, realm=None):
     # scope = addon's "Realm-Faction" — books merge only within the
     # same scope; legacy flat books land under 'default'
     books_by_scope, ledger_bychar = {}, {}
+    drops_by_scope = {}   # crowd drop stats — scope from dropsScope
     mesh_ev, mesh_mb, mesh_seq = [], [], 0
     for p in paths:
         sv = load_sv_tables(p,
@@ -1389,6 +1418,13 @@ def cmd_book(sv_arg, out_paths, root=None, feed=None, realm=None):
                 str(b.get('scope') or 'default'), []).append(b)
         ledger_bychar.update(
             (sv.get('GoblinMindLedger') or {}).get('byChar') or {})
+        # crowd drop stats — unscoped in the SV; dropsScope carries
+        # the realm the addon recorded them under
+        if gms.get('dropsScope') and gms.get('drops'):
+            drops_by_scope[str(gms['dropsScope'])] = {
+                'n': gms.get('dropsN') or {},
+                'd': gms.get('drops') or {},
+                'names': gms.get('dropsName') or {}}
         # mesh staging — wire records the addon parked in the SV;
         # meshAck (emitted below) is the purge handshake. Lua arrays
         # parse as int-keyed dicts — take .values() for the records
@@ -1444,7 +1480,7 @@ def cmd_book(sv_arg, out_paths, root=None, feed=None, realm=None):
             LOG.info('mesh: %d wire events folded into sales', added)
     # push each scope's newest local book upstream — remote-flagged
     # (pulled) entries skip themselves inside
-    backend_upload_books(books_by_scope)
+    backend_upload_books(books_by_scope, drops_by_scope)
     # sale deltas: newest lots-carrying book per scope diffs against
     # the previous snapshot (local scans and pulled books both count)
     delta_record({s: max((b for b in bs if b.get('lots')),
@@ -1644,6 +1680,11 @@ def cmd_book(sv_arg, out_paths, root=None, feed=None, realm=None):
             or None,
             'generated': int(now),
         }
+        # crowd drop stats ride the scope's remote books — newest
+        # drops-carrying book wins
+        for b in sorted(books, key=lambda x: x.get('t') or 0):
+            if b.get('drops'):
+                realms[scope]['drops'] = b['drops']
     # a TSM realm with no same-faction book scope still emits under
     # its own name — reachable via the flat top-level mirror
     for scope, tsm_scope_items in tsm_by_scope.items():
@@ -1699,6 +1740,10 @@ def cmd_book(sv_arg, out_paths, root=None, feed=None, realm=None):
         'regionAge': tsm_region_age or None,
         'feed': feed,
         'meshAck': mesh_seq,
+        # what the server last recorded as OUR drop snapshot — the
+        # addon subtracts this from local counts when merging remote
+        # crowd stats (prevents double-counting our own uploads)
+        'dropsAck': (_load_api_state().get('drops_acked') or {}),
         # last-attempt backend health for /goblin status + config
         # state for the in-game onboarding popup
         'backend': _backend_emit(),

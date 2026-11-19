@@ -262,7 +262,8 @@ function B.Sample()
 		-- collapse same-value adjacent samples so a flat week doesn't
 		-- push real movement out of the window
 		if n == 0 or h[n].v ~= B.Remaining(a) or t - h[n].t > 3600 then
-			h[n + 1] = { t = t, v = B.Remaining(a) }
+			h[n + 1] = { t = t, v = B.Remaining(a),
+				inc = a.income or 0, out = a.spent or 0 }
 			if #h > HIST_CAP then tremove(h, 1) end
 		end
 	end
@@ -273,6 +274,41 @@ function B.Sample()
 		f[#f + 1] = { t = t, v = free }
 		if #f > HIST_CAP then tremove(f, 1) end
 	end
+	-- wealth series for the account chart: real gold on hand + the
+	-- posted-buyout snapshot, so the plot shows what you'd be worth
+	-- if every listing sold at asking
+	local w = GM.db.wealthHist
+	if not w then w = {} GM.db.wealthHist = w end
+	local gold = GetMoney and GetMoney() or 0
+	local posted = GM.Inventory and GM.Inventory.PostedValue
+		and GM.Inventory.PostedValue() or 0
+	if #w == 0 or w[#w].g ~= gold or w[#w].a ~= posted
+		or t - w[#w].t > 3600 then
+		w[#w + 1] = { t = t, g = gold, a = posted }
+		if #w > HIST_CAP then tremove(w, 1) end
+	end
+end
+
+-- windowed income/spend: cumulative-counter delta since the sample
+-- at or before `days` ago (earliest carrying fields when the buffer
+-- is younger). A mid-window reset can only under-report; samples
+-- that predate the inc/out fields yield nils so the UI shows "—"
+-- rather than a padded number
+function B.Flow(a, days)
+	local h = a.hist
+	if not h or #h == 0 then return nil, nil end
+	local cutoff = time() - (days or 7) * 86400
+	local base, oldest
+	for _, p in ipairs(h) do
+		if p.inc then
+			oldest = oldest or p
+			if p.t <= cutoff then base = p end
+		end
+	end
+	base = base or oldest
+	if not base then return nil, nil end
+	return math.max(0, (a.income or 0) - base.inc),
+	       math.max(0, (a.spent or 0) - base.out)
 end
 
 function B.Init()

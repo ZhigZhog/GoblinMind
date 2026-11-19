@@ -315,15 +315,17 @@ local function ItemRow(parent, w)
 	row.x.text:SetText("x")
 	row:SetScript("OnEnter", function(self)
 		if not self.id then return end
-		GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
 		if GameTooltip.SetItemByID then
+			GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
 			GameTooltip:SetItemByID(self.id)
+			GameTooltip:Show()
 		else
-			GameTooltip:SetText(self.name:GetText() or "")
+			GM.Widgets.HintShow(self, { self.name:GetText() or "" })
 		end
-		GameTooltip:Show()
 	end)
-	row:SetScript("OnLeave", function() GameTooltip:Hide() end)
+	row:SetScript("OnLeave", function()
+		GameTooltip:Hide() GM.Widgets.HintHide()
+	end)
 	row:SetScript("OnMouseDown", function(self, btn)
 		if btn == "LeftButton" and self.id then
 			local x, y = GetCursorPosition()
@@ -471,13 +473,12 @@ local function BuildUI()
 		end)
 		row:SetScript("OnEnter", function(self)
 			if not self.path then return end
-			GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-			GameTooltip:SetText(self.path)
-			GameTooltip:AddLine("drag to nest · drop items to assign",
-				0.7, 0.7, 0.65, true)
-			GameTooltip:Show()
+			GM.Widgets.HintShow(self, {
+				self.path,
+				"drag to nest · drop items to assign",
+			})
 		end)
-		row:SetScript("OnLeave", function() GameTooltip:Hide() end)
+		row:SetScript("OnLeave", GM.Widgets.HintHide)
 		-- drop an item on a group name → assign it there
 		row:SetScript("OnReceiveDrag", function(self)
 			local ty, id = GetCursorInfo()
@@ -547,8 +548,9 @@ local function BuildUI()
 		GU.RefreshTree()
 	end)
 	Tip(protG, function() return { "Protect group",
-		"Plan steps that would SELL or POST an item in this",
-		"group (or a subgroup) ask for confirmation first" } end)
+		"Items in this group (or a subgroup) are excluded",
+		"from post scans — things that shouldn't be on the",
+		"AH. A manual sell/post step still asks once." } end)
 	ui.protBtn = protG
 
 	-- col B: members of selected group — also a drop target

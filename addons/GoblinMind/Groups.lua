@@ -92,6 +92,8 @@ function GM.Groups.Init()
 			bg.opNames[t] = "Default"
 		end
 	end
+	-- shipped protected groups — versioned seed, add-only
+	GM.Groups.SeedShipped()
 end
 
 -- create every ancestor in "A/B/C", return the leaf path
@@ -137,9 +139,190 @@ function GM.Groups.Unassign(itemID)
 	for _, g in pairs(GM.Groups.db.groups) do g.items[itemID] = nil end
 end
 
+-- shipped protected groups: tools + vendor-bought supplies that should
+-- never hit the AH. Seeded once (versioned), add-only, and only claims
+-- ungrouped ids — user edits (delete group, unprotect, unassign) stick.
+-- IDs verified against TSM's LibTSMData VendorSell.Classic table and
+-- the realm's own MapWise vendor survey; raw mats that vendors happen
+-- to sell (strange dust, blasting powder, raw fish) are deliberately
+-- excluded — they trade legitimately.
+GM.Groups.SHIPPED_VERSION = 2 -- v1 shippedV was persisted by a broken run
+local SHIPPED_GROUPS = {
+	["Crafting Supplies"] = {
+		-- profession tools
+		5956,   -- Blacksmith Hammer
+		2901,   -- Mining Pick
+		7005,   -- Skinning Knife
+		6219,   -- Arclight Spanner
+		10498,  -- Gyromatic Micro-Adjustor
+		5060,   -- Thieves' Tools
+		6256,   -- Fishing Pole
+		6365,   -- Strong Fishing Pole
+		273636, -- Chef's Knife (Forever custom)
+		276203, -- Primitive Fishing Rod (Forever custom)
+		-- smithing / enchanting supplies
+		2880,   -- Weak Flux
+		3466,   -- Strong Flux
+		18567,  -- Elemental Flux
+		3857,   -- Coal
+		4289,   -- Salt
+		6217,   -- Copper Rod
+		11291,  -- Star Wood
+		4399,   -- Wooden Stock
+		4400,   -- Heavy Stock
+		-- tailoring supplies
+		2320,   -- Coarse Thread
+		2321,   -- Fine Thread
+		2324,   -- Bleach
+		2325,   -- Black Dye
+		2604,   -- Red Dye
+		2605,   -- Green Dye
+		6260,   -- Blue Dye
+		6261,   -- Orange Dye
+		4340,   -- Gray Dye
+		4341,   -- Yellow Dye
+		4342,   -- Purple Dye
+		10290,  -- Pink Dye
+		4291,   -- Silken Thread
+		8343,   -- Heavy Silken Thread
+		14341,  -- Rune Thread
+		-- alchemy / cooking supplies
+		3371,   -- Empty Vial
+		3372,   -- Leaded Vial
+		8925,   -- Crystal Vial
+		18256,  -- Imbued Vial
+		2678,   -- Mild Spices
+		2692,   -- Hot Spices
+		3713,   -- Soothing Spices
+		2665,   -- Stormwind Seasoning Herbs
+		10284,  -- Simple Flour
+		17194,  -- Holiday Spices
+		-- engineering supplies
+		10647,  -- Engineer's Ink
+		10648,  -- Blank Parchment
+	},
+	["Adventuring Supplies"] = {
+		-- campfire + holiday vendor goods
+		4470,   -- Simple Wood
+		4471,   -- Flint and Tinder
+		272941, -- Thick Firewood (Forever custom)
+		17202,  -- Snowball
+		2596,   -- Skin of Dwarven Stout
+		2894,   -- Rhapsody Malt
+		17196,  -- Holiday Spirits
+		5042,   -- Red Ribboned Wrapping Paper
+		-- vendor food
+		117,    -- Tough Jerky
+		2287,   -- Haunch of Meat
+		3770,   -- Mutton Chop
+		3771,   -- Wild Hog Shank
+		4599,   -- Cured Ham Steak
+		8952,   -- Roasted Quail
+		4540,   -- Tough Hunk of Bread
+		4541,   -- Freshly Baked Bread
+		4542,   -- Moist Cornbread
+		4544,   -- Mulgore Spice Bread
+		4601,   -- Soft Banana Bread
+		8950,   -- Homemade Cherry Pie
+		4536,   -- Shiny Red Apple
+		4537,   -- Tel'Abim Banana
+		4538,   -- Snapvine Watermelon
+		4539,   -- Goldenbark Apple
+		4602,   -- Moon Harvest Pumpkin
+		8953,   -- Deep Fried Plantains
+		4604,   -- Forest Mushroom Cap
+		4605,   -- Red-speckled Mushroom
+		4606,   -- Spongy Morel
+		4607,   -- Delicious Cave Mold
+		4608,   -- Raw Black Truffle
+		8948,   -- Dried King Bolete
+		414,    -- Dalaran Sharp
+		422,    -- Dwarven Mild
+		1707,   -- Stormwind Brie
+		3927,   -- Fine Aged Cheddar
+		8932,   -- Alterac Swiss
+		4594,   -- Rockscale Cod
+		252026, -- Galeberry Cake (Forever custom)
+		252027, -- Galeberry Juice
+		252029, -- Hippogryph Flank
+		252030, -- Tart Sky Cheddar
+		252032, -- Red Delicious Storm Apple
+		-- vendor drink
+		159,    -- Refreshing Spring Water
+		1179,   -- Ice Cold Milk
+		1205,   -- Melon Juice
+		1645,   -- Moonberry Juice
+		1708,   -- Sweet Nectar
+		8766,   -- Morning Glory Dew
+		-- ammunition — vendor grades only; quest/rep/crafted
+		-- ammo (Feathered Arrow, Thorium Headed, Ice Threaded)
+		-- trades legitimately and stays out
+		2512,   -- Rough Arrow
+		2515,   -- Sharp Arrow
+		3030,   -- Razor Arrow
+		11285,  -- Jagged Arrow
+		2516,   -- Light Shot
+		2519,   -- Heavy Shot
+		3033,   -- Solid Shot
+		11284,  -- Accurate Slugs
+		-- thrown weapons (vendor)
+		2946,   -- Balanced Throwing Dagger
+		2947,   -- Small Throwing Knife
+		3107,   -- Keen Throwing Knife
+		3108,   -- Heavy Throwing Dagger
+		3111,   -- Crude Throwing Axe
+		3131,   -- Weighted Throwing Axe
+		3135,   -- Sharp Throwing Axe
+		3137,   -- Deadly Throwing Axe
+		15326,  -- Gleaming Throwing Axe
+		-- class reagents (vendor)
+		17020,  -- Arcane Powder
+		17021,  -- Wild Berries
+		17026,  -- Wild Thornroot
+		17028,  -- Holy Candle
+		17029,  -- Sacred Candle
+		17030,  -- Ankh
+		17031,  -- Rune of Teleportation
+		17032,  -- Rune of Portals
+		17033,  -- Symbol of Divinity
+		21177,  -- Symbol of Kings
+		17034,  -- Maple Seed
+		17035,  -- Stranglethorn Seed
+		17036,  -- Ashwood Seed
+		17037,  -- Hornbeam Seed
+		17038,  -- Ironwood Seed
+		17056,  -- Light Feather
+		5565,   -- Infernal Stone
+		16583,  -- Demonic Figurine
+		-- rogue reagents (vendor)
+		5140,   -- Flash Powder
+		2928,   -- Dust of Decay
+		2930,   -- Essence of Pain
+		8923,   -- Essence of Agony
+		8924,   -- Dust of Deterioration
+		5173,   -- Deathweed
+	},
+}
+
+-- seed shipped groups once — see SHIPPED_GROUPS for provenance
+function GM.Groups.SeedShipped()
+	local db = GM.Groups.db
+	if (db.shippedV or 0) >= GM.Groups.SHIPPED_VERSION then return end
+	for path, ids in pairs(SHIPPED_GROUPS) do
+		GM.Groups.Ensure(path)
+		local g = db.groups[path]
+		g.protected = true
+		for _, id in ipairs(ids) do
+			if not GroupFor(id) then g.items[id] = true end
+		end
+	end
+	db.shippedV = GM.Groups.SHIPPED_VERSION
+end
+
 -- protected groups shield member items from sell/post plan steps —
--- inherited down the tree like ops (a protected ancestor protects
--- every descendant)
+-- post scan excludes them outright; manual sell/post steps on one
+-- still get a single confirm click at execution. Inherited down the
+-- tree like ops (a protected ancestor protects every descendant)
 function GM.Groups.SetProtected(path, flag)
 	local g = GM.Groups.db.groups[path]
 	if g then g.protected = flag or nil end

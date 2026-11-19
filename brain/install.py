@@ -154,6 +154,38 @@ def ensure_server_secret():
     return cfg['install_secret']
 
 
+def ensure_server_bind(addr='0.0.0.0'):
+    """--host = a deliberate listener: pin 'bind' in goblin_server.json
+    so the no-config loopback default can never strand the server.
+    Keeps any other config fields (install_secret, allow) intact."""
+    cfgp = os.path.join(HERE, 'goblin_server.json')
+    try:
+        cfg = json.load(open(cfgp, encoding='utf-8'))
+    except (OSError, ValueError):
+        cfg = {}
+    if cfg.get('bind') != addr:
+        cfg['bind'] = addr
+        with open(cfgp, 'w', encoding='utf-8') as fh:
+            json.dump(cfg, fh, indent=1)
+
+
+def open_server_registration():
+    """--open host mode: strip install_secret so any install can
+    register itself — the right mode for a backend facing beyond a
+    trusted LAN. No key to ship, none for players to type; installs
+    get a server-issued token at first contact."""
+    cfgp = os.path.join(HERE, 'goblin_server.json')
+    try:
+        cfg = json.load(open(cfgp, encoding='utf-8'))
+    except (OSError, ValueError):
+        cfg = {}
+    if cfg.pop('install_secret', None) is not None:
+        with open(cfgp, 'w', encoding='utf-8') as fh:
+            json.dump(cfg, fh, indent=1)
+        return True
+    return False
+
+
 def validate_api_key(cid, csec):
     """client_credentials round-trip — a typo'd key fails here at
     install time instead of silently dead-ending the api feed."""
@@ -304,6 +336,9 @@ def main():
                     help='disable the Blizzard API feed entirely')
     ap.add_argument('--host', action='store_true',
                     help='also run the backend server here + firewall rule')
+    ap.add_argument('--open', action='store_true',
+                    help='with --host: open registration — no shared '
+                         'install key (public/community backends)')
     ap.add_argument('--dev', action='store_true',
                     help='proceed even outside Interface/AddOns')
     ap.add_argument('--remove', action='store_true',
@@ -410,17 +445,27 @@ def main():
                       f'python goblin_server.py {PORT}',
                       console=False)
             firewall_rule()
-            secret = ensure_server_secret()
+            if a.open:
+                if open_server_registration():
+                    print('  opened registration — removed the '
+                          'install_secret from goblin_server.json')
+                secret = None
+            else:
+                secret = ensure_server_secret()
+            ensure_server_bind()  # --host listens on all interfaces
             ip = lan_ip()
             invite_url = f'http://{ip or "<this-PC-LAN-IP>"}:{PORT}'
             print('  share with friends — they enter these in the')
             print('  GoblinMind setup window in game (or /goblin backend):')
             print(f'    backend URL : {invite_url}')
-            print(f'    install key : {secret}')
+            print('    install key : '
+                  + (secret or 'none — open registration'))
             # durable copy — console output scrolls away, this file
             # sits beside the bat and can be re-opened or shared
             # verbatim any time a friend joins later
             try:
+                key_line = (f'  key            : {secret}\n' if secret
+                            else '  key            : none needed\n')
                 with open(os.path.join(HERE, 'backend-invite.txt'),
                           'w', encoding='utf-8') as fh:
                     fh.write('GoblinMind backend invite\n'
@@ -429,15 +474,16 @@ def main():
                              'type them into the GoblinMind setup\n'
                              'window in game (or /goblin backend):\n\n'
                              f'  server address : {invite_url}\n'
-                             f'  key            : {secret}\n\n'
+                             f'{key_line}\n'
                              'Their install never needs the command\n'
                              'line — the in-game wizard writes the\n'
                              'config for them.\n')
                 print('  (also saved to backend-invite.txt here)')
             except OSError:
                 pass
-            print('  (delete goblin_server.json beside the server for '
-                  'open registration)')
+            if secret:
+                print('  (rerun with --open for keyless public '
+                      'registration)')
     else:
         # 'watch self' can't resolve paths outside Interface/AddOns —
         # a Startup bat pointing here would silently die at login

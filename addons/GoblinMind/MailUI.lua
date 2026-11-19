@@ -635,27 +635,26 @@ function MU.Refresh()
 				end)
 				-- attachments in the hover tip
 				row:SetScript("OnEnter", function(self)
-					GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-					local shown
+					local lines
 					for j = 1, mail.items do
 						local link = GetInboxItemLink
 							and GetInboxItemLink(mail.index, j)
 						if link then
-							if not shown then GameTooltip:AddLine(mail.subject, 1, 1, 1) shown = true end
-							GameTooltip:AddLine(link)
+							lines = lines or { mail.subject }
+							tinsert(lines, link)
 						end
 					end
 					if mail.money > 0 then
-						if not shown then GameTooltip:AddLine(mail.subject, 1, 1, 1) shown = true end
-						GameTooltip:AddLine("money: " .. GM.Money(mail.money), 0.8, 0.8, 0.2)
+						lines = lines or { mail.subject }
+						tinsert(lines, "money: " .. GM.Money(mail.money))
 					end
 					if mail.cod > 0 then
-						if not shown then GameTooltip:AddLine(mail.subject, 1, 1, 1) shown = true end
-						GameTooltip:AddLine("COD due: " .. GM.Money(mail.cod), 1, 0.4, 0.4)
+						lines = lines or { mail.subject }
+						tinsert(lines, "COD due: " .. GM.Money(mail.cod))
 					end
-					if shown then GameTooltip:Show() end
+					if lines then GM.Widgets.HintShow(self, lines) end
 				end)
-				row:SetScript("OnLeave", function() GameTooltip:Hide() end)
+				row:SetScript("OnLeave", GM.Widgets.HintHide)
 			else
 				row:Hide()
 			end
@@ -697,17 +696,13 @@ function MU.Refresh()
 					GM.Banking.MailingScan(path)
 				end)
 				row:SetScript("OnEnter", function(self)
-					GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-					GameTooltip:SetText(r.path, 1, 1, 1)
-					GameTooltip:AddLine(
+					GM.Widgets.HintShow(self, { r.path,
 						format("%d pending unit%s across %d item%s — "
 							.. "SCAN pushes send steps to the plan queue",
 							r.pend, r.pend == 1 and "" or "s",
-							r.n, r.n == 1 and "" or "s"),
-						0.8, 0.8, 0.75, true)
-					GameTooltip:Show()
+							r.n, r.n == 1 and "" or "s") })
 				end)
-				row:SetScript("OnLeave", function() GameTooltip:Hide() end)
+				row:SetScript("OnLeave", GM.Widgets.HintHide)
 			else
 				row:Hide()
 			end

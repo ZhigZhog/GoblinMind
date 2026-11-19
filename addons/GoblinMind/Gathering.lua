@@ -511,6 +511,23 @@ local function BlockPresent(tt)
 	return false
 end
 
+-- objects beat the item marker: world objects still report an item
+-- link on this client, so a same-named item's side tip can mark an
+-- OBJECT tooltip as "item" and suppress the node block. Items never
+-- carry "Requires <profession>" lines — when one is present the
+-- tooltip is a world object no matter what the marker says.
+local function LooksObject(tt)
+	for i = 2, math.min(tt:NumLines(), 5) do
+		local fs = _G["GameTooltipTextLeft" .. i]
+		local ok, hit = pcall(function()
+			local lt = fs and fs:GetText()
+			return lt and lt:find("^Requires") ~= nil
+		end)
+		if ok and hit then return true end
+	end
+	return false
+end
+
 -- game-object tooltips have no data-type event — poll the first
 -- line on a throttle and inject once per node-text change
 if GameTooltip then
@@ -530,7 +547,8 @@ if GameTooltip then
 		-- so the check is our own side-tip marker, only built by the
 		-- Item post-call
 		if GM.Tooltip and GM.Tooltip.IsItemTooltip
-			and GM.Tooltip.IsItemTooltip(tt) then
+			and GM.Tooltip.IsItemTooltip(tt)
+			and not LooksObject(tt) then
 			tt._gmInject, tt._gmInjectN, tt._gmInjectTag = nil, nil, nil
 			return
 		end
@@ -558,6 +576,13 @@ if GameTooltip then
 					:gsub("|r", "")))
 			end)
 			text = ok and clean or nil
+		end
+		-- secret-text fallback: object names still read via the
+		-- mouseover unit; only node names match, so units/mobs and
+		-- bag hovers can't false-positive
+		if not text and UnitName then
+			local ok, nm = pcall(UnitName, "mouseover")
+			if ok and nm and NODES[nm] then text = nm end
 		end
 		if text and NODES[text] then
 			local tag = "node:" .. text

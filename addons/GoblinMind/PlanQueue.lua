@@ -220,16 +220,12 @@ local function Build()
 		b:SetScript("OnEnter", function()
 			GM.Panel(b, "contHighest", "outlineVar")
 			b.text:SetTextColor(GM.RGB("accent"))
-			if tip and GameTooltip then
-				GameTooltip:SetOwner(b, "ANCHOR_BOTTOM")
-				GameTooltip:SetText(tip, 1, 1, 1)
-				GameTooltip:Show()
-			end
+			if tip then GM.Widgets.HintShow(b, { tip }) end
 		end)
 		b:SetScript("OnLeave", function()
 			GM.Panel(b, "contHigh", "outlineVar")
 			b.text:SetTextColor(GM.RGB("text"))
-			if GameTooltip then GameTooltip:Hide() end
+			GM.Widgets.HintHide()
 		end)
 		return b
 	end

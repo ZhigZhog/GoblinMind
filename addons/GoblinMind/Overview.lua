@@ -11,7 +11,6 @@ local OV = GM.Overview
 local ui
 
 local ROWS = 20
-local SERIES_COLORS = { "accent", "pos", "warn", "err", "primary", "secondary" }
 local atan2 = atan2 or function(y, x) return math.atan(y, x) end
 
 local PAGES = {
@@ -128,16 +127,19 @@ local function MakeTable(parent, cols, onClick)
 		end
 		row:SetScript("OnEnter", function()
 			if row.id then
-				GameTooltip:SetOwner(row, "ANCHOR_RIGHT")
 				if GameTooltip.SetItemByID then
+					GameTooltip:SetOwner(row, "ANCHOR_RIGHT")
 					GameTooltip:SetItemByID(row.id)
+					GameTooltip:Show()
 				else
-					GameTooltip:SetText(row.cells[1]:GetText() or "")
+					GM.Widgets.HintShow(row,
+						{ row.cells[1]:GetText() or "" })
 				end
-				GameTooltip:Show()
 			end
 		end)
-		row:SetScript("OnLeave", function() GameTooltip:Hide() end)
+		row:SetScript("OnLeave", function()
+			GameTooltip:Hide() GM.Widgets.HintHide()
+		end)
 		row:SetScript("OnClick", function()
 			if IsModifiedClick() then
 				if row.id then GM.ModifiedItemClick(row.id) end
@@ -316,50 +318,131 @@ function OV.RefreshLog()
 	end
 end
 
--- ============ trend chart ============
+-- ============ wealth chart ============
+
+-- one line, one honest answer: "am I getting richer, and how fast".
+-- W(t) = gold + pending-AH buyout is wealth-neutral across buys
+-- (gold becomes listings ~1:1), so its step line and least-squares
+-- slope measure realized P&L + revaluation — fitting the slope to
+-- raw gold-on-hand reads a buy spree as "losing money" (the old
+-- "-1087g/d" scare line). Posted value draws as a shaded band under
+-- the line instead of a second series: same information, no
+-- crossings, no legend row. Design: WoWVault/Proposals/
+-- ledger-accounts-proposal.md
+
+local WIN_SECS = { ["24H"] = 86400, ["7D"] = 604800 }
 
 function OV.RefreshChart()
 	if not ui then return end
 	for _, a in ipairs(ui.art) do a:Hide() end
 	wipe(ui.art)
 	local chart = ui.chart
-	-- plot inset: left gutter for money labels, bottom for the legend,
-	-- top clears the panel title — keeps every annotation in bounds
-	local gx, gy = 56, 24
+	-- plot inset: left gutter for money labels, top clears the KPI
+	-- strip, bottom holds time labels + the flow footer
+	local gx, gy, gt = 56, 20, 56
 	local w = chart:GetWidth() - gx - 14
-	local h = chart:GetHeight() - gy - 30
-	local series = {}
-	series[#series + 1] = { name = "free", color = "textDim",
-		hist = GM.db.budgetFree }
-	for _, a in ipairs(GM.Budget.List()) do
-		series[#series + 1] = { name = a.name, hist = a.hist,
-			color = SERIES_COLORS[(#series % #SERIES_COLORS) + 1] }
+	local h = chart:GetHeight() - gt - gy
+
+	-- ---- KPI strip: live numbers, independent of sample history ----
+	local gold = GetMoney and GetMoney() or 0
+	local posted = GM.Inventory and GM.Inventory.PostedValue
+		and GM.Inventory.PostedValue() or 0
+	local now = gold + posted
+	ui.kpiTotal:SetText("TOTAL " .. GM.Money(now))
+	local split = "on hand " .. GM.MoneyShort(gold)
+	if posted > 0 then
+		split = split .. " + posted " .. GM.MoneyShort(posted)
+		local at = GM.Inventory.OwnedAt and GM.Inventory.OwnedAt()
+		if at and time() - at > 1800 then
+			split = split .. " · " .. GM.FmtAge(time() - at) .. " ago"
+		end
 	end
-	local tMin, tMax, vMax = math.huge, 0, 0
-	for _, s in ipairs(series) do
-		for _, p in ipairs(s.hist or {}) do
+	ui.kpiSplit:SetText(split)
+
+	-- window-filtered samples + stats pass
+	local cutoff = WIN_SECS[ui.chartWin or "ALL"]
+	cutoff = cutoff and (time() - cutoff) or -math.huge
+	local hist, tMin, tMax, vMax = {}, math.huge, 0, 0
+	local n, st, sv, stt, stv = 0, 0, 0, 0, 0
+	for _, p in ipairs(GM.db.wealthHist or {}) do
+		if p.t >= cutoff then
+			hist[#hist + 1] = p
 			if p.t < tMin then tMin = p.t end
 			if p.t > tMax then tMax = p.t end
-			if p.v > vMax then vMax = p.v end
+			local wv = (p.g or 0) + (p.a or 0)
+			if wv > vMax then vMax = wv end
+			n = n + 1; st = st + p.t; sv = sv + wv
+			stt = stt + p.t * p.t; stv = stv + p.t * wv
 		end
 	end
-	for i, fs in ipairs(ui.legend) do
-		local s = series[i]
-		if s then
-			fs:SetText(s.name:sub(1, 8))
-			fs:SetTextColor(GM.RGB(s.color))
-		else
-			fs:SetText("")
+
+	-- today's delta vs the first sample at/after local midnight;
+	-- falls back to the oldest buffered sample when the day is young
+	local d = date("*t")
+	local midnight = time() - (d.hour * 3600 + d.min * 60 + d.sec)
+	local dayBase
+	for _, p in ipairs(GM.db.wealthHist or {}) do
+		if p.t >= midnight then dayBase = p break end
+	end
+	dayBase = dayBase or (GM.db.wealthHist or {})[1]
+	local deltaTxt = ""
+	if dayBase then
+		local dv = now - (dayBase.g or 0) - (dayBase.a or 0)
+		deltaTxt = GM.Signed(dv) .. GM.CC("textDim") .. " "
+			.. (dayBase.t >= midnight and "today"
+				or "since " .. date("%H:%M", dayBase.t)) .. "|r"
+	end
+
+	-- least-squares slope on W — suppressed when the window is too
+	-- thin to fit honestly (a 3-point hour is noise, not a rate)
+	local span = tMax - tMin
+	local slope, mt, mv
+	if n >= 2 then
+		mt, mv = st / n, sv / n
+		local var = stt - n * mt * mt
+		slope = var ~= 0 and (stv - n * mt * mv) / var or 0
+	end
+	local slopeOK = slope ~= nil and n >= 3 and span >= 3600
+	if slopeOK then
+		deltaTxt = deltaTxt .. "    " .. GM.Signed(slope * 86400)
+			.. GM.CC("textDim") .. "/day|r"
+	end
+	ui.kpiDelta:SetText(deltaTxt)
+
+	-- realized vs revaluation footer: wealth slope conflates AH
+	-- trading P&L with listing-value drift — split it with the
+	-- ledger cashflow over the same window (needs half a day of
+	-- span before the per-day figures mean anything)
+	ui.kpiFlow:SetText("")
+	if slopeOK and span >= 43200 then
+		local sell, buy = 0, 0
+		for _, e in ipairs(GM.Ledger.db and GM.Ledger.db.transactions
+			or {}) do
+			if e.t >= tMin and e.t <= tMax then
+				local tot = (e.u or 0) * (e.q or 0)
+				if e.ty == "sell" then sell = sell + tot
+				elseif e.ty == "buy" then buy = buy + tot end
+			end
+		end
+		if sell > 0 or buy > 0 then
+			local realized = (sell - buy) * 86400 / span
+			ui.kpiFlow:SetText(GM.CC("textDim") .. "realized |r"
+				.. GM.Signed(realized) .. GM.CC("textDim")
+				.. "/d · reval |r" .. GM.Signed(slope * 86400 - realized)
+				.. GM.CC("textDim") .. "/d|r")
 		end
 	end
+
 	if vMax <= 0 or tMax <= tMin then
-		ui.chartMsg:SetText("samples build as budgets see activity")
+		ui.chartMsg:SetText(
+			"wealth history builds as you play — samples every 5 min")
 		return
 	end
 	ui.chartMsg:SetText("")
 	tMax = math.max(tMax, tMin + 600)
+
 	-- gridlines at ¼-steps with right-justified money labels in the
-	-- gutter — the eye gets scale anchors instead of one floating max
+	-- gutter — the only scale anchor the plot needs
 	local function AxisLabel(txt, x, y, anchor)
 		local fs = GM.MakeFontString(chart, GM.FONT, 8, "secondary")
 		fs:SetPoint(anchor or "BOTTOMLEFT", chart, "BOTTOMLEFT", x, y)
@@ -378,96 +461,55 @@ function OV.RefreshChart()
 	end
 	AxisLabel(date("%H:%M", tMin), gx, 4)
 	AxisLabel(date("%H:%M", tMax), gx + w, 4, "BOTTOMRIGHT")
-	-- step interpolation: balance is constant between samples, so draw
-	-- flat runs then vertical jumps — honest to the data and far
-	-- cleaner than diagonals slashing across empty time gaps
-	for _, s in ipairs(series) do
-		local hist = s.hist or {}
-		local px, py
-		for _, p in ipairs(hist) do
-			local x = gx + (p.t - tMin) / (tMax - tMin) * w
-			local y = gy + p.v / vMax * h
-			if px then
-				tinsert(ui.art, Line(chart, px, py, x, py, s.color))
-				if y ~= py then
-					tinsert(ui.art, Line(chart, x, py, x, y, s.color))
-				end
+
+	-- pending-AH band: a low-alpha-tinted accent fill under each step,
+	-- from gold up to gold+posted — "the slice that's listings now".
+	-- Manual tint (accent * 0.22 toward the near-black panel) rather
+	-- than texture alpha — deterministic on every client.
+	local ar, ag, ab = GM.RGB("accent")
+	local px, pgy, pwv
+	for _, p in ipairs(hist) do
+		local x = gx + (p.t - tMin) / (tMax - tMin) * w
+		local yg = gy + (p.g or 0) / vMax * h
+		local yw = gy + ((p.g or 0) + (p.a or 0)) / vMax * h
+		if px and pwv > pgy then
+			local band = chart:CreateTexture(nil, "BACKGROUND")
+			band:SetPoint("BOTTOMLEFT", chart, "BOTTOMLEFT", px, pgy)
+			band:SetPoint("TOPRIGHT", chart, "BOTTOMLEFT", x, pwv)
+			band:SetColorTexture(ar * 0.22, ag * 0.22, ab * 0.22)
+			tinsert(ui.art, band)
+		end
+		px, pgy, pwv = x, yg, yw
+	end
+	-- the wealth line: step-interpolated W(t) — flat runs + vertical
+	-- jumps, honest to the samples
+	px, pwv = nil, nil
+	for _, p in ipairs(hist) do
+		local x = gx + (p.t - tMin) / (tMax - tMin) * w
+		local yw = gy + ((p.g or 0) + (p.a or 0)) / vMax * h
+		if px then
+			tinsert(ui.art, Line(chart, px, pwv, x, pwv, "accent"))
+			if yw ~= pwv then
+				tinsert(ui.art, Line(chart, x, pwv, x, yw, "accent"))
 			end
-			px, py = x, y
+		end
+		px, pwv = x, yw
+	end
+	-- dashed trendline on W — same slope the KPI strip prints, so
+	-- the line and the number can never disagree
+	if slopeOK then
+		local function vy(t)
+			return math.max(0, math.min(vMax, mv + slope * (t - mt)))
+		end
+		local ya = gy + vy(tMin) / vMax * h
+		local yb = gy + vy(tMax) / vMax * h
+		for i = 0, 12, 2 do -- dashed: every other seventh
+			local xa = gx + w * i / 14
+			local xb = gx + w * (i + 1) / 14
+			tinsert(ui.art, Line(chart, xa, ya + (yb - ya) * i / 14,
+				xb, ya + (yb - ya) * (i + 1) / 14, "secondary", 1))
 		end
 	end
-end
-
--- ============ flow pies ============
-
--- sector fill: radial spokes at ~3px arc pitch — reads as a solid
--- pie slice at these radii and needs no wedge textures
-local function PieSlice(parent, cx, cy, r, a1, a2, key, pool)
-	local step = 3 / math.max(1, r)
-	for a = a1, a2, step do
-		local c, s = cos(a), sin(a)
-		tinsert(pool, Line(parent, cx, cy, cx + c * r, cy + s * r, key, 4))
-	end
-end
-
-local function Pie(parent, cx, cy, r, title, entries, pool)
-	local fs = GM.MakeFontString(parent, GM.FONT_MED, 9, "secondary")
-	fs:SetPoint("CENTER", parent, "BOTTOMLEFT", cx, cy + r + 12)
-	fs:SetWordWrap(false)
-	local total = 0
-	for _, e in ipairs(entries) do total = total + e.v end
-	if total <= 0 then
-		fs:SetText(title .. " — none yet")
-		return
-	end
-	fs:SetText(title .. "  " .. GM.CC("textDim") .. GM.Money(total) .. "|r")
-	local a = math.pi / 2 -- start at 12 o'clock, sweep clockwise
-	for i, e in ipairs(entries) do
-		local a2 = a - e.v / total * 2 * math.pi
-		PieSlice(parent, cx, cy, r, a2, a, e.color, pool)
-		a = a2
-	end
-	-- labels right of the pie: color swatch, name, share + amount
-	local ly = cy + r - 8
-	for i, e in ipairs(entries) do
-		if e.v / total >= 0.015 then
-			local sw = parent:CreateTexture(nil, "ARTWORK")
-			sw:SetSize(7, 7)
-			sw:SetPoint("BOTTOMLEFT", parent, "BOTTOMLEFT", cx + r + 14, ly)
-			sw:SetColorTexture(GM.RGB(e.color))
-			tinsert(pool, sw)
-			local fs = GM.MakeFontString(parent, GM.FONT, 8, "text")
-			fs:SetPoint("BOTTOMLEFT", parent, "BOTTOMLEFT", cx + r + 26, ly)
-			fs:SetJustifyH("LEFT")
-			fs:SetWordWrap(false)
-			fs:SetText(format("%s  %s%s|r %s", e.name:sub(1, 10),
-				GM.CC("secondary"),
-				format("%.0f%%", e.v / total * 100),
-				GM.Money(e.v)))
-			tinsert(pool, fs)
-			ly = ly - 13
-		end
-	end
-end
-
--- spending + income share per account — same color per account as
--- the trend series so the legend reads across both visualizations
-function OV.RefreshPie()
-	if not ui or not ui.pieHost then return end
-	for _, a in ipairs(ui.pieArt) do a:Hide() end
-	wipe(ui.pieArt)
-	local spends, earns = {}, {}
-	for i, a in ipairs(GM.Budget.List()) do
-		local col = SERIES_COLORS[(i % #SERIES_COLORS) + 1]
-		if (a.spent or 0) > 0 then
-			spends[#spends + 1] = { name = a.name, v = a.spent, color = col }
-		end
-		if (a.income or 0) > 0 then
-			earns[#earns + 1] = { name = a.name, v = a.income, color = col }
-		end
-	end
-	Pie(ui.pieHost, 60, 164, 38, "INCOME", earns, ui.pieArt)
-	Pie(ui.pieHost, 60, 56, 38, "SPEND", spends, ui.pieArt)
 end
 
 -- ============ accounts ============
@@ -484,13 +526,16 @@ local function RefreshAccounts()
 			row:Hide()
 		end
 	end
+	-- nudge toward the first real account while the auto-seeded pool
+	-- is the whole list
+	ui.acctOnboard:SetShown(#list == 1 and list[1].pool ~= nil)
 end
 
 -- ============ window ============
 
 local function Build()
 	if ui then return end
-	ui = { scroll = 0, art = {}, pieArt = {}, page = "activity", tables = {} }
+	ui = { scroll = 0, art = {}, page = "activity", tables = {} }
 	local f = CreateFrame("Frame", "GoblinMindOverview", UIParent)
 	f:SetSize(860, 560)
 	f:SetPoint("CENTER", 60, 20)
@@ -632,43 +677,69 @@ local function Build()
 		{ "CANCELLED", 380, 90 }, { "FAIL RATE", 490, 90 },
 	}, function(id) OV.ShowItem(id) end)
 
-	-- ---- page: accounts (chart + function controls) ----
+	-- ---- page: accounts (wealth + function controls) ----
 	local acctP = Panel(host, 0, 0, 724, 516, "ACCOUNTS")
 	ui.pageAccounts = acctP
-	local chart = Panel(acctP, 6, -20, 712, 226, "ACCOUNT TRENDS")
+	local chart = Panel(acctP, 6, -20, 712, 212, "WEALTH")
 	if chart.SetClipsChildren then chart:SetClipsChildren(true) end
 	ui.chart = chart
 	ui.chartMsg = GM.MakeFontString(chart, GM.FONT, 10, "textDim")
-	ui.chartMsg:SetPoint("CENTER")
-	ui.legend = {}
-	for i = 1, 7 do
-		local fs = GM.MakeFontString(chart, GM.FONT, 9, "textDim")
-		fs:SetPoint("TOPLEFT", 58 + (i - 1) * 62, -20)
-		fs:SetJustifyH("LEFT")
-		fs:SetWordWrap(false)
-		ui.legend[i] = fs
+	ui.chartMsg:SetPoint("CENTER", 0, -14)
+	-- KPI strip: the <2s read — total wealth and its split, today's
+	-- delta, the trend rate; the chart below is the drill-in
+	ui.kpiTotal = GM.MakeFontString(chart, GM.FONT_BOLD, 13, "text")
+	ui.kpiTotal:SetPoint("TOPLEFT", 10, -20)
+	ui.kpiTotal:SetWordWrap(false)
+	ui.kpiSplit = GM.MakeFontString(chart, GM.FONT, 9, "textDim")
+	ui.kpiSplit:SetPoint("LEFT", ui.kpiTotal, "RIGHT", 10, -3)
+	ui.kpiSplit:SetWordWrap(false)
+	ui.kpiDelta = GM.MakeFontString(chart, GM.FONT, 9, "textDim")
+	ui.kpiDelta:SetPoint("TOPLEFT", 10, -40)
+	ui.kpiDelta:SetWordWrap(false)
+	ui.kpiFlow = GM.MakeFontString(chart, GM.FONT, 8, "textDim")
+	ui.kpiFlow:SetPoint("BOTTOM", chart, "BOTTOM", 0, 6)
+	ui.kpiFlow:SetWordWrap(false)
+	-- window segments: filter the sampled window (ALL = whole buffer)
+	ui.chartWin = "ALL"
+	ui.winSegs = {}
+	local wins = { "24H", "7D", "ALL" }
+	for i, lab in ipairs(wins) do
+		local seg = W.Segment(chart, lab, 34, 16)
+		seg:SetPoint("TOPRIGHT", -10 - (#wins - i) * 38, -20)
+		seg:SetScript("OnClick", function()
+			ui.chartWin = lab
+			for j, s in ipairs(ui.winSegs) do
+				W.PaintSeg(s, wins[j] == lab)
+			end
+			OV.RefreshChart()
+		end)
+		ui.winSegs[i] = seg
+		W.PaintSeg(seg, lab == "ALL")
 	end
-	local accts = Panel(acctP, 6, -254, 712, 256, "ACCOUNTS · FUNCTION")
+	local accts = Panel(acctP, 6, -240, 712, 270, "ACCOUNTS · FUNCTION")
 	ui.acctRows = {}
 	local ACCT_ROWS = 7
 	for i = 1, ACCT_ROWS do
-		local row = W.AcctRow(accts, i, true)
+		local row = W.AcctRow(accts, i, false)
 		row:SetPoint("TOPLEFT", 8, -20 - (i - 1) * 26)
-		row:SetWidth(440)
+		row:SetWidth(696)
 		ui.acctRows[i] = row
 	end
+	-- onboarding line: shows only while the auto-seeded pool is the
+	-- whole list — the add-row is already right there
+	ui.acctOnboard = GM.MakeFontString(accts, GM.FONT, 9, "secondary")
+	ui.acctOnboard:SetPoint("TOPLEFT", 8, -50)
+	ui.acctOnboard:SetWordWrap(false)
+	ui.acctOnboard:SetText("create an account below to earmark gold — "
+		.. "e.g. a 10% SAVE or an AH float")
 	-- same add-row contract as the dashboard BUDGETS panel
 	ui.acctAdd = W.AcctAdd(accts)
 	ui.acctAdd:SetPoint("BOTTOMLEFT", 10, 26)
 	ui.acctHint = GM.MakeFontString(accts, GM.FONT, 9, "secondary")
 	ui.acctHint:SetPoint("BOTTOMLEFT", 10, 6)
 	ui.acctHint:SetText(
-		"kind: spend pool / reserve · group: items route to this account")
-
-	-- right column: income/spend share pies (rows stop at ~x=450)
-	ui.pieHost = CreateFrame("Frame", nil, accts)
-	ui.pieHost:SetPoint("TOPLEFT", 470, -8)
-	ui.pieHost:SetSize(234, 244)
+		"kind: spend pool / reserve · group: items route to this account · "
+		.. "right column: 7-day in/out")
 
 	-- ---- page: item detail (drill-in) ----
 	local itP = Panel(host, 0, 0, 724, 516, "ITEM")
@@ -871,7 +942,6 @@ function OV.Refresh()
 		ui.tFailed.paint()
 	elseif ui.page == "accounts" then
 		OV.RefreshChart()
-		OV.RefreshPie()
 		RefreshAccounts()
 	elseif ui.page == "item" then
 		RefreshItem()

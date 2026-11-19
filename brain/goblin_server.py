@@ -16,6 +16,7 @@ Endpoints (all JSON):
 Usage: goblin_server.py [port]          (default 8765)
 State: goblin_backend.db (sqlite) next to the script.
 """
+import ipaddress
 import json
 import os
 import re
@@ -43,13 +44,48 @@ MERGE_MAX_AGE = 7 * 86400  # uploads older than the stat window are
 
 def _server_cfg():
     """Machine-local server config (never shipped): {"install_secret":
-    "..."}. Read lazily so key rotation needs no restart. Missing or
-    empty secret = open registration (trusted-LAN mode)."""
+    "...", "bind": "0.0.0.0", "allow": ["cidr", ...]}. Read lazily so
+    edits need no restart. Missing or empty secret = open
+    registration; missing allow = no IP restriction."""
     try:
         with open(CFG_PATH, encoding='utf-8') as fh:
             return json.load(fh)
     except (OSError, ValueError):
         return {}
+
+
+def _bind_addr(cli=None):
+    """Listen address. Explicit config 'bind' (or a CLI arg) wins; a
+    config file present without bind means a deliberately --host'd
+    server -> all interfaces; NO config file means an auto-spawned
+    personal backend -> loopback only, so a solo install's backend
+    can never be joined over the network."""
+    if cli:
+        return cli
+    cfg = _server_cfg()
+    if cfg.get('bind'):
+        return str(cfg['bind'])
+    return '0.0.0.0' if os.path.exists(CFG_PATH) else '127.0.0.1'
+
+
+def _allowed_ip(ip):
+    """Optional CIDR fence: goblin_server.json 'allow' lists the only
+    networks that may talk to this server at all — belt and suspenders
+    on top of install_secret for LAN-exposed guild hosts."""
+    nets = _server_cfg().get('allow')
+    if not nets:
+        return True
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    for n in nets:
+        try:
+            if addr in ipaddress.ip_network(str(n), strict=False):
+                return True
+        except ValueError:
+            continue
+    return False
 
 
 def db():
@@ -66,6 +102,18 @@ def db():
     conn.execute('''CREATE TABLE IF NOT EXISTS rate(
         install_id INTEGER, bucket REAL, n INTEGER,
         PRIMARY KEY(install_id, bucket))''')
+    # crowdsourced drop stats — per-install cumulative snapshots,
+    # REPLACE'd on each upload; the aggregate sums across installs
+    conn.execute('''CREATE TABLE IF NOT EXISTS drop_n(
+        install_id INTEGER, scope TEXT, src TEXT, n INTEGER,
+        t REAL, PRIMARY KEY(install_id, scope, src))''')
+    conn.execute('''CREATE TABLE IF NOT EXISTS drop_k(
+        install_id INTEGER, scope TEXT, item_id INTEGER, src TEXT,
+        k INTEGER, q INTEGER, t REAL,
+        PRIMARY KEY(install_id, scope, item_id, src))''')
+    conn.execute('''CREATE TABLE IF NOT EXISTS drop_name(
+        install_id INTEGER, scope TEXT, src TEXT, name TEXT,
+        PRIMARY KEY(install_id, scope, src))''')
     return conn
 
 
@@ -106,6 +154,87 @@ def clean_items(items):
 _last_gc = [0.0]
 _last_vacuum = [0.0]
 
+SRC_RE = re.compile(r'^[coin].{0,63}$')
+DROP_SRC_CAP = 500        # src keys per upload
+DROP_PAIR_CAP = 2000      # (item,src) pairs per upload
+DROP_COUNT_CAP = 10 ** 7  # k/q/n sanity bound
+
+
+def store_drops(conn, install, scope, drops):
+    """Wholesale replace of an install's cumulative drop snapshot for
+    a scope — deleting first also purges sources the client pruned.
+    Uploads are cumulative counters, never additive."""
+    if not isinstance(drops, dict):
+        return
+    now = time.time()
+    nmap = drops.get('n') or {}
+    dmap = drops.get('d') or {}
+    names = drops.get('names') or {}
+    conn.execute('DELETE FROM drop_n WHERE install_id=? AND scope=?',
+                 (install, scope))
+    conn.execute('DELETE FROM drop_k WHERE install_id=? AND scope=?',
+                 (install, scope))
+    conn.execute('DELETE FROM drop_name WHERE install_id=? AND scope=?',
+                 (install, scope))
+    stored = 0
+    for src, n in list(nmap.items())[:DROP_SRC_CAP]:
+        src = str(src)
+        if SRC_RE.match(src) and isinstance(n, (int, float)) \
+                and 0 < n <= DROP_COUNT_CAP:
+            conn.execute('INSERT INTO drop_n VALUES(?,?,?,?,?)',
+                         (install, scope, src, int(n), now))
+            stored += 1
+    pairs = 0
+    for iid, srcs in dmap.items():
+        if pairs >= DROP_PAIR_CAP:
+            break
+        try:
+            iid = int(iid)
+        except (TypeError, ValueError):
+            continue
+        for src, st in (srcs or {}).items():
+            if pairs >= DROP_PAIR_CAP:
+                break
+            src = str(src)
+            if not SRC_RE.match(src) or not isinstance(st, dict):
+                continue
+            k, q = st.get('k'), st.get('q')
+            if not (isinstance(k, (int, float))
+                    and 0 <= k <= DROP_COUNT_CAP
+                    and isinstance(q, (int, float))
+                    and 0 <= q <= DROP_COUNT_CAP):
+                continue
+            conn.execute('INSERT INTO drop_k VALUES(?,?,?,?,?,?,?)',
+                         (install, scope, iid, src,
+                          int(k), int(q), now))
+            pairs += 1
+    for src, name in list(names.items())[:DROP_SRC_CAP]:
+        src = str(src)
+        if SRC_RE.match(src) and isinstance(name, str) and name:
+            conn.execute('INSERT INTO drop_name VALUES(?,?,?,?)',
+                         (install, scope, src, name[:64]))
+
+
+def merged_drops(conn, scope):
+    """Crowdsourced drop stats — SUM counts across installs; each
+    install's rows are its latest cumulative snapshot. Mirrors the
+    addon's GM.db.drops/dropsN/dropsName shape."""
+    n = {r[0]: int(r[1]) for r in conn.execute(
+        'SELECT src, SUM(n) FROM drop_n WHERE scope=? GROUP BY src',
+        (scope,))}
+    d = {}
+    for iid, src, k, q in conn.execute(
+            'SELECT item_id, src, SUM(k), SUM(q) FROM drop_k '
+            'WHERE scope=? GROUP BY item_id, src', (scope,)):
+        d[str(iid)] = d.get(str(iid)) or {}
+        d[str(iid)][src] = {'k': int(k), 'q': int(q)}
+    names = {r[0]: r[1] for r in conn.execute(
+        'SELECT src, MAX(name) FROM drop_name WHERE scope=? '
+        'GROUP BY src', (scope,))}
+    if not (n or d):
+        return {}
+    return {'n': n, 'd': d, 'names': names}
+
 
 def _gc(conn):
     """Lazily purge uploads past the merge window — keeps the store
@@ -116,6 +245,14 @@ def _gc(conn):
     _last_gc[0] = time.time()
     conn.execute('DELETE FROM uploads WHERE t < ?',
                  (time.time() - MERGE_MAX_AGE,))
+    cutoff = time.time() - MERGE_MAX_AGE
+    conn.execute('DELETE FROM drop_n WHERE t < ?', (cutoff,))
+    conn.execute('DELETE FROM drop_k WHERE t < ?', (cutoff,))
+    conn.execute('DELETE FROM drop_name WHERE NOT EXISTS ('
+                 'SELECT 1 FROM drop_n WHERE '
+                 'drop_n.install_id=drop_name.install_id AND '
+                 'drop_n.scope=drop_name.scope AND '
+                 'drop_n.src=drop_name.src)', ())
     conn.commit()
     # weekly VACUUM reclaims the file space deleted rows leave —
     # sqlite doesn't shrink on DELETE alone
@@ -146,7 +283,8 @@ def merged_book(conn, scope):
     lots = {f: n for grp in lots_by_iid.values()
             for f, n in grp.items()}
     return {'scope': scope, 't': int(newest) if newest else None,
-            'items': items, 'lots': lots}
+            'items': items, 'lots': lots,
+            'drops': merged_drops(conn, scope)}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -185,6 +323,9 @@ class Handler(BaseHTTPRequestHandler):
                                       fmt % args))
 
     def do_GET(self):
+        if not _allowed_ip(self.client_address[0]):
+            self._send(403, {'error': 'ip'})
+            return
         u = urllib.parse.urlparse(self.path)
         q = urllib.parse.parse_qs(u.query)
         conn = db()
@@ -224,6 +365,9 @@ class Handler(BaseHTTPRequestHandler):
             conn.close()
 
     def do_POST(self):
+        if not _allowed_ip(self.client_address[0]):
+            self._send(403, {'error': 'ip'})
+            return
         u = urllib.parse.urlparse(self.path)
         conn = db()
         try:
@@ -308,6 +452,7 @@ class Handler(BaseHTTPRequestHandler):
                 'AND id NOT IN (SELECT id FROM uploads WHERE '
                 'install_id=? AND scope=? ORDER BY t DESC LIMIT ?)',
                 (install, scope, install, scope, KEEP_PER_INSTALL))
+            store_drops(conn, install, scope, body.get('drops'))
             conn.commit()
             self._send(200, {'ok': True, 'items': len(items)})
         finally:
@@ -334,7 +479,8 @@ def _self_restart():
 
 if __name__ == '__main__':
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8765
-    srv = ThreadingHTTPServer(('0.0.0.0', port), Handler)
+    bind = _bind_addr(sys.argv[2] if len(sys.argv) > 2 else None)
+    srv = ThreadingHTTPServer((bind, port), Handler)
     threading.Thread(target=_self_restart, daemon=True).start()
-    print('goblin backend on :%d -> %s' % (port, DB_PATH))
+    print('goblin backend on %s:%d -> %s' % (bind, port, DB_PATH))
     srv.serve_forever()

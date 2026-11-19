@@ -95,46 +95,76 @@ function DB.AddTabs(frame, titleFs, currentKey)
 		meas:SetTextColor(0, 0, 0, 0) -- measure-only, never painted
 		frame._gmTabMeas = meas
 	end
-	local avail = (frame:GetWidth() or 640)
-		- (titleFs.GetStringWidth and titleFs:GetStringWidth() or 120) - 36
+	-- anchor against the title's TEXT extent, not its region edge —
+	-- callers SetWidth the title fontstring to 400+, so anchoring to
+	-- its RIGHT pushed the whole strip to mid-window ("right aligned")
+	local titleW = titleFs.GetStringWidth
+		and titleFs:GetStringWidth() or 120
+	local avail = (frame:GetWidth() or 640) - titleW - 48
 	local total = 0
 	for _, t in ipairs(TABS) do
 		meas:SetText(t.label)
 		total = total + (meas:GetStringWidth() or 40) + 15
 	end
-	local compact = total > avail
-	local anchor = titleFs
-	for _, t in ipairs(TABS) do
-		local b = CreateFrame("Button", nil, frame)
-		b:SetPoint("LEFT", anchor, "RIGHT", 5, 0)
-		b:SetHeight(14)
-		local cur = t.key == currentKey
-		b.text = GM.MakeFontString(b, GM.FONT_BOLD, 9,
-			cur and "accent" or "textDim")
-		b.text:SetPoint("CENTER")
-		b.text:SetText(compact and t.short or t.label)
-		-- auto-width from the label — fixed px widths clip the
-		-- longer tab names into their neighbours
-		b:SetWidth((b.text.GetStringWidth
-			and b.text:GetStringWidth() or 40) + 10)
-		-- the current destination stays visible and selected — a
-		-- disappearing tab shifts every following target under the
-		-- cursor
-		if cur then
-			b.line = b:CreateTexture(nil, "ARTWORK")
-			b.line:SetSize(b:GetWidth() - 10, 2)
-			b.line:SetPoint("BOTTOM", 0, -1)
-			b.line:SetColorTexture(GM.RGB("accent"))
+	local function build(compact)
+		for _, b in ipairs(frame._gmTabs) do
+			b:Hide()
+			b:SetParent(nil)
 		end
-		local key = t.key
-		b:SetScript("OnClick", function() DB.Switch(key) end)
-		b:SetScript("OnEnter", function() b.text:SetTextColor(GM.RGB("text")) end)
-		b:SetScript("OnLeave", function()
-			b.text:SetTextColor(GM.RGB(cur and "accent" or "textDim"))
-		end)
-		anchor = b
-		frame._gmTabs[#frame._gmTabs + 1] = b
+		wipe(frame._gmTabs)
+		local anchor = titleFs
+		for _, t in ipairs(TABS) do
+			local b = CreateFrame("Button", nil, frame)
+			if anchor == titleFs then
+				b:SetPoint("LEFT", titleFs, "LEFT", titleW + 8, 0)
+			else
+				b:SetPoint("LEFT", anchor, "RIGHT", 5, 0)
+			end
+			b:SetHeight(14)
+			local cur = t.key == currentKey
+			b.text = GM.MakeFontString(b, GM.FONT_BOLD, 9,
+				cur and "accent" or "textDim")
+			b.text:SetPoint("CENTER")
+			b.text:SetText(compact and t.short or t.label)
+			-- auto-width from the label — fixed px widths clip the
+			-- longer tab names into their neighbours
+			b:SetWidth((b.text.GetStringWidth
+				and b.text:GetStringWidth() or 40) + 10)
+			-- the current destination stays visible and selected — a
+			-- disappearing tab shifts every following target under the
+			-- cursor
+			if cur then
+				b.line = b:CreateTexture(nil, "ARTWORK")
+				b.line:SetSize(b:GetWidth() - 10, 2)
+				b.line:SetPoint("BOTTOM", 0, -1)
+				b.line:SetColorTexture(GM.RGB("accent"))
+			end
+			local key = t.key
+			b:SetScript("OnClick", function() DB.Switch(key) end)
+			b:SetScript("OnEnter", function() b.text:SetTextColor(GM.RGB("text")) end)
+			b:SetScript("OnLeave", function()
+				b.text:SetTextColor(GM.RGB(cur and "accent" or "textDim"))
+			end)
+			anchor = b
+			frame._gmTabs[#frame._gmTabs + 1] = b
+		end
 	end
+	build(total > avail)
+	-- GetStringWidth under-measures this client's Montserrat bold —
+	-- the pre-check can pass while the rendered strip still overruns
+	-- the frame edge. Verify real extents post-layout and rebuild
+	-- compact if the last tab doesn't fit inside the window.
+	local function VerifyFit(retries)
+		local last = frame._gmTabs[#frame._gmTabs]
+		local lr = last and last.GetRight and last:GetRight()
+		local fr = frame.GetRight and frame:GetRight()
+		if lr and fr then
+			if lr > fr - 30 then build(true) end
+		elseif retries > 0 and GM.After then
+			GM.After(0.2, function() VerifyFit(retries - 1) end)
+		end
+	end
+	if GM.After then GM.After(0, function() VerifyFit(2) end) end
 end
 
 -- ============ home view ============

@@ -130,8 +130,13 @@ Primary data = the in-house book feed below.
   split `C:\Program Files\` on Windows). Deploy = copy the file
   over; no manual restart needed.
 - **Crowdsource backend (`brain\goblin_server.py`)**: persistent
-  merged-book service on `127.0.0.1:8765` (binds `0.0.0.0` — LAN
-  needs a firewall rule for TCP 8765). Endpoints: `/v1/register`,
+  merged-book service on `127.0.0.1:8765`. Bind rule: explicit
+  `goblin_server.json "bind"` wins; config file present without
+  bind = `0.0.0.0` (a deliberately `--host`ed server — `install.py
+  --host` pins it); NO config file = `127.0.0.1` so a solo
+  install's watcher-spawned backend can never be joined. Optional
+  `"allow": ["cidr"]` fences every request (register + reads).
+  LAN hosts need a firewall rule for TCP 8765. Endpoints: `/v1/register`,
   `/v1/upload`, `/v1/book?scope=`, `/v1/health`, `/v1/scopes`.
   `/v1/health` also lists installs (name, attributed scopes, upload
   count, last-upload `t`); `/v1/scopes` is the open scope list that
@@ -296,6 +301,17 @@ Primary data = the in-house book feed below.
     wrap entirely via `rawHMIC` captured at Core.lua load — it
     wants Blizzard's default chain, not every installed hook.
     Found 2026-11-19: C stack overflow on a crafting mat-row click.
+  - **`GetStringWidth` under-measures** the vendored Montserrat fonts
+    (~10-20%) — layout decisions made from measured widths can still
+    overflow at render. Dashboard's `AddTabs` builds, then verifies the
+    strip's real `GetRight` extent post-layout and rebuilds compact on
+    overrun. Trust real extents, not the metric (found 2026-11-19: tab
+    strip ran off the ledger window edge).
+  - **FontStrings don't hard-clip** — overflowing text draws past the
+    region bounds into neighbouring widgets. Bound the TEXT (compact
+    `GM.MoneyShort`, `SetWordWrap(false)`, width discipline), not just
+    the box — found on the ACCOUNTS row where "left … spent …" ran
+    under the reset/del buttons.
   - **Hard per-script CPU budget** — a script that runs too long
     dies with "insecure scripts exceeded execution limit"
     (attribution shows the *handler's* file, `Settings.lua:-1`, not
