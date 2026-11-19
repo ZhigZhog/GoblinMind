@@ -246,6 +246,10 @@ Primary data = the in-house book feed below.
   .tocs → package → tag `v<version>` → `git push origin main
   --follow-tags` → create the GitHub release via REST with the zip
   attached (token via `git credential fill`; the MCP is read-only).
+  **Branching** (2026-11-18, user directive): every new feature gets
+  its own branch and merges to main only when the feature is fully
+  working — no partial feature work on main. Versioning restarted
+  at beta: `0.1.0-beta` was the first CurseForge-facing tag.
 - UI rule: match TSM's default theme — palette + fonts in
   `addons\GoblinMind\Theme.lua`, fonts referenced from TSM's Media dir.
 - Client quirks (verified 2026-11-11):
