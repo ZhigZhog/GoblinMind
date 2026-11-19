@@ -132,6 +132,9 @@ local function Record()
 	GM.db.drops = GM.db.drops or {}
 	GM.db.dropsN = GM.db.dropsN or {}
 	GM.db.dropsName = GM.db.dropsName or {}
+	-- scope the backend attributes these observations to — the
+	-- watcher uploads the whole store under this realm
+	GM.db.dropsScope = GM.Scope and GM.Scope()
 
 	for src in pairs(winSrcSet) do
 		GM.db.dropsN[src] = (GM.db.dropsN[src] or 0) + 1
@@ -159,21 +162,50 @@ local function Record()
 	end
 end
 
--- ranked sources for a tooltip: { {src, name, rate, k, n, q, low} }
--- only sources past the observation floor rank
+-- ranked sources for a tooltip: { {src, name, rate, k, n, q, low,
+-- crowd} } — only sources past the observation floor rank.
+-- Merges local observations with backend crowd stats: the server's
+-- per-install snapshots already include what it last recorded from
+-- US (dropsAck), so the effective count = crowd + un-uploaded local
+-- delta — never double-counted.
 function D.TopSources(itemID, count)
 	local m = GM.db and GM.db.drops and GM.db.drops[itemID]
-	if not m then return end
+	local sc = GM.Scope and GM.Scope()
+	local realm = sc and GoblinMindDB and GoblinMindDB.realms
+		and GoblinMindDB.realms[sc]
+	local rd = realm and realm.drops
+	local ack = GoblinMindDB and GoblinMindDB.dropsAck
+		and GoblinMindDB.dropsAck[sc]
+	local rid = tostring(itemID)
+	local rdd = rd and rd.d and rd.d[rid]
+	local ad = ack and ack.d and ack.d[rid]
+	if not (m or rdd) then return end
+	local nL = GM.db and GM.db.dropsN or {}
+	local nR = rd and rd.n or {}
+	local an = ack and ack.n or {}
+	local namesL = GM.db and GM.db.dropsName or {}
+	local namesR = rd and rd.names or {}
+	local srcs = {}
+	if m then for src in pairs(m) do srcs[src] = true end end
+	if rdd then for src in pairs(rdd) do srcs[src] = true end end
 	local out = {}
-	for src, st in pairs(m) do
-		local n0 = GM.db.dropsN and GM.db.dropsN[src] or 0
-		if n0 >= DISPLAY_FLOOR and st.k and st.k > 0 then
+	for src in pairs(srcs) do
+		local lk = m and m[src] and m[src].k or 0
+		local lq = m and m[src] and m[src].q or 0
+		local rk = rdd and rdd[src] and rdd[src].k or 0
+		local rq = rdd and rdd[src] and rdd[src].q or 0
+		local n = (nR[src] or 0)
+			+ math.max(0, (nL[src] or 0) - (an[src] or 0))
+		local k = rk + math.max(0, lk - (ad and ad[src] and ad[src].k or 0))
+		local q = rq + math.max(0, lq - (ad and ad[src] and ad[src].q or 0))
+		if n >= DISPLAY_FLOOR and k > 0 then
 			tinsert(out, {
 				src = src,
-				name = GM.db.dropsName and GM.db.dropsName[src],
-				rate = st.k / n0,
-				k = st.k, q = st.q, n = n0,
-				low = n0 < APPROX_FLOOR,
+				name = namesL[src] or namesR[src],
+				rate = k / n,
+				k = k, q = q, n = n,
+				low = n < APPROX_FLOOR,
+				crowd = (rk > 0 or (nR[src] or 0) > 0) or nil,
 			})
 		end
 	end

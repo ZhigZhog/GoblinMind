@@ -214,6 +214,77 @@ def main():
                {'scope': S, 't': now, 'items': {'2': item()}}, tok_a)
     check('existing tokens unaffected by gate', c == 200, c)
 
+    print('== crowd drop stats ==')
+    # fresh installs — the rate bucket counts before validation, so
+    # the main tokens are already near their 10/10min quota
+    c, r = req(base, '/v1/register', {'name': 'drop-a', 'key': 'sekrit'})
+    tok_da = r['token']
+    c, r = req(base, '/v1/register', {'name': 'drop-b', 'key': 'sekrit'})
+    tok_db = r['token']
+
+    drops_a = {'n': {'c100': 50, 'nMurloc': 12},
+               'd': {'2770': {'c100': {'k': 10, 'q': 25}}},
+               'names': {'c100': 'Cave Yeti'}}
+    c, _ = req(base, '/v1/upload',
+               {'scope': S, 't': now, 'items': {'1': item()},
+                'drops': drops_a}, tok_da)
+    check('drop upload accepted', c == 200, c)
+    c, b = req(base, '/v1/book?scope=' + S)
+    dr = b.get('drops') or {}
+    check('drop n surfaced', dr.get('n', {}).get('c100') == 50, dr)
+    check('drop k/q surfaced',
+          dr.get('d', {}).get('2770', {}).get('c100', {}).get('k') == 10)
+    check('drop name surfaced',
+          dr.get('names', {}).get('c100') == 'Cave Yeti')
+
+    # second install same src -> counts SUM (crowd aggregation)
+    req(base, '/v1/upload',
+        {'scope': S, 't': now, 'items': {'1': item()},
+         'drops': {'n': {'c100': 30},
+                   'd': {'2770': {'c100': {'k': 6, 'q': 15}}},
+                   'names': {}}}, tok_db)
+    c, b = req(base, '/v1/book?scope=' + S)
+    dr = b.get('drops') or {}
+    check('crowd n sums across installs',
+          dr.get('n', {}).get('c100') == 80, dr.get('n'))
+    check('crowd k sums across installs',
+          dr.get('d', {}).get('2770', {}).get('c100', {}).get('k') == 16)
+
+    # re-upload REPLACEs the install's snapshot — cumulative, never
+    # additive (else every re-upload would double-count itself)
+    req(base, '/v1/upload',
+        {'scope': S, 't': now + 1, 'items': {'1': item()},
+         'drops': {'n': {'c100': 60},
+                   'd': {'2770': {'c100': {'k': 12, 'q': 30}}},
+                   'names': {}}}, tok_da)
+    c, b = req(base, '/v1/book?scope=' + S)
+    dr = b.get('drops') or {}
+    check('re-upload replaces, never adds',
+          dr.get('n', {}).get('c100') == 90, dr.get('n'))  # 60+30
+
+    # malformed rows filtered, good rows kept; wholesale replace
+    # purges the install's earlier src set for the scope
+    req(base, '/v1/upload',
+        {'scope': S, 't': now + 2, 'items': {'1': item()},
+         'drops': {'n': {'BADKEY': 5, 'c200': 10, 'c201': 10 ** 9},
+                   'd': {'2770': {'c200': {'k': -1, 'q': 5},
+                                  'zzz': {'k': 1, 'q': 1}},
+                         'notanid': {'c200': {'k': 1, 'q': 1}}},
+                   'names': {'c200': 'Yeti', 'x': 9}}}, tok_da)
+    c, b = req(base, '/v1/book?scope=' + S)
+    dr = b.get('drops') or {}
+    check('bad src key dropped', 'BADKEY' not in dr.get('n', {}))
+    check('over-cap n dropped', dr.get('n', {}).get('c201') is None)
+    check('good n kept', dr.get('n', {}).get('c200') == 10)
+    check('negative k dropped',
+          'c200' not in (dr.get('d', {}).get('2770') or {}))
+    check('bad src in d dropped',
+          'zzz' not in (dr.get('d', {}).get('2770') or {}))
+    check('non-int item dropped', 'notanid' not in dr.get('d', {}))
+    check('non-str name dropped', dr.get('names', {}).get('x') is None)
+    check('replaced sources drop out',
+          dr.get('n', {}).get('c100') == 30, dr.get('n'))
+
     srv.shutdown()
     print()
     if FAILURES:
