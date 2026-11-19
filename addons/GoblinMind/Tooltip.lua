@@ -1092,6 +1092,15 @@ local function Hook(tooltip, data)
 	-- item and would clobber the tracked item.
 	if tooltip ~= GameTooltip and tooltip ~= ItemRefTooltip then return end
 	if tooltip == sideTip then return end
+	-- world objects file Item postcalls on this client (same-named
+	-- items like a Kingsblood node) — a GameObject subject GUID
+	-- means the hover is an object, not an item: no side tip, no
+	-- item marker for Gathering's IsItemTooltip
+	local guid = data and data.guid
+	if guid then
+		local ok, t = pcall(strsplit, "-", guid)
+		if ok and t == "GameObject" then return end
+	end
 	local itemID = data and data.id
 	local link
 	if TooltipUtil and TooltipUtil.GetDisplayedItem then
