@@ -356,11 +356,15 @@ function A.CancelScanNow()
 		-- the map key is a listing fingerprint — CancelAuction needs
 		-- the snapshot's real auctionID (enum index fallback).
 		-- duplicate enum rows share that key — collapse them or the
-		-- same real auction gets a cancel step per ghost row
+		-- same real auction gets a cancel step per ghost row.
+		-- a.keys holds every row's key for n identical lots — one
+		-- cancel step per listing, each with a distinct target
 		local akey = a.aid or a.idx or fp
 		if not e.seen[akey] then
 			e.seen[akey] = true
-			tinsert(e.aids, { aid = akey, qty = a.qty, unit = unit })
+			for _, k in ipairs(a.keys or { akey }) do
+				tinsert(e.aids, { aid = k, qty = a.qty, unit = unit })
+			end
 		end
 		if unit and unit < e.minUnit then e.minUnit = unit end
 		byItem[a.itemID] = e

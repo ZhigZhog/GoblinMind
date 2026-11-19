@@ -203,15 +203,20 @@ function GM.Inventory.RefreshOwned()
 			e.fp = EntryFp(e)
 			local prev = now[e.fp]
 			-- identical listings share a fingerprint — count them and
-			-- prefer the entry carrying a real id for cancel actions
+			-- prefer the entry carrying a real id for cancel actions,
+			-- but keep EVERY row's key: n identical lots need n
+			-- distinct cancel targets (CancelAuction takes the raw
+			-- key, and every aid/idx resolves back through aidIndex)
 			if prev then
 				prev.n = (prev.n or 1) + 1
+				prev.keys[#prev.keys + 1] = aid or i
 				if aid and not prev.aid then
 					prev.aid, prev.idx = aid, i
 				end
 				if aid then aidIndex[aid] = e.fp end
 				aidIndex[i] = e.fp
 			else
+				e.keys = { aid or i }
 				now[e.fp] = e
 				if aid then aidIndex[aid] = e.fp end
 				aidIndex[i] = e.fp
