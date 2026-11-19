@@ -262,7 +262,8 @@ function B.Sample()
 		-- collapse same-value adjacent samples so a flat week doesn't
 		-- push real movement out of the window
 		if n == 0 or h[n].v ~= B.Remaining(a) or t - h[n].t > 3600 then
-			h[n + 1] = { t = t, v = B.Remaining(a) }
+			h[n + 1] = { t = t, v = B.Remaining(a),
+				inc = a.income or 0, out = a.spent or 0 }
 			if #h > HIST_CAP then tremove(h, 1) end
 		end
 	end
@@ -286,6 +287,28 @@ function B.Sample()
 		w[#w + 1] = { t = t, g = gold, a = posted }
 		if #w > HIST_CAP then tremove(w, 1) end
 	end
+end
+
+-- windowed income/spend: cumulative-counter delta since the sample
+-- at or before `days` ago (earliest carrying fields when the buffer
+-- is younger). A mid-window reset can only under-report; samples
+-- that predate the inc/out fields yield nils so the UI shows "—"
+-- rather than a padded number
+function B.Flow(a, days)
+	local h = a.hist
+	if not h or #h == 0 then return nil, nil end
+	local cutoff = time() - (days or 7) * 86400
+	local base, oldest
+	for _, p in ipairs(h) do
+		if p.inc then
+			oldest = oldest or p
+			if p.t <= cutoff then base = p end
+		end
+	end
+	base = base or oldest
+	if not base then return nil, nil end
+	return math.max(0, (a.income or 0) - base.inc),
+	       math.max(0, (a.spent or 0) - base.out)
 end
 
 function B.Init()

@@ -532,8 +532,16 @@ function W.AcctRow(parent, idx, compact)
 	W.Tip(rst, function() return { "Reset spent to zero" } end)
 	row.rst = rst
 
-	-- left text stops before the reset/del buttons
-	row.left:SetPoint("RIGHT", rst, "LEFT", -6, 0)
+	-- 7d income/spend column: fixed-width right-justified block before
+	-- the row buttons; `left` re-anchors to it so nothing overlaps
+	row.flow = GM.MakeFontString(row, GM.FONT, 9, "textDim")
+	row.flow:SetPoint("RIGHT", rst, "LEFT", -8, 0)
+	row.flow:SetWidth(140)
+	row.flow:SetJustifyH("RIGHT")
+	row.flow:SetWordWrap(false)
+
+	-- left text stops before the flow column
+	row.left:SetPoint("RIGHT", row.flow, "LEFT", -8, 0)
 	return row
 end
 
@@ -553,6 +561,14 @@ function W.PaintAcctRow(row, a)
 		row.left:SetText("left " .. GM.MoneyShort(rem)
 			.. " · spent " .. GM.MoneyShort(a.spent or 0))
 		row.left:SetTextColor(GM.RGB(rem > 0 and "textDim" or "err"))
+	end
+	local fin, fout = GM.Budget.Flow(a)
+	if fin then
+		row.flow:SetText(GM.CC("pos") .. "+" .. GM.MoneyShort(fin) .. "|r"
+			.. GM.CC("textDim") .. " / |r"
+			.. GM.CC("warn") .. "-" .. GM.MoneyShort(fout) .. "|r")
+	else
+		row.flow:SetText("—")
 	end
 end
 
