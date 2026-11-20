@@ -968,25 +968,38 @@ end
 -- ============ refresh: tree ============
 
 local function TreeList()
-	local out, paths = {}, {}
-	for _, g in ipairs(GM.Groups.List()) do
-		paths[g.path] = true
-		-- display depth: Base Group is the root row; every other
-		-- top-level group renders one level in (TSM's tree shape)
-		local depth = g.path == "Base Group" and 1
-			or select(2, g.path:gsub("/", "")) + 2
-		out[#out + 1] = { path = g.path, n = g.n, depth = depth,
-			leaf = g.path:match("[^/]+$") or g.path }
-	end
-	for _, e in ipairs(out) do
-		for p in pairs(paths) do
-			-- Base Group parents everything; others need path-prefix kids
-			if (e.path == "Base Group" and p ~= "Base Group")
-				or p:sub(1, #e.path + 1) == e.path .. "/" then
-				e.kids = true
-				break
-			end
+	-- flat path sort renders children ABOVE their parent whenever
+	-- the parent's name sorts later ("Adventuring Supplies" over
+	-- "Base Group") — the tree needs depth-first order: each parent
+	-- immediately followed by its alphabetically-sorted subtree
+	local counts = {}
+	for _, g in ipairs(GM.Groups.List()) do counts[g.path] = g.n end
+	local all = GM.Groups.db.groups
+	local kidsOf = {}
+	for path in pairs(all) do
+		local parent = path:match("^(.*)/[^/]+$") or "Base Group"
+		if parent ~= path then
+			kidsOf[parent] = kidsOf[parent] or {}
+			tinsert(kidsOf[parent], path)
 		end
+	end
+	for _, arr in pairs(kidsOf) do table.sort(arr) end
+	local out, seen = {}, {}
+	local function Visit(path, depth)
+		if seen[path] or not all[path] then return end
+		seen[path] = true
+		out[#out + 1] = { path = path, n = counts[path] or 0,
+			depth = depth, leaf = path:match("[^/]+$") or path,
+			kids = kidsOf[path] ~= nil }
+		for _, c in ipairs(kidsOf[path] or {}) do
+			Visit(c, depth + 1)
+		end
+	end
+	Visit("Base Group", 1)
+	-- orphan paths (a parent deleted out from under them) surface
+	-- as root rows rather than vanishing from the tree entirely
+	for _, g in ipairs(GM.Groups.List()) do
+		if not seen[g.path] then Visit(g.path, 1) end
 	end
 	-- collapsed ancestor hides the whole subtree; Base Group's own
 	-- row always survives (it's the root even when shut)
