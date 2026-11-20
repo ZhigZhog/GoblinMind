@@ -140,14 +140,25 @@ Primary data = the in-house book feed below.
   `"allow": ["cidr"]` fences every request (register + reads).
   LAN hosts need a firewall rule for TCP 8765. Endpoints: `/v1/register`,
   `/v1/upload`, `/v1/book?scope=`, `/v1/health`, `/v1/scopes`.
-  `/v1/health` also lists installs (name, attributed scopes, upload
-  count, last-upload `t`); `/v1/scopes` is the open scope list that
+  `/v1/health` also lists installs (name, **uuid**, attributed
+  scopes, upload count, last-upload `t`, **`seen`** = last
+  authed activity); `/v1/scopes` is the open scope list that
   `install.py` offers as numbered choices. SQLite beside the
-  script; newest-upload-wins per item, 200 uploads/install/scope,
-  10 uploads/10min rate limit, 7-day staleness cutoff + hourly GC
-  + weekly VACUUM, client-claimed `t` clamped at `now` (can't pin
-  the book with a
-  future date). Auto-starts via `Startup\goblinmind-server.bat`
+  script in **WAL mode** (readers overlap the writer;
+  `busy_timeout=5000`, `synchronous=NORMAL` per conn) —
+  `init_db()` owns ALL DDL at startup + idempotent column
+  migrations, `db()` is the bare per-request path (never put
+  CREATE TABLE back in it). newest-upload-wins per item, 200
+  uploads/install/scope, 10 uploads/10min rate limit, 7-day
+  staleness cutoff + **hourly GC on a daemon thread**
+  (`_gc_loop` — request handlers never GC; tests call
+  `_gc(conn, force=True)` directly) + weekly VACUUM (fails
+  safe under lock, retries next window), client-claimed `t`
+  clamped at `now` (can't pin the book with a future date).
+  **`/v1/book` serves a serialized per-scope cache**
+  (`book_json`, invalidated on upload/GC, capped at 64 scopes
+  — it's an unauthenticated endpoint so don't drop the cap);
+  merge order is `ORDER BY t, id` = deterministic output. Auto-starts via `Startup\goblinmind-server.bat`
   from the installed brain dir; **self-restarts on file change**
   like the watcher. **Watcher auto-spawns it too**: when the
   configured `backend.url` is loopback (`127.0.0.1`/`localhost`/
@@ -183,13 +194,24 @@ Primary data = the in-house book feed below.
   installs out-of-band; installer flag is `--key`. `--host`
   auto-generates the secret (writes `goblin_server.json` when
   missing) and prints the LAN URL + key to share.
+  **Install identity** (2026-11-19, writ groundwork): the brain
+  generates a persistent uuid4 (`api_state.install_uuid`,
+  `_install_uuid()`) — the PUBLIC half of client identity; the
+  bearer token stays the secret half and never leaves api_state.
+  Register sends `uuid`; the server stores it (COALESCE keeps a
+  stored uuid when a re-register doesn't send one) and echoes it.
+  Installs predating uuids re-register ONCE on the next backend
+  call (`api_state.backend_uuid_sent` flag) — a failed retry
+  falls back to the still-valid token rather than breaking pulls.
+  `GoblinMindDB.backend.install` carries the uuid into the game
+  so the same anchor can key writ contracts in and out of game.
   The brain records the health install-count as
   `api_state.backend.peers` → `GoblinMindDB.backend.peers` →
   `/goblin status` shows "N installs". `install.py` probes
   `/v1/health`+`/v1/scopes` before writing config — bad IP or a
   closed firewall is caught at install, not at first pull.
   **Tests**: `python brain\test_server.py` — in-process server on an
-  ephemeral port + temp DB; 36 checks over register/auth/cleaning/
+  ephemeral port + temp DB; 56 checks over register/auth/cleaning/
   merge/cutoff/GC/rate-limit/key-gate/scopes/health-detail.
   Known wart it documents:
   the rate bucket increments before payload validation, so
