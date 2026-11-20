@@ -1134,6 +1134,8 @@ function CU.Refresh()
 							or "")
 				elseif s.kind == "quest" then
 					p = "• quest reward — " .. (s.name or "?")
+				elseif s.kind == "auto" then
+					p = "• " .. (s.name or "learned automatically")
 				end
 				if p then parts[#parts + 1] = p end
 			end
