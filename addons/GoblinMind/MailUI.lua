@@ -843,3 +843,66 @@ f:SetScript("OnUpdate", function(_, e)
 		ui.frame:Hide()
 	end
 end)
+
+-- /goblin codprobe — the writ escrow go/no-go: does this client let
+-- us set COD on outgoing mail? Enumerates every mail-shaped global +
+-- C_Mail members, live-calls SetSendMailCOD if present (declared-but-
+-- dead globals exist — craftdebug found those in the tradeskill API),
+-- and dumps a real inbox header tuple when mail is readable (reveals
+-- the COD field position for reject detection later).
+function MU.CodProbe()
+	GM.dbgCap = {}
+	GM.Print("— mail COD probe —")
+	for _, n in ipairs({
+		"SetSendMailCOD", "SendMail", "SetSendMailMoney",
+		"ClearSendMail", "ClickSendMailItemButton",
+		"GetSendMailItem", "GetSendMailItemInfo", "GetSendMailPrice",
+		"GetInboxNumItems", "GetInboxHeaderInfo", "GetInboxItem",
+		"GetInboxText", "TakeInboxItem", "TakeInboxMoney",
+		"ReturnInboxItem", "DeleteInboxItem", "AutoLootMailItem",
+		"CheckInbox", "MailFrame", "SendMailFrame",
+		"SendMailCODButton", "SendMailMoneyButton",
+	}) do
+		GM.Print(format("%-26s %s", n,
+			_G[n] == nil and "nil" or tostring(_G[n])))
+	end
+	if C_Mail then
+		local names = {}
+		for k in pairs(C_Mail) do names[#names + 1] = tostring(k) end
+		sort(names)
+		GM.Print("C_Mail: " .. table.concat(names, ", "))
+	else
+		GM.Print("C_Mail: nil")
+	end
+	if SetSendMailCOD then
+		local ok, err = pcall(SetSendMailCOD, 100)
+		GM.Print("SetSendMailCOD(100) → " .. tostring(ok)
+			.. " " .. tostring(err))
+		if ClearSendMail then pcall(ClearSendMail) end
+	end
+	if GetInboxNumItems and GetInboxHeaderInfo then
+		local n = tonumber(GetInboxNumItems()) or 0
+		GM.Print("inbox items: " .. n)
+		if n > 0 then
+			local t = { GetInboxHeaderInfo(1) }
+			for i, v in ipairs(t) do
+				GM.Print(format("  header[%d] = %s", i, tostring(v)))
+			end
+		end
+	end
+	local named = {}
+	for k, v in pairs(_G) do
+		if type(k) == "string" and type(v) == "function"
+			and (k:find("COD") or k:find("SendMail")
+			     or k:find("Inbox")) then
+			named[#named + 1] = k
+		end
+	end
+	sort(named)
+	GM.Print("mail-ish globals: " .. table.concat(named, ", "))
+	if GM.db then
+		GM.db.dbgDump = table.concat(GM.dbgCap, "\n")
+	end
+	GM.dbgCap = nil
+	GM.Print("captured — /reload flushes to SavedVariables (dbgDump)")
+end

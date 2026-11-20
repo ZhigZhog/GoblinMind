@@ -181,6 +181,10 @@ SlashCmdList.GOBLINMIND = function(msg)
 		GM.Crafting.CraftProbe(strtrim(msg:sub(11)))
 		return
 	end
+	if msg:sub(1, 8) == "codprobe" then
+		GM.MailUI.CodProbe()
+		return
+	end
 	if msg:sub(1, 7) == "deprobe" then
 		-- dump the raw GetItemInfo fields DisenchantDrops gates on, plus
 		-- its result — isolates client return-shape quirks vs table bugs
