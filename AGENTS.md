@@ -784,8 +784,30 @@ Primary data = the in-house book feed below.
   creature+reference loot, quest rewards → item_template class=9
   teach-spells (trigger is ON_USE=0 on cmangos, NOT 6); template
   ids resolve through creature_template Trainer/VendorTemplateId.
-  Gap: skill-line-gated recipes (bandages) come through DBC
-  SkillLineAbility — no world-DB rows, so they emit no source.
+- **vmangos augmentation** (2026-11-19):
+  `brain/import_vmangos_db.py` merges `brain/data/mangos.sqlite`
+  (vmangos db-sqlite release — gitignored, download once) on top of
+  the cmangos JSON; re-running enriches existing rows (dedupe by
+  (kind,name) backfills missing zone/town/pos/req/cost/chance keys).
+  Coverage 2,615→4,035 spells. Its joins differ: `skill_line_ability`
+  (build=5875) covers the DBC-gated trainer spells cmangos lacks —
+  learn_on_get_skill 0→"any <Prof> trainer" (generic, defers to named
+  rows), 1→`auto` kind, 2=class spells (skipped). Learn-spell chain:
+  item_template class=9 `spellid_N` → spell_template `effectN=36` /
+  `effectTriggerSpellN` = craft spell. **Zone/town resolution** (the
+  db has no creature→zone table): `creature` spawn (id..id5 columns)
+  → `pos`; `taxi_nodes` (~105 rows, names like 'Stonard, Swamp of
+  Sorrows' — the comma suffix IS the zone) → `zone` via nearest
+  same-map node, `town` when <3000yd; `points_of_interest` (250
+  subzone landmarks, NO map column — assigned by nearest spawn
+  density) → `town` when <800yd, outranks taxi town; quest `zone`
+  = `quest_template.ZoneOrSort` → `area_template.name` (exact, but
+  only 24/136 quests have it). NPCs absent from spawns/templates get
+  backfilled via a name→geo index (Kartosh case — his npc_trainer
+  entry differs from his spawned entry). Uncomma'd taxi names
+  ('Northshire Abbey', 'Moonglade') have no zone part → map_name
+  fallback. Drops capped at top-6/spell by chance (87k raw → ~3k);
+  imported `chance` is the emulator's static rate, not observed.
 - **Centered single-line labels anchor, don't justify**
   (issue #9 follow-up, 2026-11-18): `SetAllPoints()` +
   `SetJustifyH("CENTER")` on a fontstring does NOT survive —

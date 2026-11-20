@@ -1137,7 +1137,18 @@ function CU.Refresh()
 				elseif s.kind == "auto" then
 					p = "• " .. (s.name or "learned automatically")
 				end
-				if p then parts[#parts + 1] = p end
+				if p then
+					-- location tail: " — Town, Zone" when both are
+					-- known, else whichever we have (pos yards stay
+					-- data-only — useless to display raw)
+					local loc = s.town and s.zone
+						and (s.town .. ", " .. s.zone)
+						or (s.zone or s.town)
+					if loc and s.kind ~= "auto" then
+						p = p .. " — " .. loc
+					end
+					parts[#parts + 1] = p
+				end
 			end
 			if #parts > 0 then srcTxt = table.concat(parts, "\n") end
 		end
