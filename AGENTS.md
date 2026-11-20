@@ -29,10 +29,12 @@ Primary data = the in-house book feed below.
   self -v --feed book` — so `brain.log`, `book_history.json`, and
   `filed_bugs.json` live in the mod dir, not the dev tree. `watch
   self` derives every path from the script location (no feeds.json
-  needed — the release never ships one). `goblin-watch.bat` is
-  dual-mode: inside `...\Interface\AddOns\` it runs `watch self`,
-  anywhere else (dev tree) it falls back to `watch forever`.
-  `scripts\brain-watch.bat` / `watch forever` remain the dev feed —
+  needed — the release never ships one). A bare `goblin_brain.py`
+  run is dual-mode — the launcher role `goblin-watch.bat` played
+  before CurseForge moderation banned .bat files in uploads
+  (2026-11): inside `...\Interface\AddOns\` it first-run-registers
+  autostart then `watch self`; anywhere else (dev tree) it falls
+  back to `watch forever`. `watch forever` remains the dev feed —
   the in-house feed. It re-emits `GoblinMindDB` on
   BOTH triggers: SavedVariables flush (/reload, logout → newest book
   wins per item, ledger sums across chars) AND settled AppData
@@ -152,7 +154,7 @@ Primary data = the in-house book feed below.
   `::1`) and a request hits ConnectionRefused, the watcher spawns
   the sibling `goblin_server.py` itself (120s throttle, gives up
   for the run if the port doesn't open). Never fires for remote
-  URLs. This is what makes "run goblin-watch.bat once" the whole
+  URLs. This is what makes "run goblin_brain.py once" the whole
   manual story — found 2026-11-18 when onboarding told testers to
   start the watcher but never mentioned the server.
   **Spawned hidden + logged**: the spawn uses CREATE_NO_WINDOW
@@ -258,10 +260,10 @@ Primary data = the in-house book feed below.
   (`sync-addons.bat` robocopy-deploys into the AddOns dir).
 - **Release packaging**: always `python scripts\package-release.py
   <version>` → `dist\GoblinMind-<version>.zip`. The zip MUST ship the
-  brain as `GoblinMind/brain/{goblin_brain.py, goblin-watch.bat}`
-  (same layout `sync-addons.bat` deploys — `watch self` derives the
-  install root from it). An addons-only zip is broken — v0.2.0's first
-  upload missed it. Release flow: merge → bump `## Version:` in both
+  brain as `GoblinMind/brain/goblin_brain.py` (+ the BRAIN_FILES
+  allowlist — NO .bat files, CurseForge moderation bans them; a bare
+  goblin_brain.py run IS the launcher). An addons-only zip is
+  broken — v0.2.0's first upload missed it. Release flow: merge → bump `## Version:` in both
   .tocs → package → `git tag -a v<version>` (ANNOTATED — a lightweight
   `git tag` is silently skipped by --follow-tags; v0.1.1-beta needed
   a manual `git push origin v0.1.1-beta` because of this) →
@@ -685,10 +687,10 @@ Primary data = the in-house book feed below.
   clears pending flags. `install.py` non-host path is register-only
   (no prompts — config is in-game); `--host` keeps the interactive
   server path + writes `backend-invite.txt` (durable URL+key share
-  card beside the bat). **`goblin-watch.bat` self-registers**: on
+  card beside the bat). **bare `goblin_brain.py` self-registers**: on
   first run inside a WoW install it calls `install.py --register`
-  (writes the per-user Startup bat only) and prints the undo path —
-  one double-click is ever needed. `GM.EmitAge()` (secs since
+  (writes the per-user Startup bat only) — one double-click is ever
+  needed. `GM.EmitAge()` (secs since
   `GoblinMindDB.generated`) drives companion-app hints — >900s =
   silent. `GM.db.hideUnlearned` = spoiler-free crafting (RecipeRows
   skips unlearned rows); toggled on the OPTIONS page.
@@ -756,8 +758,8 @@ Primary data = the in-house book feed below.
 - **First-install/onboarding contract** (issues #5/#8, 2026-11-18):
   `Onboarding.MaybeShow` runs once per install off a persisted
   `GM.db.onboarded` flag — the in-game flow is the PRIMARY config
-  path (install.bat only registers the watcher + Blizzard API;
-  `install.bat --host` is the server-host path). Never gate the
+  path (install.py only registers the watcher + Blizzard API;
+  `install.py --host` is the server-host path). Never gate the
   first-run prompt on `GoblinMindDB.backend` presence — the shipped
   Data.lua may not carry the block, which silently skipped
   onboarding for every fresh install.

@@ -931,7 +931,7 @@ def _port_open(host, port, timeout=2):
 
 
 def _maybe_start_local_backend(cfg, err):
-    """'Run goblin-watch.bat once' is the whole manual story — so when
+    """'Run goblin_brain.py once' is the whole manual story — so when
     the configured backend URL is loopback but refuses connections,
     and goblin_server.py sits beside this script, spawn it ourselves.
     Never fires for remote URLs (that host is someone else's machine)
@@ -2085,7 +2085,7 @@ def _brain_emit():
     the absolute path in a copyable box (the addon can't resolve its
     own install dir, but the watcher knows exactly where it sits)."""
     d = os.path.dirname(os.path.abspath(__file__))
-    return {'dir': d, 'bat': os.path.join(d, 'goblin-watch.bat')}
+    return {'dir': d, 'bat': os.path.join(d, 'goblin_brain.py')}
 
 
 def _lan_ip():
@@ -2155,7 +2155,7 @@ _WATCH_LOCK_FH = None
 
 
 def _watch_single_instance():
-    """Only one watcher per brain dir — a second goblin-watch.bat
+    """Only one watcher per brain dir — a second goblin_brain.py
     double-click (the onboarding app page says to!) while a watcher
     already runs would race emits and double-hit the backend rate
     limit. Byte-locks watcher.lock for the process lifetime; a
@@ -2403,7 +2403,40 @@ def cmd_watch(appdata, outs, interval=5, settle=20, feed='tsm',
         time.sleep(interval)
 
 
+def _bare_watch_args():
+    """Bare `goblin_brain.py` run = the launcher role the deleted
+    goblin-watch.bat played (CurseForge moderation bans .bat files in
+    uploads, 2026-11): same dual-mode — inside a WoW install it
+    first-run-registers the watcher to start with Windows, then
+    `watch self`; in the dev tree `watch forever` (self needs the
+    AddOns layout)."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    if re.search(r'[\\/]Interface[\\/]AddOns[\\/]', here, re.I):
+        startup = os.path.join(
+            os.environ.get('APPDATA', ''), 'Microsoft', 'Windows',
+            'Start Menu', 'Programs', 'Startup',
+            'goblinmind-brain-watch.bat')
+        # one double-click is ever needed — register autostart once
+        if os.name == 'nt' and not os.path.exists(startup):
+            try:
+                subprocess.call([sys.executable,
+                                 os.path.join(here, 'install.py'),
+                                 '--register'])
+            except Exception as e:
+                print(f'autostart registration failed ({e}) — '
+                      'continuing anyway')
+        print('starting watcher — watch self (leave running; close '
+              'window to stop)')
+        return ['watch', 'self', '-v', '--feed', 'book']
+    print('dev tree — self needs a WoW install; starting watcher '
+          'with the forever feed')
+    return ['watch', 'forever', '-v', '--feed', 'book']
+
+
 def main():
+    argv = sys.argv[1:]
+    if not argv:
+        argv = _bare_watch_args()
     ap = argparse.ArgumentParser()
     ap.add_argument('cmd', choices=['dump', 'emit', 'watch', 'bugs',
                                     'book', 'feeds', 'api'])
@@ -2423,7 +2456,7 @@ def main():
                         os.path.abspath(__file__)), 'brain.log'),
                     help='log file (default: brain.log next to the script; '
                          'empty string disables)')
-    a = ap.parse_args()
+    a = ap.parse_args(argv)
     setup_logging(a.verbose, a.log or None)
     if a.cmd == 'feeds':
         feeds = load_feeds()

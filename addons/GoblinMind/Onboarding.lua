@@ -378,7 +378,7 @@ local function Build()
 		"One last thing — GoblinMind's number-cruncher lives outside "
 		.. "the game, and it hasn't started yet.\n\n"
 		.. "1. Open this folder:\n"
-		.. "2. Double-click goblin-watch.bat\n\n"
+		.. "2. Double-click goblin_brain.py\n\n"
 		.. GM.CC("textDim")
 		.. "That's the only time you ever have to. It sets itself to "
 		.. "start with Windows, then keeps prices and bug reports "
@@ -537,7 +537,7 @@ end
 function OB.MaybeShow()
 	if not GM.db then return end
 	-- first install: show once regardless of any config state — the
-	-- in-game flow IS the primary path (install.bat exists for the
+	-- in-game flow IS the primary path (install.py exists for the
 	-- server host + autostart, not for the connect step itself).
 	-- Flag before Show so a mid-login crash can't loop the prompt.
 	if not GM.db.onboarded then

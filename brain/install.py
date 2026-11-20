@@ -2,7 +2,7 @@
 """GoblinMind post-extract installer (Windows).
 
 Run from the installed addon dir — Interface/AddOns/GoblinMind/brain/
-— or via install.bat. Sets up the pieces that can't ship pre-made:
+. Sets up the pieces that can't ship pre-made:
 
   * feeds.json        — `backend` block (crowdsourced feed): the
                         goblin_server URL, this install's name, and
@@ -345,8 +345,8 @@ def main():
                     help='remove the Startup entries and exit')
     ap.add_argument('--register', action='store_true',
                     help='write only the watcher Startup entry and '
-                         'exit — called by goblin-watch.bat on first '
-                         'run so one double-click is ever needed')
+                         'exit — called by a bare goblin_brain.py run on '
+                         'first launch so one double-click is ever needed')
     a = ap.parse_args()
 
     if a.register:
@@ -384,10 +384,10 @@ def main():
             write_bat(WATCH_BAT, 'GoblinMind Brain',
                       'python goblin_brain.py watch self -v --feed book')
             print('watcher registered — starts at next login (or '
-                  'double-click goblin-watch.bat to run it now)')
+                  'double-click goblin_brain.py to run it now)')
             print('all configuration happens in game — the onboarding '
                   'wizard or /goblin backend')
-            print('to HOST a backend for others, rerun: install.bat '
+            print('to HOST a backend for others, rerun: install.py '
                   '--host')
         else:
             print('skipped Startup entries — not inside Interface/AddOns')
@@ -489,7 +489,7 @@ def main():
         # a Startup bat pointing here would silently die at login
         print('  skipped Startup entries — not inside Interface/AddOns')
     print('done — the watcher starts at next login (or run '
-          'goblin-watch.bat now). /reload in game to pick it up.')
+          'goblin_brain.py now). /reload in game to pick it up.')
 
 
 if __name__ == '__main__':

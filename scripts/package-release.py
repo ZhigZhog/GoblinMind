@@ -3,8 +3,9 @@
 
 Canonical layout (must match scripts/sync-addons.bat):
     GoblinMind/            addons/GoblinMind/**           (the addon)
-    GoblinMind/brain/      brain/goblin_brain.py
-                           brain/goblin-watch.bat         (the feed watcher)
+    GoblinMind/brain/      brain/goblin_brain.py          (watcher —
+                           bare run = the launcher; NO .bat files —
+                           CurseForge moderation bans them)
     GoblinMind_Data/       addons/GoblinMind_Data/**      (generated DB)
 
 Usage: python scripts/package-release.py <version>
@@ -16,9 +17,9 @@ import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ADDONS = ("GoblinMind", "GoblinMind_Data")
-BRAIN_FILES = ("goblin_brain.py", "goblin-watch.bat", "vendor_buy.json",
+BRAIN_FILES = ("goblin_brain.py", "vendor_buy.json",
                "recipe_sources.json",
-               "goblin_server.py", "install.py", "install.bat",
+               "goblin_server.py", "install.py",
                "feeds.example.json", "goblin_server.example.json")
 
 

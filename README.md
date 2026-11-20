@@ -22,19 +22,20 @@ bug reports file themselves to the issue tracker (see Bug reports).
    `Interface/AddOns/GoblinMind/` and `Interface/AddOns/GoblinMind_Data/`.
 2. Enable both addons at the character select screen.
 3. **Start the brain** — double-click
-   `Interface/AddOns/GoblinMind/brain/goblin-watch.bat` once while
-   you play. On first run it self-registers to start with Windows,
-   then keeps prices and bug reports moving on its own — **zero
-   prompts, zero configuration**. Everything configurable (backend,
-   Blizzard API, scopes) is staged by the in-game wizard and the
-   watcher folds it into `feeds.json` itself. Point it at a backend
-   on the same PC and it starts the server for you, too.
-   - `install.bat` does the same registration non-interactively;
-     use `install.bat --remove` to undo.
+   `Interface/AddOns/GoblinMind/brain/goblin_brain.py` once while
+   you play (needs Python 3.x). On first run it self-registers to
+   start with Windows, then keeps prices and bug reports moving on
+   its own — **zero prompts, zero configuration**. Everything
+   configurable (backend, Blizzard API, scopes) is staged by the
+   in-game wizard and the watcher folds it into `feeds.json` itself.
+   Point it at a backend on the same PC and it starts the server for
+   you, too.
+   - `python install.py` does the same registration
+     non-interactively; `--remove` undoes it.
    - To **host** the shared backend on your machine, run
-     `install.bat --host` (starts `goblin_server.py` now and opens
-     TCP 8765 through Windows Firewall — one UAC prompt), then hand
-     players the URL + install key it prints.
+     `python install.py --host` (starts `goblin_server.py` now and
+     opens TCP 8765 through Windows Firewall — one UAC prompt), then
+     hand players the URL + install key it prints.
 4. `/reload` (or relog). First login walks the onboarding wizard:
    **backend** (CONNECT → next page; SKIP → import; LATER re-asks —
    re-open with `/goblin backend`), **Blizzard API** (free creds from
@@ -182,7 +183,7 @@ cross-install coverage. `/goblin backend` opens the onboarding dialog
 (server URL, callsign, key if the host uses one); CONNECT stages a
 request through SavedVariables and the watcher applies it — no restart.
 `/goblin status` prints feed health, install count, and last
-upload/pull. Self-host: `install.bat --host` on the server machine,
+upload/pull. Self-host: `install.py --host` on the server machine,
 then hand the printed URL + key to your installs. Everything works
 without the backend — your own scans and the mesh are sufficient.
 
