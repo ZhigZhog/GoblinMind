@@ -90,6 +90,7 @@ end
 
 -- /goblin craftdebug — dump every profession API + category walks
 function C.Debug(matchName)
+	GM.dbgCap = {}
 	GM.Print("— tradeskill API probe —")
 	GM.Print("global GetTradeSkillLine: " .. tostring(
 		GetTradeSkillLine and GetTradeSkillLine() or GetTradeSkillLine))
@@ -318,12 +319,19 @@ function C.Debug(matchName)
 		end
 	end
 	if shown == 0 then GM.Print("no recipes matched") end
+	if GM.db then
+		GM.db.dbgDump = table.concat(GM.dbgCap, "\n")
+	end
+	GM.dbgCap = nil
+	GM.Print("captured — /reload flushes it to SavedVariables "
+		.. "(search dbgDump)")
 end
 
 -- /goblin craftprobe <recipeID|name> — enumerate every craft-shaped
 -- API on this client and fire CraftRecipe with full result capture.
 -- Run with the tradeskill window open; says exactly what the call did.
 function C.CraftProbe(match)
+	GM.dbgCap = {}
 	GM.Print("— craft API probe —")
 	-- trailing flag word switches the call under test:
 	--   "t" → same cast inside C_Timer.After (is the wall timing or
@@ -406,6 +414,12 @@ function C.CraftProbe(match)
 			call()
 		end
 	end
+	if GM.db then
+		GM.db.dbgDump = table.concat(GM.dbgCap, "\n")
+	end
+	GM.dbgCap = nil
+	GM.Print("captured — /reload flushes it to SavedVariables "
+		.. "(search dbgDump)")
 end
 
 -- linked/guild/NPC tradeskill frames show someone ELSE's recipes

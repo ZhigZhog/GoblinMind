@@ -58,9 +58,13 @@ function GM.Print(...)
 	-- the report so a stranger sees what the addon just did
 	local parts = {}
 	for i = 1, select("#", ...) do parts[i] = tostring(select(i, ...)) end
-	GM.log[#GM.log + 1] = table.concat(parts, " ")
+	local line = table.concat(parts, " ")
 		:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
+	GM.log[#GM.log + 1] = line
 	if #GM.log > 40 then table.remove(GM.log, 1) end
+	-- debug probes opt into a bigger sink — craftdebug/craftprobe
+	-- flush it into SV so /reload writes the full output to disk
+	if GM.dbgCap then GM.dbgCap[#GM.dbgCap + 1] = line end
 end
 
 -- Item-arg parse shared by price/inv: accepts real chat links
