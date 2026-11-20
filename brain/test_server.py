@@ -5,7 +5,8 @@ Runs the real Handler in-process on an ephemeral port against a temp
 DB + temp goblin_server.json, so no live server is touched. Covers:
 open + keyed registration, re-key on duplicate names, bearer auth,
 payload validation/cleaning, newest-wins merge + lots ownership,
-staleness cutoff + GC, the client-t clamp, and the rate limit.
+staleness cutoff + direct GC, the client-t clamp, install uuid
+persistence + last_seen, crowd drop aggregation, and the rate limit.
 
     python brain/test_server.py        # exits nonzero on any failure
 """
@@ -64,6 +65,7 @@ def main():
     tmp = tempfile.mkdtemp(prefix='goblin-server-test-')
     gs.DB_PATH = os.path.join(tmp, 'test.db')
     gs.CFG_PATH = os.path.join(tmp, 'goblin_server.json')
+    gs.init_db()   # the test bypasses gs.main(), which owns startup DDL
     gs.Handler.log_message = lambda *a, **k: None  # quiet access log
     srv = ThreadingHTTPServer(('127.0.0.1', 0), gs.Handler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
@@ -164,15 +166,39 @@ def main():
         {'scope': S, 't': old, 'items': {'8': item(1)}}, tok_s)
     c, b = req(base, '/v1/book?scope=' + S)
     check('8-day-old upload aged out of merge', '8' not in b['items'])
-    # GC ticks at most hourly (_last_gc clock) — reset it so the next
-    # GET exercises the delete path deterministically
-    gs._last_gc[0] = 0
-    req(base, '/v1/book?scope=' + S)
+    # GC runs on its own daemon thread hourly (_gc_loop) — invoke the
+    # same routine directly rather than relying on a request trigger
     conn = sqlite3.connect(gs.DB_PATH)
+    gs._gc(conn, force=True)
     n = conn.execute('SELECT COUNT(*) FROM uploads WHERE t=?',
                      (old,)).fetchone()[0]
     conn.close()
-    check('stale row GC\'d once the hourly tick fires', n == 0, n)
+    check('stale row GC\'d', n == 0, n)
+
+    print('== install identity (uuid + last_seen) ==')
+    c, r = req(base, '/v1/register',
+               {'name': 'uid-a', 'uuid': 'uuid-aaa'})
+    check('register echoes client uuid',
+          c == 200 and r.get('uuid') == 'uuid-aaa', r)
+    tok_ua = r['token']
+    c, h = req(base, '/v1/health')
+    ua = next((i for i in h.get('installs') or []
+               if i['name'] == 'uid-a'), None)
+    check('health carries uuid',
+          ua is not None and ua.get('uuid') == 'uuid-aaa', ua)
+    check('seen empty before first upload',
+          ua is not None and not ua.get('seen'), ua)
+    c, _ = req(base, '/v1/upload',
+               {'scope': S, 't': now, 'items': {'1': item()}}, tok_ua)
+    check('uuid install can upload', c == 200, c)
+    c, h = req(base, '/v1/health')
+    ua = next((i for i in h.get('installs') or []
+               if i['name'] == 'uid-a'), None)
+    check('upload stamps last_seen',
+          ua is not None and ua.get('seen'), ua)
+    c, r = req(base, '/v1/register', {'name': 'uid-a'})
+    check('re-register without uuid keeps stored one',
+          c == 200 and r.get('uuid') == 'uuid-aaa', r)
 
     print('== rate limit ==')
     c, r = req(base, '/v1/register', {'name': 'spammer'})

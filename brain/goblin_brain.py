@@ -33,6 +33,7 @@ import tempfile
 import time
 import urllib.parse
 import urllib.request
+import uuid
 
 LOG = logging.getLogger('goblin_brain')
 
@@ -1000,12 +1001,32 @@ def _backend_fail_hint(cfg, e):
     return ''
 
 
+def _install_uuid():
+    """Stable per-install identity — generated once, persisted in
+    api_state, sent on backend register so the server knows WHICH
+    client each bearer token belongs to (no handmade accounts). The
+    same anchor will key writ contracts: in-game it rides emitted
+    state, externally it's the install's public handle (the bearer
+    token stays the secret half)."""
+    st = _load_api_state()
+    uid = st.get('install_uuid')
+    if not uid:
+        uid = str(uuid.uuid4())
+        st['install_uuid'] = uid
+        _save_api_state(st)
+    return uid
+
+
 def _backend_token(cfg):
     st = _load_api_state()
     tok = st.get('backend_token')
-    if tok:
+    uid = _install_uuid()   # lazily creates the install's stable id
+    if tok and st.get('backend_uuid_sent'):
         return tok
-    body = {'name': cfg.get('name') or 'goblinmind'}
+    # register: fresh token, or a one-time re-register so installs
+    # that predate uuids still push their identity to the server —
+    # flagged on success so this only happens once
+    body = {'name': cfg.get('name') or 'goblinmind', 'uuid': uid}
     key = cfg.get('key') or _local_server_secret(cfg)
     if key:
         body['key'] = key  # shared install secret (server-gated)
@@ -1017,8 +1038,14 @@ def _backend_token(cfg):
         resp = json.load(urllib.request.urlopen(req, timeout=30))
     except urllib.error.URLError as e:
         _maybe_start_local_backend(cfg, e)
+        if tok:
+            return tok  # existing token still works — retry next call
         raise
     st['backend_token'] = resp['token']
+    st['backend_install_id'] = resp.get('install_id')
+    st['backend_uuid_sent'] = True
+    if resp.get('uuid'):
+        st['install_uuid'] = resp['uuid']
     _save_api_state(st)
     return resp['token']
 
@@ -1978,7 +2005,12 @@ def process_bugs(appdata, root=None):
                             body or '', re.M)
             labels = [f'v{ver.group(1)}'] if ver else []
             if labels:
-                ensure_labels(token, labels)
+                try:
+                    ensure_labels(token, labels)
+                except Exception:
+                    labels = []  # filing matters more than the tag —
+                                 # a label-create failure must not
+                                 # block the issue itself
             url = file_issue(token, title, body or title, labels)
             filed[rid] = url
             newly.append((rid, url))
@@ -2145,6 +2177,10 @@ def _backend_emit():
     if cfg.get('url'):
         out['url'] = cfg['url']
         out['name'] = cfg.get('name') or 'goblinmind'
+    # the public half of install identity — emitted even with no
+    # backend configured so the same uuid anchors in-game writs.
+    # Safe to emit: the bearer token stays in api_state.
+    out['install'] = st.get('install_uuid') or _install_uuid()
     if st.get('backend_req_at'):
         out['ack'] = st['backend_req_at']
     # newest failed direction wins — its err string rides the record
