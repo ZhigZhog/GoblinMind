@@ -5,8 +5,11 @@ Forever** (interface `16001`). Price model, execution planner, crafting
 planner, ledger, group/operation system, session takeovers — TSM-styled
 dark UI, **no TSM required**.
 
-**0.1 Beta** — first public beta (CurseForge). Expect rough edges;
-bug reports file themselves to the issue tracker (see Bug reports).
+**0.1.2-beta** — live on
+[CurseForge](https://www.curseforge.com/wow/addons/goblinmind) and
+[Releases](https://github.com/ZhigZhog/GoblinMind/releases).
+Expect rough edges; bug reports file themselves to the issue
+tracker (see Bug reports).
 
 ## Requirements
 
@@ -114,7 +117,8 @@ fast in-and-out camping without a continuous scan running.
 Replaces the professions frame. Left: professions + custom categories.
 Middle: recipe list with profit, craftable count, and queue controls —
 including **unlearned recipes within your level range** (grayed, with
-acquisition info in the detail pane; they can never be queued).
+acquisition info in the detail pane — trainer/vendor/drop/quest
+sources with named NPCs, towns and zones; they can never be queued).
 Right: detail — material locations across bags/bank/mail/gbank/AH/alts,
 full cost vs effective cost (mats you already own), profit vs buying
 the mats. QUEUE builds a stock plan; the plan executes through the
@@ -213,6 +217,7 @@ without the backend — your own scans and the mesh are sufficient.
 | `/goblin price <item> <expr>` | per-item custom price source |
 | `/goblin inv <item>` | inventory breakdown for an item |
 | `/goblin backend` | backend onboarding / reconfigure |
+| `/goblin onboard` | replay the first-run onboarding wizard |
 | `/goblin import` | addon-settings import screen (TSM etc.) |
 | `/goblin status` | feed, backend, and mesh health |
 | `/goblin perf` | 8s diagnostic sample (counters, frame walk) |
