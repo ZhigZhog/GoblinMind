@@ -881,7 +881,7 @@ function MU.CodProbe()
 		if ClearSendMail then pcall(ClearSendMail) end
 	end
 	if GetInboxNumItems and GetInboxHeaderInfo then
-		local n = tonumber(GetInboxNumItems()) or 0
+		local n = tonumber((GetInboxNumItems())) or 0
 		GM.Print("inbox items: " .. n)
 		if n > 0 then
 			local t = { GetInboxHeaderInfo(1) }
