@@ -1907,10 +1907,33 @@ def gh_token():
     return None
 
 
-def file_issue(token, title, body):
+def ensure_labels(token, labels):
+    """Create any missing labels — the API 422s on duplicates, which
+    is the happy path for 'already exists'. Version labels are
+    created on demand so every build files under its own tag."""
+    for name in labels:
+        req = urllib.request.Request(
+            f'https://api.github.com/repos/{REPO}/labels',
+            data=json.dumps({'name': name, 'color': 'bfd4f2'}).encode(),
+            method='POST',
+            headers={
+                'Authorization': f'Bearer {token}',
+                'Accept': 'application/vnd.github+json',
+                'User-Agent': 'goblinmind-brain',
+                'Content-Type': 'application/json',
+            })
+        try:
+            urllib.request.urlopen(req, timeout=20).close()
+        except urllib.error.HTTPError as e:
+            if e.code != 422:
+                raise
+
+
+def file_issue(token, title, body, labels=()):
     req = urllib.request.Request(
         f'https://api.github.com/repos/{REPO}/issues',
-        data=json.dumps({'title': title, 'body': body}).encode(),
+        data=json.dumps({'title': title, 'body': body,
+                         'labels': list(labels)}).encode(),
         method='POST',
         headers={
             'Authorization': f'Bearer {token}',
@@ -1949,7 +1972,14 @@ def process_bugs(appdata, root=None):
             payload = bytes.fromhex(hexbody).decode('utf-8')
             title, _, body = payload.partition('\n')
             title = ('[in-game] ' + (title or 'bug report'))[:120]
-            url = file_issue(token, title, body or title)
+            # tag the filing build — diagnostics carry 'version: X';
+            # every version gets its own issue label
+            ver = re.search(r'^version:\s*([0-9][\w.\-]*)',
+                            body or '', re.M)
+            labels = [f'v{ver.group(1)}'] if ver else []
+            if labels:
+                ensure_labels(token, labels)
+            url = file_issue(token, title, body or title, labels)
             filed[rid] = url
             newly.append((rid, url))
             LOG.info('filed %s -> %s', rid, url)
