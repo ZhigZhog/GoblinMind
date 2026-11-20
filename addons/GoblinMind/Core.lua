@@ -118,6 +118,20 @@ SlashCmdList.GOBLINMIND = function(msg)
 		if GM.Onboard then GM.Onboard.Show() end
 		return
 	end
+	if msg == "onboard" then
+		-- replay first-run: wipe only the wizard's display flags so
+		-- the next login hits the pristine `not onboarded` branch —
+		-- book/ledger/groups/backend state all untouched
+		if GM.db then
+			GM.db.onboarded = nil
+			GM.db.obDone = nil
+			GM.db.obDismissed = nil
+			GM.db.obDbg = nil
+		end
+		if GM.Onboard then GM.Onboard.Show() end
+		GM.Print("onboarding reset — pops at every login until DONE")
+		return
+	end
 	if msg == "import" then
 		if GM.Onboard then GM.Onboard.Show("import") end
 		return
