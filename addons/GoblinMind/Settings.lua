@@ -272,10 +272,11 @@ local function StageApiReq(clientId, secret, region, scope)
 end
 GM.StageApiReq = StageApiReq
 
--- seconds since the watcher's last emit (nil = never seen) — the
--- onboarding and bug reporter warn "start the watcher" off this;
--- a quiet install can go a few minutes between emits, callers pick
--- their own stale threshold
+-- seconds since the watcher's last emit (nil = never seen). This
+-- measures the LOADED snapshot — it grows all session even with a
+-- live watcher. "Is the app running" gates use GM.emitAgeAtLogin
+-- (captured at ADDON_LOADED in Core.lua); "is my data stale" gates
+-- keep this. Callers pick their own threshold.
 function GM.EmitAge()
 	local gen = GoblinMindDB and GoblinMindDB.generated
 	return gen and (time() - gen) or nil

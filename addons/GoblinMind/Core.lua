@@ -28,6 +28,10 @@ GM.frame:SetScript("OnEvent", function(_, event, arg1)
 		ApplyDefaults(GoblinMindSettings, DEFAULTS)
 		GM.db = GoblinMindSettings
 		GoblinMindPrices = GoblinMindPrices or { customSources = {} }
+		-- GoblinMindDB freezes at load: its emit age only measures
+		-- watcher liveness AT LOGIN — capture it now so the bug
+		-- reporter doesn't flag a 2h-old session as "no app running"
+		GM.emitAgeAtLogin = GM.EmitAge and GM.EmitAge() or nil
 		if GM.Ledger then GM.Ledger.Init() end
 		if GM.Groups then GM.Groups.Init() end
 		if GM.History then GM.History.Init() end

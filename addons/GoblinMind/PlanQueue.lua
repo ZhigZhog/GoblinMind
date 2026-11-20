@@ -139,6 +139,7 @@ local LEFT_W = 464
 local HEAD_COLS = {
 	postscan     = { "ITEM", "POST @" },
 	cancelscan   = { "ITEM", "UNDER @" },
+	shopscan     = { "ITEM", "BUY @" },
 	craft        = { "ITEM", "SOURCE" },
 	vendoring    = { "ITEM", "VENDOR" },
 	warehousing  = { "ITEM", "WHERE" },
@@ -498,7 +499,12 @@ local function Build()
 	ui.clear.text:SetPoint("CENTER")
 	ui.clear.text:SetWordWrap(false)
 	ui.clear.text:SetText("CLEAR")
-	ui.clear:SetScript("OnClick", function() PQ.ClearPlan() end)
+	-- manual CLEAR abandons the scan context too — 0-hit scan
+	-- finishes also call ClearPlan but keep scanMode for RESCAN
+	ui.clear:SetScript("OnClick", function()
+		PQ.scanMode = nil
+		PQ.ClearPlan()
+	end)
 	ui.clear:SetScript("OnEnter", function()
 		if ui.clear:IsEnabled() then GM.Panel(ui.clear, "contHigh") end
 	end)
@@ -641,6 +647,24 @@ function PQ.ClearPlan()
 	PQ.stepIndex = 1
 	PQ.lossConfirm = nil
 	PQ.protectedOk = {}
+	PQ.itemFresh = nil
+	PQ.Refresh()
+end
+
+-- a scan starting invalidates the armed plan — its asks/undercuts
+-- predate the query. Clear at START (not at finish) so no stale
+-- step stays clickable mid-scan; the new plan lands via SetScanPlan.
+-- pendingBuy lives on PQ so the mail-transit dedupe survives, and
+-- scanMode records which scan ran so RESCAN still works on the
+-- cleared/nil plan (0-hit scans leave nothing to read mode from).
+function PQ.ScanStart(mode)
+	PQ.scanMode = mode
+	PQ.plan = nil
+	PQ.stepIndex = 1
+	PQ.budgetConfirm = nil
+	PQ.budgetWarn = nil
+	PQ.lossConfirm = nil
+	PQ.protectedOk = {}
 	PQ.Refresh()
 end
 
@@ -664,6 +688,9 @@ end
 function PQ.SetScanPlan(plan)
 	Build()
 	PQ.plan = plan
+	PQ.scanMode = (plan.mode == "postscan" or plan.mode == "cancelscan"
+		or plan.mode == "shopscan") and plan.mode or nil
+	PQ.itemFresh = nil -- a landing plan supersedes the retarget flag
 	PQ.stepIndex = 1
 	PQ.homeMode = false
 	PQ.budgetConfirm = nil
@@ -679,6 +706,8 @@ function PQ.SetItem(itemID, itemLink)
 	PQ.itemID = itemID
 	PQ.item = itemLink
 	PQ.scan = nil
+	PQ.scanMode = nil -- retargeting supersedes "rerun last scan"
+	PQ.itemFresh = true -- and outranks the armed plan's mode on rescan
 	-- inspecting an item must not erase work: a plan with unfinished
 	-- steps survives — the step list keeps running while the stats
 	-- pane shows the inspected item. Only a finished/empty plan clears.
@@ -692,6 +721,19 @@ function PQ.SetItem(itemID, itemLink)
 end
 
 function PQ.Rescan()
+	-- a retargeted item outranks the armed plan's mode — shift+click
+	-- says "look at THIS", so RESCAN re-solves it instead of firing
+	-- the shop/post scan the still-armed plan came from
+	if PQ.itemFresh and PQ.itemID and GM.AH.open then
+		local workID = PQ.itemID
+		local name = GetInfo and GetInfo(workID)
+		GM.Auctioning.StopScan()
+		PQ.ScanStart()
+		GM.AH.ScanItem(workID, name, function(asks)
+			PQ.Solve(asks, workID)
+		end)
+		return
+	end
 	-- craft plans re-emit, not re-solve: fresh inventory + prices
 	-- re-evaluate fetch/alt/buy and sub-craft choices — no AH needed
 	if PQ.plan and PQ.plan.mode == "craft" then
@@ -709,8 +751,10 @@ function PQ.Rescan()
 		ui.summary:SetText(GM.CC("warn") .. "auction house is not open|r")
 		return
 	end
-	if PQ.plan and PQ.plan.mode == "postscan" then GM.Auctioning.PostScan() return end
-	if PQ.plan and PQ.plan.mode == "cancelscan" then GM.Auctioning.CancelScan() return end
+	local mode = (PQ.plan and PQ.plan.mode) or PQ.scanMode
+	if mode == "postscan" then GM.Auctioning.PostScan() return end
+	if mode == "cancelscan" then GM.Auctioning.CancelScan() return end
+	if mode == "shopscan" then GM.Auctioning.ShoppingScan() return end
 	-- rescan always re-solves the DISPLAYED target — a retargeted item
 	-- gets its own fresh plan (a live plan only wins by default when
 	-- nothing else is targeted)
@@ -722,6 +766,11 @@ function PQ.Rescan()
 		return
 	end
 	local name = GetInfo and GetInfo(workID)
+	-- a targeted solve outranks any group scan still pumping — abort
+	-- it or its finish lands over this plan (and it would stomp our
+	-- onScanDone slot mid-flight anyway)
+	GM.Auctioning.StopScan()
+	PQ.ScanStart() -- no stale steps armed while the query is out
 	GM.AH.ScanItem(workID, name, function(asks)
 		PQ.Solve(asks, workID)
 	end)
@@ -748,12 +797,12 @@ function PQ.Solve(asks, workID)
 	local sOps = GM.Groups.GetOps(workID, "shopping")
 	local function ev(f) return GM.Groups.EvalOp(aOps, f, workID) end
 	-- a just-bought lot sits in mail transit — invisible to BagCount
-	-- for the delivery window. Plan.pendingBuy records purchases so
+	-- for the delivery window. PQ.pendingBuy records purchases so
 	-- the post-step rescan's re-solve doesn't re-emit the same buys
-	-- forever (the "loops from the top" report). Delivered units
-	-- rebase into the bag count itself.
-	local pend = PQ.plan and PQ.plan.pendingBuy
-		and PQ.plan.pendingBuy[workID]
+	-- forever (the "loops from the top" report). It lives on PQ, not
+	-- the plan — scans clear/replace plans freely without losing the
+	-- ledger. Delivered units rebase into the bag count itself.
+	local pend = PQ.pendingBuy and PQ.pendingBuy[workID]
 	local pending = 0
 	if pend then
 		pending = math.max(0, pend.qty
@@ -817,12 +866,13 @@ function PQ.Solve(asks, workID)
 		lot.item = workLink
 	end
 	plan.itemID = workID
-	plan.pendingBuy = pend and PQ.plan.pendingBuy
 	plan.bank = GM.BankCount(workID)
 	plan.deposit = GM.AH.DepositCost(workID,
 		plan.qty + (plan.owned or 0) + (plan.relisted or 0)) or 0
 	plan.ev = plan.ev - plan.deposit
 	PQ.plan = plan
+	PQ.scanMode = nil -- a solved item plan supersedes the last scan
+	PQ.itemFresh = nil
 	PQ.stepIndex = 1
 	PQ.lossConfirm = nil
 	PQ.protectedOk = {}
@@ -902,14 +952,13 @@ function PQ.ExecuteNext()
 		if cur and cur.itemID == pc.itemID then
 			if GM.AH.Execute({ kind = "confirm" }) then
 				PQ.submitFlash = GetTime()
-				local plan = PQ.plan
-				if plan and cur.itemID then
-					plan.pendingBuy = plan.pendingBuy or {}
-					local pb = plan.pendingBuy[cur.itemID]
+				if cur.itemID then
+					PQ.pendingBuy = PQ.pendingBuy or {}
+					local pb = PQ.pendingBuy[cur.itemID]
 						or { qty = 0,
 							base = GM.BagCount(cur.itemID) }
 					pb.qty = pb.qty + (cur.qty or 1)
-					plan.pendingBuy[cur.itemID] = pb
+					PQ.pendingBuy[cur.itemID] = pb
 				end
 				PQ.stepIndex = PQ.stepIndex + 1
 				-- craft plans re-EMIT on rescan (QueueEmit re-derives
@@ -1039,11 +1088,11 @@ function PQ.ExecuteNext()
 		PQ.budgetWarn = nil
 		PQ.submitFlash = GetTime()
 		if step.kind == "buy" and step.itemID then
-			PQ.plan.pendingBuy = PQ.plan.pendingBuy or {}
-			local pb = PQ.plan.pendingBuy[step.itemID]
+			PQ.pendingBuy = PQ.pendingBuy or {}
+			local pb = PQ.pendingBuy[step.itemID]
 				or { qty = 0, base = GM.BagCount(step.itemID) }
 			pb.qty = pb.qty + (step.qty or 1)
-			PQ.plan.pendingBuy[step.itemID] = pb
+			PQ.pendingBuy[step.itemID] = pb
 		end
 		PQ.stepIndex = PQ.stepIndex + 1
 		-- single-item plans rescan after each action; scan-mode plans are
@@ -1529,6 +1578,14 @@ function PQ.Refresh()
 			ui.summary:SetText(format("CANCEL SCAN · %d undercut auction%s — one click each",
 				#PQ.plan.steps, #PQ.plan.steps == 1 and "" or "s"))
 			ui.summary2:SetText("")
+		elseif PQ.plan.mode == "shopscan" then
+			ui.sumEdge:SetColorTexture(GM.RGB("pos"))
+			ui.summary:SetText(format("SHOP SCAN · %d buy%s across %d item%s — one click each",
+				#PQ.plan.steps, #PQ.plan.steps == 1 and "" or "s",
+				PQ.plan.itemCount or 0,
+				(PQ.plan.itemCount or 0) == 1 and "" or "s"))
+			ui.summary2:SetText(format("spend %s · worth %s",
+				GM.Money(PQ.plan.spend or 0), GM.Money(PQ.plan.ev or 0)))
 		elseif PQ.plan.mode == "craft" then
 			ui.sumEdge:SetColorTexture(GM.RGB("accent"))
 			-- name the products, not just the step count

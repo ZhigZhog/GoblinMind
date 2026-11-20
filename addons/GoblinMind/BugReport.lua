@@ -157,7 +157,10 @@ local function Build()
 		end
 		local id = GM.StageReport(txt, user:gsub("\n.*", ""))
 		f:Hide()
-		local age = GM.EmitAge and GM.EmitAge()
+		-- emitAgeAtLogin, not EmitAge(): the loaded snapshot freezes
+		-- at session start, so the live age hits >900 after 15min of
+		-- play even with a healthy watcher filing reports
+		local age = GM.emitAgeAtLogin
 		local dead = (not age) or age > 900
 		GM.Print("bug report filed (" .. id .. ") — uploads "
 			.. "automatically in ~90s (SavedVariables autosave), or "

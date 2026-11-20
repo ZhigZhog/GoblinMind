@@ -1,267 +1,32 @@
 local _, GM = ...
 local W = GM.Widgets
 
--- Groups/ops editor (/goblin groups). Typed controls per the
--- goblinmind-groups-controls proposal: every row shows an I/O
--- ownership button (I=inherited, O=local override — click O to reset),
--- bools/enums are segment toggles, six quantity fields get steppers,
--- expr fields keep text + a 7-source picker, mailTo gets a target
--- capture helper. Editing a displayed inherited value writes a local
--- override; empty+Enter or clicking O deletes the local key.
+-- Groups window (/goblin groups). ITEMS page = group tree · members ·
+-- searchable catalogue; OPS page = a per-type SUMMARY (which named op
+-- applies, how many local overrides) that deep-links into the main
+-- OPS tab — OpsUI is the one field editor now (the cascade helpers
+-- live on GM.Groups: OpResolve/OpRawLocal/OpSetLocal/OpForPath).
 
 GM.GroupsUI = {}
 local GU = GM.GroupsUI
 local ui
 
-local EXPR_SOURCES = { "dbmarket", "vendorsell", "crafting", "matprice",
-	"dbminbuyout", "dbhistorical", "dbregionmarketavg" }
-
--- shared op-field definitions live on GM.Groups so OpsUI can build
--- the same controls for named operations
-local OP_FIELDS = GM.Groups.OP_FIELDS
-
--- ============ raw vs merged state ============
-
 local function editPath()
 	return ui.editPath or "Base Group"
-end
-
-local function ancestors(path)
-	local out, seg = {}, nil
-	for part in (path or ""):gmatch("[^/]+") do
-		seg = seg and seg .. "/" .. part or part
-		out[#out + 1] = seg
-	end
-	-- Base Group is the root — every group inherits its ops
-	if out[1] ~= "Base Group" then tinsert(out, 1, "Base Group") end
-	return out
-end
-
-local function RawLocal(path, opType, field)
-	local g = GM.Groups.db.groups[path]
-	if not (g and g.ops and g.ops[opType]) then return nil end
-	return g.ops[opType][field]
-end
-
--- effective value + where it comes from: "local", "op:<name>", an
--- ancestor path, or "Defaults". excludeLeaf=true answers "what would
--- reset restore". Same precedence as Groups.Merged: local overrides
--- beat the assigned named op at each cascade level.
-local function ResolveField(path, opType, field, excludeLeaf)
-	local chain = ancestors(path)
-	for i = excludeLeaf and (#chain - 1) or #chain, 1, -1 do
-		local v = RawLocal(chain[i], opType, field)
-		if v ~= nil then
-			return v, (chain[i] == path and not excludeLeaf) and "local" or chain[i]
-		end
-		local name = GM.Groups.OpAssigned(chain[i], opType)
-		local op = name and GM.Groups.OpFields(opType, name)
-		if op and op[field] ~= nil then
-			return op[field], "op:" .. name
-				.. (chain[i] ~= path and (" (" .. chain[i] .. ")") or "")
-		end
-	end
-	local d = GM.Groups.OP_DEFAULTS[opType]
-	return d and d[field], "Defaults"
-end
-
-local function groupOps(path, opType)
-	GM.Groups.Ensure(path)
-	local g = GM.Groups.db.groups[path]
-	g.ops[opType] = g.ops[opType] or {}
-	return g.ops[opType]
 end
 
 -- ============ widget helpers ============
 
 local function EditBox(parent, w, h)
-	local eb = W.DirtyEditBox(parent, w, h, GU.Refresh)
-	eb:SetScript("OnEditFocusGained", function(self)
-		self.capPath = editPath()
-		self.capText = self:GetText()
-	end)
-	return eb
+	return W.DirtyEditBox(parent, w, h, GU.Refresh)
 end
 
 local Btn = W.ActionBtn
 local Tip = W.Tip
 
-local SetMark = W.SetMark
-
 local function Footer(msg, err) W.Footer(ui.footer, msg, err) end
 
-local FOOTER_DEFAULT = "I = inherited · O = local (click to reset) · Enter saves · Esc discards"
-
--- discard any unfocused draft edits (group switch, discrete commit)
-local function DiscardDrafts()
-	for _, r in ipairs(ui.opRows) do
-		if r.eb and r.eb.dirty then
-			r.eb.dirty = nil
-			SetMark(r.eb)
-			Footer("Unsaved field edit discarded")
-		end
-	end
-end
-
--- ============ commit ============
-
-local function CommitRaw(path, opType, field, value)
-	if path ~= editPath() then return nil, "group changed" end
-	groupOps(path, opType)[field] = value
-	return true
-end
-
--- text commit: empty = delete local key; otherwise validate by kind
-local function CommitText(eb)
-	local f = eb.field
-	local v = strtrim(eb:GetText() or "")
-	if eb.capPath and eb.capPath ~= editPath() then
-		Footer("Unsaved field edit discarded", true)
-		eb.dirty = nil
-		eb:ClearFocus()
-		GU.Refresh()
-		return
-	end
-	if v == "" then
-		CommitRaw(editPath(), f[2], f[3], nil)
-		eb.dirty = nil
-		SetMark(eb)
-		eb:ClearFocus()
-		GU.Refresh()
-		Footer(f[1] .. " → inherit")
-		return
-	end
-	if f[4] == "num" then
-		local n = tonumber(v)
-		local lo, hi = f[6] and f[6].min, f[6] and f[6].max
-		if not (n and n == n and n ~= math.huge and n ~= -math.huge) then
-			SetMark(eb, "err") Footer("not a number", true) return
-		end
-		if f[5] == "stepper" and n % 1 ~= 0 then
-			SetMark(eb, "err") Footer("must be a whole number", true) return
-		end
-		if lo and n < lo then
-			SetMark(eb, "err") Footer("minimum " .. lo, true) return
-		end
-		if hi and n > hi then
-			SetMark(eb, "err") Footer("maximum " .. hi, true) return
-		end
-		CommitRaw(editPath(), f[2], f[3], n)
-	elseif f[4] == "expr" then
-		local val, err = GM.Pricing.Eval(v, GM.PlanQueue.itemID)
-		if err then
-			SetMark(eb, "err")
-			Footer(f[1] .. ": " .. err, true)
-			return
-		end
-		CommitRaw(editPath(), f[2], f[3], v)
-	else -- text
-		CommitRaw(editPath(), f[2], f[3], v)
-	end
-	eb.dirty = nil
-	SetMark(eb, "ok")
-	eb:ClearFocus()
-	GU.Refresh()
-	if f[4] == "expr" and v ~= "" and not val then
-		Footer(f[1] .. " saved; no resolved price for this item")
-	end
-end
-
--- discrete commit (toggle/segment/stepper): discard other drafts first
-local function CommitDiscrete(f, value)
-	DiscardDrafts()
-	CommitRaw(editPath(), f[2], f[3], value)
-	GU.Refresh()
-end
-
--- ============ row construction ============
-
-local ROW_Y0, ROW_PITCH, ROW_H = -280, 19, 18
-local COL_X = { 10, 256 }
-local COL_W, LABEL_W, IO_X, VAL_X, VAL_W = 234, 76, 80, 100, 134
-
-local Segment = W.Segment
-local PaintSeg = W.PaintSeg
-
-local function BuildValueControl(row, f, host)
-	local w = f[5]
-	if w == "bool" then
-		row.on  = Segment(host, "On", 66);  row.on:SetPoint("TOPLEFT", VAL_X, 0)
-		row.off = Segment(host, "Off", 66); row.off:SetPoint("TOPLEFT", VAL_X + 68, 0)
-		row.on:SetScript("OnClick", function() CommitDiscrete(f, true) end)
-		row.off:SetScript("OnClick", function() CommitDiscrete(f, false) end)
-	elseif w == "seg" then
-		row.segs = {}
-		local widths = #f[6].opts == 3 and { 43, 43, 44 } or { 66, 66 }
-		local x = VAL_X
-		for i, opt in ipairs(f[6].opts) do
-			local b = Segment(host, opt[1], widths[i])
-			b:SetPoint("TOPLEFT", x, 0)
-			b:SetScript("OnClick", function() CommitDiscrete(f, opt[2]) end)
-			b.optValue = opt[2]
-			row.segs[i] = b
-			x = x + widths[i] + 2
-		end
-	elseif w == "stepper" then
-		row.minus = Segment(host, "-", 18); row.minus:SetPoint("TOPLEFT", VAL_X, 0)
-		row.plus  = Segment(host, "+", 18); row.plus:SetPoint("TOPLEFT", VAL_X + 116, 0)
-		row.eb = EditBox(host, 94, ROW_H)
-		row.eb:SetPoint("TOPLEFT", VAL_X + 20, 0)
-		row.eb:SetNumeric(false)
-		row.minus:SetScript("OnClick", function()
-			local cur = tonumber(row.eb:GetText())
-			if row.eb.dirty and not cur then
-				Footer("invalid draft — fix before stepping", true) return
-			end
-			cur = cur or tonumber(row.effective) or 0
-			CommitDiscrete(f, math.max((f[6] and f[6].min) or 0, cur - 1))
-		end)
-		row.plus:SetScript("OnClick", function()
-			local cur = tonumber(row.eb:GetText())
-			if row.eb.dirty and not cur then
-				Footer("invalid draft — fix before stepping", true) return
-			end
-			cur = cur or tonumber(row.effective) or 0
-			CommitDiscrete(f, cur + 1)
-		end)
-	elseif w == "num" then
-		row.eb = EditBox(host, VAL_W, ROW_H)
-		row.eb:SetPoint("TOPLEFT", VAL_X, 0)
-	elseif w == "expr" then
-		row.eb = EditBox(host, 114, ROW_H)
-		row.eb:SetPoint("TOPLEFT", VAL_X, 0)
-		row.aux = Segment(host, "v", 18)
-		row.aux:SetPoint("TOPLEFT", VAL_X + 116, 0)
-		row.aux.eb = row.eb
-		row.aux:SetScript("OnClick", function(self) GU.ToggleSourceMenu(self) end)
-		Tip(row.aux, function()
-			return { "Insert a price source",
-				"Replaces the draft — press Enter to save" }
-		end)
-	elseif w == "recip" then
-		row.eb = EditBox(host, 114, ROW_H)
-		row.eb:SetPoint("TOPLEFT", VAL_X, 0)
-		row.aux = Segment(host, "T", 18)
-		row.aux:SetPoint("TOPLEFT", VAL_X + 116, 0)
-		row.aux.eb = row.eb
-		row.aux:SetScript("OnClick", function()
-			if not (UnitIsPlayer("target") and UnitName("target")) then return end
-			local name, realm = UnitName("target")
-			row.eb:SetText((realm and #realm > 0) and (name .. "-" .. realm) or name)
-			row.eb.dirty = true
-			SetMark(row.eb, "dirty")
-			row.eb:SetFocus()
-		end)
-		Tip(row.aux, function()
-			return { "Use target name",
-				"Captures current player target (does not send mail)" }
-		end)
-	end
-	if row.eb then
-		row.eb.field = f
-		row.eb:SetScript("OnEnterPressed", function(self) CommitText(self) end)
-	end
-end
+local FOOTER_DEFAULT = "drag items to assign · Enter saves · Esc discards"
 
 -- ============ window ============
 -- TSM-parity groups page: ITEMS page = group tree · members ·
@@ -364,7 +129,8 @@ end
 
 local function BuildUI()
 	if ui then return end
-	ui = { catOff = 0, memOff = 0, treeOff = 0, page = "items", nameCache = {} }
+	ui = { catOff = 0, memOff = 0, treeOff = 0, page = "items",
+		nameCache = {}, collapsed = {} }
 	local f = CreateFrame("Frame", "GoblinMindGroupsUI", UIParent)
 	f:SetSize(WIN_W, WIN_H)
 	f:SetPoint("CENTER", -40, 20)
@@ -384,9 +150,7 @@ local function BuildUI()
 	f:Hide()
 	GM.Panel(f, "contLow", "outlineVar")
 	f:SetScript("OnHide", function()
-		DiscardDrafts()
 		ui.pending, ui.drag = nil, nil
-		if ui.srcMenu then ui.srcMenu:Hide() ui.srcCatcher:Hide() end
 	end)
 	ui.frame = f
 
@@ -443,6 +207,23 @@ local function BuildUI()
 		row:SetPoint("TOPLEFT", 6, -22 - (i - 1) * 20)
 		row.gmTreeRow = true
 		W.HoverTint(row)
+		-- real expander (was a decorative ▼ in the row text — it
+		-- collapsed nothing and its clicks fell through to the
+		-- move-drag handler → "Base Group can't be moved")
+		row.collapse = CreateFrame("Button", nil, row)
+		row.collapse:SetSize(14, 18)
+		row.collapse:SetPoint("LEFT", 0, 0)
+		row.collapse:SetFrameLevel(row:GetFrameLevel() + 1)
+		row.collapse.text = GM.MakeFontString(row.collapse, GM.FONT,
+			10, "secondary")
+		row.collapse.text:SetPoint("CENTER", 0, 0)
+		row.collapse:SetScript("OnClick", function(self)
+			local p = self:GetParent().path
+			if not p then return end
+			ui.collapsed[p] = not ui.collapsed[p] or nil
+			GU.RefreshTree()
+		end)
+		row.collapse:Hide()
 		row.text = GM.MakeFontString(row, GM.FONT, 10, "text")
 		row.text:SetPoint("LEFT", 2, 0)
 		row.text:SetWidth(168)
@@ -455,7 +236,6 @@ local function BuildUI()
 				or (ui.lastDrop and GetTime() - ui.lastDrop < 0.3) then
 				return
 			end
-			DiscardDrafts()
 			ui.editPath = self.path
 			GU.Refresh()
 		end)
@@ -812,6 +592,8 @@ local function BuildUI()
 		"Base Group items export ungrouped" } end)
 
 	-- ============ OPS page ============
+	-- per-type summary + deep-link into the unified OpsUI editor —
+	-- no second field grid (the one editor lives in the OPS tab)
 	local ops = CreateFrame("Frame", nil, f)
 	ops:SetPoint("TOPLEFT", 10, -34)
 	ops:SetPoint("BOTTOMRIGHT", -10, 30)
@@ -822,49 +604,40 @@ local function BuildUI()
 	ui.opsHeader:SetWordWrap(false)
 
 	ui.opRows = {}
-	local OPS_COL_X = { 6, 286, 566 }
-	local OPS_COL_W, OPS_Y0, OPS_PITCH = 270, -26, 19
-	for i, fd in ipairs(OP_FIELDS) do
-		local col = i <= 10 and 1 or i <= 20 and 2 or 3
-		local rowN = col == 1 and i or col == 2 and i - 10 or i - 20
-		local host = CreateFrame("Frame", nil, ops)
-		host:SetSize(OPS_COL_W, ROW_H)
-		host:SetPoint("TOPLEFT", OPS_COL_X[col], OPS_Y0 - (rowN - 1) * OPS_PITCH)
-		local row = { def = fd, host = host }
+	for i, opType in ipairs(GM.Groups.OP_TYPES) do
+		local row = CreateFrame("Frame", nil, ops)
+		row:SetSize(560, 22)
+		row:SetPoint("TOPLEFT", 6, -30 - (i - 1) * 26)
+		GM.Panel(row, "contLowest")
+		row.opType = opType
 
-		row.lab = GM.MakeFontString(host, GM.FONT, 10, "textDim")
-		row.lab:SetSize(LABEL_W, ROW_H)
-		row.lab:SetPoint("TOPLEFT", 0, 0)
-		row.lab:SetText(fd[1])
+		row.lab = GM.MakeFontString(row, GM.FONT_BOLD, 10, "textDim")
+		row.lab:SetPoint("LEFT", 8, 0)
+		row.lab:SetWidth(96)
 		row.lab:SetJustifyH("LEFT")
+		row.lab:SetText(opType)
 
-		row.io = CreateFrame("Button", nil, host)
-		row.io:SetSize(16, ROW_H)
-		row.io:SetPoint("TOPLEFT", IO_X, 0)
-		GM.Panel(row.io, "contLowest", "outlineVar")
-		row.io.text = GM.MakeFontString(row.io, GM.FONT_BOLD, 9, "textDim")
-		row.io.text:SetPoint("CENTER")
-		row.io.row = row
-		row.io:SetScript("OnClick", function(self)
-			if RawLocal(editPath(), fd[2], fd[3]) == nil then return end
-			groupOps(editPath(), fd[2])[fd[3]] = nil
-			GU.Refresh()
-			Footer(fd[1] .. " → inherit")
-		end)
-		Tip(row.io, function()
-			local localV = RawLocal(editPath(), fd[2], fd[3])
-			if localV == nil then
-				local _, src = ResolveField(editPath(), fd[2], fd[3])
-				return { "Inherited from " .. src,
-					"Edit the value to override on " .. editPath() }
-			end
-			local rv, src = ResolveField(editPath(), fd[2], fd[3], true)
-			return { "Local override on " .. editPath(),
-				"Click to remove — inherits " .. tostring(rv)
-					.. " from " .. src }
-		end)
+		row.op = GM.MakeFontString(row, GM.FONT, 10, "text")
+		row.op:SetPoint("LEFT", 110, 0)
+		row.op:SetWidth(180)
+		row.op:SetJustifyH("LEFT")
+		row.op:SetWordWrap(false)
 
-		BuildValueControl(row, fd, host)
+		row.sub = GM.MakeFontString(row, GM.FONT, 9, "textDim")
+		row.sub:SetPoint("LEFT", 296, 0)
+		row.sub:SetWidth(190)
+		row.sub:SetJustifyH("LEFT")
+		row.sub:SetWordWrap(false)
+
+		row.edit = Btn(row, "EDIT", 44, 16)
+		row.edit:SetPoint("RIGHT", -6, 0)
+		row.edit:SetScript("OnClick", function()
+			GM.OpsUI.OpenGroup(editPath(), opType)
+		end)
+		Tip(row.edit, function()
+			return { "Edit in the OPS tab",
+				"Named ops + " .. editPath() .. "'s local overrides" }
+		end)
 		ui.opRows[i] = row
 	end
 
@@ -885,90 +658,54 @@ local function BuildUI()
 	end
 end
 
--- ============ source picker menu ============
-
-local function BuildSourceMenu()
-	if ui.srcMenu then return end
-	local catcher = CreateFrame("Button", nil, ui.frame)
-	catcher:SetAllPoints(UIParent)
-	catcher:SetFrameLevel(ui.frame:GetFrameLevel() + 19)
-	catcher:SetScript("OnClick", function()
-		ui.srcMenu:Hide() catcher:Hide()
-	end)
-	catcher:Hide()
-	local m = CreateFrame("Frame", nil, ui.frame)
-	m:SetSize(218, 4 + 7 * 20 + 4)
-	m:SetFrameLevel(ui.frame:GetFrameLevel() + 20)
-	GM.Panel(m, "contLow", "outline")
-	m:Hide()
-	m.btns = {}
-	for i, src in ipairs(EXPR_SOURCES) do
-		local b = CreateFrame("Button", nil, m)
-		b:SetSize(210, 20)
-		b:SetPoint("TOPLEFT", 4, -4 - (i - 1) * 20)
-		b:SetFrameLevel(m:GetFrameLevel() + 1)
-		b.text = GM.MakeFontString(b, GM.FONT, 10, "text")
-		b.text:SetPoint("LEFT", 6, 0)
-		b.text:SetWidth(130)
-		b.text:SetJustifyH("LEFT")
-		b.text:SetWordWrap(false)
-		b.text:SetText("100% " .. src)
-		local hov = b:CreateTexture(nil, "ARTWORK")
-		hov:SetAllPoints()
-		hov:SetColorTexture(GM.RGB("contHigh"))
-		hov:Hide()
-		b:SetScript("OnEnter", function() hov:Show() end)
-		b:SetScript("OnLeave", function() hov:Hide() end)
-		b:SetScript("OnClick", function()
-			local eb = m.eb
-			if eb then
-				eb:SetText("100% " .. src)
-				eb.dirty = true
-				SetMark(eb, "dirty")
-				eb:SetFocus()
-			end
-			m:Hide() ui.srcCatcher:Hide()
-		end)
-		m.btns[i] = b
-	end
-	ui.srcMenu, ui.srcCatcher = m, catcher
-end
-
-function GU.ToggleSourceMenu(btn)
-	BuildSourceMenu()
-	local m = ui.srcMenu
-	if m:IsShown() and m.eb == btn.eb then
-		m:Hide() ui.srcCatcher:Hide() return
-	end
-	m.eb = btn.eb
-	m:ClearAllPoints()
-	m:SetPoint("TOPRIGHT", btn, "BOTTOMRIGHT", 0, -2)
-	m:Show()
-	ui.srcCatcher:Show()
-end
-
 -- ============ refresh: tree ============
 
 local function TreeList()
-	local out, paths = {}, {}
-	for _, g in ipairs(GM.Groups.List()) do
-		paths[g.path] = true
-		-- display depth: Base Group is the root row; every other
-		-- top-level group renders one level in (TSM's tree shape)
-		local depth = g.path == "Base Group" and 1
-			or select(2, g.path:gsub("/", "")) + 2
-		out[#out + 1] = { path = g.path, n = g.n, depth = depth,
-			leaf = g.path:match("[^/]+$") or g.path }
-	end
-	for _, e in ipairs(out) do
-		for p in pairs(paths) do
-			-- Base Group parents everything; others need path-prefix kids
-			if (e.path == "Base Group" and p ~= "Base Group")
-				or p:sub(1, #e.path + 1) == e.path .. "/" then
-				e.kids = true
-				break
-			end
+	-- flat path sort renders children ABOVE their parent whenever
+	-- the parent's name sorts later ("Adventuring Supplies" over
+	-- "Base Group") — the tree needs depth-first order: each parent
+	-- immediately followed by its alphabetically-sorted subtree
+	local counts = {}
+	for _, g in ipairs(GM.Groups.List()) do counts[g.path] = g.n end
+	local all = GM.Groups.db.groups
+	local kidsOf = {}
+	for path in pairs(all) do
+		local parent = path:match("^(.*)/[^/]+$") or "Base Group"
+		if parent ~= path then
+			kidsOf[parent] = kidsOf[parent] or {}
+			tinsert(kidsOf[parent], path)
 		end
+	end
+	for _, arr in pairs(kidsOf) do table.sort(arr) end
+	local out, seen = {}, {}
+	local function Visit(path, depth)
+		if seen[path] or not all[path] then return end
+		seen[path] = true
+		out[#out + 1] = { path = path, n = counts[path] or 0,
+			depth = depth, leaf = path:match("[^/]+$") or path,
+			kids = kidsOf[path] ~= nil }
+		for _, c in ipairs(kidsOf[path] or {}) do
+			Visit(c, depth + 1)
+		end
+	end
+	Visit("Base Group", 1)
+	-- orphan paths (a parent deleted out from under them) surface
+	-- as root rows rather than vanishing from the tree entirely
+	for _, g in ipairs(GM.Groups.List()) do
+		if not seen[g.path] then Visit(g.path, 1) end
+	end
+	-- collapsed ancestor hides the whole subtree; Base Group's own
+	-- row always survives (it's the root even when shut)
+	local collapsed = ui and ui.collapsed or {}
+	for i = #out, 1, -1 do
+		local p = out[i].path
+		local hide = p ~= "Base Group" and collapsed["Base Group"]
+		local j = p:find("/", 1, true)
+		while j and not hide do
+			hide = collapsed[p:sub(1, j - 1)] or false
+			j = p:find("/", j + 1, true)
+		end
+		if hide then tremove(out, i) end
 	end
 	return out
 end
@@ -995,11 +732,17 @@ function GU.RefreshTree()
 		if g then
 			row:Show()
 			row.path = g.path
+			local indent = (g.depth - 1) * 14
+			row.collapse:ClearAllPoints()
+			row.collapse:SetPoint("LEFT", indent, 0)
+			row.collapse:SetShown(g.kids and true or false)
+			row.collapse.text:SetText(
+				ui.collapsed[g.path] and "▶" or "▼")
+			row.text:ClearAllPoints()
+			row.text:SetPoint("LEFT", indent + 14, 0)
 			local marker = g.depth > 1
 				and (GM.CC("secondary") .. "· |r") or ""
-			row.text:SetText(strrep("    ", g.depth - 1) .. marker
-				.. (g.kids and (GM.CC("secondary") .. "▼ |r") or "")
-				.. g.leaf
+			row.text:SetText(marker .. g.leaf
 				.. GM.CC("secondary") .. "  " .. g.n .. "|r")
 			row.text:SetTextColor(GM.RGB(
 				g.path == ui.editPath and "accent"
@@ -1166,27 +909,22 @@ end
 -- ============ refresh: ops ============
 
 local function RefreshOps()
-	ui.opsHeader:SetText("OPS — " .. editPath())
-	local showPath = editPath()
+	local p = editPath()
+	ui.opsHeader:SetText("OPS — " .. p
+		.. "  ·  EDIT opens this group's overrides in the OPS tab")
 	for _, r in ipairs(ui.opRows) do
-		local fd = r.def
-		local localV = RawLocal(showPath, fd[2], fd[3])
-		local owned = localV ~= nil
-		local eff = GM.Groups.GetOpsForPath(showPath, fd[2])[fd[3]]
-		r.effective = eff
-
-		r.io.text:SetText(owned and "O" or "I")
-		r.io.text:SetTextColor(GM.RGB(owned and "accent" or "textDim"))
-
-		if not (r.eb and r.eb.dirty) then
-			if r.eb then r.eb:SetText(eff == nil and "" or tostring(eff)) end
+		local t = r.opType
+		local own = GM.Groups.OpAssigned(p, t)
+		local name = GM.Groups.OpForPath(p, t)
+		local n = GM.Groups.OpLocalCount(p, t)
+		r.op:SetText(name or "—")
+		r.op:SetTextColor(GM.RGB(own and "accent" or "textDim"))
+		local sub = n > 0
+			and (n .. " local override" .. (n ~= 1 and "s" or "")) or "—"
+		if name and not own then
+			sub = sub .. " · op inherited"
 		end
-		if fd[5] == "bool" then
-			PaintSeg(r.on, eff == true)
-			PaintSeg(r.off, eff == false)
-		elseif fd[5] == "seg" then
-			for _, b in ipairs(r.segs) do PaintSeg(b, eff == b.optValue) end
-		end
+		r.sub:SetText(sub)
 	end
 end
 
@@ -1212,7 +950,7 @@ function GU.Refresh()
 end
 
 function GU.Retarget()
-	if ui then DiscardDrafts() ui.editPath = nil end
+	if ui then ui.editPath = nil end
 	GU.Refresh()
 end
 

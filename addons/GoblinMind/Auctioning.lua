@@ -59,6 +59,16 @@ function A.Busy()
 	return scanning ~= nil or #scanQ > 0
 end
 
+-- abort the serial queue — pending jobs never pump, the in-flight
+-- job's `scanning ~= job` guard drops its callback. User clicks
+-- (result drill-down, item re-solve) outrank a running group scan:
+-- without this the interrupted queue kept pumping, stomped the
+-- click's onScanDone slot, and its finish landed OVER the new plan.
+function A.StopScan()
+	scanQ = {}
+	scanning = nil
+end
+
 -- public entry into the serial queue — shopping/sniper scan one item
 -- at a time too, and a second ScanItem would clobber the pending one
 function A.QueueScan(itemID, done)
@@ -114,6 +124,31 @@ function A.BagItems()
 	return out
 end
 
+-- group scope for scans: the AH window's GROUPS selection is a set
+-- of paths; membership covers the whole subtree (picking a parent
+-- scans its children). Base Group = the ungrouped item set.
+-- nil = nothing selected → scans stay unscoped (all items).
+function A.ScanGroupIds()
+	local sel = GM.db and GM.db.scanGroups
+	if not sel or not next(sel) then return end
+	local out, paths = {}, {}
+	for p in pairs(sel) do paths[#paths + 1] = p end
+	for path, g in pairs(GM.Groups.db.groups) do
+		for _, s in ipairs(paths) do
+			if path == s or path:sub(1, #s + 1) == s .. "/" then
+				for id in pairs(g.items) do out[id] = true end
+				break
+			end
+		end
+	end
+	if sel["Base Group"] then
+		for _, id in ipairs(GM.Groups.UngroupedIds()) do
+			out[id] = true
+		end
+	end
+	return out
+end
+
 -- per-item post preview without running a scan — the same decision
 -- PostScan's ProcessItem makes, driven off the shared book when it's
 -- fresh (<300s). Returns unit or nil,reason + the inputs for display.
@@ -159,6 +194,10 @@ function A.PostScan(only)
 	-- the plan + scan progress live in the main window — surface it
 	-- when the scan was launched from the auctions window or a slash
 	GM.PlanQueue.Show()
+	GM.PlanQueue.ScanStart("postscan")
+	-- no explicit subset (bag-table checkboxes) → the AH window's
+	-- GROUPS selection scopes the scan; nil = everything
+	only = only or A.ScanGroupIds()
 	local bags = A.BagItems()
 	local items, skipped = {}, {}
 	for id, e in pairs(bags) do
@@ -331,6 +370,7 @@ function A.CancelScan()
 		return
 	end
 	GM.PlanQueue.Show() -- progress + results live in the main window
+	GM.PlanQueue.ScanStart("cancelscan")
 	-- decide off a fresh owned-auction snapshot; fall back to whatever
 	-- the cache holds if the event never lands
 	GM.PlanQueue.ScanStatus(GM.CC("textDim") .. "refreshing owned auctions…|r")
@@ -345,7 +385,13 @@ function A.CancelScan()
 end
 
 function A.CancelScanNow()
-	local owned = GM.Inventory.auctions or {}
+	-- GROUPS selection scopes which owned listings are checked;
+	-- nil = every owned auction
+	local sel = A.ScanGroupIds()
+	local owned = {}
+	for fp, a in pairs(GM.Inventory.auctions or {}) do
+		if (not sel) or sel[a.itemID] then owned[fp] = a end
+	end
 	local byItem = {}
 	for fp, a in pairs(owned) do
 		local e = byItem[a.itemID] or { aids = {}, seen = {},
@@ -437,5 +483,139 @@ function A.FinishCancelScan(steps, undercutItems)
 		spend = 0,
 		ev = 0,
 		itemCount = #steps,
+	})
+end
+
+-- ============ shopping scan ============
+
+-- group-scoped buy pass: every item in the GROUPS selection gets
+-- queried; listings at/under the group's shopping cap become buy
+-- steps (one click each, same as every plan). The cap mirrors the
+-- sniper rule: shopping.maxPrice expr, falling back to belowPct%
+-- under dbmarket when the expr won't resolve — an unresolvable cap
+-- skips the item rather than buying unbounded.
+function A.ShoppingScan()
+	if not GM.AH.open then
+		GM.Print("open the auction house first")
+		return
+	end
+	if A.Busy() then
+		GM.PlanQueue.ScanStatus(GM.CC("warn") .. "scan already running|r")
+		return
+	end
+	local ids = A.ScanGroupIds()
+	if not ids then
+		GM.PlanQueue.ScanStatus(GM.CC("warn")
+			.. "shopping scan is group-scoped — pick groups first (GROUPS)|r")
+		return
+	end
+	GM.PlanQueue.Show()
+	GM.PlanQueue.ScanStart("shopscan")
+	local items = {}
+	for id in pairs(ids) do items[#items + 1] = id end
+	table.sort(items, function(a, b)
+		return (GM.ItemName(a) or "") < (GM.ItemName(b) or "")
+	end)
+	if #items == 0 then
+		GM.PlanQueue.ScanStatus(GM.CC("warn") .. "selected groups are empty|r")
+		return
+	end
+
+	local function Cap(id)
+		local sOps = GM.Groups.GetOps(id, "shopping")
+		local cap = GM.Groups.EvalOp(sOps, "maxPrice", id)
+		-- corrupted market data can explode exprs into e+45 caps that
+		-- would buy everything — treat as unusable (sniper's rule)
+		if cap and cap > 1e10 then cap = nil end
+		if cap then return cap end
+		local m = GM.Price("dbmarket", id)
+		local pct = tonumber(sOps.belowPct) or 10
+		return m and floor(m * (1 - pct / 100)) or nil
+	end
+
+	local steps, spend, mktSum, hits = {}, 0, 0, {}
+	local shopRows = {} -- per-hit rows for the AH window's results pane
+	local remaining = #items
+	GM.PlanQueue.ScanStatus(GM.CC("textDim") .. format(
+		"shopping scan — checking 0/%d group items|r", #items))
+	for _, id in ipairs(items) do
+		ScanQueued(id, function(asks)
+			local cap = Cap(id)
+			local isComm = GM.AH.IsCommodity(id)
+			local m = GM.Price("dbmarket", id)
+			local pre = #steps
+			local cQty, cUnit, cCost = 0, nil, 0
+			local row
+			for _, a in ipairs(asks) do
+				if not a.own and cap and a.unit and a.unit <= cap then
+					if not row then
+						-- asks sort cheapest-first → first accepted
+						-- unit is the floor the list shows
+						row = { id = id,
+							name = GM.ItemName(id) or ("item " .. id),
+							qty = 0, unit = a.unit, mkt = m,
+							low = true, asks = asks }
+						shopRows[#shopRows + 1] = row
+					end
+					row.qty = row.qty + a.qty
+					if isComm then
+						cQty = cQty + a.qty
+						cUnit = a.unit
+						cCost = cCost + (a.total or a.unit * a.qty)
+					else
+						local cost = a.total or a.unit * a.qty
+						tinsert(steps, { kind = "buy", itemID = id,
+							item = ItemLink(id), name = ShortName(id),
+							qty = a.qty, unit = a.unit, total = cost,
+							auctionID = a.id, btag = "shop",
+							bagBase = GM.BagCount(id) })
+						spend = spend + cost
+						mktSum = mktSum + (m or 0) * a.qty
+					end
+				end
+			end
+			if cQty > 0 then
+				-- commodities buy via staged quote: one step takes the
+				-- whole under-cap depth at the deepest accepted unit
+				tinsert(steps, { kind = "buy", itemID = id,
+					item = ItemLink(id), name = ShortName(id),
+					qty = cQty, unit = cUnit, commodity = true,
+					btag = "shop", bagBase = GM.BagCount(id) })
+				spend = spend + cCost
+				mktSum = mktSum + (m or 0) * cQty
+			end
+			if #steps > pre then hits[id] = true end
+			remaining = remaining - 1
+			GM.PlanQueue.ScanStatus(GM.CC("textDim") .. format(
+				"shopping scan — checking %d/%d group items|r",
+				#items - remaining, #items))
+			if remaining == 0 then
+				A.FinishShopScan(steps, spend, mktSum, hits, shopRows)
+			end
+		end)
+	end
+end
+
+function A.FinishShopScan(steps, spend, mktSum, hits, shopRows)
+	if #steps == 0 then
+		GM.PlanQueue.ClearPlan()
+		GM.PlanQueue.ScanStatus(GM.CC("textDim")
+			.. "shopping scan done — nothing at/under the groups' max prices|r")
+		return
+	end
+	table.sort(shopRows, function(a, b)
+		return (a.name or "") < (b.name or "")
+	end)
+	if GM.AHUI and GM.AHUI.PostShopRows then
+		GM.AHUI.PostShopRows(shopRows)
+	end
+	local n = 0
+	for _ in pairs(hits) do n = n + 1 end
+	GM.PlanQueue.SetScanPlan({
+		mode = "shopscan",
+		steps = steps,
+		spend = spend,
+		ev = mktSum,
+		itemCount = n,
 	})
 end

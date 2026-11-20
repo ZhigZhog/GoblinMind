@@ -45,7 +45,15 @@ end
 
 -- ============ field commits ============
 
+-- commit target is two-scoped: named-op mode writes the shared op,
+-- group mode writes the group's local override (cascade layer)
 local function CommitField(f, value)
+	if ui.groupMode then
+		if ui.selGroup then
+			GM.Groups.OpSetLocal(ui.selGroup, SelType(), f[3], value)
+		end
+		return
+	end
 	local op = CurOp()
 	if not op then return end
 	op[f[3]] = value
@@ -54,14 +62,14 @@ end
 local function CommitText(eb)
 	local f = eb.field
 	local v = strtrim(eb:GetText() or "")
-	if not CurOp() then eb:ClearFocus() return end
+	if not ui.groupMode and not CurOp() then eb:ClearFocus() return end
 	if v == "" then
 		CommitField(f, nil)
 		eb.dirty = nil
 		SetMark(eb)
 		eb:ClearFocus()
 		OU.Refresh()
-		Footer(f[1] .. " → default")
+		Footer(f[1] .. (ui.groupMode and " → inherit" or " → default"))
 		return
 	end
 	if f[4] == "num" then
@@ -255,13 +263,23 @@ local function BuildUI()
 		ui.typeRows[i] = r
 	end
 
-	-- middle: named ops of the selected type
+	-- middle: named ops of the selected type. Row 1 is a pinned
+	-- pseudo-entry that swaps the fields pane to the per-group
+	-- override editor (the merged GROUPS-tab ops surface)
 	local opP = Panel(f, 156, 200, "OPERATIONS")
 	ui.opPanel = opP
+	ui.groupRow = ListRow(opP, 184, 104)
+	ui.groupRow:SetPoint("TOPLEFT", 8, -24)
+	ui.groupRow.text:SetText("‹group overrides›")
+	ui.groupRow:SetScript("OnClick", function()
+		ui.groupMode = true
+		ui.selGroup = ui.selGroup or "Base Group"
+		OU.Refresh()
+	end)
 	ui.opRows = {}
-	for i = 1, OP_ROWS do
+	for i = 1, OP_ROWS - 1 do
 		local r = ListRow(opP, 184, 104)
-		r:SetPoint("TOPLEFT", 8, -24 - (i - 1) * (ROW_H + 2))
+		r:SetPoint("TOPLEFT", 8, -24 - i * (ROW_H + 2))
 		r:Hide()
 		ui.opRows[i] = r
 	end
@@ -336,6 +354,25 @@ local function BuildUI()
 			"Toggles the group list — one op per type per group" }
 	end)
 	ui.assignBtn = assignBtn
+
+	-- group mode's picker fills the ASSIGN slot: which group's local
+	-- overrides the fields pane is editing
+	ui.grpBtn = Btn(fldP, "GROUP ▾", 76, 16)
+	ui.grpBtn:SetPoint("TOPRIGHT", -8, -20)
+	ui.grpBtn.text:SetFont(GM.FONT_BOLD, 9, "")
+	ui.grpBtn:SetScript("OnClick", function(self)
+		local entries = {}
+		for _, g in ipairs(GM.Groups.List()) do
+			local path = g.path
+			entries[#entries + 1] = {
+				label = path,
+				checked = ui.selGroup == path,
+				cb = function() ui.selGroup = path OU.Refresh() end,
+			}
+		end
+		PopupMenu(self, entries)
+	end)
+	ui.grpBtn:Hide()
 
 	-- field rows: built lazily per type on first paint
 	ui.fieldRows = {}
@@ -415,6 +452,37 @@ local function BuildFieldRow(fldP, fd, idx)
 		lb:SetPoint("TOPLEFT", 0, 0)
 		Tip(lb, function() return { fd[1], fd[6].tip } end)
 	end
+
+	-- I/O chip rides the value column's left edge — group mode only:
+	-- O = local override (click clears back to inherited), I = the
+	-- resolved value comes from the cascade (tooltip names the source)
+	row.io = CreateFrame("Button", nil, host)
+	row.io:SetSize(16, ROW_H)
+	row.io:SetPoint("TOPLEFT", VAL_X - 18, 0)
+	GM.Panel(row.io, "contLowest", "outlineVar")
+	row.io.text = GM.MakeFontString(row.io, GM.FONT_BOLD, 9, "textDim")
+	row.io.text:SetPoint("CENTER")
+	row.io:Hide()
+	row.io:SetScript("OnClick", function()
+		if not (ui.groupMode and ui.selGroup) then return end
+		if GM.Groups.OpRawLocal(ui.selGroup, fd[2], fd[3]) == nil then return end
+		GM.Groups.OpSetLocal(ui.selGroup, fd[2], fd[3], nil)
+		OU.Refresh()
+		Footer(fd[1] .. " → inherit")
+	end)
+	Tip(row.io, function()
+		if not (ui.groupMode and ui.selGroup) then return nil end
+		local p = ui.selGroup
+		if GM.Groups.OpRawLocal(p, fd[2], fd[3]) == nil then
+			local _, src = GM.Groups.OpResolve(p, fd[2], fd[3])
+			return { "Inherited from " .. tostring(src),
+				"Edit the value to override on " .. p }
+		end
+		local rv, src = GM.Groups.OpResolve(p, fd[2], fd[3], true)
+		return { "Local override on " .. p,
+			"Click to remove — inherits " .. tostring(rv)
+				.. " from " .. tostring(src) }
+	end)
 
 	local w = fd[5]
 	if w == "bool" then
@@ -501,31 +569,42 @@ local function RefreshFields()
 	for _, r in ipairs(ui.fieldRows) do r.host:Hide() end
 	local op = CurOp()
 	local n = SelName()
-	local prot = op and GM.Groups.OpProtected(n)
-	ui.fldHeader:SetText(n and ("FIELDS — " .. n
-		.. (prot and "  (protected)" or "")) or "FIELDS — select an op")
-	ui.renEb:SetShown(op and not prot)
-	ui.delBtn:SetShown(op and not prot)
-	ui.assignBtn:SetShown(op ~= nil)
-	ui.assignedFs:SetShown(op ~= nil)
-	if not op then return end
-	if not ui.renEb:HasFocus() then ui.renEb:SetText(n) end
+	local groupMode = ui.groupMode and ui.selGroup
+	ui.grpBtn:SetShown(groupMode and true or false)
 
-	-- assignment summary — count + a bounded preview, not the full
-	-- path dump (a 194-group TSM import overflows the whole panel)
-	local paths
-	for _, o in ipairs(GM.Groups.Ops(SelType())) do
-		if o.name == n then paths = o.userPaths end
-	end
-	if paths and #paths > 0 then
-		local prev = {}
-		for i = 1, math.min(#paths, 3) do prev[i] = paths[i] end
-		ui.assignedFs:SetText(format(
-			"assigned to %d group%s — %s%s", #paths,
-			#paths == 1 and "" or "s", table.concat(prev, ", "),
-			#paths > 3 and (", +" .. (#paths - 3) .. " more") or ""))
+	if groupMode then
+		ui.fldHeader:SetText("FIELDS — " .. ui.selGroup)
+		ui.assignedFs:SetText(
+			"local overrides — I = inherited · O = local (click to reset)")
+		ui.assignedFs:Show()
+		ui.renEb:Hide() ui.delBtn:Hide() ui.assignBtn:Hide()
 	else
-		ui.assignedFs:SetText("assigned to: —")
+		local prot = op and GM.Groups.OpProtected(n)
+		ui.fldHeader:SetText(n and ("FIELDS — " .. n
+			.. (prot and "  (protected)" or "")) or "FIELDS — select an op")
+		ui.renEb:SetShown(op and not prot)
+		ui.delBtn:SetShown(op and not prot)
+		ui.assignBtn:SetShown(op ~= nil)
+		ui.assignedFs:SetShown(op ~= nil)
+		if not op then return end
+		if not ui.renEb:HasFocus() then ui.renEb:SetText(n) end
+
+		-- assignment summary — count + a bounded preview, not the full
+		-- path dump (a 194-group TSM import overflows the whole panel)
+		local paths
+		for _, o in ipairs(GM.Groups.Ops(SelType())) do
+			if o.name == n then paths = o.userPaths end
+		end
+		if paths and #paths > 0 then
+			local prev = {}
+			for i = 1, math.min(#paths, 3) do prev[i] = paths[i] end
+			ui.assignedFs:SetText(format(
+				"assigned to %d group%s — %s%s", #paths,
+				#paths == 1 and "" or "s", table.concat(prev, ", "),
+				#paths > 3 and (", +" .. (#paths - 3) .. " more") or ""))
+		else
+			ui.assignedFs:SetText("assigned to: —")
+		end
 	end
 
 	-- rows for this type's fields
@@ -543,17 +622,29 @@ local function RefreshFields()
 			ui.fieldRows[idx] = r
 		end
 		r.host:Show()
-		local eff = op[fd[3]]
-		if eff == nil then
-			local d = GM.Groups.OP_DEFAULTS[fd[2]]
-			eff = d and d[fd[3]]
+		local eff, owned
+		if groupMode then
+			eff = GM.Groups.OpResolve(ui.selGroup, fd[2], fd[3])
+			r.effRaw = GM.Groups.OpRawLocal(ui.selGroup, fd[2], fd[3])
+			owned = r.effRaw ~= nil
+			r.io:Show()
+			r.io.text:SetText(owned and "O" or "I")
+			r.io.text:SetTextColor(GM.RGB(owned and "accent" or "textDim"))
+		else
+			eff = op[fd[3]]
+			if eff == nil then
+				local d = GM.Groups.OP_DEFAULTS[fd[2]]
+				eff = d and d[fd[3]]
+			end
+			r.effRaw = op[fd[3]]
+			owned = r.effRaw ~= nil
+			r.io:Hide()
 		end
-		r.effRaw = op[fd[3]]
 		if not (r.eb and r.eb.dirty) then
 			if r.eb then r.eb:SetText(eff == nil and "" or tostring(eff)) end
 		end
 		if r.eb then
-			r.eb:SetTextColor(GM.RGB(r.effRaw ~= nil and "text" or "textDim"))
+			r.eb:SetTextColor(GM.RGB(owned and "text" or "textDim"))
 		end
 		if fd[5] == "bool" then
 			PaintSeg(r.on, eff == true)
@@ -573,6 +664,11 @@ function OU.Refresh()
 		r._gmBg:SetColorTexture(GM.RGB(sel and "contHighest" or "contLowest"))
 		r.text:SetTextColor(GM.RGB(sel and "accent" or "text"))
 	end
+	-- the pinned pseudo-row reads selected while group mode is up
+	ui.groupRow._gmBg:SetColorTexture(GM.RGB(
+		ui.groupMode and "contHighest" or "contLowest"))
+	ui.groupRow.text:SetTextColor(GM.RGB(
+		ui.groupMode and "accent" or "textDim"))
 	-- default selection: first op of the type
 	local ops = GM.Groups.Ops(SelType())
 	if not ui.selName and ops[1] then ui.selName = ops[1].name end
@@ -583,7 +679,7 @@ function OU.Refresh()
 		local o = ops[i]
 		if o then
 			r:Show()
-			local sel = o.name == ui.selName
+			local sel = o.name == ui.selName and not ui.groupMode
 			r._gmBg:SetColorTexture(GM.RGB(sel and "contHighest" or "contLowest"))
 			r.text:SetText(o.name)
 			r.text:SetTextColor(GM.RGB(sel and "accent" or "text"))
@@ -593,6 +689,7 @@ function OU.Refresh()
 			local name = o.name
 			r:SetScript("OnClick", function()
 				ui.selName = name
+				ui.groupMode = nil -- picking a named op leaves group mode
 				OU.Refresh()
 			end)
 		else
@@ -617,4 +714,14 @@ end
 function OU.Toggle()
 	BuildUI()
 	if ui.frame:IsShown() then ui.frame:Hide() else OU.Show() end
+end
+
+-- deep-link from the GROUPS page: jump straight into a group's
+-- local-override editor for one op type (the merged ops surface)
+function OU.OpenGroup(path, opType)
+	BuildUI()
+	ui.selType = opType or ui.selType or "auctioning"
+	ui.groupMode = true
+	ui.selGroup = path or "Base Group"
+	GM.Dashboard.Switch("ops")
 end

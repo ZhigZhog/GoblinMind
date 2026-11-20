@@ -396,6 +396,67 @@ local function Merged(path, opType)
 	return out
 end
 
+-- per-field cascade queries — shared by the ops UIs (the OPS tab's
+-- named-op editor AND its per-group override mode). OpResolve also
+-- reports WHERE the effective value comes from, for the I/O chips.
+function GM.Groups.OpRawLocal(path, opType, field)
+	local g = GM.Groups.db.groups[path]
+	if not (g and g.ops and g.ops[opType]) then return nil end
+	return g.ops[opType][field]
+end
+
+-- effective value + source: "local", "op:<name>", an ancestor path,
+-- or "Defaults". excludeLeaf=true answers "what would reset inherit".
+-- Same precedence as Merged: local overrides beat the assigned named
+-- op at each cascade level.
+function GM.Groups.OpResolve(path, opType, field, excludeLeaf)
+	local chain = ancestors(path)
+	for i = excludeLeaf and (#chain - 1) or #chain, 1, -1 do
+		local v = GM.Groups.OpRawLocal(chain[i], opType, field)
+		if v ~= nil then
+			return v, (chain[i] == path and not excludeLeaf)
+				and "local" or chain[i]
+		end
+		local name = GM.Groups.OpAssigned(chain[i], opType)
+		local op = name and GM.Groups.OpFields(opType, name)
+		if op and op[field] ~= nil then
+			return op[field], "op:" .. name
+				.. (chain[i] ~= path and (" (" .. chain[i] .. ")") or "")
+		end
+	end
+	local d = GM.Groups.OP_DEFAULTS[opType]
+	return d and d[field], "Defaults"
+end
+
+-- write a per-group local override; nil clears it back to inherit
+function GM.Groups.OpSetLocal(path, opType, field, value)
+	GM.Groups.Ensure(path)
+	local g = GM.Groups.db.groups[path]
+	g.ops[opType] = g.ops[opType] or {}
+	g.ops[opType][field] = value
+end
+
+-- effective NAMED op for a path: leaf's own assignment, else the
+-- nearest ancestor's (same order Merged applies). The groups OPS
+-- summary + OpsUI group mode both display "which op applies here".
+function GM.Groups.OpForPath(path, opType)
+	local name
+	for _, seg in ipairs(ancestors(path or "Base Group")) do
+		local n = GM.Groups.OpAssigned(seg, opType)
+		if n then name = n end
+	end
+	return name
+end
+
+-- how many local overrides a group's own ops[opType] table holds
+function GM.Groups.OpLocalCount(path, opType)
+	local g = GM.Groups.db.groups[path]
+	if not (g and g.ops and g.ops[opType]) then return 0 end
+	local n = 0
+	for _ in pairs(g.ops[opType]) do n = n + 1 end
+	return n
+end
+
 function GM.Groups.GetOps(itemID, opType)
 	return Merged(itemID and GroupFor(itemID) or "Base Group", opType)
 end
