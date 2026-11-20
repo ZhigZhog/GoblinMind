@@ -1143,8 +1143,10 @@ function CU.Refresh()
 			GM.CC("warn") .. "UNLEARNED|r"
 			.. (dr.req and format(" — requires %s (%d)",
 				dr.prof or "profession", dr.req) or "")
-			.. reach .. "\n"
+			.. reach
+			.. (dr.reqTxt and "\n" .. dr.reqTxt or "") .. "\n"
 			.. (srcTxt
+				or (dr.srcTxt and "Source: " .. dr.srcTxt)
 				or ("Missing recipes in your range are usually "
 					.. "trainer-taught — check a "
 					.. (dr.prof or "profession")

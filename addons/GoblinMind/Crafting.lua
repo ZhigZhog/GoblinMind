@@ -136,8 +136,51 @@ function C.Debug(matchName)
 		end
 		-- gate internals for a recipe (arg) or the first queued one
 		local rid = tonumber(matchName)
-			or next(GoblinMindCrafting.queue or {})
+		if not rid and matchName and matchName ~= "" then
+			for id, r in pairs(GoblinMindCrafting.recipes or {}) do
+				if (r.name or ""):lower():find(matchName:lower()) then
+					rid = id break
+				end
+			end
+		end
+		rid = rid or next(GoblinMindCrafting.queue or {})
 		if rid then
+			-- acquisition-source probe: what does the client actually
+			-- expose for this recipe (learned or not)? answers the
+			-- "where does recipeSources' coverage stop" question
+			local gi = C_TradeSkillUI.GetRecipeInfo
+			if gi then
+				local ok, info = pcall(gi, rid)
+				GM.Print("  GetRecipeInfo(" .. rid .. ") → "
+					.. tostring(ok))
+				if ok and type(info) == "table" then
+					local ks = {}
+					for k in pairs(info) do ks[#ks + 1] = k end
+					sort(ks)
+					for _, k in ipairs(ks) do
+						GM.Print("    ." .. tostring(k) .. " = "
+							.. tostring(info[k]))
+					end
+				end
+			end
+			local gst = C_TradeSkillUI.GetRecipeSourceText
+			GM.Print("  GetRecipeSourceText: " .. tostring(gst))
+			if gst then
+				local ok, s = pcall(gst, rid)
+				GM.Print("    → " .. tostring(ok) .. " "
+					.. tostring(s))
+			end
+			local sf = {}
+			for k, v in pairs(C_TradeSkillUI) do
+				if type(v) == "function"
+					and (k:lower():find("source")
+						or k:lower():find("learn")) then
+					sf[#sf + 1] = k
+				end
+			end
+			sort(sf)
+			GM.Print("  source/learn fns: "
+				.. table.concat(sf, ", "))
 			GM.Print("  lastProf = " .. tostring(C.lastProf))
 			local pf = ProfessionsFrame or TradeSkillFrame
 			GM.Print("  pf shown = " .. tostring(pf and pf:IsShown()))
@@ -302,6 +345,9 @@ end
 -- LINK's tooltip as "Requires Cooking (125)". One hidden probe,
 -- parsed once per recipe (prev.req caching in Scan keeps it off
 -- repeat TRADE_SKILL_UPDATE events). nil when the client won't say.
+-- Second return collects the non-numeric Requires lines the pane
+-- wants too — "Requires Goblin Engineering" (specialization),
+-- "Requires Anvil" (tools). Same tooltip, same read.
 local reqProbe
 local function ReqSkillFor(recipeID)
 	if not C_TradeSkillUI.GetRecipeLink then return end
@@ -315,16 +361,32 @@ local function ReqSkillFor(recipeID)
 	if not reqProbe then return end
 	reqProbe:SetOwner(UIParent, "ANCHOR_NONE")
 	reqProbe:SetHyperlink(link)
+	local req, others = nil, nil
 	for i = 1, reqProbe:NumLines() or 0 do
 		local fs = _G["GMReqProbeTextLeft" .. i]
 		local s = fs and fs:GetText()
-		local n = s and s:match("Requires%s+[^%(]*%((%d+)%)")
-		if n then
-			reqProbe:Hide()
-			return tonumber(n)
+		if s then
+			local n = s:match("^Requires%s+[^%(]*%((%d+)%)")
+			if n then
+				req = tonumber(n)
+			elseif s:find("^Requires%s+") then
+				others = (others and others .. "\n" or "") .. s
+			end
 		end
 	end
 	reqProbe:Hide()
+	return req, others
+end
+
+-- the client may expose retail's GetRecipeSourceText — returns the
+-- acquisition string for UNLEARNED recipes exactly where our static
+-- recipeSources table has holes. nil-safe: absent function or empty
+-- text just yields nil and the pane falls through as before.
+local function SourceTextFor(recipeID)
+	local fn = C_TradeSkillUI and C_TradeSkillUI.GetRecipeSourceText
+	if not fn then return end
+	local ok, s = pcall(fn, recipeID)
+	if ok and type(s) == "string" and s ~= "" then return s end
 end
 
 local function Scan()
@@ -413,6 +475,7 @@ local function Scan()
 					end
 				end
 			end
+			local rq, rqTxt = ReqSkillFor(recipeID)
 			GoblinMindCrafting.recipes[recipeID] = {
 				name = info.name or prev.name,
 				itemID = sc and sc.outputItemID or prev.itemID,
@@ -424,7 +487,9 @@ local function Scan()
 				numMade = sc and sc.quantityMin or prev.numMade or 1,
 				cat = info.categoryID or prev.cat,
 				diff = info.relativeDifficulty or info.difficulty or prev.diff,
-				req = prev.req or ReqSkillFor(recipeID),
+				req = prev.req or rq,
+				reqTxt = prev.reqTxt or rqTxt,
+				srcTxt = prev.srcTxt or SourceTextFor(recipeID),
 			}
 			n = n + 1
 		end
