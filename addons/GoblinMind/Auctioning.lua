@@ -521,6 +521,7 @@ function A.ShoppingScan()
 	end
 
 	local steps, spend, mktSum, hits = {}, 0, 0, {}
+	local shopRows = {} -- per-hit rows for the AH window's results pane
 	local remaining = #items
 	GM.PlanQueue.ScanStatus(GM.CC("textDim") .. format(
 		"shopping scan — checking 0/%d group items|r", #items))
@@ -531,8 +532,19 @@ function A.ShoppingScan()
 			local m = GM.Price("dbmarket", id)
 			local pre = #steps
 			local cQty, cUnit, cCost = 0, nil, 0
+			local row
 			for _, a in ipairs(asks) do
 				if not a.own and cap and a.unit and a.unit <= cap then
+					if not row then
+						-- asks sort cheapest-first → first accepted
+						-- unit is the floor the list shows
+						row = { id = id,
+							name = GM.ItemName(id) or ("item " .. id),
+							qty = 0, unit = a.unit, mkt = m,
+							low = true, asks = asks }
+						shopRows[#shopRows + 1] = row
+					end
+					row.qty = row.qty + a.qty
 					if isComm then
 						cQty = cQty + a.qty
 						cUnit = a.unit
@@ -565,18 +577,24 @@ function A.ShoppingScan()
 				"shopping scan — checking %d/%d group items|r",
 				#items - remaining, #items))
 			if remaining == 0 then
-				A.FinishShopScan(steps, spend, mktSum, hits)
+				A.FinishShopScan(steps, spend, mktSum, hits, shopRows)
 			end
 		end)
 	end
 end
 
-function A.FinishShopScan(steps, spend, mktSum, hits)
+function A.FinishShopScan(steps, spend, mktSum, hits, shopRows)
 	if #steps == 0 then
 		GM.PlanQueue.ClearPlan()
 		GM.PlanQueue.ScanStatus(GM.CC("textDim")
 			.. "shopping scan done — nothing at/under the groups' max prices|r")
 		return
+	end
+	table.sort(shopRows, function(a, b)
+		return (a.name or "") < (b.name or "")
+	end)
+	if GM.AHUI and GM.AHUI.PostShopRows then
+		GM.AHUI.PostShopRows(shopRows)
 	end
 	local n = 0
 	for _ in pairs(hits) do n = n + 1 end

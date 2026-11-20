@@ -129,6 +129,19 @@ local function QueueBrowse(str, classFilters, label)
 	SendPendingBrowse()
 end
 
+-- a finished shopping scan hands its hit rows to the results pane so
+-- the player can pick items out of the list (not only the plan's
+-- one-BUY-at-a-time flow). Rows carry cached asks for instant
+-- drill-down; a name search or book scan takes the pane back.
+function AU.PostShopRows(rows)
+	if not ui then return end
+	ui.shopRows = rows
+	ui.shopRowsT = time()
+	ui.lastBrowseLabel = "shopping scan"
+	ui.scroll = 0
+	AU.Refresh()
+end
+
 -- name search → per-itemKey aggregates {itemKey, minPrice, totalQuantity}
 local function DoSearch()
 	local q = strtrim(ui.search:GetText() or "")
@@ -153,6 +166,17 @@ local function Results()
 		-- live progress line — the same message the planner shows
 		ui.status = ui.scanMsg or "book scan in progress…"
 		return rows
+	end
+	-- a finished shopping scan posts its hits here — same precedence
+	-- rules as browse results: a newer name search or book scan wins
+	if ui.shopRows then
+		if (ui.searchedAt or 0) > ui.shopRowsT
+			or (GM.AH.bookT or 0) > ui.shopRowsT then
+			ui.shopRows = nil
+		else
+			ui.status = nil
+			return ui.shopRows
+		end
 	end
 	if not ui.searchedAt then
 		-- a scan just finished shows its completion line briefly;
@@ -243,9 +267,17 @@ end
 -- drill into a result: per-listing asks land in the right pane
 local function ScanAsks(r)
 	ui.sel = r
-	ui.asks = nil
 	ui.stagedBuy = nil
 	ui.confirmAsk = nil
+	if r.asks then
+		-- shopping-scan rows carry the asks the scan already pulled —
+		-- seconds old, and a stale buy fails server-side anyway
+		ui.asks = r.asks
+		ui.status = nil
+		AU.Refresh()
+		return
+	end
+	ui.asks = nil
 	ui.status = "scanning " .. (r.name or "?") .. "…"
 	AU.Refresh()
 	GM.AH.ScanItem(r.id, r.name, function(asks)
