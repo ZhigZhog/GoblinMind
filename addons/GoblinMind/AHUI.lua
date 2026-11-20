@@ -264,6 +264,22 @@ function AU.BuyN()
 	AU.Refresh()
 end
 
+-- shift+click inside our AH = retarget the planner (TargetItem shows
+-- it and rescans while the AH is open). A live chat editbox keeps
+-- the native insert-link priority; other modifiers keep Blizzard's
+-- chain (ctrl=dressup etc.) via ModifiedItemClick.
+local function RowModClick(id)
+	if IsShiftKeyDown() then
+		local chat = ChatEdit_GetActiveWindow
+			and ChatEdit_GetActiveWindow()
+		if not (chat and chat:IsShown()) then
+			GM.TargetItem(id)
+			return
+		end
+	end
+	GM.ModifiedItemClick(id)
+end
+
 -- drill into a result: per-listing asks land in the right pane
 local function ScanAsks(r)
 	ui.sel = r
@@ -1424,7 +1440,7 @@ function AU.Refresh()
 				local sel = r
 				row:SetScript("OnClick", function()
 					if IsModifiedClick() then
-						if sel.id then GM.ModifiedItemClick(sel.id) end
+						if sel.id then RowModClick(sel.id) end
 						return
 					end
 					ui.askScroll = 0
@@ -1553,7 +1569,7 @@ function AU.Refresh()
 				end)
 				row:SetScript("OnClick", function()
 					if not r.id then return end
-					if IsModifiedClick() then GM.ModifiedItemClick(r.id)
+					if IsModifiedClick() then RowModClick(r.id)
 					else GM.TargetItem(r.id) end
 				end)
 			else
@@ -1603,7 +1619,7 @@ function AU.Refresh()
 				end
 				row:SetScript("OnClick", function()
 					if not r.id then return end
-					if IsModifiedClick() then GM.ModifiedItemClick(r.id)
+					if IsModifiedClick() then RowModClick(r.id)
 					else GM.TargetItem(r.id) end
 				end)
 			else
