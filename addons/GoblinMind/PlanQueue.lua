@@ -750,6 +750,10 @@ function PQ.Rescan()
 		return
 	end
 	local name = GetInfo and GetInfo(workID)
+	-- a targeted solve outranks any group scan still pumping — abort
+	-- it or its finish lands over this plan (and it would stomp our
+	-- onScanDone slot mid-flight anyway)
+	GM.Auctioning.StopScan()
 	PQ.ScanStart() -- no stale steps armed while the query is out
 	GM.AH.ScanItem(workID, name, function(asks)
 		PQ.Solve(asks, workID)

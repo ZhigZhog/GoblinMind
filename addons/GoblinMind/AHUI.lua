@@ -296,6 +296,9 @@ local function ScanAsks(r)
 	ui.asks = nil
 	ui.status = "scanning " .. (r.name or "?") .. "…"
 	AU.Refresh()
+	-- a clicked result outranks a running group scan — abort the queue
+	-- before it stomps this query's onScanDone slot
+	GM.Auctioning.StopScan()
 	GM.AH.ScanItem(r.id, r.name, function(asks)
 		ui.asks = asks or {}
 		ui.status = nil

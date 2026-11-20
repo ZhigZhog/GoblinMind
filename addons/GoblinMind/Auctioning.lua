@@ -59,6 +59,16 @@ function A.Busy()
 	return scanning ~= nil or #scanQ > 0
 end
 
+-- abort the serial queue — pending jobs never pump, the in-flight
+-- job's `scanning ~= job` guard drops its callback. User clicks
+-- (result drill-down, item re-solve) outrank a running group scan:
+-- without this the interrupted queue kept pumping, stomped the
+-- click's onScanDone slot, and its finish landed OVER the new plan.
+function A.StopScan()
+	scanQ = {}
+	scanning = nil
+end
+
 -- public entry into the serial queue — shopping/sniper scan one item
 -- at a time too, and a second ScanItem would clobber the pending one
 function A.QueueScan(itemID, done)
