@@ -169,7 +169,90 @@ function C.Debug(matchName)
 				local ok, s = pcall(gst, rid)
 				GM.Print("    → " .. tostring(ok) .. " "
 					.. tostring(s))
+				local ok2, s2 = pcall(gst, rid, false)
+				GM.Print("    (rid,false) → " .. tostring(ok2)
+					.. " " .. tostring(s2))
 			end
+			-- source-type filter oracle: if SetSourceTypeFilter +
+			-- GetFilteredRecipeIDs partition the list by acquisition
+			-- source, per-type membership IS the source classification
+			-- for every recipe the client knows
+			local gsf = C_TradeSkillUI.GetSourceTypeFilter
+			local ssf = C_TradeSkillUI.SetSourceTypeFilter
+			local gfr = C_TradeSkillUI.GetFilteredRecipeIDs
+			if gsf then
+				local ok, r = pcall(gsf)
+				GM.Print("  GetSourceTypeFilter() → "
+					.. tostring(ok) .. " " .. tostring(r)
+					.. (type(r) == "table" and (" (" .. #r .. ")")
+						or ""))
+			end
+			if ssf and gfr then
+				for t = 0, 12 do
+					local ok = pcall(ssf, t)
+					if ok then
+						local ok2, ids = pcall(gfr)
+						local n = type(ids) == "table" and #ids or -1
+						local mine = false
+						if type(ids) == "table" then
+							for _, i in ipairs(ids) do
+								if i == rid then mine = true break end
+							end
+						end
+						if n >= 0 then
+							GM.Print("    srcType " .. t .. ": " .. n
+								.. " ids"
+								.. (mine and " — CONTAINS " .. rid
+									or ""))
+						end
+					else
+						GM.Print("    srcType " .. t .. ": err")
+					end
+				end
+				-- restore the filter we found
+				pcall(ssf, gsf and select(2, pcall(gsf)))
+				pcall(C_TradeSkillUI.ClearRecipeSourceTypeFilter)
+			end
+			local rsf = C_TradeSkillUI.SetRecipeSourceTypeFilter
+			local grf = C_TradeSkillUI.GetRecipeSourceTypeFilter
+			if grf then
+				local ok, r = pcall(grf)
+				GM.Print("  GetRecipeSourceTypeFilter() → "
+					.. tostring(ok) .. " " .. tostring(r))
+			end
+			if rsf and gfr then
+				-- retail signature is (sourceType, filtered) — try it
+				for t = 0, 12 do
+					local ok = pcall(rsf, t, true)
+					if ok then
+						local ok2, ids = pcall(gfr)
+						local n = type(ids) == "table" and #ids or -1
+						GM.Print("    rsf " .. t .. ",true → "
+							.. tostring(ok2) .. " " .. n .. " ids")
+					else
+						GM.Print("    rsf " .. t .. ": err")
+					end
+				end
+				pcall(C_TradeSkillUI.ClearRecipeSourceTypeFilter)
+			end
+			local any = C_TradeSkillUI.IsAnyRecipeFromSource
+			if any then
+				for t = 0, 12 do
+					local ok, r = pcall(any, t)
+					if ok and r then
+						GM.Print("    IsAnyRecipeFromSource(" .. t
+							.. ") → " .. tostring(r))
+					end
+				end
+			end
+			local il = C_TradeSkillUI.IsOriginalCraftRecipeLearned
+			if il then
+				local ok, r = pcall(il, rid)
+				GM.Print("  IsOriginalCraftRecipeLearned → "
+					.. tostring(ok) .. " " .. tostring(r))
+			end
+			GM.Print("  Enum.RecipeSourceType: " .. tostring(
+				Enum and Enum.RecipeSourceType))
 			local sf = {}
 			for k, v in pairs(C_TradeSkillUI) do
 				if type(v) == "function"
