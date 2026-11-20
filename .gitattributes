@@ -1,0 +1,3 @@
+# Generated artifacts — content is always re-emitted, so merges keep
+# the checked-out branch's copy (requires: git config merge.ours.driver true)
+addons/GoblinMind_Data/Data.lua merge=ours
