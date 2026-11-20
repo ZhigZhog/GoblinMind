@@ -364,7 +364,8 @@ end
 
 local function BuildUI()
 	if ui then return end
-	ui = { catOff = 0, memOff = 0, treeOff = 0, page = "items", nameCache = {} }
+	ui = { catOff = 0, memOff = 0, treeOff = 0, page = "items",
+		nameCache = {}, collapsed = {} }
 	local f = CreateFrame("Frame", "GoblinMindGroupsUI", UIParent)
 	f:SetSize(WIN_W, WIN_H)
 	f:SetPoint("CENTER", -40, 20)
@@ -443,6 +444,23 @@ local function BuildUI()
 		row:SetPoint("TOPLEFT", 6, -22 - (i - 1) * 20)
 		row.gmTreeRow = true
 		W.HoverTint(row)
+		-- real expander (was a decorative ▼ in the row text — it
+		-- collapsed nothing and its clicks fell through to the
+		-- move-drag handler → "Base Group can't be moved")
+		row.collapse = CreateFrame("Button", nil, row)
+		row.collapse:SetSize(14, 18)
+		row.collapse:SetPoint("LEFT", 0, 0)
+		row.collapse:SetFrameLevel(row:GetFrameLevel() + 1)
+		row.collapse.text = GM.MakeFontString(row.collapse, GM.FONT,
+			10, "secondary")
+		row.collapse.text:SetPoint("CENTER", 0, 0)
+		row.collapse:SetScript("OnClick", function(self)
+			local p = self:GetParent().path
+			if not p then return end
+			ui.collapsed[p] = not ui.collapsed[p] or nil
+			GU.RefreshTree()
+		end)
+		row.collapse:Hide()
 		row.text = GM.MakeFontString(row, GM.FONT, 10, "text")
 		row.text:SetPoint("LEFT", 2, 0)
 		row.text:SetWidth(168)
@@ -970,6 +988,19 @@ local function TreeList()
 			end
 		end
 	end
+	-- collapsed ancestor hides the whole subtree; Base Group's own
+	-- row always survives (it's the root even when shut)
+	local collapsed = ui and ui.collapsed or {}
+	for i = #out, 1, -1 do
+		local p = out[i].path
+		local hide = p ~= "Base Group" and collapsed["Base Group"]
+		local j = p:find("/", 1, true)
+		while j and not hide do
+			hide = collapsed[p:sub(1, j - 1)] or false
+			j = p:find("/", j + 1, true)
+		end
+		if hide then tremove(out, i) end
+	end
 	return out
 end
 
@@ -995,11 +1026,17 @@ function GU.RefreshTree()
 		if g then
 			row:Show()
 			row.path = g.path
+			local indent = (g.depth - 1) * 14
+			row.collapse:ClearAllPoints()
+			row.collapse:SetPoint("LEFT", indent, 0)
+			row.collapse:SetShown(g.kids and true or false)
+			row.collapse.text:SetText(
+				ui.collapsed[g.path] and "▶" or "▼")
+			row.text:ClearAllPoints()
+			row.text:SetPoint("LEFT", indent + 14, 0)
 			local marker = g.depth > 1
 				and (GM.CC("secondary") .. "· |r") or ""
-			row.text:SetText(strrep("    ", g.depth - 1) .. marker
-				.. (g.kids and (GM.CC("secondary") .. "▼ |r") or "")
-				.. g.leaf
+			row.text:SetText(marker .. g.leaf
 				.. GM.CC("secondary") .. "  " .. g.n .. "|r")
 			row.text:SetTextColor(GM.RGB(
 				g.path == ui.editPath and "accent"

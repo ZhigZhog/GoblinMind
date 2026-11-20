@@ -588,6 +588,8 @@ function VU.Refresh()
 					or r.flip and "pos" or "accent"))
 				row.tip, row.tipIdx = "buy", r.index
 				local idx = r.index
+				-- Blizzard merchant parity: modified clicks on the
+				-- row (or its BUY button) preview/link, never buy
 				row.act:SetScript("OnClick", function()
 					if r.out then return end
 					if IsShiftKeyDown() then
@@ -598,8 +600,17 @@ function VU.Refresh()
 						row.qtyBox:SetFocus()
 						return
 					end
+					if IsModifiedClick() and r.id then
+						GM.ModifiedItemClick(r.id)
+						return
+					end
 					pcall(BuyMerchantItem, idx, r.qty or 1)
 					VU.Refresh()
+				end)
+				row:SetScript("OnClick", function()
+					if IsModifiedClick() and r.id then
+						GM.ModifiedItemClick(r.id)
+					end
 				end)
 			elseif ui.page == "sell" then
 				row.c2:SetText(GM.Money(r.val))
@@ -610,6 +621,10 @@ function VU.Refresh()
 				row.tipID = r.id
 				local bag, slot = r.bag, r.slot
 				row.act:SetScript("OnClick", function()
+					if IsModifiedClick() and r.id then
+						GM.ModifiedItemClick(r.id)
+						return
+					end
 					if MerchantOpen() and UseItem then
 						pcall(UseItem, bag, slot)
 						VU.Refresh()
@@ -632,8 +647,17 @@ function VU.Refresh()
 				row.tip, row.tipIdx = "back", r.index
 				local idx = r.index
 				row.act:SetScript("OnClick", function()
+					if IsModifiedClick() and r.id then
+						GM.ModifiedItemClick(r.id)
+						return
+					end
 					pcall(BuybackItem, idx)
 					VU.Refresh()
+				end)
+				row:SetScript("OnClick", function()
+					if IsModifiedClick() and r.id then
+						GM.ModifiedItemClick(r.id)
+					end
 				end)
 			end
 			if r.flip then
