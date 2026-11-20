@@ -184,6 +184,7 @@ function A.PostScan(only)
 	-- the plan + scan progress live in the main window — surface it
 	-- when the scan was launched from the auctions window or a slash
 	GM.PlanQueue.Show()
+	GM.PlanQueue.ScanStart("postscan")
 	-- no explicit subset (bag-table checkboxes) → the AH window's
 	-- GROUPS selection scopes the scan; nil = everything
 	only = only or A.ScanGroupIds()
@@ -359,6 +360,7 @@ function A.CancelScan()
 		return
 	end
 	GM.PlanQueue.Show() -- progress + results live in the main window
+	GM.PlanQueue.ScanStart("cancelscan")
 	-- decide off a fresh owned-auction snapshot; fall back to whatever
 	-- the cache holds if the event never lands
 	GM.PlanQueue.ScanStatus(GM.CC("textDim") .. "refreshing owned auctions…|r")
@@ -498,6 +500,7 @@ function A.ShoppingScan()
 		return
 	end
 	GM.PlanQueue.Show()
+	GM.PlanQueue.ScanStart("shopscan")
 	local items = {}
 	for id in pairs(ids) do items[#items + 1] = id end
 	table.sort(items, function(a, b)
