@@ -254,6 +254,17 @@ Primary data = the in-house book feed below.
   then shows `ok=false, error=` instead of a misleading
   `configured=true, ok=true` (2026-11-19).
 
+- **Branch model** (2026-11-19): `main` = release/bugfix/nightly;
+  `dev` = feature work (started with crafting writs), merges into
+  main at release time. Hotfixes go on main, then `git merge main`
+  on dev (or cherry-pick) to keep dev current. `Data.lua` merges
+  keep the target branch's copy via `.gitattributes merge=ours` —
+  requires the LOCAL driver `git config merge.ours.driver true`
+  (once per clone/machine — not in the repo); the watcher re-emits
+  it anyway. `recipe_sources.json` conflicts resolve by
+  re-running `import_recipe_db.py` + `import_vmangos_db.py`.
+  Switching branches with a dirty emitted `Data.lua` fails or
+  carries over — commit it or `git checkout --` it first.
 - Layout: `brain\` (Python emit/watch CLI) · `addons\GoblinMind\`
   (shim addon, scaffolded — TSM-styled UI) · `addons\GoblinMind_Data\`
   (generated-data addon — `GoblinMindDB` from `goblin_brain.py emit`) · `scripts\`
