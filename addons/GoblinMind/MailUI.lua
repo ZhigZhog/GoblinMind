@@ -852,54 +852,75 @@ end)
 -- the COD field position for reject detection later).
 function MU.CodProbe()
 	GM.dbgCap = {}
-	GM.Print("— mail COD probe —")
-	for _, n in ipairs({
-		"SetSendMailCOD", "SendMail", "SetSendMailMoney",
-		"ClearSendMail", "ClickSendMailItemButton",
-		"GetSendMailItem", "GetSendMailItemInfo", "GetSendMailPrice",
-		"GetInboxNumItems", "GetInboxHeaderInfo", "GetInboxItem",
-		"GetInboxText", "TakeInboxItem", "TakeInboxMoney",
-		"ReturnInboxItem", "DeleteInboxItem", "AutoLootMailItem",
-		"CheckInbox", "MailFrame", "SendMailFrame",
-		"SendMailCODButton", "SendMailMoneyButton",
-	}) do
-		GM.Print(format("%-26s %s", n,
-			_G[n] == nil and "nil" or tostring(_G[n])))
-	end
-	if C_Mail then
-		local names = {}
-		for k in pairs(C_Mail) do names[#names + 1] = tostring(k) end
-		sort(names)
-		GM.Print("C_Mail: " .. table.concat(names, ", "))
-	else
-		GM.Print("C_Mail: nil")
-	end
-	if SetSendMailCOD then
-		local ok, err = pcall(SetSendMailCOD, 100)
-		GM.Print("SetSendMailCOD(100) → " .. tostring(ok)
-			.. " " .. tostring(err))
-		if ClearSendMail then pcall(ClearSendMail) end
-	end
-	if GetInboxNumItems and GetInboxHeaderInfo then
-		local n = tonumber((GetInboxNumItems())) or 0
-		GM.Print("inbox items: " .. n)
-		if n > 0 then
-			local t = { GetInboxHeaderInfo(1) }
-			for i, v in ipairs(t) do
-				GM.Print(format("  header[%d] = %s", i, tostring(v)))
+	-- xpcall the whole body: a mid-run error still reaches the
+	-- dbgDump flush — the capture IS the point of the probe
+	local ok, err = xpcall(function()
+		GM.Print("— mail COD probe —")
+		for _, n in ipairs({
+			"SetSendMailCOD", "SendMail", "SetSendMailMoney",
+			"ClearSendMail", "ClickSendMailItemButton",
+			"GetSendMailItem", "GetSendMailItemInfo",
+			"GetSendMailPrice",
+			"GetInboxNumItems", "GetInboxHeaderInfo", "GetInboxItem",
+			"GetInboxText", "TakeInboxItem", "TakeInboxMoney",
+			"ReturnInboxItem", "DeleteInboxItem",
+			"AutoLootMailItem",
+			"CheckInbox", "MailFrame", "SendMailFrame",
+			"SendMailCODButton", "SendMailMoneyButton",
+		}) do
+			GM.Print(format("%-26s %s", n,
+				_G[n] == nil and "nil" or tostring(_G[n])))
+		end
+		if C_Mail then
+			local names = {}
+			for k in pairs(C_Mail) do
+				names[#names + 1] = tostring(k)
+			end
+			sort(names)
+			GM.Print("C_Mail: " .. table.concat(names, ", "))
+		else
+			GM.Print("C_Mail: nil")
+		end
+		if SetSendMailCOD then
+			local ok2, err2 = pcall(SetSendMailCOD, 100)
+			GM.Print("SetSendMailCOD(100) → " .. tostring(ok2)
+				.. " " .. tostring(err2))
+			if ClearSendMail then pcall(ClearSendMail) end
+		end
+		if GetInboxNumItems and GetInboxHeaderInfo then
+			local n = tonumber((GetInboxNumItems())) or 0
+			GM.Print("inbox items: " .. n)
+			if n > 0 then
+				local ok3, t = pcall(function()
+					return { GetInboxHeaderInfo(1) }
+				end)
+				if ok3 then
+					for i, v in ipairs(t) do
+						GM.Print(format("  header[%d] = %s",
+							i, tostring(v)))
+					end
+				else
+					GM.Print("  GetInboxHeaderInfo err: "
+						.. tostring(t))
+				end
 			end
 		end
-	end
-	local named = {}
-	for k, v in pairs(_G) do
-		if type(k) == "string" and type(v) == "function"
-			and (k:find("COD") or k:find("SendMail")
-			     or k:find("Inbox")) then
-			named[#named + 1] = k
+		local named = {}
+		for k, v in pairs(_G) do
+			if type(k) == "string" and type(v) == "function"
+				and (k:find("COD") or k:find("SendMail")
+				     or k:find("Inbox")) then
+				named[#named + 1] = k
+			end
 		end
+		sort(named)
+		GM.Print("mail-ish globals: "
+			.. table.concat(named, ", "))
+	end, function(e) return e end)
+	if not ok then
+		GM.Print("probe error (partial dump follows): "
+			.. tostring(err))
 	end
-	sort(named)
-	GM.Print("mail-ish globals: " .. table.concat(named, ", "))
 	if GM.db then
 		GM.db.dbgDump = table.concat(GM.dbgCap, "\n")
 	end
