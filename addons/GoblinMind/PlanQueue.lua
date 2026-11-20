@@ -647,6 +647,7 @@ function PQ.ClearPlan()
 	PQ.stepIndex = 1
 	PQ.lossConfirm = nil
 	PQ.protectedOk = {}
+	PQ.itemFresh = nil
 	PQ.Refresh()
 end
 
@@ -689,6 +690,7 @@ function PQ.SetScanPlan(plan)
 	PQ.plan = plan
 	PQ.scanMode = (plan.mode == "postscan" or plan.mode == "cancelscan"
 		or plan.mode == "shopscan") and plan.mode or nil
+	PQ.itemFresh = nil -- a landing plan supersedes the retarget flag
 	PQ.stepIndex = 1
 	PQ.homeMode = false
 	PQ.budgetConfirm = nil
@@ -705,6 +707,7 @@ function PQ.SetItem(itemID, itemLink)
 	PQ.item = itemLink
 	PQ.scan = nil
 	PQ.scanMode = nil -- retargeting supersedes "rerun last scan"
+	PQ.itemFresh = true -- and outranks the armed plan's mode on rescan
 	-- inspecting an item must not erase work: a plan with unfinished
 	-- steps survives — the step list keeps running while the stats
 	-- pane shows the inspected item. Only a finished/empty plan clears.
@@ -718,6 +721,19 @@ function PQ.SetItem(itemID, itemLink)
 end
 
 function PQ.Rescan()
+	-- a retargeted item outranks the armed plan's mode — shift+click
+	-- says "look at THIS", so RESCAN re-solves it instead of firing
+	-- the shop/post scan the still-armed plan came from
+	if PQ.itemFresh and PQ.itemID and GM.AH.open then
+		local workID = PQ.itemID
+		local name = GetInfo and GetInfo(workID)
+		GM.Auctioning.StopScan()
+		PQ.ScanStart()
+		GM.AH.ScanItem(workID, name, function(asks)
+			PQ.Solve(asks, workID)
+		end)
+		return
+	end
 	-- craft plans re-emit, not re-solve: fresh inventory + prices
 	-- re-evaluate fetch/alt/buy and sub-craft choices — no AH needed
 	if PQ.plan and PQ.plan.mode == "craft" then
@@ -856,6 +872,7 @@ function PQ.Solve(asks, workID)
 	plan.ev = plan.ev - plan.deposit
 	PQ.plan = plan
 	PQ.scanMode = nil -- a solved item plan supersedes the last scan
+	PQ.itemFresh = nil
 	PQ.stepIndex = 1
 	PQ.lossConfirm = nil
 	PQ.protectedOk = {}
