@@ -139,6 +139,7 @@ local LEFT_W = 464
 local HEAD_COLS = {
 	postscan     = { "ITEM", "POST @" },
 	cancelscan   = { "ITEM", "UNDER @" },
+	shopscan     = { "ITEM", "BUY @" },
 	craft        = { "ITEM", "SOURCE" },
 	vendoring    = { "ITEM", "VENDOR" },
 	warehousing  = { "ITEM", "WHERE" },
@@ -711,6 +712,7 @@ function PQ.Rescan()
 	end
 	if PQ.plan and PQ.plan.mode == "postscan" then GM.Auctioning.PostScan() return end
 	if PQ.plan and PQ.plan.mode == "cancelscan" then GM.Auctioning.CancelScan() return end
+	if PQ.plan and PQ.plan.mode == "shopscan" then GM.Auctioning.ShoppingScan() return end
 	-- rescan always re-solves the DISPLAYED target — a retargeted item
 	-- gets its own fresh plan (a live plan only wins by default when
 	-- nothing else is targeted)
@@ -1529,6 +1531,14 @@ function PQ.Refresh()
 			ui.summary:SetText(format("CANCEL SCAN · %d undercut auction%s — one click each",
 				#PQ.plan.steps, #PQ.plan.steps == 1 and "" or "s"))
 			ui.summary2:SetText("")
+		elseif PQ.plan.mode == "shopscan" then
+			ui.sumEdge:SetColorTexture(GM.RGB("pos"))
+			ui.summary:SetText(format("SHOP SCAN · %d buy%s across %d item%s — one click each",
+				#PQ.plan.steps, #PQ.plan.steps == 1 and "" or "s",
+				PQ.plan.itemCount or 0,
+				(PQ.plan.itemCount or 0) == 1 and "" or "s"))
+			ui.summary2:SetText(format("spend %s · worth %s",
+				GM.Money(PQ.plan.spend or 0), GM.Money(PQ.plan.ev or 0)))
 		elseif PQ.plan.mode == "craft" then
 			ui.sumEdge:SetColorTexture(GM.RGB("accent"))
 			-- name the products, not just the step count

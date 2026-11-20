@@ -389,8 +389,18 @@ local function Build()
 	end)
 	local post = Btn(f, 84, "POST SCAN", function() GM.Auctioning.PostScan() end)
 	post:SetPoint("LEFT", full, "RIGHT", 6, 0)
+	Tip(post, function()
+		return { "Post scan",
+			"Plans posts for bag items (vendor-floor guarded).",
+			"With GROUPS checked, only those items post." }
+	end)
 	local cancel = Btn(f, 90, "CANCEL SCAN", function() GM.Auctioning.CancelScan() end)
 	cancel:SetPoint("LEFT", post, "RIGHT", 6, 0)
+	Tip(cancel, function()
+		return { "Cancel scan",
+			"Cancels your undercut auctions (ops-gated).",
+			"With GROUPS checked, only their listings scan." }
+	end)
 	local snip = Btn(f, 62, "SNIPER", function() GM.SniperUI.Toggle() end)
 	snip:SetPoint("LEFT", cancel, "RIGHT", 6, 0)
 	Tip(snip, function()
@@ -430,6 +440,7 @@ local function Build()
 	ui.browseBtn = Btn(lp, 48, "BROWSE", function()
 		ui.filterBox:Hide()
 		if ui.savedBox then ui.savedBox:Hide() end
+		if ui.groupsBox then ui.groupsBox:Hide() end
 		ui.browseBox:SetShown(not ui.browseBox:IsShown())
 	end)
 	ui.browseBtn:SetSize(48, 14)
@@ -437,6 +448,7 @@ local function Build()
 	ui.fltBtn = Btn(lp, 44, "FILTER", function()
 		ui.browseBox:Hide()
 		if ui.savedBox then ui.savedBox:Hide() end
+		if ui.groupsBox then ui.groupsBox:Hide() end
 		ui.filterBox:SetShown(not ui.filterBox:IsShown())
 	end)
 	ui.fltBtn:SetSize(44, 14)
@@ -444,11 +456,29 @@ local function Build()
 	ui.saveBtn = Btn(lp, 42, "SAVED", function()
 		ui.browseBox:Hide()
 		ui.filterBox:Hide()
+		if ui.groupsBox then ui.groupsBox:Hide() end
 		BuildSavedBox()
 		ui.savedBox:SetShown(not ui.savedBox:IsShown())
 	end)
 	ui.saveBtn:SetSize(42, 14)
 	ui.saveBtn:SetPoint("TOPRIGHT", -6, -4)
+	-- GROUPS scopes POST/CANCEL/SHOPPING scans — checkbox multi-
+	-- select persisted in GM.db.scanGroups; empty = unscoped
+	ui.grpBtn = Btn(lp, 56, "GROUPS", function()
+		ui.browseBox:Hide()
+		ui.filterBox:Hide()
+		if ui.savedBox then ui.savedBox:Hide() end
+		BuildGroupsBox()
+		ui.groupsBox:SetShown(not ui.groupsBox:IsShown())
+	end)
+	ui.grpBtn:SetSize(56, 14)
+	ui.grpBtn:SetPoint("TOPRIGHT", -156, -4)
+	Tip(ui.grpBtn, function()
+		return { "Scan groups",
+			"Check groups to scope POST, CANCEL, and",
+			"SHOPPING scans to their items (subgroups",
+			"included). Nothing checked = scan everything." }
+	end)
 	lp:EnableMouseWheel(true)
 	lp:SetScript("OnMouseWheel", function(_, d)
 		ui.scroll = math.max(0, ui.scroll - d * 3)
@@ -1223,12 +1253,97 @@ function BuildSavedBox()
 	end
 end
 
+-- group scope for POST/CANCEL/SHOPPING scans — checkbox rows per
+-- group persisted in GM.db.scanGroups; empty = scans stay unscoped
+function BuildGroupsBox()
+	if not ui.groupsBox then
+		local gb = CreateFrame("Frame", nil, ui.frame)
+		gb:SetSize(240, 22 + 14 * 18 + 28)
+		gb:SetPoint("TOPLEFT", 12, -58)
+		gb:SetFrameStrata("DIALOG")
+		GM.Panel(gb, "contHigh", "outlineVar")
+		local t = GM.MakeFontString(gb, GM.FONT_BOLD, 9, "accent")
+		t:SetPoint("TOPLEFT", 8, -6)
+		t:SetText("SCAN GROUPS")
+		gb.rows = {}
+		for i = 1, 14 do
+			local b = Btn(gb, 226, "", nil)
+			b:SetSize(226, 18)
+			b:SetPoint("TOPLEFT", 6, -22 - (i - 1) * 18)
+			b.text:SetJustifyH("LEFT")
+			b.text:SetWidth(218)
+			b.text:SetWordWrap(false)
+			gb.rows[i] = b
+		end
+		gb:EnableMouseWheel(true)
+		gb:SetScript("OnMouseWheel", function(_, d)
+			ui.grpOff = math.max(0, (ui.grpOff or 0) - d * 2)
+			BuildGroupsBox()
+		end)
+		local clear = Btn(gb, 48, "CLEAR", function()
+			GM.db.scanGroups = nil
+			BuildGroupsBox()
+			AU.Refresh()
+		end)
+		clear:SetSize(48, 16)
+		clear:SetPoint("BOTTOMLEFT", 6, 6)
+		local shop = Btn(gb, 124, "SHOPPING SCAN", function()
+			gb:Hide()
+			GM.Auctioning.ShoppingScan()
+		end)
+		shop:SetSize(124, 16)
+		shop:SetPoint("BOTTOMRIGHT", -6, 6)
+		Tip(shop, function()
+			return { "Shopping scan",
+				"Queries every item in the checked groups and",
+				"plans a BUY step per listing at/under the",
+				"group's shopping max price." }
+		end)
+		ui.groupsBox = gb
+	end
+	local gb = ui.groupsBox
+	local list = GM.Groups.List()
+	local maxOff = math.max(0, #list - 14)
+	if (ui.grpOff or 0) > maxOff then ui.grpOff = maxOff end
+	local off = ui.grpOff or 0
+	for i, b in ipairs(gb.rows) do
+		local g = list[i + off]
+		if g then
+			b:Show()
+			local sel = GM.db.scanGroups and GM.db.scanGroups[g.path]
+			local depth = select(2, g.path:gsub("/", ""))
+			b.text:SetText((sel and GM.CC("accent") .. "[x] |r"
+				or GM.CC("textDim") .. "[ ] |r")
+				.. strrep("  ", depth) .. GM.Groups.Leaf(g.path)
+				.. GM.CC("secondary") .. "  ×" .. g.n .. "|r")
+			b:SetScript("OnClick", function()
+				GM.db.scanGroups = GM.db.scanGroups or {}
+				GM.db.scanGroups[g.path] =
+					(not GM.db.scanGroups[g.path]) or nil
+				if not next(GM.db.scanGroups) then
+					GM.db.scanGroups = nil
+				end
+				BuildGroupsBox()
+				AU.Refresh()
+			end)
+		else
+			b:Hide()
+		end
+	end
+end
+
 -- ============ refresh ============
 
 function AU.Refresh()
 	if not ui then return end
 	local open = AHOpen()
 	ui.pageTabs.set(ui.page)
+	-- GROUPS reads accent when a scan scope is active — otherwise
+	-- scans cover everything and the button stays plain text
+	if ui.grpBtn and ui.grpBtn.text then
+		local scoped = GM.db.scanGroups and next(GM.db.scanGroups)
+		ui.grpBtn.text:SetTextColor(GM.RGB(scoped and "accent" or "text"))
+	end
 
 	-- pane visibility: SHOP = results + listings panes; MINE = posted
 	-- on top + bids underneath
