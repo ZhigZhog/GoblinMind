@@ -533,6 +533,16 @@ def _expire_order(conn, oid, now):
         _stat(conn, inst, 'commits_expired')
     if rel:
         _pool_refresh(conn, oid)
+    # the order itself: 'open' past expires dies like GC's pass —
+    # without this a claim can land on a dead order between expiry
+    # and the hourly sweep, and pulls serve it as open
+    if conn.execute(
+            "UPDATE orders SET state='expired' WHERE id=? AND "
+            "state='open' AND expires<?", (oid, now)).rowcount:
+        conn.execute("UPDATE commits SET state='void' WHERE "
+                     "order_id=? AND state='active'", (oid,))
+        return True
+    return False
 
 
 def _stat(conn, install_id, col):
@@ -839,6 +849,15 @@ def h_orders(conn, ctx):
         _stat(conn, inst, 'commits_expired')
     for oid in {r[2] for r in exp}:
         _pool_refresh(conn, oid)
+    # and the orders themselves — 'open' past expires must not
+    # serve as open for the GC window (up to an hour)
+    for oid, in conn.execute(
+            "SELECT id FROM orders WHERE board=? AND state='open' "
+            "AND expires<?", (board, now)):
+        conn.execute("UPDATE commits SET state='void' WHERE "
+                     "order_id=? AND state='active'", (oid,))
+        conn.execute("UPDATE orders SET state='expired' WHERE id=?",
+                     (oid,))
     conn.commit()
     rows = conn.execute(
         'SELECT id,board,item_id,qty_total,qty_filled,qty_held,'
@@ -1119,7 +1138,11 @@ def o_verb(conn, ctx):
     if not row or row[1] != ctx['b'] or row[13] != 'open':
         ctx['send'](404, {'error': 'order'})
         return None
-    _expire_order(conn, ctx['oid'], ctx['now'])
+    if _expire_order(conn, ctx['oid'], ctx['now']):
+        # expired under us — ops on dead orders must not apply
+        # (was a live claim/fill window between expires and GC)
+        ctx['send'](404, {'error': 'order'})
+        return None
     if spec[0] == 'poster' and row[14] != ctx['install']:
         ctx['send'](403, {'error': 'poster'})
         return None

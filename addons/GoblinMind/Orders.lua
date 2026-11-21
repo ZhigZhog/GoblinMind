@@ -819,11 +819,20 @@ function OR.Op(verb, board, fields, evFields)
 end
 
 function OR.Post(board, itemID, qty, ppu, ttl, charname)
-	return OR.Op("post", board, {
+	local rid = OR.Op("post", board, {
 		itemID = itemID, qtyTotal = qty, pricePerUnit = ppu,
 		claimTTL = ttl, poster = charname or CharName(),
 		backed = OR.PurseCovers(ppu * qty),
 	})
+	-- the advisory reserve lives with the op itself, not the UI —
+	-- a post from ANY caller (UI, script, queued relay flush)
+	-- must fund-check the same way, or 'backed' lies about
+	-- unfunded stacks (found via sim: direct OR.Post never
+	-- reserved, so a second post always read purse-true)
+	if rid then
+		OR.ReserveAdd(rid, ppu * qty, board)
+	end
+	return rid
 end
 
 function OR.Claim(board, oid, units, charname)
@@ -1029,12 +1038,35 @@ end
 
 function OR.IsRemote(b)
 	if not b or b == "" then return false end
+	local be = GoblinMindDB and GoblinMindDB.backend
+	if be and be.boards then
+		-- configured on OUR tracker = ours, period — a peer's
+		-- same-named T beacon is a different swarm's data and must
+		-- never tunnel our own ops onto it (found via sim: a peer
+		-- advertising 'main' made every un-reloaded local client
+		-- treat their own board as remote)
+		for _, n in ipairs(be.boards) do
+			if n == b then return false end
+		end
+	end
 	local bs = GoblinMindDB and GoblinMindDB.boards
 	if bs and bs[b] then return false end  -- own tracker serves it
 	if GM.db and GM.db.rboards and GM.db.rboards[b] then
 		return true
 	end
-	return OR.relay.peers[b] ~= nil         -- discovered via T
+	local peers = OR.relay.peers[b]
+	if not peers then return false end
+	-- T-discovery: remote only when EVERY serving peer carries a
+	-- tag and none match our tracker — same-swarm or untagged
+	-- (legacy) beacons keep the board local; posting to our own
+	-- backend's same-named board is correct, never a tunnel
+	local my = OR.TrackerTag()
+	for _, m in pairs(peers) do
+		if not m.tag or not my or m.tag == my then
+			return false
+		end
+	end
+	return true
 end
 
 -- ============ creds + envelopes (tunneled side) ============
@@ -1163,8 +1195,12 @@ function OR.RelayPeer(body, sender)
 	if sender:match("^[^-]+") == UnitName("player") then return end
 	for entry in (body or ""):gmatch("[^,]+") do
 		-- "board[:tag]" — tag is the serving peer's tracker hash;
-		-- absent = legacy beacon (only trusted for remote boards)
+		-- absent = legacy beacon (only trusted for remote boards).
+		-- ':'-only entries match nothing — b nil keys the write
 		local b, tag = entry:match("^([^:]+):?(.*)$")
+		if not b or b == "" then
+			-- malformed beacon entry — skip, don't kill the record
+		else
 		local m = OR.relay.peers[b] or {}
 		m[sender] = { t = time(), tag = tag ~= "" and tag or nil }
 		OR.relay.peers[b] = m
@@ -1174,6 +1210,7 @@ function OR.RelayPeer(body, sender)
 			for _, rec in ipairs(q) do
 				OR.RelayWhisper(b, rec)
 			end
+		end
 		end
 	end
 end

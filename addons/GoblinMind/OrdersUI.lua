@@ -471,7 +471,6 @@ function OU.Post()
 	end
 	local ttl = hrs and math.floor(hrs * 3600) or nil
 	local rid = OR.Post(board, itemID, math.floor(qty), ppu, ttl)
-	OR.ReserveAdd(rid, ppu * math.floor(qty), board)
 	if not OR.PurseCovers(0) then
 		ui.postMsg:SetText(GM.CC("warn")
 			.. "posted — UNDERFUNDED (purse < reserves)|r")
