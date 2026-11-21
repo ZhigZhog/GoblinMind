@@ -29,9 +29,9 @@ local function Panel(parent, x, y, w, h, title)
 	return p
 end
 
-local function MkBtn(parent, label, w)
+local function MkBtn(parent, label, w, h)
 	local b = CreateFrame("Button", nil, parent)
-	b:SetSize(w or 60, 18)
+	b:SetSize(w or 60, h or 18)
 	GM.Panel(b, "contHigh")
 	b.text = GM.MakeFontString(b, GM.FONT_BOLD, 9, "accent")
 	b.text:SetPoint("CENTER")
@@ -184,8 +184,7 @@ local function Build()
 	ui.browseScroll = 0
 	-- mode toggle rides the panel header row — count folds into the
 	-- title text so the corner is free for it
-	ui.modeBtn = MkBtn(list, "FIND ITEM", 66)
-	ui.modeBtn:SetSize(66, 13)
+	ui.modeBtn = MkBtn(list, "FIND ITEM", 66, 13)
 	ui.modeBtn:SetPoint("TOPRIGHT", -4, -2)
 	ui.modeBtn:SetScript("OnClick", function()
 		ui.browseMode = not ui.browseMode
@@ -279,7 +278,7 @@ local function Build()
 		r.cbg:SetPoint("BOTTOMRIGHT", 0, 0)
 		r.cbg:SetColorTexture(GM.RGB("contLow"))
 		r.cbg:Hide()
-		r.fold = MkBtn(r, "+", 14)
+		r.fold = MkBtn(r, "+", 14, 13)
 		r.fold:SetPoint("LEFT", 0, 0)
 		r.icon = r:CreateTexture(nil, "ARTWORK")
 		r.icon:SetSize(13, 13)
@@ -302,7 +301,7 @@ local function Build()
 		r.status:SetPoint("LEFT", 452, 0)
 		r.status:SetWidth(170)
 		r.status:SetWordWrap(false)
-		r.claim = MkBtn(r, "CLAIM", 48)
+		r.claim = MkBtn(r, "CLAIM", 48, 13)
 		r.claim:SetPoint("RIGHT", -4, 0)
 		-- nested-commit paint elements (hidden unless the row
 		-- renders a claim under an expanded order)
@@ -311,11 +310,11 @@ local function Build()
 		r.ctxt:SetWidth(390)
 		r.ctxt:SetWordWrap(false)
 		r.ctxt:SetJustifyH("LEFT")
-		r.cforce = MkBtn(r, "FORCE", 46)
+		r.cforce = MkBtn(r, "FORCE", 46, 13)
 		r.cforce:SetPoint("RIGHT", -2, 0)
-		r.cdeny = MkBtn(r, "DENY", 42)
+		r.cdeny = MkBtn(r, "DENY", 42, 13)
 		r.cdeny:SetPoint("RIGHT", -50, 0)
-		r.cacc = MkBtn(r, "ACC", 34)
+		r.cacc = MkBtn(r, "ACC", 34, 13)
 		r.cacc:SetPoint("RIGHT", -94, 0)
 		ui.rows[i] = r
 	end
@@ -376,7 +375,7 @@ function OU.SetItem(itemID)
 	if not itemID then
 		ui.icon:Hide()
 		ui.itemName:SetText(GM.CC("textDim")
-			.. "drop an item here to post a buy order|r")
+			.. "drop an item — or FIND ITEM below to browse|r")
 		ui.itemSub:SetText("")
 		return
 	end
@@ -513,11 +512,20 @@ local function CommitRow(r, o, c, me)
 		+ (stat.commits_forced or 0)
 		+ (stat.commits_expired or 0)
 	-- completed-claim % once history exists; denied and voluntary
-	-- releases don't count either way — that's the design
-	local rating = res >= 3
-		and string.format("%d%%",
-			math.floor((stat.commits_filled or 0) * 100 / res + 0.5))
-		or "new"
+	-- releases don't count either way — that's the design. Colored
+	-- so reliability reads at a glance (pos/warn/err tiers, dim
+	-- while the vendor is still unknown)
+	local rating, rkey
+	if res >= 3 then
+		local pct = math.floor(
+			(stat.commits_filled or 0) * 100 / res + 0.5)
+		rating = pct .. "%"
+		rkey = pct >= 80 and "pos" or (pct >= 50 and "warn" or "err")
+	else
+		rating = "new"
+		rkey = "textDim"
+	end
+	rating = GM.CC(rkey) .. rating .. "|r"
 	local left = (c.expires or 0) - time()
 	r.ctxt:SetText(string.format("» %s%s  x%d/%d  %s  %s  %s%s",
 		c.crafter or "?",
@@ -557,11 +565,9 @@ end
 -- changes; names resolve async via ReqOnce and a later refresh
 -- picks them up.
 local function BrowseIndex()
-	local db = GoblinMindDB
-	local gen = db and db.generated or 0
+	local gen = OR.Generated()
 	if ui.idxGen == gen and ui.idx then return ui.idx end
-	local items = db and ((db.realms and db.realms[GM.Scope()]
-		and db.realms[GM.Scope()].items) or db.items) or {}
+	local items = OR.Catalog() or {}
 	local idx = {}
 	for id in pairs(items) do
 		local n = GM.ItemName(id)

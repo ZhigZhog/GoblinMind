@@ -100,6 +100,19 @@ function OR.MyInstallID()
 		and GoblinMindDB.backend.installID or nil
 end
 
+-- item catalog the browse mode lists + the emit generation for
+-- cache invalidation — the UI reads the catalog through here,
+-- never raw GoblinMindDB
+function OR.Catalog()
+	local db = GoblinMindDB
+	return db and ((db.realms and db.realms[GM.Scope()]
+		and db.realms[GM.Scope()].items) or db.items) or nil
+end
+
+function OR.Generated()
+	return (GoblinMindDB and GoblinMindDB.generated) or 0
+end
+
 -- ============ live overlay (mesh 'O' events) ============
 -- Pulled boards are authoritative but flush-timescale. Order events
 -- also ride the mesh as 'O' records — volatile hints applied on top
@@ -127,20 +140,237 @@ function OR.LiveEvent(board, ev)
 	end
 end
 
-local function evConfirmed(ev, byId, liveIds)
+-- find an order id by a commit id on the pulled board — release
+-- stages only cid (that's the server route), the overlay needs
+-- the parent to paint on
+local function oidForCommit(board, cid)
+	local b = OR.Board(board)
+	for _, o in ipairs(b and b.orders or {}) do
+		for _, c in ipairs(o.commits or {}) do
+			if c.id == cid then return o.id end
+		end
+	end
+end
+
+-- ============ verb registry ============
+-- Every op the system knows lives here — one table, so each
+-- concern has exactly ONE execution path instead of parallel
+-- if-chains:
+--   ev(f,rid)          staged fields -> overlay event
+--                      (absent = stage-only, no overlay/mesh)
+--   wire(ev,rid,board) ev -> ';' mesh record
+--   parse(f)           ';' fields -> ev (inverse of wire)
+--   apply(ev,view,byId)      mutate the pulled view
+--   confirm(ev,byId,live)    pull already reflects it -> drop ev
+--   replay(f,ctx)            decoded queue fields -> ev (reload)
+local VERBS = {}
+
+-- reject/release/deny/force share semantics: an active commit
+-- leaves the pool, its unfilled units return
+local function relApply(ev, view, byId)
+	local o = byId[ev.oid]
+	if not o then return end
+	o._pendOp = ev.v
+	for _, c in ipairs(o.commits or {}) do
+		if c.id == ev.cid and c.state == "active" then
+			c.state = ev.v == "reject" and "rejected" or "released"
+			c._pendOp = ev.v
+			o.remaining = (o.remaining or 0)
+				+ ((c.units or 0) - (c.unitsFilled or 0))
+		end
+	end
+end
+
+local function relConfirm(ev, byId)
 	local o = ev.oid and byId[ev.oid]
-	if ev.v == "post" then
+	if not o then return false end
+	for _, c in ipairs(o.commits or {}) do
+		if c.id == ev.cid then return c.state ~= "active" end
+	end
+	return false
+end
+
+-- short-form commit evs — most verbs are just {oid, cid}
+local function cidEv(f)
+	return { oid = f.oid, cid = f.commit }
+end
+local function cidParse(f)
+	return { oid = f[3], cid = f[4], t = tonumber(f[5]) }
+end
+
+VERBS.post = {
+	letter = "P",
+	ev = function(f, rid)
+		local ev = {
+			board = f.b, itemID = f.itemID, qtyTotal = f.qtyTotal,
+			pricePerUnit = f.pricePerUnit, ttl = f.claimTTL,
+			poster = f.poster, posterUUID = OR.MyUUID(),
+		}
+		local inst = OR.MyInstallID()
+		if inst then ev.realID = inst .. ":" .. rid end
+		return ev
+	end,
+	wire = function(ev, rid, board)
+		return table.concat({ "P", board, rid, ev.itemID,
+			ev.qtyTotal, ev.pricePerUnit, ev.ttl or 0,
+			OR.MyInstallID() or "?", ev.posterUUID or "?",
+			ev.poster or "?", time() }, ";")
+	end,
+	parse = function(f)
+		local ev = {
+			board = f[2], itemID = tonumber(f[4]),
+			qtyTotal = tonumber(f[5]),
+			pricePerUnit = tonumber(f[6]), ttl = tonumber(f[7]),
+			posterUUID = f[9], poster = f[10], t = tonumber(f[11]),
+		}
+		if f[8] and f[8] ~= "?" and f[8] ~= "0" then
+			ev.realID = f[8] .. ":" .. f[3]
+		end
+		if ev.itemID and ev.qtyTotal then return ev end
+	end,
+	replay = function(f, ctx)
+		local ev = {
+			board = ctx.board, itemID = f.itemID,
+			qtyTotal = f.qtyTotal, pricePerUnit = f.pricePerUnit,
+			ttl = f.claimTTL, poster = f.poster,
+			posterUUID = ctx.uuid,
+		}
+		if ctx.inst then ev.realID = ctx.inst .. ":" .. ctx.rid end
+		return ev
+	end,
+	apply = function(ev, view, byId)
+		if ev.realID and not byId[ev.realID] then
+			local o = {
+				id = ev.realID, board = ev.board,
+				itemID = ev.itemID, qtyTotal = ev.qtyTotal,
+				qtyFilled = 0, remaining = ev.qtyTotal,
+				pricePerUnit = ev.pricePerUnit,
+				claimTTL = ev.ttl, poster = ev.poster,
+				posterUUID = ev.posterUUID, backed = true,
+				created = ev.t, expires = ev.t + 7 * 86400,
+				state = "open", _live = true, _pendOp = "post",
+				commits = {},
+			}
+			byId[o.id] = o
+			view[#view + 1] = o
+		end
+	end,
+	confirm = function(ev, byId)
 		return ev.realID and byId[ev.realID] ~= nil
-	elseif ev.v == "claim" then
+	end,
+}
+
+VERBS.claim = {
+	letter = "C",
+	ev = function(f, rid)
+		local ev = {
+			oid = f.oid, units = f.units, crafter = f.crafter,
+			crafterUUID = OR.MyUUID(),
+		}
+		local inst = OR.MyInstallID()
+		if inst then ev.cid = inst .. ":" .. rid end
+		return ev
+	end,
+	wire = function(ev, rid, board)
+		return table.concat({ "C", board, ev.oid, rid, ev.units,
+			OR.MyInstallID() or "?", ev.crafterUUID or "?",
+			ev.crafter or "?", time() }, ";")
+	end,
+	parse = function(f)
+		local ev = {
+			board = f[2], oid = f[3], units = tonumber(f[5]),
+			crafterUUID = f[7], crafter = f[8], t = tonumber(f[9]),
+		}
+		if f[6] and f[6] ~= "?" and f[6] ~= "0" then
+			ev.cid = f[6] .. ":" .. f[4]
+		end
+		if ev.oid and ev.units then return ev end
+	end,
+	replay = function(f, ctx)
+		local ev = {
+			oid = f.oid, units = f.units, crafter = f.crafter,
+			crafterUUID = ctx.uuid,
+		}
+		if ctx.inst then ev.cid = ctx.inst .. ":" .. ctx.rid end
+		return ev
+	end,
+	apply = function(ev, view, byId)
+		local o = byId[ev.oid]
+		if o and o.state == "open" then
+			o.remaining = math.max(0,
+				(o.remaining or 0) - (ev.units or 0))
+			o._pendOp = "claim"
+			o.commits = o.commits or {}
+			o.commits[#o.commits + 1] = {
+				id = ev.cid, units = ev.units, unitsFilled = 0,
+				crafter = ev.crafter, crafterUUID = ev.crafterUUID,
+				expires = ev.t + (o.claimTTL or 86400),
+				state = "active", _live = true, _pendOp = "claim",
+			}
+		end
+	end,
+	confirm = function(ev, byId)
+		local o = ev.oid and byId[ev.oid]
 		if not o then return false end
 		for _, c in ipairs(o.commits or {}) do
 			if c.id == ev.cid then return true end
 		end
 		return false
-	elseif ev.v == "fill" then
+	end,
+}
+
+VERBS.fill = {
+	letter = "F",
+	ev = function(f)
+		return { oid = f.oid, units = f.units, cid = f.commit }
+	end,
+	wire = function(ev, rid, board)
+		return table.concat({ "F", board, ev.oid, ev.units,
+			ev.cid or "", time() }, ";")
+	end,
+	parse = function(f)
+		return { oid = f[3], units = tonumber(f[4]), cid = f[5],
+			t = tonumber(f[6]) }
+	end,
+	replay = function(f)
+		return { oid = f.oid, units = f.units, cid = f.commit }
+	end,
+	apply = function(ev, view, byId)
+		local o = byId[ev.oid]
+		if not o then return end
+		-- server: fill moves units held→filled (remaining stays —
+		-- the claim already took them out). Only decrement
+		-- remaining when we never saw the claim (blind fill).
+		local seen
+		for _, c in ipairs(o.commits or {}) do
+			if c.id == ev.cid then
+				seen = c
+				break
+			end
+		end
+		if seen and seen.state == "active" then
+			seen.unitsFilled = (seen.unitsFilled or 0)
+				+ (ev.units or 0)
+			if seen.unitsFilled >= (seen.units or 0) then
+				seen.state = "filled"
+			end
+		end
+		ev.newFilled = (o.qtyFilled or 0) + (ev.units or 0)
+		o.qtyFilled = ev.newFilled
+		o._pendOp = "fill"
+		if not seen then
+			o.remaining = math.max(0,
+				(o.remaining or 0) - (ev.units or 0))
+		end
+		if o.qtyFilled >= (o.qtyTotal or 0) then
+			o.state = "filled"
+		end
+	end,
+	confirm = function(ev, byId)
+		local o = ev.oid and byId[ev.oid]
 		if not o then return false end
 		-- confirm against the filled commit — ev.newFilled is only
-		-- set during applyEv, never at drop-check time, so the old
+		-- set during apply, never at drop-check time, so the old
 		-- qtyFilled>=newFilled test confirmed every fill instantly
 		-- (>=0) and dropped it unapplied
 		for _, c in ipairs(o.commits or {}) do
@@ -152,7 +382,55 @@ local function evConfirmed(ev, byId, liveIds)
 		-- blind fill (claim never seen): the order reaching a
 		-- terminal state is the only observable confirmation
 		return o.state ~= "open"
-	elseif ev.v == "cancel" then
+	end,
+}
+
+VERBS.reject = {
+	letter = "R",
+	ev = cidEv,
+	wire = function(ev, rid, board)
+		return table.concat({ "R", board, ev.oid, ev.cid or "",
+			time() }, ";")
+	end,
+	parse = cidParse,
+	replay = cidEv,
+	apply = relApply,
+	confirm = relConfirm,
+}
+
+VERBS.cancel = {
+	letter = "X",
+	ev = function(f)
+		return { oid = f.oid, units = f.units or 0 }
+	end,
+	wire = function(ev, rid, board)
+		return table.concat({ "X", board, ev.oid, ev.units or 0,
+			time() }, ";")
+	end,
+	parse = function(f)
+		return { oid = f[3], units = tonumber(f[4]) or 0,
+			t = tonumber(f[5]) }
+	end,
+	replay = function(f)
+		return { oid = f.oid, units = f.units }
+	end,
+	apply = function(ev, view, byId)
+		local o = byId[ev.oid]
+		if not o then return end
+		-- pending cancel keeps the row (grayed + flagged) until a
+		-- pull confirms — a failed cancel op drops the ev and the
+		-- order snaps back, never having visibly left
+		o._pendOp = "cancel"
+		if (ev.units or 0) > 0 then
+			ev.newTotal = math.max((o.qtyFilled or 0),
+				(o.qtyTotal or 0) - ev.units)
+			o.qtyTotal = ev.newTotal
+			o.remaining = math.max(0,
+				(o.remaining or 0) - ev.units)
+		end
+	end,
+	confirm = function(ev, byId, liveIds)
+		local o = ev.oid and byId[ev.oid]
 		-- `not o` = order absent from the pull. But when the cancel
 		-- targets an overlay-only order (pending post), absence just
 		-- means the post hasn't been pulled yet — NOT that the cancel
@@ -164,21 +442,103 @@ local function evConfirmed(ev, byId, liveIds)
 		end
 		return absent or (o and (o.qtyTotal or 0)
 			<= (ev.newTotal or 0)) or false
-	elseif ev.v == "accept" then
+	end,
+}
+
+VERBS.release = {
+	letter = "L",
+	-- the stage body stays cid-only (that's the server route); the
+	-- overlay's parent oid comes from evFields at stage time or the
+	-- pulled board on replay
+	ev = function(f)
+		return { oid = oidForCommit(f.b, f.cid), cid = f.cid }
+	end,
+	wire = function(ev, rid, board)
+		return table.concat({ "L", board, ev.oid or "", ev.cid,
+			time() }, ";")
+	end,
+	parse = cidParse,
+	replay = function(f, ctx)
+		return { oid = oidForCommit(ctx.board, f.cid), cid = f.cid }
+	end,
+	apply = relApply,
+	confirm = relConfirm,
+}
+
+-- poster-side claim management: accept green-lights a crafter,
+-- deny frees the units with no stat hit, force frees them and
+-- books the vendor's rating
+VERBS.accept = {
+	letter = "A",
+	ev = cidEv,
+	wire = function(ev, rid, board)
+		return table.concat({ "A", board, ev.oid, ev.cid,
+			time() }, ";")
+	end,
+	parse = cidParse,
+	replay = cidEv,
+	apply = function(ev, view, byId)
+		local o = byId[ev.oid]
+		if not o then return end
+		o._pendOp = "accept"
+		for _, c in ipairs(o.commits or {}) do
+			if c.id == ev.cid then
+				c.accepted = true
+				c._pendOp = "accept"
+			end
+		end
+	end,
+	confirm = function(ev, byId)
+		local o = ev.oid and byId[ev.oid]
 		if not o then return false end
 		for _, c in ipairs(o.commits or {}) do
 			if c.id == ev.cid then return c.accepted and true or false end
 		end
 		return false
-	elseif ev.v == "reject" or ev.v == "release"
-			or ev.v == "deny" or ev.v == "force" then
-		if not o then return false end
-		for _, c in ipairs(o.commits or {}) do
-			if c.id == ev.cid then return c.state ~= "active" end
-		end
-		return false
-	end
-	return false
+	end,
+}
+
+VERBS.deny = {
+	letter = "D",
+	ev = cidEv,
+	wire = function(ev, rid, board)
+		return table.concat({ "D", board, ev.oid, ev.cid,
+			time() }, ";")
+	end,
+	parse = cidParse,
+	replay = cidEv,
+	apply = relApply,
+	confirm = relConfirm,
+}
+
+VERBS.force = {
+	letter = "K",
+	ev = cidEv,
+	wire = function(ev, rid, board)
+		return table.concat({ "K", board, ev.oid, ev.cid,
+			time() }, ";")
+	end,
+	parse = cidParse,
+	replay = cidEv,
+	apply = relApply,
+	confirm = relConfirm,
+}
+
+-- stage-only verbs: moderation ops have no overlay and no mesh
+VERBS.ignore = {}
+VERBS.ban = {}
+
+local LETTER = {}
+for name, def in pairs(VERBS) do
+	def.name = name
+	if def.letter then LETTER[def.letter] = def end
+end
+
+local function evConfirmed(ev, byId, liveIds)
+	local def = VERBS[ev.v]
+	return (def and def.confirm)
+		and (def.confirm(ev, byId, liveIds) and true or false)
+		or false
 end
 
 local function evDrop(ev, byId, res, pullT, liveIds)
@@ -215,108 +575,8 @@ local function shallow(o)
 end
 
 local function applyEv(ev, view, byId)
-	if ev.v == "post" then
-		if ev.realID and not byId[ev.realID] then
-			local o = {
-				id = ev.realID, board = ev.board,
-				itemID = ev.itemID, qtyTotal = ev.qtyTotal,
-				qtyFilled = 0, remaining = ev.qtyTotal,
-				pricePerUnit = ev.pricePerUnit,
-				claimTTL = ev.ttl, poster = ev.poster,
-				posterUUID = ev.posterUUID, backed = true,
-				created = ev.t, expires = ev.t + 7 * 86400,
-				state = "open", _live = true, _pendOp = "post",
-				commits = {},
-			}
-			byId[o.id] = o
-			view[#view + 1] = o
-		end
-	elseif ev.v == "claim" then
-		local o = byId[ev.oid]
-		if o and o.state == "open" then
-			o.remaining = math.max(0,
-				(o.remaining or 0) - (ev.units or 0))
-			o._pendOp = "claim"
-			o.commits = o.commits or {}
-			o.commits[#o.commits + 1] = {
-				id = ev.cid, units = ev.units, unitsFilled = 0,
-				crafter = ev.crafter, crafterUUID = ev.crafterUUID,
-				expires = ev.t + (o.claimTTL or 86400),
-				state = "active", _live = true, _pendOp = "claim",
-			}
-		end
-	elseif ev.v == "fill" then
-		local o = byId[ev.oid]
-		if o then
-			-- server: fill moves units held→filled (remaining stays —
-			-- the claim already took them out). Only decrement
-			-- remaining when we never saw the claim (blind fill).
-			local seen
-			for _, c in ipairs(o.commits or {}) do
-				if c.id == ev.cid then
-					seen = c
-					break
-				end
-			end
-			if seen and seen.state == "active" then
-				seen.unitsFilled = (seen.unitsFilled or 0)
-					+ (ev.units or 0)
-				if seen.unitsFilled >= (seen.units or 0) then
-					seen.state = "filled"
-				end
-			end
-			ev.newFilled = (o.qtyFilled or 0) + (ev.units or 0)
-			o.qtyFilled = ev.newFilled
-			o._pendOp = "fill"
-			if not seen then
-				o.remaining = math.max(0,
-					(o.remaining or 0) - (ev.units or 0))
-			end
-			if o.qtyFilled >= (o.qtyTotal or 0) then
-				o.state = "filled"
-			end
-		end
-	elseif ev.v == "cancel" then
-		local o = byId[ev.oid]
-		if o then
-			-- pending cancel keeps the row (grayed + flagged) until a
-			-- pull confirms — a failed cancel op drops the ev and the
-			-- order snaps back, never having visibly left
-			o._pendOp = "cancel"
-			if (ev.units or 0) > 0 then
-				ev.newTotal = math.max((o.qtyFilled or 0),
-					(o.qtyTotal or 0) - ev.units)
-				o.qtyTotal = ev.newTotal
-				o.remaining = math.max(0,
-					(o.remaining or 0) - ev.units)
-			end
-		end
-	elseif ev.v == "accept" then
-		local o = byId[ev.oid]
-		if o then
-			o._pendOp = "accept"
-			for _, c in ipairs(o.commits or {}) do
-				if c.id == ev.cid then
-					c.accepted = true
-					c._pendOp = "accept"
-				end
-			end
-		end
-	elseif ev.v == "reject" or ev.v == "release"
-			or ev.v == "deny" or ev.v == "force" then
-		local o = byId[ev.oid]
-		if o then
-			o._pendOp = ev.v
-			for _, c in ipairs(o.commits or {}) do
-				if c.id == ev.cid and c.state == "active" then
-					c.state = ev.v == "reject" and "rejected" or "released"
-					c._pendOp = ev.v
-					o.remaining = (o.remaining or 0)
-						+ ((c.units or 0) - (c.unitsFilled or 0))
-				end
-			end
-		end
-	end
+	local def = VERBS[ev.v]
+	if def and def.apply then def.apply(ev, view, byId) end
 end
 
 -- staged-but-unconsumed ops survive in the SavedVariables queue —
@@ -325,62 +585,24 @@ end
 -- queue IS the pending set: ClearAcked drops rids the server has
 -- answered, so what's left is by definition unconfirmed.
 local _replayed = false
-local function oidForCommit(board, cid)
-	local b = OR.Board(board)
-	for _, o in ipairs(b and b.orders or {}) do
-		for _, c in ipairs(o.commits or {}) do
-			if c.id == cid then return o.id end
-		end
-	end
-end
-
 function OR.ReplayPending()
 	if _replayed then return end
 	_replayed = true
-	local inst = OR.MyInstallID()
+	local ctx = { inst = OR.MyInstallID(), uuid = OR.MyUUID() }
 	for _, rec in ipairs((GM.db and GM.db.orderQueue) or {}) do
 		local rid, h = rec:match("^(ord%-[^|]+)|(%x+)$")
 		local f = h and unjson(unhex(h)) or nil
 		local b = f and f.b or nil
-		-- the rid embeds the stage timestamp — replayed ops keep
-		-- their real age (TTL, event-order sort) instead of
-		-- looking brand new every login
-		local ridT = tonumber(rid and rid:match("^ord%-(%d+)"))
-		local ev
-		if f and b then
-			if f.v == "post" then
-				ev = { v = "post", rid = rid, board = b,
-					itemID = f.itemID, qtyTotal = f.qtyTotal,
-					pricePerUnit = f.pricePerUnit, ttl = f.claimTTL,
-					poster = f.poster, posterUUID = OR.MyUUID() }
-				if inst then
-					ev.realID = inst .. ":" .. rid
-				end
-			elseif f.v == "claim" then
-				ev = { v = "claim", rid = rid, oid = f.oid,
-					units = f.units, crafter = f.crafter,
-					crafterUUID = OR.MyUUID() }
-				if inst then ev.cid = inst .. ":" .. rid end
-			elseif f.v == "fill" then
-				ev = { v = "fill", rid = rid, oid = f.oid,
-					units = f.units, cid = f.commit }
-			elseif f.v == "reject" then
-				ev = { v = "reject", rid = rid, oid = f.oid,
-					cid = f.commit }
-			elseif f.v == "cancel" then
-				ev = { v = "cancel", rid = rid, oid = f.oid,
-					units = f.units }
-			elseif f.v == "release" then
-				ev = { v = "release", rid = rid, cid = f.cid,
-					oid = oidForCommit(b, f.cid) }
-			elseif f.v == "accept" or f.v == "deny"
-					or f.v == "force" then
-				ev = { v = f.v, rid = rid, oid = f.oid,
-					cid = f.commit }
-			end
-		end
-		if ev then
-			ev.t = ridT
+		ctx.rid, ctx.board = rid, b
+		local def = f and VERBS[f.v]
+		local ev = def and def.replay and def.replay(f, ctx)
+		if ev and b then
+			-- the rid embeds the stage timestamp — replayed ops keep
+			-- their real age (TTL, event-order sort) instead of
+			-- looking brand new every login
+			ev.v = f.v
+			ev.rid = rid
+			ev.t = tonumber(rid:match("^ord%-(%d+)"))
 			local dup = false
 			for _, e in ipairs(OR.live[b] or {}) do
 				if e.rid == rid then dup = true break end
@@ -481,110 +703,76 @@ function OR.MeshSend(rec)
 	end
 end
 
+-- THE op path: stage -> overlay ev -> mesh broadcast. Every verb
+-- wrapper below is a thin field-map into this one pipeline, so an
+-- op can never partially fire (queue without overlay, overlay
+-- without mesh). evFields overrides the def's ev builder when the
+-- caller knows overlay detail the stage body shouldn't carry
+-- (release's parent oid — the server route doesn't want it).
+function OR.Op(verb, board, fields, evFields)
+	local def = VERBS[verb]
+	if not def then return nil end
+	fields = fields or {}
+	fields.v = verb
+	fields.b = fields.b or board
+	local rid = OR.Stage(fields)
+	local ev = evFields or (def.ev and def.ev(fields, rid))
+	if ev then
+		ev.v = verb
+		ev.rid = rid
+		OR.LiveEvent(board, ev)
+		if def.wire then
+			OR.MeshSend(def.wire(ev, rid, board))
+		end
+	end
+	return rid
+end
+
 function OR.Post(board, itemID, qty, ppu, ttl, charname)
-	local poster = charname or CharName()
-	local rid = OR.Stage({
-		v = "post", b = board, itemID = itemID, qtyTotal = qty,
-		pricePerUnit = ppu, claimTTL = ttl, poster = poster,
+	return OR.Op("post", board, {
+		itemID = itemID, qtyTotal = qty, pricePerUnit = ppu,
+		claimTTL = ttl, poster = charname or CharName(),
 		backed = OR.PurseCovers(ppu * qty),
 	})
-	local inst = OR.MyInstallID() or "?"
-	local ev = { v = "post", rid = rid, board = board,
-		itemID = itemID, qtyTotal = qty, pricePerUnit = ppu,
-		ttl = ttl, poster = poster, posterUUID = OR.MyUUID() }
-	if inst ~= "?" then ev.realID = inst .. ":" .. rid end
-	OR.LiveEvent(board, ev)
-	OR.MeshSend(table.concat({ "P", board, rid, itemID, qty, ppu,
-		ttl or 0, inst, OR.MyUUID() or "?", poster,
-		time() }, ";"))
-	return rid
 end
 
 function OR.Claim(board, oid, units, charname)
-	local crafter = charname or CharName()
-	local rid = OR.Stage({
-		v = "claim", b = board, oid = oid, units = units,
-		crafter = crafter,
+	return OR.Op("claim", board, {
+		oid = oid, units = units, crafter = charname or CharName(),
 	})
-	local inst = OR.MyInstallID() or "?"
-	local ev = { v = "claim", rid = rid, oid = oid, units = units,
-		crafter = crafter, crafterUUID = OR.MyUUID() }
-	if inst ~= "?" then ev.cid = inst .. ":" .. rid end
-	OR.LiveEvent(board, ev)
-	OR.MeshSend(table.concat({ "C", board, oid, rid, units,
-		inst, OR.MyUUID() or "?", crafter, time() }, ";"))
-	return rid
 end
 
 function OR.Fill(board, oid, units, cid, mailFrom)
-	local rid = OR.Stage({
-		v = "fill", b = board, oid = oid, units = units,
-		commit = cid, mailFrom = mailFrom,
+	return OR.Op("fill", board, {
+		oid = oid, units = units, commit = cid, mailFrom = mailFrom,
 	})
-	OR.LiveEvent(board, { v = "fill", rid = rid, oid = oid,
-		units = units, cid = cid })
-	OR.MeshSend(table.concat({ "F", board, oid, units,
-		cid or "", time() }, ";"))
-	return rid
 end
 
 function OR.Reject(board, oid, cid, mailFrom)
-	local rid = OR.Stage({ v = "reject", b = board, oid = oid,
-		commit = cid, mailFrom = mailFrom })
-	OR.LiveEvent(board, { v = "reject", rid = rid, oid = oid,
-		cid = cid })
-	OR.MeshSend(table.concat({ "R", board, oid, cid or "",
-		time() }, ";"))
-	return rid
+	return OR.Op("reject", board, {
+		oid = oid, commit = cid, mailFrom = mailFrom,
+	})
 end
 
 function OR.Cancel(board, oid, units)
-	local rid = OR.Stage({ v = "cancel", b = board, oid = oid,
-		units = units })
-	OR.LiveEvent(board, { v = "cancel", rid = rid, oid = oid,
-		units = units or 0 })
-	OR.MeshSend(table.concat({ "X", board, oid, units or 0,
-		time() }, ";"))
-	return rid
+	return OR.Op("cancel", board, { oid = oid, units = units })
 end
 
 function OR.Release(board, cid, oid)
-	local rid = OR.Stage({ v = "release", b = board, cid = cid })
-	OR.LiveEvent(board, { v = "release", rid = rid, oid = oid,
-		cid = cid })
-	OR.MeshSend(table.concat({ "L", board, oid or "", cid,
-		time() }, ";"))
-	return rid
+	return OR.Op("release", board, { cid = cid },
+		{ oid = oid, cid = cid })
 end
 
--- poster-side claim management: accept green-lights a crafter,
--- deny frees the units with no stat hit, force frees them and
--- books the vendor's rating
 function OR.Accept(board, oid, cid)
-	local rid = OR.Stage({ v = "accept", b = board, oid = oid,
-		commit = cid })
-	OR.LiveEvent(board, { v = "accept", rid = rid, oid = oid,
-		cid = cid })
-	OR.MeshSend(table.concat({ "A", board, oid, cid, time() }, ";"))
-	return rid
+	return OR.Op("accept", board, { oid = oid, commit = cid })
 end
 
 function OR.Deny(board, oid, cid)
-	local rid = OR.Stage({ v = "deny", b = board, oid = oid,
-		commit = cid })
-	OR.LiveEvent(board, { v = "deny", rid = rid, oid = oid,
-		cid = cid })
-	OR.MeshSend(table.concat({ "D", board, oid, cid, time() }, ";"))
-	return rid
+	return OR.Op("deny", board, { oid = oid, commit = cid })
 end
 
 function OR.Force(board, oid, cid)
-	local rid = OR.Stage({ v = "force", b = board, oid = oid,
-		commit = cid })
-	OR.LiveEvent(board, { v = "force", rid = rid, oid = oid,
-		cid = cid })
-	OR.MeshSend(table.concat({ "K", board, oid, cid, time() }, ";"))
-	return rid
+	return OR.Op("force", board, { oid = oid, commit = cid })
 end
 
 -- mesh 'O' receive: ';'-separated records — ':' can't be the
@@ -593,56 +781,20 @@ end
 function OR.MeshEvent(rec)
 	local f = {}
 	for x in rec:gmatch("[^;]*") do f[#f + 1] = x end
-	local v = f[1]
-	if v == "P" then
-		local ev = { v = "post", board = f[2],
-			itemID = tonumber(f[4]), qtyTotal = tonumber(f[5]),
-			pricePerUnit = tonumber(f[6]), ttl = tonumber(f[7]),
-			posterUUID = f[9], poster = f[10],
-			t = tonumber(f[11]) }
-		if f[8] and f[8] ~= "?" and f[8] ~= "0" then
-			ev.realID = f[8] .. ":" .. f[3]
-		end
-		if ev.itemID and ev.qtyTotal then OR.LiveEvent(f[2], ev) end
-	elseif v == "C" then
-		local ev = { v = "claim", board = f[2], oid = f[3],
-			units = tonumber(f[5]), crafterUUID = f[7],
-			crafter = f[8], t = tonumber(f[9]) }
-		if f[6] and f[6] ~= "?" and f[6] ~= "0" then
-			ev.cid = f[6] .. ":" .. f[4]
-		end
-		if ev.oid and ev.units then OR.LiveEvent(f[2], ev) end
-	elseif v == "F" then
-		OR.LiveEvent(f[2], { v = "fill", oid = f[3],
-			units = tonumber(f[4]), cid = f[5],
-			t = tonumber(f[6]) })
-	elseif v == "R" then
-		OR.LiveEvent(f[2], { v = "reject", oid = f[3], cid = f[4],
-			t = tonumber(f[5]) })
-	elseif v == "X" then
-		OR.LiveEvent(f[2], { v = "cancel", oid = f[3],
-			units = tonumber(f[4]) or 0, t = tonumber(f[5]) })
-	elseif v == "L" then
-		OR.LiveEvent(f[2], { v = "release", oid = f[3], cid = f[4],
-			t = tonumber(f[5]) })
-	elseif v == "A" then
-		OR.LiveEvent(f[2], { v = "accept", oid = f[3], cid = f[4],
-			t = tonumber(f[5]) })
-	elseif v == "D" then
-		OR.LiveEvent(f[2], { v = "deny", oid = f[3], cid = f[4],
-			t = tonumber(f[5]) })
-	elseif v == "K" then
-		OR.LiveEvent(f[2], { v = "force", oid = f[3], cid = f[4],
-			t = tonumber(f[5]) })
+	local def = LETTER[f[1]]
+	local ev = def and def.parse and def.parse(f)
+	if ev then
+		ev.v = def.name
+		OR.LiveEvent(f[2], ev)
 	end
 end
 
 function OR.Ignore(uuid, on)
-	return OR.Stage({ v = "ignore", uuid = uuid, on = on })
+	return OR.Op("ignore", nil, { uuid = uuid, on = on })
 end
 
 function OR.BoardBan(board, uuid, on)
-	return OR.Stage({ v = "ban", b = board, uuid = uuid, on = on })
+	return OR.Op("ban", board, { uuid = uuid, on = on })
 end
 
 function OR.JoinBoard(name, on)
