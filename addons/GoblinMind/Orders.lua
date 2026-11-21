@@ -39,6 +39,30 @@ local function OpJSON(f)
 	return "{" .. table.concat(parts, ",") .. "}"
 end
 
+local function unhex(h)
+	return (h:gsub("..", function(p)
+		return string.char(tonumber(p, 16))
+	end))
+end
+
+-- inverse of OpJSON — flat {"k":scalar} only; jesc maps every
+-- embedded quote/backslash to \uXXXX so bare " never appears
+-- inside string values (the two-pass match below stays safe)
+local function unjson(s)
+	local out = {}
+	for k, v in s:gmatch('"([^"]-)":"(.-)"[,}]') do
+		out[k] = v:gsub("\\u(%x%x%x%x)", function(x)
+			return string.char(tonumber(x, 16) % 256)
+		end)
+	end
+	for k, v in s:gmatch('"([^"]-)":([^",}]+)') do
+		if v == "true" then out[k] = true
+		elseif v == "false" then out[k] = false
+		else out[k] = tonumber(v) end
+	end
+	return out
+end
+
 local function CharName()
 	return UnitName("player") or "?"
 end
@@ -241,7 +265,70 @@ local function applyEv(ev, view, byId)
 	end
 end
 
+-- staged-but-unconsumed ops survive in the SavedVariables queue —
+-- replay them into the live overlay on first read so a post/claim
+-- the watcher hasn't acked yet doesn't vanish on /reload. The
+-- queue IS the pending set: ClearAcked drops rids the server has
+-- answered, so what's left is by definition unconfirmed.
+local _replayed = false
+local function oidForCommit(board, cid)
+	local b = OR.Board(board)
+	for _, o in ipairs(b and b.orders or {}) do
+		for _, c in ipairs(o.commits or {}) do
+			if c.id == cid then return o.id end
+		end
+	end
+end
+
+function OR.ReplayPending()
+	if _replayed then return end
+	_replayed = true
+	local inst = OR.MyInstallID()
+	for _, rec in ipairs((GM.db and GM.db.orderQueue) or {}) do
+		local rid, h = rec:match("^(ord%-[^|]+)|(%x+)$")
+		local f = h and unjson(unhex(h)) or nil
+		local b = f and f.b or nil
+		local ev
+		if f and b then
+			if f.v == "post" then
+				ev = { v = "post", rid = rid, board = b,
+					itemID = f.itemID, qtyTotal = f.qtyTotal,
+					pricePerUnit = f.pricePerUnit, ttl = f.claimTTL,
+					poster = f.poster, posterUUID = OR.MyUUID() }
+				if inst then
+					ev.realID = inst .. ":" .. rid
+				end
+			elseif f.v == "claim" then
+				ev = { v = "claim", rid = rid, oid = f.oid,
+					units = f.units, crafter = f.crafter,
+					crafterUUID = OR.MyUUID() }
+				if inst then ev.cid = inst .. ":" .. rid end
+			elseif f.v == "fill" then
+				ev = { v = "fill", rid = rid, oid = f.oid,
+					units = f.units, cid = f.commit }
+			elseif f.v == "reject" then
+				ev = { v = "reject", rid = rid, oid = f.oid,
+					cid = f.commit }
+			elseif f.v == "cancel" then
+				ev = { v = "cancel", rid = rid, oid = f.oid,
+					units = f.units }
+			elseif f.v == "release" then
+				ev = { v = "release", rid = rid, cid = f.cid,
+					oid = oidForCommit(b, f.cid) }
+			end
+		end
+		if ev then
+			local dup = false
+			for _, e in ipairs(OR.live[b] or {}) do
+				if e.rid == rid then dup = true break end
+			end
+			if not dup then OR.LiveEvent(b, ev) end
+		end
+	end
+end
+
 function OR.Orders(name)
+	OR.ReplayPending()
 	local b = OR.Board(name)
 	local pulled = b and b.orders or {}
 	local view, byId = {}, {}

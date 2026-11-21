@@ -1119,6 +1119,20 @@ def backend_pull(cfg=None):
     return books
 
 
+def _boards_snapshot():
+    """Serialized stored board orders (t stripped — it changes every
+    pull). The watch loop diffs snapshots to fire an emit only when
+    the board actually changed."""
+    try:
+        with open(API_BOOK_PATH, encoding='utf-8') as fh:
+            boards = json.load(fh).get('boards') or {}
+    except (OSError, ValueError):
+        return None
+    return json.dumps(
+        {b: v.get('orders') for b, v in boards.items()},
+        sort_keys=True)
+
+
 def boards_pull(cfg=None):
     """GET /v1/boards/{b}/orders per configured board — the writ
     feed. Stored beside the remote books in api_book.json under
@@ -2529,6 +2543,7 @@ def cmd_watch(appdata, outs, interval=5, settle=20, feed='tsm',
         backend_cfg_raw.get('poll_minutes', 15)) * 60
     last_backend_poll = time.time()
     last_boards_poll = time.time()  # first pull after one interval
+    last_boards_emit = 0.0          # board-change emit floor (5m)
     LOG.info('watching %s', appdata)
     LOG.info('outputs: %s', ' ; '.join(outs))
     LOG.info('poll=%ss settle=%ss', interval, settle)
@@ -2673,7 +2688,16 @@ def cmd_watch(appdata, outs, interval=5, settle=20, feed='tsm',
                     now - last_boards_poll >= boards_secs:
                 last_boards_poll = now
                 try:
+                    before = _boards_snapshot()
                     boards_pull(backend_cfg_raw)
+                    # a changed board is news — don't leave it sitting
+                    # in api_state until the next cadence emit. Floor
+                    # keeps a busy board from thrashing the 5-min
+                    # book merge; unchanged pulls cost nothing.
+                    if _boards_snapshot() != before and \
+                            now - last_boards_emit >= 300:
+                        last_boards_emit = now
+                        emit_book('boards changed')
                 except Exception:
                     LOG.exception('boards pull failed')
         # cadence floor: book mode re-merges at least once an hour —
