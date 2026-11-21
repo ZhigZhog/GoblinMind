@@ -78,9 +78,26 @@ local function Build()
 	ui.boardBtns = {}
 	ui.board = nil
 
-	-- hint line: flush cadence + reserve warning
+	-- live board refresh — the file copy only moves at /reload;
+	-- this asks a peer on the same tracker for its newest pull.
+	-- Fixed anchor: ui.hint's left edge slides with text length.
+	ui.refreshBtn = MkBtn(f, "REFRESH", 66, 15)
+	ui.refreshBtn:SetPoint("TOPRIGHT", -12, -30)
+	ui.refreshBtn:SetScript("OnClick", function()
+		local peer, why = OR.RelayAsk(ui.board, true)
+		if peer then
+			ui.hint:SetText(GM.CC("good")
+				.. ("asked %s — snapshot inbound|r"):format(peer))
+		elseif why == "cooldown" then
+			ui.hint:SetText("asked just now — waiting on peer")
+		else
+			ui.hint:SetText("no peer serves this board — pull at /reload")
+		end
+	end)
+
+	-- hint line: flush cadence + reserve warning (right of REFRESH)
 	ui.hint = GM.MakeFontString(f, GM.FONT, 9, "textDim")
-	ui.hint:SetPoint("TOPRIGHT", -12, -32)
+	ui.hint:SetPoint("RIGHT", ui.refreshBtn, "LEFT", -8, 0)
 
 	-- ===== POST bar: item strip on top, inputs below =====
 	local post = Panel(f, 10, -54, 700, 84, "POST BUY ORDER")

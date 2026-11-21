@@ -121,8 +121,15 @@ end
 -- advertiser and whispers its envelopes there.
 function M.Advertise()
 	local bs = GoblinMindDB and GoblinMindDB.boards
+	-- board:tag — the tag is our tracker's url hash; peers use it to
+	-- serve snapshots only for boards on the SAME tracker (a foreign
+	-- same-named board is a different swarm, never a refresh source)
+	local tag = GM.Orders and GM.Orders.TrackerTag
+		and GM.Orders.TrackerTag() or "-"
 	local names = {}
-	for b in pairs(bs or {}) do names[#names + 1] = b end
+	for b in pairs(bs or {}) do
+		names[#names + 1] = b .. ":" .. tag
+	end
 	if #names == 0 then return end
 	M._advT = GetTime()
 	M.Send("T", { table.concat(names, ",") })

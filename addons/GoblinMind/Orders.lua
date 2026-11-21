@@ -109,9 +109,29 @@ end
 
 function OR.Board(name)
 	local bs = GoblinMindDB and GoblinMindDB.boards
-	if bs and bs[name] then return bs[name] end
-	local rb = GM.db and GM.db.rboards
-	return rb and rb[name] or nil
+	local b = bs and bs[name]
+	local rb = GM.db and GM.db.rboards and GM.db.rboards[name]
+	-- freshest snapshot wins: a tag-matched peer's pull can be
+	-- fresher than the file copy (which only moves at /reload)
+	if b and rb and (rb.t or 0) > (b.t or 0) then return rb end
+	return b or rb
+end
+
+-- tracker identity for T beacons — two boards named "main" on
+-- different trackers are different swarms; the tag keeps a peer's
+-- snapshot from poisoning our board view on a same-name collision
+local function urlHash(s)
+	local h = 5381
+	for i = 1, #s do
+		h = (h * 33 + s:byte(i)) % 0x100000000
+	end
+	return format("%x", h)
+end
+
+function OR.TrackerTag()
+	local u = GoblinMindDB and GoblinMindDB.backend
+		and GoblinMindDB.backend.url
+	return u and urlHash(u) or nil
 end
 
 function OR.MyInstallID()
@@ -1043,9 +1063,18 @@ end
 
 function OR.RelayServing(board)
 	local best, bt, now = nil, nil, time()
-	for name, t in pairs(OR.relay.peers[board] or {}) do
+	-- for a board our own tracker serves, only a peer on the SAME
+	-- tracker may refresh it — a foreign same-named board would
+	-- poison the view. Remote boards have no local truth: any peer.
+	local local_ = GoblinMindDB and GoblinMindDB.boards
+		and GoblinMindDB.boards[board]
+	local ourTag = OR.TrackerTag()
+	for name, e in pairs(OR.relay.peers[board] or {}) do
+		local t = type(e) == "table" and e.t or e
+		local tag = type(e) == "table" and e.tag or nil
 		if now - (t or 0) < RELAY_PEER_TTL
-				and (not bt or t > bt) then
+				and (not bt or t > bt)
+				and (not local_ or (ourTag and tag == ourTag)) then
 			best, bt = name, t
 		end
 	end
@@ -1088,29 +1117,39 @@ function OR.RelaySend(board, verb, fields, rid, creds)
 	OR.RelayWhisper(board, table.concat(p, ";"))
 end
 
-function OR.RelayAsk(board)
-	if not board or not OR.IsRemote(board) then return end
+function OR.RelayAsk(board, force)
+	if not board then return nil end
+	-- force = the manual refresh path: a local board's file copy is
+	-- /reload-bound, so a tag-matched peer's newer pull is the only
+	-- live view. Without force, only remote boards ask — the local
+	-- watcher's pull is already the freshest source we'll get.
+	if not (force or OR.IsRemote(board)) then return nil end
 	local now = time()
-	if now - (OR.relay.asked[board] or 0) < RELAY_ASK_TTL then
-		return
+	local ttl = force and 10 or RELAY_ASK_TTL
+	if now - (OR.relay.asked[board] or 0) < ttl then
+		return nil, "cooldown"
 	end
 	OR.relay.asked[board] = now
 	local peer = OR.RelayServing(board)
 	if not peer or not (GM.Mesh and GM.Mesh.Whisper) then
-		return
+		return nil
 	end
 	OR.relay.gen = (OR.relay.gen or 0) + 1
 	OR.RBoard(board).askGen = OR.relay.gen
 	GM.Mesh.Whisper(peer, "Q", board .. ";" .. OR.relay.gen)
+	return peer
 end
 
 -- T beacon: peer advertises the boards it can serve — build the
 -- peer map and flush any envelopes pended behind discovery
 function OR.RelayPeer(body, sender)
 	if not sender or sender == "" then return end
-	for b in (body or ""):gmatch("[^,]+") do
+	for entry in (body or ""):gmatch("[^,]+") do
+		-- "board[:tag]" — tag is the serving peer's tracker hash;
+		-- absent = legacy beacon (only trusted for remote boards)
+		local b, tag = entry:match("^([^:]+):?(.*)$")
 		local m = OR.relay.peers[b] or {}
-		m[sender] = time()
+		m[sender] = { t = time(), tag = tag ~= "" and tag or nil }
 		OR.relay.peers[b] = m
 		local q = OR.relay.rpend[b]
 		if q then
@@ -1208,6 +1247,11 @@ function OR.RelayIngest(kind, f)
 			if rb.orders[i]._gen ~= gen then
 				table.remove(rb.orders, i)
 			end
+		end
+		-- the refresh button's whole point — the snapshot just
+		-- landed live; repaint without waiting for another trigger
+		if GM.OrdersUI and GM.OrdersUI.Refresh then
+			GM.OrdersUI.Refresh()
 		end
 		return
 	end
