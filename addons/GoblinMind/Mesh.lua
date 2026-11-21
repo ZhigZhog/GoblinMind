@@ -462,8 +462,8 @@ local function Ago(t)
 	if not t then return "never" end
 	local s = time() - t
 	if s < 90 then return s .. "s ago" end
-	if s < 5400 then return format("%dm ago", s / 60) end
-	if s < 129600 then return format("%dh ago", s / 3600) end
+	if s < 5400 then return format("%dm ago", floor(s / 60)) end
+	if s < 129600 then return format("%dh ago", floor(s / 3600)) end
 	return ">36h ago"
 end
 
@@ -504,7 +504,14 @@ function M.Status()
 			end
 			local s = b .. " (" .. open .. " open)"
 			if OR.IsRemote(b) then
+				local np = 0
+				for _ in pairs(OR.relay
+						and OR.relay.peers[b] or {}) do
+					np = np + 1
+				end
 				s = s .. " via " .. (OR.RelayServing(b) or "?")
+					.. " (" .. np .. " peer" .. (np == 1 and "" or "s")
+					.. ")"
 					.. (OR.RelayCreds(b) and ""
 						or " — registering")
 				rem[#rem + 1] = s
@@ -517,6 +524,38 @@ function M.Status()
 				.. (#loc > 0 and table.concat(loc, ", ") or "")
 				.. (#loc > 0 and #rem > 0 and " · " or "")
 				.. (#rem > 0 and ("mesh " .. table.concat(rem, ", "))
+					or ""))
+		end
+		-- v2 mesh state: is our beacon suppressed (covered) or
+		-- carrying discovery, how dense the swarm looks, and any
+		-- offer-window asks / pinned streams in flight
+		if OR.relay and OR.MeshDensity then
+			local nboards, npeers = 0, 0
+			for _, m in pairs(OR.relay.peers or {}) do
+				nboards = nboards + 1
+				for _ in pairs(m) do npeers = npeers + 1 end
+			end
+			local nasks, npins = 0, 0
+			for _ in pairs(OR.relay.asks or {}) do nasks = nasks + 1 end
+			for _ in pairs(OR.relay.src or {}) do npins = npins + 1 end
+			local srvN = 0
+			for _ in pairs(GoblinMindDB
+					and GoblinMindDB.boards or {}) do
+				srvN = srvN + 1
+			end
+			local state = "quiet (covered)"
+			if srvN == 0 then state = "serving nothing"
+			elseif OR.BeaconNeeded and OR.BeaconNeeded() then
+				state = "advertising"
+			end
+			GM.Print(format("mesh v2: %s · %d senders/10m · "
+				.. "%d peer%s on %d board%s%s",
+				state, OR.MeshDensity(), npeers,
+				npeers == 1 and "" or "s", nboards,
+				nboards == 1 and "" or "s",
+				(nasks + npins) > 0 and format(
+					" · %d ask + %d stream%s in flight",
+					nasks, npins, npins == 1 and "" or "s")
 					or ""))
 		end
 		-- relay health: ops deferred behind register, our outbound
