@@ -489,6 +489,88 @@ def write_db(db, out_path):
     _atomic_replace(tmp, out_path)
 
 
+_IDENT_SCAN = re.compile(r'[A-Za-z_][A-Za-z0-9_]*')
+
+
+def _str_end(text, pos):
+    """Offset just past the closing quote of the string at pos —
+    _enc escapes \\ and \\" so this is the whole contract."""
+    n = len(text)
+    pos += 1
+    while pos < n:
+        c = text[pos]
+        if c == '\\':
+            pos += 2
+            continue
+        if c == '"':
+            return pos + 1
+        pos += 1
+    return n
+
+
+def _value_end(text, pos):
+    """End offset of the top-level table value starting at pos —
+    the next ',' at depth 1 or the '}' that closes GoblinMindDB.
+    Depth+string aware: 'boards' appears nested under 'backend' too,
+    so a naive find() can splice the wrong span."""
+    n, depth = len(text), 1
+    while pos < n:
+        c = text[pos]
+        if c == '"':
+            pos = _str_end(text, pos)
+            continue
+        if c == '{':
+            depth += 1
+        elif c == '}':
+            depth -= 1
+            if depth == 0:
+                return pos
+        elif c == ',' and depth == 1:
+            return pos
+        pos += 1
+    return n
+
+
+def _db_splice(text, updates):
+    """Replace top-level `key=` values inside the emitted
+    single-line GoblinMindDB table — the boards-patch emit's writer.
+    Returns the spliced text, or None when a wanted key is absent
+    at top level (foreign/stale file — caller falls back to a full
+    emit)."""
+    head = 'GoblinMindDB = {'
+    i = text.find(head)
+    if i < 0:
+        return None
+    pos, n, depth = i + len(head), len(text), 1
+    out, last = [text[:pos]], pos
+    updates = dict(updates)
+    while pos < n and depth > 0:
+        c = text[pos]
+        if c == '"':
+            pos = _str_end(text, pos)
+            continue
+        if c == '{':
+            depth += 1
+        elif c == '}':
+            depth -= 1
+        elif depth == 1 and (c.isalpha() or c == '_'):
+            m = _IDENT_SCAN.match(text, pos)
+            if m and m.end() < n and text[m.end()] == '=':
+                vend = _value_end(text, m.end() + 1)
+                k = m.group(0)
+                if k in updates:
+                    out.append(text[last:m.end() + 1])
+                    out.append(_enc(updates.pop(k)))
+                    last = vend
+                pos = vend
+                continue
+        pos += 1
+    if updates:
+        return None
+    out.append(text[last:])
+    return ''.join(out)
+
+
 # ---------- in-house feed: book + ledger -> GoblinMindDB ----------
 # Replaces TSM's AppData as the data source: the addon's persistent AH
 # book (GoblinMindSettings.book) is the current snapshot; the brain
@@ -2484,6 +2566,57 @@ def _relay_results_emit():
     return _load_api_state().get('relay_results') or {}
 
 
+def _patch_boards_emit(out_paths):
+    """Volatile-keys-only emit: splices boards/orderResults/
+    relayResults/backend/generated into the LAST full emit instead
+    of re-running the ~5min book merge. A writ op confirm then
+    lands in seconds, not behind a merge (the 'pend:post stuck
+    ~6min' bug). Returns True when every output spliced — False
+    means the file isn't in our emitted shape and a real emit has
+    to run instead (first run, hand-edited file, TSM-feed output)."""
+    updates = {
+        'boards': api_boards(),
+        'orderResults': _order_results_emit(),
+        'relayResults': _relay_results_emit(),
+        'backend': _backend_emit(),
+        'generated': int(time.time()),
+    }
+    ok = True
+    for out in out_paths:
+        try:
+            mt0 = os.path.getmtime(out)
+            with open(out, encoding='utf-8') as fh:
+                text = fh.read()
+        except OSError:
+            ok = False
+            continue
+        patched = _db_splice(text, updates)
+        if patched is None:
+            LOG.info('boards patch skipped — %s not in emitted shape',
+                     out)
+            ok = False
+            continue
+        try:
+            # the merge thread can finish a 5-min emit between our
+            # read and write — a patch of the OLD file would clobber
+            # its brand-new merge. Skip instead: the next pull's
+            # patch splices the new file. Idempotent by design.
+            if os.path.getmtime(out) != mt0:
+                LOG.info('boards patch skipped — %s changed under us',
+                         out)
+                continue
+        except OSError:
+            continue
+        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(out),
+                                   suffix='.tmp')
+        with os.fdopen(fd, 'w', encoding='utf-8',
+                       newline='\n') as fh:
+            fh.write(patched)
+        _atomic_replace(tmp, out)
+        LOG.info('boards patch emit -> %s', out)
+    return ok
+
+
 def process_board_reqs(appdata, root=None):
     """In-game board join/leave — edits feeds.json's backend.boards
     list in ts order. Consumed rids live in api_state.board_reqs."""
@@ -2951,11 +3084,16 @@ def cmd_watch(appdata, outs, interval=5, settle=20, feed='tsm',
                     # ops_dirty flushes result acks even when the
                     # board didn't move (a rejected op is still news)
                     changed = _boards_snapshot() != before
-                    if (changed or ops_dirty) and \
-                            now - last_boards_emit >= 300:
-                        last_boards_emit = now
-                        emit_book('boards changed' if changed
-                                  else 'order results')
+                    if changed or ops_dirty:
+                        # board news is a cheap splice of the volatile
+                        # keys — no merge, no floor. The full emit only
+                        # runs when the file isn't in our shape.
+                        if _patch_boards_emit(outs):
+                            last_boards_emit = now
+                        elif now - last_boards_emit >= 300:
+                            last_boards_emit = now
+                            emit_book('boards changed' if changed
+                                      else 'order results')
                 except Exception:
                     LOG.exception('boards pull failed')
         # cadence floor: book mode re-merges at least once an hour —
