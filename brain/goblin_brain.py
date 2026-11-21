@@ -486,7 +486,7 @@ def write_db(db, out_path):
                                suffix='.tmp')
     with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as fh:
         fh.write(text)
-    os.replace(tmp, out_path)
+    _atomic_replace(tmp, out_path)
 
 
 # ---------- in-house feed: book + ledger -> GoblinMindDB ----------
@@ -601,7 +601,7 @@ def save_book_hist(hist):
     tmp = HIST_PATH + '.tmp'
     with open(tmp, 'w', encoding='utf-8') as fh:
         json.dump(hist, fh)
-    os.replace(tmp, HIST_PATH)
+    _atomic_replace(tmp, HIST_PATH)
 
 
 def _median(vals):
@@ -706,6 +706,26 @@ def _load_api_state():
         return {}
 
 
+def _atomic_replace(tmp, path):
+    """os.replace with a brief PermissionError retry — Windows blocks
+    rename while ANY handle holds the target, and the emit thread's
+    concurrent loads are exactly such a handle (the 12:48 api_state
+    crash). A persistent failure drops the write, never the watcher."""
+    for attempt in range(6):
+        try:
+            os.replace(tmp, path)
+            return True
+        except PermissionError:
+            if attempt < 5:
+                time.sleep(0.05 * (attempt + 1))
+    LOG.warning('replace blocked — write dropped: %s', path)
+    try:
+        os.remove(tmp)
+    except OSError:
+        pass
+    return False
+
+
 def _save_api_state(st):
     if getattr(_EMIT_LOCAL, 'defer', False):
         # emit-thread writes MUST go through _api_put (key-scoped,
@@ -718,7 +738,7 @@ def _save_api_state(st):
     tmp = API_STATE_PATH + '.tmp'
     with open(tmp, 'w', encoding='utf-8') as fh:
         json.dump(st, fh)
-    os.replace(tmp, API_STATE_PATH)
+    _atomic_replace(tmp, API_STATE_PATH)
 
 
 # --- emit-thread plumbing (watch runs cmd_book on a daemon thread) ---
@@ -910,7 +930,7 @@ def api_poll(cfg=None):
     tmp = API_BOOK_PATH + '.tmp'
     with open(tmp, 'w', encoding='utf-8') as fh:
         json.dump(cur, fh)
-    os.replace(tmp, API_BOOK_PATH)
+    _atomic_replace(tmp, API_BOOK_PATH)
     return books
 
 
@@ -1166,7 +1186,7 @@ def backend_pull(cfg=None):
         tmp = API_BOOK_PATH + '.tmp'
         with open(tmp, 'w', encoding='utf-8') as fh:
             json.dump(cur, fh)
-        os.replace(tmp, API_BOOK_PATH)
+        _atomic_replace(tmp, API_BOOK_PATH)
         delta_record(books)
     return books
 
@@ -1222,7 +1242,7 @@ def boards_pull(cfg=None):
         tmp = API_BOOK_PATH + '.tmp'
         with open(tmp, 'w', encoding='utf-8') as fh:
             json.dump(cur, fh)
-        os.replace(tmp, API_BOOK_PATH)
+        _atomic_replace(tmp, API_BOOK_PATH)
     return boards
 
 
@@ -1981,7 +2001,7 @@ def save_feeds(feeds):
     tmp = FEEDS_PATH + '.tmp'
     with open(tmp, 'w', encoding='utf-8') as fh:
         json.dump(feeds, fh, indent=1)
-    os.replace(tmp, FEEDS_PATH)
+    _atomic_replace(tmp, FEEDS_PATH)
 
 
 def self_feed():
@@ -2064,7 +2084,7 @@ def save_filed(filed):
     tmp = FILED_PATH + '.tmp'
     with open(tmp, 'w', encoding='utf-8') as fh:
         json.dump(filed, fh, indent=1)
-    os.replace(tmp, FILED_PATH)
+    _atomic_replace(tmp, FILED_PATH)
 
 
 def gh_token():
@@ -2607,6 +2627,12 @@ def _watch_single_instance():
     limit. Byte-locks watcher.lock for the process lifetime; a
     self-restart's child retries briefly while the parent exits."""
     global _WATCH_LOCK_FH
+    # crash-restart re-enters cmd_watch inside the same process — we
+    # already own the lock; re-locking would block 15s then sys.exit,
+    # killing the very restart it's meant to protect (that's what
+    # silently killed the 12:48 restart — the emit-race crash loop)
+    if _WATCH_LOCK_FH:
+        return
     d = os.path.dirname(os.path.abspath(__file__))
     p = os.path.join(d, 'watcher.lock')
     deadline = time.time() + 15  # self-restart: parent lets go on exit
@@ -2629,6 +2655,7 @@ def _watch_single_instance():
             if time.time() < deadline:
                 time.sleep(1)
                 continue
+            LOG.warning('another watcher already holds %s — exiting', p)
             print('another watcher already holds', p, '— exiting')
             sys.exit(0)
         fh.seek(0)
