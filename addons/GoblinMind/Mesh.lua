@@ -124,6 +124,7 @@ function M.Advertise()
 	local names = {}
 	for b in pairs(bs or {}) do names[#names + 1] = b end
 	if #names == 0 then return end
+	M._advT = GetTime()
 	M.Send("T", { table.concat(names, ",") })
 end
 
@@ -288,6 +289,12 @@ local function OnAddon(_, prefix, msg, ctype, sender)
 		if GM.Orders and GM.Orders.RelayPeer then
 			GM.Orders.RelayPeer(body, sender)
 		end
+	elseif kind == "D" then
+		-- discovery probe from a fresh install ("who serves what?") —
+		-- answer by re-advertising now instead of letting them wait
+		-- out the beacon cycle. Throttled so a login burst can't
+		-- turn the channel into a beacon storm
+		if GetTime() - (M._advT or 0) > 10 then M.Advertise() end
 	elseif kind == "O" then
 		-- writ events are volatile overlays — Orders.lua owns the
 		-- grammar and the confirmation/drop rules; mesh just relays
@@ -404,6 +411,16 @@ f:SetScript("OnEvent", function(_, ev, ...)
 				GM.After(280, advTick)
 			end
 			GM.After(280, advTick)
+		end)
+		-- discovery probe: if no peer advertised a board by the time
+		-- we've settled, ask the channel — serving peers re-send their
+		-- T on a D instead of leaving us dark until the next cycle
+		GM.After(40, function()
+			local peers = GM.Orders and GM.Orders.relay
+				and GM.Orders.relay.peers
+			if not (peers and next(peers)) then
+				M.Send("D", { "x" })
+			end
 		end)
 	end
 end)

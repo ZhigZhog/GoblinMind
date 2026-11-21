@@ -5,11 +5,15 @@ local _, GM = ...
 -- config page stages a hex request in SavedVariables — the brain
 -- watcher picks them up on the next SV flush and writes feeds.json:
 --
---   page 1 BACKEND   — crowdsource price feed (optional). CONNECT
---                      stages a bm- request and advances to API;
---                      SKIP is permanent and also goes to API (the
---                      Blizzard feed is independent — solo players
---                      deserve it too). LATER re-asks next login.
+--   page 1 BACKEND   — shared price feed + writ boards. The mesh
+--                      path needs NOTHING typed: peers advertise
+--                      their boards on the game channel and ops
+--                      tunnel through whispers automatically. The
+--                      URL/key fields are only for a friend who
+--                      handed you a direct server address — CONNECT
+--                      stages a bm- request for the watcher. NEXT
+--                      marks the page decided and moves on; LATER
+--                      re-asks next login.
 --   page 2 API       — Blizzard auction API credentials (optional).
 --                      SAVE stages an api- request; SKIP goes to IMPORT.
 --   page 3 IMPORT    — compatible-addon settings (TSM etc.) via
@@ -107,6 +111,15 @@ local function Build()
 		if f._done then return end
 		if GM.db then GM.db.obDismissed = time() end
 	end)
+	-- page-1 status is live — a D-probe answer can land while the
+	-- wizard sits open; refresh at a lazy cadence so the mesh line
+	-- catches it without needing a page switch
+	f:SetScript("OnUpdate", function(_, e)
+		f._tick = (f._tick or 0) + (e or 0)
+		if f._tick < 3 then return end
+		f._tick = 0
+		if ui.page == 1 then Refresh() end
+	end)
 
 	ui.pages = {}
 	for i = 1, #PAGES do
@@ -130,14 +143,17 @@ local function Build()
 	body:SetJustifyH("LEFT")
 	body:SetSpacing(3)
 	body:SetText(
-		"Team up: GoblinMind installs that join the same server pool "
-		.. "their price scans into a shared book — prices stay fresh "
-		.. "even while you're offline.\n\n"
+		"Team up: installs on the same server pool their price "
+		.. "scans into a shared book — prices stay fresh even while "
+		.. "you're offline — and host the writ boards.\n\n"
+		.. "You usually type NOTHING: friends' boards advertise "
+		.. "themselves over a hidden game channel — they show up in "
+		.. "the writ window on their own, and ops tunnel through the "
+		.. "game automatically. No address, no key.\n\n"
 		.. GM.CC("textDim")
-		.. "Only fill this in if a friend gave you a server address "
-		.. "and key. Playing solo? Press SKIP — everything still works "
-		.. "on your own scans, the mesh, and the free Blizzard feed on "
-		.. "the next page.|r")
+		.. "Only fill this in if a friend handed you a server "
+		.. "address directly (e.g. a host on your network). "
+		.. "Otherwise press NEXT — the mesh does the rest.|r")
 
 	-- fields cascade off the body's bottom edge — wrapped text height
 	-- varies by width/font, fixed offsets overlapped the body copy
@@ -179,7 +195,7 @@ local function Build()
 	end)
 	connect:SetPoint("BOTTOMLEFT", 12, 10)
 
-	local skip = Btn(p1, 90, "SKIP", function()
+	local skip = Btn(p1, 90, "NEXT >", function()
 		GM.db.backendSkip = true
 		SetPage("api")
 	end)
@@ -477,7 +493,22 @@ function Refresh()
 	elseif req then
 		ui.status:SetText(GM.CC("warn") .. STAGED .. "|r")
 	else
-		ui.status:SetText("not configured")
+		-- mesh boards need no config at all — peers advertise on the
+		-- channel and ops tunnel through whispers; surfacing them here
+		-- makes "nothing to configure" concrete
+		local remote = {}
+		for _, b in ipairs(GM.Orders and GM.Orders.Boards
+				and GM.Orders.Boards() or {}) do
+			if GM.Orders.IsRemote(b) then
+				remote[#remote + 1] = b
+			end
+		end
+		ui.status:SetText(#remote > 0
+			and (GM.CC("pos") .. format(
+				"mesh found %d board%s: %s — nothing to configure",
+				#remote, #remote == 1 and "" or "s",
+				table.concat(remote, ", ")) .. "|r")
+			or "no boards discovered yet — peers advertise when they're online")
 	end
 	-- R5: on the loopback host the emit carries the share invite —
 	-- show it so the player can hand friends the URL + key in game
