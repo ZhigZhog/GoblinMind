@@ -63,7 +63,7 @@ local GoldText = GM.MoneyShort
 local VIEW_NEXT = { orders = "find", find = "search",
 	search = "orders" }
 local VIEW_LBL = { orders = "FIND ITEM", find = "SEARCH",
-	search = "BOARD" }
+	search = "« BOARD" }
 
 local function has(t, v)
 	for _, x in ipairs(t) do if x == v then return true end end
@@ -255,9 +255,10 @@ local function Build()
 		OU.Refresh()
 	end)
 	ui.search:Hide()
-	-- back-to-picker in search results — takes the search box's spot
+	-- back-to-picker in search results — bottom edge, clear of the
+	-- column headers and the search box that share the top row
 	ui.searchBack = MkBtn(list, "« ITEMS", 52, 13)
-	ui.searchBack:SetPoint("TOPLEFT", 8, -18)
+	ui.searchBack:SetPoint("BOTTOMLEFT", 6, 3)
 	ui.searchBack:SetScript("OnClick", function()
 		ui.searchItem = nil
 		ui.browseScroll = 0
