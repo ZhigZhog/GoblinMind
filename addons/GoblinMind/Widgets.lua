@@ -711,3 +711,75 @@ function W.Window(o)
 	end
 	return f, title, close
 end
+
+-- Blizzard-style coin input: three digit boxes with persistent
+-- g/s/c unit labels — the canonical way to enter coin values, one
+-- implementation for every field (writ price, mail money, AH price
+-- filters + post dialog). :GetCopper() returns copper, or nil when
+-- all three boxes are empty so callers can tell "0c" from "blank".
+-- :SetCopper splits a copper value back out; nil/<=0 clears.
+-- Tab walks g→s→c. Sub-boxes are exposed (.g/.s/.c) for callers
+-- that wire Enter/Escape handlers.
+function W.GoldEdit(parent, w)
+	local h = CreateFrame("Frame", nil, parent)
+	w = w or 118
+	h:SetSize(w, 18)
+	-- gold gets the extra room (the big number); silver/copper are
+	-- two-digit by construction like Blizzard's own coin fields
+	local gw = math.max(34, math.floor(w * 0.42))
+	local sw = math.max(20, math.floor((w - gw - 24) / 2))
+	local function mk(ww, maxc)
+		local e = CreateFrame("EditBox", nil, h)
+		e:SetSize(ww, 18)
+		e:SetAutoFocus(false)
+		e:SetFont(GM.FONT, 10, "")
+		e:SetTextColor(GM.RGB("text"))
+		e:SetTextInsets(4, 2, 0, 0)
+		e:SetMaxLetters(maxc)
+		GM.Panel(e, "contLowest")
+		e:SetScript("OnTextChanged", function(s)
+			local t = s:GetText():gsub("%D", "")
+			if t ~= s:GetText() then s:SetText(t) end
+		end)
+		e:SetScript("OnEscapePressed", function(s) s:ClearFocus() end)
+		return e
+	end
+	local function unit(anchor, txt, color)
+		local fs = GM.MakeFontString(h, GM.FONT, 9, color)
+		fs:SetPoint("LEFT", anchor, "RIGHT", 2, 0)
+		fs:SetText(txt)
+		return fs
+	end
+	h.g = mk(gw, 7)
+	h.g:SetPoint("LEFT", 0, 0)
+	local lg = unit(h.g, "g", "accent")
+	h.s = mk(sw, 2)
+	h.s:SetPoint("LEFT", lg, "RIGHT", 4, 0)
+	local ls = unit(h.s, "s", "textDim")
+	h.c = mk(sw, 2)
+	h.c:SetPoint("LEFT", ls, "RIGHT", 4, 0)
+	unit(h.c, "c", "textDim")
+	h.g:SetScript("OnTabPressed", function() h.s:SetFocus() end)
+	h.s:SetScript("OnTabPressed", function() h.c:SetFocus() end)
+	h.c:SetScript("OnTabPressed", function() h.c:ClearFocus() end)
+	local function digits(e) return tonumber(e:GetText()) or 0 end
+	function h:GetCopper()
+		local t = digits(h.g) * 10000 + digits(h.s) * 100 + digits(h.c)
+		if t == 0 and h.g:GetText() == "" and h.s:GetText() == ""
+			and h.c:GetText() == "" then
+			return nil
+		end
+		return t
+	end
+	function h:SetCopper(v)
+		if not v or v <= 0 then
+			h.g:SetText(""); h.s:SetText(""); h.c:SetText("")
+			return
+		end
+		h.g:SetText(tostring(math.floor(v / 10000)))
+		h.s:SetText(tostring(math.floor(v / 100) % 100))
+		h.c:SetText(tostring(v % 100))
+	end
+	function h:SetFocus() h.g:SetFocus() end
+	return h
+end

@@ -155,7 +155,7 @@ local function Build()
 	-- input row below the strip
 	ui.qtyE = MkEdit(post, 60, "qty")
 	ui.qtyE:SetPoint("BOTTOMLEFT", 10, 8)
-	ui.priceE = MkEdit(post, 70, "gold ea")
+	ui.priceE = GM.Widgets.GoldEdit(post, 118)
 	ui.priceE:SetPoint("LEFT", ui.qtyE, "RIGHT", 6, 0)
 	ui.ttlE = MkEdit(post, 50, "hrs")
 	ui.ttlE:SetPoint("LEFT", ui.priceE, "RIGHT", 6, 0)
@@ -184,10 +184,11 @@ local function Build()
 	end)
 	ui.scroll = 0
 	ui.browseScroll = 0
-	-- mode toggle rides the panel header; the count string is
-	-- consumed by the title line in both modes
+	-- mode toggle rides the panel header row — count folds into the
+	-- title text so the corner is free for it
 	ui.modeBtn = MkBtn(list, "FIND ITEM", 66)
-	ui.modeBtn:SetPoint("TOPRIGHT", -6, -4)
+	ui.modeBtn:SetSize(66, 13)
+	ui.modeBtn:SetPoint("TOPRIGHT", -4, -2)
 	ui.modeBtn:SetScript("OnClick", function()
 		ui.browseMode = not ui.browseMode
 		ui.browseScroll = 0
@@ -250,7 +251,7 @@ local function Build()
 	for i = 1, ROWS do
 		local r = CreateFrame("Frame", nil, list)
 		r:SetSize(684, 15)
-		r:SetPoint("TOPLEFT", 8, -16 - (i - 1) * 15.5)
+		r:SetPoint("TOPLEFT", 8, -22 - (i - 1) * 15.5)
 		r.item = GM.MakeFontString(r, GM.FONT, 10, "text")
 		r.item:SetPoint("LEFT", 0, 0)
 		r.item:SetWidth(170)
@@ -349,17 +350,16 @@ function OU.Post()
 	end
 	local itemID = ui.itemID
 	local qty = tonumber(ui.qtyE:GetText())
-	local gold = tonumber(ui.priceE:GetText())
+	local ppu = ui.priceE:GetCopper()
 	local hrs = tonumber(ui.ttlE:GetText())
 	if not itemID then
 		ui.postMsg:SetText("drop an item on the strip first")
 		return
 	end
-	if not (qty and gold) or qty < 1 or gold <= 0 then
+	if not (qty and ppu) or qty < 1 or ppu <= 0 then
 		ui.postMsg:SetText("qty + price required")
 		return
 	end
-	local ppu = math.floor(gold * 10000)
 	local ttl = hrs and math.floor(hrs * 3600) or nil
 	local rid = OR.Post(board, itemID, math.floor(qty), ppu, ttl)
 	OR.ReserveAdd(rid, ppu * math.floor(qty), board)
@@ -369,7 +369,7 @@ function OU.Post()
 	else
 		ui.postMsg:SetText("posted " .. rid .. " — live on mesh + next flush")
 	end
-	ui.qtyE:SetText(""); ui.priceE:SetText("")
+	ui.qtyE:SetText(""); ui.priceE:SetCopper(nil)
 end
 
 local function OrderRow(r, o, me)
@@ -438,6 +438,7 @@ end
 local function BrowsePaint()
 	for i = 1, ROWS do ui.rows[i]:Hide() end
 	ui.listP.title:SetText("FIND ITEM")
+	ui.listP.count:SetText("")
 	local q = (ui.search:GetText() or ""):lower():gsub("^%s+", "")
 		:gsub("%s+$", "")
 	local qid = tonumber(q)
@@ -456,9 +457,9 @@ local function BrowsePaint()
 		end
 	end
 	local more = #idx - #hits
-	ui.listP.count:SetText(q == ""
+	ui.listP.title:SetText("FIND ITEM — " .. (q == ""
 		and (#idx .. " items")
-		or (#hits .. (more > 0 and "+" .. more or "") .. " match"))
+		or (#hits .. (more > 0 and "+" .. more or "") .. " match")))
 	for i = 1, BROWSEROWS do
 		local r = ui.browseRows[i]
 		local e = hits[i + (ui.browseScroll or 0)]
@@ -528,8 +529,9 @@ function OU.Refresh()
 		for i = 1, BROWSEROWS do ui.browseRows[i]:Hide() end
 		local orders = ui.board and OR.Orders(ui.board) or {}
 		ui.listP.title:SetText(
-			"BOARD — " .. tostring(ui.board or "none"))
-		ui.listP.count:SetText(#orders .. " open")
+			"BOARD — " .. tostring(ui.board or "none")
+				.. " · " .. #orders .. " open")
+		ui.listP.count:SetText("")
 		local me = OR.MyUUID()
 		for i = 1, ROWS do
 			local r = ui.rows[i]

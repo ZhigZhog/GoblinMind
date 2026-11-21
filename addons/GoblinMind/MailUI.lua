@@ -285,7 +285,7 @@ local function Build()
 	ui.to:HookScript("OnEditFocusGained", function()
 		acList = RecipientNames()
 	end)
-	ui.money = EditBox(ui.sendBar, 60, "copper")
+	ui.money = W.GoldEdit(ui.sendBar, 108)
 	ui.money:SetPoint("LEFT", ui.to, "RIGHT", 6, 0)
 	-- COD toggle: when set the copper box feeds SetSendMailCOD
 	-- (payment on delivery) instead of SetSendMailMoney — the writ
@@ -529,7 +529,7 @@ function MU.Send()
 		GM.Print(GM.CC("warn") .. "recipient first|r")
 		return
 	end
-	local copper = tonumber(ui.money:GetText()) or 0
+	local copper = ui.money:GetCopper() or 0
 	if copper < 0 then copper = 0 end
 	local name = GetSendMailItem and GetSendMailItem(1)
 	if copper > 0 then
@@ -858,8 +858,7 @@ function MU.PrepareWrit(to, itemID, units, unitPrice)
 		ui.pageTabs.set("send")
 	end
 	ui.to:SetText(to or "")
-	ui.money:SetText(tostring(
-		math.floor((unitPrice or 0) * (units or 1))))
+	ui.money:SetCopper(math.floor((unitPrice or 0) * (units or 1)))
 	if ui.cod then ui.cod:SetChecked(true) end
 	local iname = GetItemInfo and GetItemInfo(itemID) or nil
 	if ui.subject then
