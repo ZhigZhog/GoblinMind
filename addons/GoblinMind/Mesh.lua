@@ -11,7 +11,16 @@ local _, GM = ...
 GM.Mesh = {}
 local M = GM.Mesh
 
-local PREFIX, CHANNEL = "GoblinMind", "goblinmindx"
+local PREFIX = "GoblinMind"
+local CH_A, CH_B = "goblinmindx", "goblinwritx"
+-- v2 channel split: market diffs (S/M) and writ traffic ride
+-- separate buses. Writ records are rare but heavy — a 50-message
+-- snapshot stream must never starve a sale hint, and vice versa.
+local WRIT_KINDS = { T=1, D=1, Q=1, F=1, P=1, N=1, W=1, w=1, Z=1,
+                     I=1, i=1, O=1 }
+local function ChanFor(kind)
+	return WRIT_KINDS[kind] and CH_B or CH_A
+end
 local MAX_MSG = 240          -- wire cap is 255; leave header room
 local SEND_GAP = 0.35        -- pace sends — addon comms are throttled
 local STAGE_CAP = 400        -- staged records kept per list
@@ -24,25 +33,37 @@ local TL_LOWER = { 0, 1800, 7200, 43200, 172800 }
 local Send = C_ChatInfo and C_ChatInfo.SendAddonMessage
 	or SendAddonMessage
 local RegPrefix = C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix
-local chanID, sendQ, pumping = 0, {}, false
+local chanID, sendQ, pumping = {}, {}, false
 M.stats = { sent = 0, heard = 0, lastSend = nil, lastHear = nil }
 
 -- ============ channel lifecycle ============
 
-local function FindChannel()
+local function FindChannel(name)
 	-- first return is the channel number; return 3 is the
 	-- INSTANCE id (0 in the world) — reading it as the channel
 	-- id left the join state at "not joined" forever
-	local id = GetChannelName(CHANNEL)
+	local id = GetChannelName(name)
 	return tonumber(id) or 0
 end
 
+local function ChanID(name)
+	local id = chanID[name]
+	if not id or id == 0 then
+		id = FindChannel(name)
+		chanID[name] = id
+	end
+	return id or 0
+end
+
 local function TryJoin(tries)
-	chanID = FindChannel() or 0
-	if chanID > 0 then return end
-	JoinChannelByName(CHANNEL)
-	chanID = FindChannel() or 0
-	if chanID == 0 and tries < 5 then
+	local missing = false
+	for _, ch in ipairs({ CH_A, CH_B }) do
+		if ChanID(ch) == 0 then
+			JoinChannelByName(ch)
+			if ChanID(ch) == 0 then missing = true end
+		end
+	end
+	if missing and tries < 5 then
 		GM.After(5, function() TryJoin(tries + 1) end)
 	end
 end
@@ -51,10 +72,9 @@ end
 
 local function Pump()
 	if not pumping then return end
-	if chanID == 0 then chanID = FindChannel() or 0 end
 	local msg = tremove(sendQ, 1)
 	if not msg then pumping = false return end
-	if type(msg) == "table" then
+	if type(msg) == "table" and msg.target then
 		-- whisper transport — the relay tunnel rides directed
 		-- comms to a specific peer, not the shared channel
 		local ok, sent = pcall(Send, PREFIX, msg.msg, "WHISPER",
@@ -63,32 +83,82 @@ local function Pump()
 			M.stats.sent = M.stats.sent + 1
 			M.stats.lastSend = time()
 		end
-	elseif chanID > 0 then
-		local ok, sent = pcall(Send, PREFIX, msg, "CHANNEL", chanID)
-		if ok and sent ~= false then
-			M.stats.sent = M.stats.sent + 1
-			M.stats.lastSend = time()
+	elseif type(msg) == "table" then
+		-- channel send — msg.pred is a dequeue-time suppression
+		-- check (cancellation must reach QUEUED records, not just
+		-- flag intent: a 50-row stream already in sendQ can't be
+		-- un-sent once Pump takes it)
+		local dead = msg.pred and msg.pred()
+		if dead then
+			GM.After(SEND_GAP, Pump)
+			return
+		end
+		local ch = ChanID(msg.ch)
+		if ch > 0 then
+			local ok, sent = pcall(Send, PREFIX, msg.msg,
+				"CHANNEL", ch)
+			if ok and sent ~= false then
+				M.stats.sent = M.stats.sent + 1
+				M.stats.lastSend = time()
+			end
+		else
+			-- channel lost: bounded retry, then drop. Spinning on
+			-- the head message wedges the whole queue — with two
+			-- buses a dead writ channel must not starve market
+			-- sends and whispers queued behind it (WoW caps
+			-- custom channels, so a failed join is a real state)
+			msg.tries = (msg.tries or 0) + 1
+			if msg.tries <= 80 then
+				tinsert(sendQ, 1, msg)
+			end
 		end
 	else
-		tinsert(sendQ, 1, msg) -- channel lost — keep, retry next tick
+		-- legacy bare-string entry — market channel
+		local ch = ChanID(CH_A)
+		if ch > 0 then
+			local ok, sent = pcall(Send, PREFIX, msg, "CHANNEL", ch)
+			if ok and sent ~= false then
+				M.stats.sent = M.stats.sent + 1
+				M.stats.lastSend = time()
+			end
+		else
+			tinsert(sendQ, 1, msg)
+		end
 	end
 	GM.After(SEND_GAP, Pump)
 end
 
-local function Broadcast(recs, kind)
+-- walk the queue and drop entries whose suppress key matches —
+-- this is how overheard answers silence queued duplicates BEFORE
+-- they transmit (mDNS known-answer / Meshtastic overhear-cancel)
+function M.Cancel(pred)
+	for i = #sendQ, 1, -1 do
+		local m = sendQ[i]
+		if type(m) == "table" and m.key and pred(m) then
+			tremove(sendQ, i)
+		end
+	end
+end
+
+local function Broadcast(recs, kind, key, pred)
 	-- header: proto | kind | scope — scope lets receivers fold into
 	-- the right books_by_scope bucket on their side
 	local scope = GM.Scope()
 	local head = "1|" .. kind .. "|" .. scope .. "|"
+	local ch = ChanFor(kind)
 	local buf = head
 	for _, r in ipairs(recs) do
 		if #buf + #r + 1 > MAX_MSG then
-			sendQ[#sendQ + 1] = buf
+			sendQ[#sendQ + 1] = { msg = buf, ch = ch, key = key,
+				pred = pred }
 			buf = head
 		end
 		buf = buf .. (#buf > #head and "," or "") .. r
 	end
-	if #buf > #head then sendQ[#sendQ + 1] = buf end
+	if #buf > #head then
+		sendQ[#sendQ + 1] = { msg = buf, ch = ch, key = key,
+			pred = pred }
+	end
 	if not pumping then pumping = true Pump() end
 end
 
@@ -96,10 +166,9 @@ end
 -- M/S kinds stay owned by OnBook's book-diff machinery. Volatile
 -- realtime records drop when the channel is down rather than queue
 -- — a writ event that arrives late is worse than one that doesn't.
-function M.Send(kind, recs)
-	if chanID == 0 then chanID = FindChannel() or 0 end
-	if chanID == 0 then return end
-	Broadcast(recs, kind)
+function M.Send(kind, recs, key, pred)
+	if ChanID(ChanFor(kind)) == 0 then return end
+	Broadcast(recs, kind, key, pred)
 end
 
 -- whisper transport: the writ relay tunnel — op envelopes and
@@ -132,6 +201,11 @@ function M.Advertise()
 	end
 	if #names == 0 then return end
 	M._advT = GetTime()
+	-- our own beacon is coverage we can't hear — Orders counts it
+	-- explicitly so the Trickle-lite bound actually converges
+	if GM.Orders and GM.Orders.relay then
+		GM.Orders.relay.selfAdv = time()
+	end
 	M.Send("T", { table.concat(names, ",") })
 end
 
@@ -147,7 +221,7 @@ end
 -- the same prefix-diff the brain does on the server side — S events
 -- for disappeared lots, M beacons for mb changes.
 function M.OnBook(book, lots, prevBook, prevLots, prevT)
-	if not (chanID > 0 or FindChannel()) then return end
+	if ChanID(CH_A) == 0 then return end
 	local now = time()
 	local elapsed = math.max(0, now - (prevT or now))
 
@@ -304,17 +378,27 @@ local function OnAddon(_, prefix, msg, ctype, sender)
 			GM.Orders.RelayPeer(body, sender)
 		end
 	elseif kind == "D" then
-		-- discovery probe from a fresh install ("who serves what?") —
-		-- answer by re-advertising now instead of letting them wait
-		-- out the beacon cycle. Throttled so a login burst can't
-		-- turn the channel into a beacon storm
-		if GetTime() - (M._advT or 0) > 10 then M.Advertise() end
+		-- discovery probe — v2: Orders decides whether WE are
+		-- needed (coverage suppression) and answers on jitter.
+		-- The v1 "every client re-beacons" rule was an
+		-- N-squared storm at scale
+		if GM.Orders and GM.Orders.MeshProbe then
+			GM.Orders.MeshProbe(body, sender)
+		end
 	elseif kind == "Q" then
 		-- distributed board query — "who serves a fresh pull of
-		-- this board?" Servers answer by streaming their snapshot
-		-- back on-channel; Orders.lua owns the tag/serve rules
+		-- this board?" v2: servers answer with small offers (F);
+		-- the asker picks one source (P) which alone streams
 		if GM.Orders and GM.Orders.MeshQuery then
 			GM.Orders.MeshQuery(body, sender)
+		end
+	elseif kind == "F" then
+		if GM.Orders and GM.Orders.MeshOffer then
+			GM.Orders.MeshOffer(body, sender)
+		end
+	elseif kind == "P" then
+		if GM.Orders and GM.Orders.MeshPull then
+			GM.Orders.MeshPull(body, sender)
 		end
 	elseif kind == "N" then
 		-- stream announcement — binds (board,gen) to a sender +
@@ -385,15 +469,14 @@ end
 
 function M.Status()
 	local db = GoblinMindDB or {}
-	local ch = chanID > 0 and chanID or (FindChannel() or 0)
 	local st = GM.db and GM.db.mesh or {}
 	local nScopes = 0
 	for _ in pairs(db.realms or {}) do nScopes = nScopes + 1 end
 	GM.Print(format("feed: %s · DB %s · %d scopes",
 		db.feed or "?", Ago(db.generated), nScopes))
 	GM.Print(format("mesh: %s · sent %d (%s) · heard %d (%s) · staged %d ev / %d mb · seq %d · ack %s",
-		ch > 0 and ("joined " .. CHANNEL .. " (ch " .. ch .. ")")
-			or "not joined",
+		(ChanID(CH_A) > 0 and CH_A or "-") .. "/"
+			.. (ChanID(CH_B) > 0 and CH_B or "-"),
 		M.stats.sent, Ago(M.stats.lastSend),
 		M.stats.heard, Ago(M.stats.lastHear),
 		st.ev and #st.ev or 0, st.mb and #st.mb or 0,
@@ -508,22 +591,33 @@ f:SetScript("OnEvent", function(_, ev, ...)
 			GM.Orders.RelayStart()
 		end
 		-- relay capability beacons — cadence low enough to be
-		-- noise-free, frequent enough for peers to find us
+		-- noise-free, frequent enough for peers to find us.
+		-- v2: BeaconNeeded() suppresses the beacon when every
+		-- board we serve is already covered by enough fresh
+		-- beaconers (Trickle-lite — small swarms keep total
+		-- coverage, big swarms stay quiet)
 		GM.After(30, function()
-			M.Advertise()
-			local function advTick()
+			if not (GM.Orders and GM.Orders.BeaconNeeded
+				and not GM.Orders.BeaconNeeded()) then
 				M.Advertise()
+			end
+			local function advTick()
+				if not (GM.Orders and GM.Orders.BeaconNeeded
+					and not GM.Orders.BeaconNeeded()) then
+					M.Advertise()
+				end
 				GM.After(280, advTick)
 			end
 			GM.After(280, advTick)
 		end)
-		-- discovery probe: if no peer advertised a board by the time
-		-- we've settled, ask the channel — serving peers re-send their
-		-- T on a D instead of leaving us dark until the next cycle
+		-- discovery probe: if no peer advertised a board we care
+		-- about by the time we've settled, ask the channel. v2:
+		-- DiscoveryNeeded() — covered boards don't probe, and a
+		-- probe that got answered in the last 30s coalesces with
+		-- the next asker's instead of stacking
 		GM.After(40, function()
-			local peers = GM.Orders and GM.Orders.relay
-				and GM.Orders.relay.peers
-			if not (peers and next(peers)) then
+			if not (GM.Orders and GM.Orders.DiscoveryNeeded
+				and not GM.Orders.DiscoveryNeeded()) then
 				M.Send("D", { "x" })
 			end
 		end)

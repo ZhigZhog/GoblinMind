@@ -9,7 +9,6 @@ _TASKS = {}      -- GM.After queue: {due, fn}
 _FRAMES = {}     -- captured frames (events + OnEvent scripts)
 _PRINTS = {}     -- GM.Print sink
 _RELOADS = 0
-_JOINED = false
 ITEM_DB = ITEM_DB or {}   -- [itemID] = {name=, link=}
 
 -- WoW global aliases the addon uses (WoW exposes math/table
@@ -58,8 +57,16 @@ function GetItemInfo(id)
 end
 function ReloadUI() _RELOADS = _RELOADS + 1 end
 function IsModifiedClick() return false end
-function GetChannelName(ch) return _JOINED and 5 or 0 end
-function JoinChannelByName(ch) _JOINED = true end
+-- per-channel membership: v2 runs two buses (goblinmindx market,
+-- goblinwritx writs) — a client can be in either, both, or neither
+_JOINED = {}
+_CHIDS = { goblinmindx = 5, goblinwritx = 6 }
+_CHNAMES = { [5] = "goblinmindx", [6] = "goblinwritx" }
+_JOIN_FAIL = {}   -- channels a test wants unjoinable
+function GetChannelName(ch) return _JOINED[ch] and _CHIDS[ch] or 0 end
+function JoinChannelByName(ch)
+	if not _JOIN_FAIL[ch] then _JOINED[ch] = true end
+end
 
 _SEND_LOG = {}   -- every SendAddonMessage call (debug)
 C_ChatInfo = {
@@ -67,7 +74,8 @@ C_ChatInfo = {
 		_SEND_LOG[#_SEND_LOG + 1] =
 			tostring(prefix) .. "|" .. tostring(ctype)
 			.. "|" .. tostring(msg):sub(1, 40)
-		_WIRE[#_WIRE + 1] = { msg = msg, ctype = ctype, to = to }
+		_WIRE[#_WIRE + 1] = { msg = msg, ctype = ctype, to = to,
+			chan = ctype == "CHANNEL" and _CHNAMES[to] or nil }
 		return true
 	end,
 	RegisterAddonMessagePrefix = function(p) return true end,

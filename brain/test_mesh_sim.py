@@ -101,6 +101,18 @@ class Client:
     def OR(self):
         return self.g.GM.Orders
 
+    def Mesh(self):
+        return self.g.GM.Mesh
+
+    # -- channel membership (v2 two-bus model) --
+    def chan_fail(self, chan):
+        """JoinChannelByName(chan) will silently fail — like WoW's
+        10-custom-channel cap kicking in."""
+        self.g._JOIN_FAIL[chan] = True
+
+    def leave_chan(self, chan):
+        self.g._JOINED[chan] = None
+
     def db(self):
         return self.g.GoblinMindSettings
 
@@ -117,11 +129,25 @@ class Client:
 
     def fire_login(self):
         self.g.fire_event('PLAYER_LOGIN')
-        self.advance(45)   # join channel, T beacon, D probe
+        # 10s covers TryJoin(4s) + margin. The 30s/40s beacon/D
+        # tasks stay pending — scenarios seed boards via
+        # watcher+reload first, and pump()'s settle pass fires
+        # them when the wire goes quiet (real order: addon boot
+        # loads the DB long before the beacon timer)
+        self.advance(10)
 
     def advance(self, secs):
         self.g._NOW.t = self.g._NOW.t + secs
         self.g.run_due()
+
+    def next_due(self):
+        t = self.g._TASKS
+        nxt = None
+        for i in range(1, len(t) + 1):
+            d = t[i].due
+            if d is not None and (nxt is None or d < nxt):
+                nxt = d
+        return nxt
 
     # -- the wire --
     def flush_wire(self):
@@ -129,9 +155,13 @@ class Client:
         out = []
         for i in range(1, len(w) + 1):
             out.append({'msg': w[i].msg, 'ctype': w[i].ctype,
-                        'to': w[i].to})
+                        'to': w[i].to, 'chan': w[i].chan})
         self.lua.execute('_WIRE = {}')
         return out
+
+    def joined(self, chan):
+        """Is this client a member of the named channel?"""
+        return bool(self.g._JOINED[chan])
 
     def deliver(self, msg, ctype, sender):
         self.g.fire_event('CHAT_MSG_ADDON', 'GoblinMind',
@@ -209,14 +239,37 @@ class World:
         self.url_a = 'http://127.0.0.1:%d' % self.port
         self.url_b = 'http://localhost:%d' % self.port  # 2nd tracker
         self.clients = {}
+        # every wire message the pump routed — v2 scenarios count
+        # by kind/channel to assert bounded responders
+        self.wire_log = []
 
     def client(self, name, tracker='a', boards=('main',),
                items=None, backend=True):
-        url = {'a': self.url_a, 'b': self.url_b}[tracker] \
-            if backend else None
+        url = self.url_for(tracker) if backend else None
         c = Client(self, name, url, list(boards), items)
         self.clients[name] = c
         return c
+
+    def url_for(self, tracker):
+        """TrackerTag hashes the configured url STRING, not the
+        host it resolves to — hostname case permutations all reach
+        this server but hash as distinct trackers. 'a'/'b' keep
+        their readable forms."""
+        if tracker == 'a':
+            return self.url_a
+        if tracker == 'b':
+            return self.url_b
+        # stable per key — two installs on one tracker must share
+        # the tag; distinct keys get distinct case permutations
+        self._turls = getattr(self, '_turls', {})
+        if tracker not in self._turls:
+            perm = len(self._turls) + 1
+            host = ''.join(
+                ch.upper() if (perm >> i) & 1 else ch
+                for i, ch in enumerate('localhost'))
+            self._turls[tracker] = 'http://%s:%d' % (host,
+                                                     self.port)
+        return self._turls[tracker]
 
     # -- the channel: route wire records like a chat server --
     def pump(self, ticks=10):
@@ -226,21 +279,51 @@ class World:
         so the paced sendQ pump flushes, then loops to cover handler
         replies (Q->N/W/w/Z, R->relayOut chains)."""
         for _ in range(ticks):
-            for c in list(self.clients.values()):
-                c.advance(0.5)
+            # drain in-flight wire BEFORE advancing clocks — real
+            # clients receive queued messages before more time
+            # passes; advancing first lets a jittered task overtake
+            # a message that would have suppressed it
             moved = False
             for c in list(self.clients.values()):
                 for m in c.flush_wire():
                     moved = True
+                    if m['msg'].startswith('1|'):
+                        self.wire_log.append(
+                            {'from': c.name, 'ctype': m['ctype'],
+                             'chan': m['chan'],
+                             'kind': m['msg'].split('|', 3)[1]})
                     if m['ctype'] == 'CHANNEL':
+                        # two buses now — a message on goblinwritx
+                        # only reaches clients joined there
+                        chan = m['chan']
                         for d in self.clients.values():
-                            d.deliver(m['msg'], 'CHANNEL', c.name)
+                            if chan is None or d.joined(chan):
+                                d.deliver(m['msg'], 'CHANNEL',
+                                          c.name)
                     elif m['ctype'] == 'WHISPER':
                         t = self.clients.get(m['to'])
                         if t:
                             t.deliver(m['msg'], 'WHISPER', c.name)
             if not moved:
-                return
+                # settle: wire quiet but tasks may be pending
+                # (beacon, D, offer-select). Advance EVERY client
+                # to the global earliest due time — wall-clock
+                # stays shared across clients like real WoW, so a
+                # server's 1.5s offer can't lose to the asker's
+                # 2.5s selection window just because the settle
+                # jumped the asker first
+                best = None
+                for c in self.clients.values():
+                    d = c.next_due()
+                    if d is not None and (best is None or d < best):
+                        best = d
+                if best is None:
+                    return
+                now = min(c.g._NOW.t for c in self.clients.values())
+                if best - now > 60:   # don't chase the 280s advTick
+                    return
+                for c in self.clients.values():
+                    c.advance(max(0, best - c.g._NOW.t))
 
     # -- a client's watcher pass: consume its SV, hit the server,
     #    pull boards, emit - exactly the live 5s loop, compressed --
@@ -423,7 +506,7 @@ def s04_remote_relay(w):
     check('Xavier sees remote board via T', 'gob' in x.board_names(),
           x.board_names())
     # refresh pulls Relay's snapshot -> rboards entry
-    x.OR().RefreshBoard('gob'); w.pump()
+    x.OR().RefreshBoard('gob'); w.pump(16)  # Q->F offers->P->stream
     check('remote snapshot landed', x.OR().IsRemote('gob')
           and 'gob' in x.board_names(), x.board_names())
     gobs = x.OR().Board('gob')
@@ -886,7 +969,7 @@ def s25_remote_claim(w):
     x.fire_login()
     w.watcher(x); x.reload()
     x.advance(40); r.advance(40); w.pump()
-    x.OR().RefreshBoard('gob'); w.pump()
+    x.OR().RefreshBoard('gob'); w.pump(16)
     oid = x.OR().Board('gob').orders[1].id
     x.OR().Claim('gob', oid, 3)
     w.pump()                 # R register whisper -> Relay stages
@@ -933,6 +1016,251 @@ def s14_beacon_no_hijack(w):
           any(r.get('ok') for r in res.values()), res)
 
 
+# ---- v2 scenarios: channel split, offer/pull, suppression ----
+
+def s26_channel_split(w):
+    """Two buses: writ kinds ride goblinwritx only, market kinds
+    goblinmindx only. A client that can't join one bus neither
+    hears it nor sends on it — and its other bus keeps working."""
+    mo = w.client('MarketOnly', tracker='a', boards=['main'])
+    wo = w.client('WritOnly', tracker='a', boards=['main'])
+    r = w.client('Relay', tracker='b', boards=['gob'])
+    mo.chan_fail('goblinwritx')
+    wo.chan_fail('goblinmindx')
+    mo.fire_login(); wo.fire_login(); r.fire_login()
+    w.watcher(r); r.reload()   # boards must exist pre-beacon
+    r.advance(40); wo.advance(40); mo.advance(40); w.pump(8)
+    # Relay's T beacon rode the writ channel
+    tmsgs = [m for m in w.wire_log if m['kind'] == 'T']
+    check('T beacons ride goblinwritx',
+          tmsgs and all(m['chan'] == 'goblinwritx' for m in tmsgs),
+          tmsgs)
+    # WritOnly heard it; MarketOnly (not a member) did not
+    check('writ member sees peers', 'gob' in
+          list(wo.OR().relay.peers.keys()), wo.board_names())
+    check('market-only blind to writ bus',
+          'gob' not in list(mo.OR().relay.peers.keys()),
+          mo.board_names())
+    # market kind goes to goblinmindx — MarketOnly ingests,
+    # WritOnly (not a member) never sees it
+    r.Mesh().Send('M', r.lua.table_from(['2589:2500:500']))
+    w.pump()
+    check('M record rode goblinmindx',
+          any(m['kind'] == 'M' and m['chan'] == 'goblinmindx'
+              for m in w.wire_log), w.wire_log[-3:])
+    check('market member staged beacon',
+          mo.Mesh().LatestMB(2589) is not None, 'no mb')
+    check('writ-only blind to market bus',
+          wo.Mesh().LatestMB(2589) is None, 'mb leaked')
+    # MarketOnly cannot send writ kinds — M.Send drops silently
+    before = len(w.wire_log)
+    mo.Mesh().Send('T', mo.lua.table_from(['gob:x']))
+    w.pump()
+    check('unjoined writ send dropped not queued',
+          not any(m['from'] == 'MarketOnly' and m['kind'] == 'T'
+                  for m in w.wire_log[before:]),
+          w.wire_log[before:])
+    # but its whisper transport still works (no channel needed)
+    mo.Mesh().Whisper('WritOnly', 'R', 'gob;-;-;-;x')
+    w.pump()
+    check('whisper rides with no channel',
+          any(m['from'] == 'MarketOnly' and m['ctype'] == 'WHISPER'
+              for m in w.wire_log[before:]), w.wire_log[before:])
+
+
+def s27_offer_pull(w):
+    """One asker, two servers on foreign trackers serving 'gob'.
+    Q produces tiny F offers, the asker picks ONE (P), and exactly
+    one N/W/w/Z stream lands — the second server never streams."""
+    x = w.client('Xavier', tracker='a', boards=['main'])
+    r1 = w.client('Relay1', tracker='b', boards=['gob'])
+    r2 = w.client('Relay2', tracker='c', boards=['gob'])
+    r1.fire_login(); r2.fire_login(); w.pump()
+    r1.OR().Post('gob', 5518, 9, 700, 86400)
+    r2.OR().Post('gob', 5520, 4, 300, 86400)
+    w.watcher(r1); r1.reload()
+    w.watcher(r2); r2.reload()
+    x.fire_login(); w.watcher(x); x.reload()
+    x.advance(40); r1.advance(40); r2.advance(40); w.pump()
+    before = len(w.wire_log)
+    x.OR().RefreshBoard('gob'); w.pump(16)
+    seg = w.wire_log[before:]
+    qs = [m for m in seg if m['kind'] == 'Q']
+    fs = [m for m in seg if m['kind'] == 'F']
+    ps = [m for m in seg if m['kind'] == 'P']
+    ns = [m for m in seg if m['kind'] == 'N']
+    check('Q went out with nonce', len(qs) == 1, qs)
+    check('at least one F offer', len(fs) >= 1, fs)
+    check('exactly one P selection', len(ps) == 1, ps)
+    check('exactly one stream announced', len(ns) == 1, ns)
+    ws_ = [m for m in seg if m['kind'] in ('W', 'w', 'Z')]
+    check('stream rows from the selected sender only',
+          ws_ and all(m['from'] == ns[0]['from']
+                      for m in ws_), ws_[:4])
+    gobs = x.OR().Board('gob')
+    # one sim server = one 'gob' board — both posters' orders are
+    # legitimate board state, all carried by the single winner's
+    # stream; the pin is consumed when Z lands
+    check('snapshot landed via v2 flow',
+          gobs and len(gobs.orders or {}) == 2,
+          gobs and len(gobs.orders or {}))
+    check('stream pin consumed on Z',
+          x.OR().relay.src['gob'] is None,
+          dict(x.OR().relay.src))
+
+
+def s28_coverage_suppression(w):
+    """Trickle-lite: 6 beaconers on 'gob' — once each hears >=K_REP
+    fresh peers, its next beacon suppresses. A newcomer's D probe
+    gets zero re-beacons from a covered swarm."""
+    srvs = [w.client('Srv%d' % i, tracker='t%d' % i,
+                     boards=['gob']) for i in range(6)]
+    for c in srvs:
+        c.fire_login()
+    for c in srvs:
+        w.watcher(c); c.reload()
+    w.pump(20)
+    # wave 1: clients beacon before coverage forms
+    first = [m for m in w.wire_log if m['kind'] == 'T']
+    n0 = len(first)
+    check('initial beacons bounded', 0 < n0 <= 6, n0)
+    # suppressed swarm breathes: once every heard beacon AND
+    # selfAdv cross the 600s TTL the board is dark again — the
+    # swarm re-beacons exactly once (liveness: dead coverage
+    # self-heals), then the NEXT tick is silent because the
+    # burst re-established coverage
+    mark = len(w.wire_log)
+    for c in srvs:
+        c.advance(300)
+    w.pump(20)
+    second = [m for m in w.wire_log[mark:] if m['kind'] == 'T']
+    check('stale coverage bursts once not per-tick',
+          len(second) <= 6, len(second))
+    mark = len(w.wire_log)
+    for c in srvs:
+        c.advance(300)
+    w.pump(20)
+    third = [m for m in w.wire_log[mark:] if m['kind'] == 'T']
+    check('post-burst tick silent again', len(third) <= 1,
+          len(third))
+    # newcomer with an unserved board probes; servers covered for
+    # 'gob' must not re-beacon at it
+    x = w.client('Newb', tracker='tg', boards=['newb'])
+    x.fire_login(); w.pump(10)
+    x.advance(50)
+    mark = len(w.wire_log)
+    w.pump(12)
+    ds = [m for m in w.wire_log if m['kind'] == 'D'
+          and m['from'] == 'Newb']
+    check('newcomer probed the dark board', len(ds) >= 1, ds)
+    ts = [m for m in w.wire_log[mark:] if m['kind'] == 'T']
+    check('D drew zero re-beacons from covered swarm',
+          len(ts) == 0, len(ts))
+
+
+def s29_offer_suppression(w):
+    """A server whose dom already holds an equal-or-fresher F for
+    the nonce never transmits its own — mDNS duplicate-answer
+    suppression. (Offers colliding inside one sendQ gap are an
+    accepted bounded residual — s27's single-stream invariant is
+    what actually bounds the heavy traffic.)"""
+    s1 = w.client('Srv1', tracker='b', boards=['gob'])
+    s2 = w.client('Srv2', tracker='c', boards=['gob'])
+    s1.fire_login(); s2.fire_login(); w.pump()
+    s1.OR().Post('gob', 5518, 9, 700, 86400)
+    s2.OR().Post('gob', 5518, 9, 700, 86400)
+    w.watcher(s1); s1.reload()
+    w.watcher(s2); s2.reload()
+    s1.g.GoblinMindDB.boards.gob.t = 1000
+    s2.g.GoblinMindDB.boards.gob.t = 1000
+    # Srv2 already heard an equal offer for this nonce — its
+    # deferred check must suppress; Srv1 heard nothing and sends
+    s2.OR().MeshOffer('gob;42;1000;1;tag', 'Early')
+    s1.OR().MeshQuery('gob;42;-;0', 'Asker')
+    s2.OR().MeshQuery('gob;42;-;0', 'Asker')
+    w.pump(12)
+    fs = [m for m in w.wire_log if m['kind'] == 'F']
+    check('dominated offer never sent', len(fs) == 1
+          and fs[0]['from'] == 'Srv1', fs)
+
+
+def s30_item_suppression(w):
+    """i answers: once K_I responses for a nonce are on the wire
+    the next server's deferred reply dies. Without answers heard,
+    the reply goes out."""
+    s = w.client('Srv', tracker='b', boards=['gob'])
+    s.fire_login(); w.pump()
+    s.OR().Post('gob', 5518, 9, 700, 86400)
+    w.watcher(s); s.reload()
+    # prime: 4 answers already heard for nonce 77
+    for i in range(4):
+        s.OR().ItemIngest(s.lua.table_from(
+            ['77', '5518', 'gob', 'o%d' % i, '9', '9', '700',
+             '0', '-', '0']), 'Peer%d' % i)
+    s.OR().MeshItemQuery('5518;77;-', 'Asker')
+    s.advance(5); w.pump()
+    check('saturated nonce -> no reply',
+          not any(m['kind'] == 'i' for m in w.wire_log),
+          [m for m in w.wire_log if m['kind'] == 'i'])
+    # fresh nonce: reply goes out
+    s.OR().MeshItemQuery('5518;88;-', 'Asker')
+    s.advance(5); w.pump()
+    check('fresh nonce -> reply goes out',
+          any(m['kind'] == 'i' and m['from'] == 'Srv'
+              for m in w.wire_log),
+          [m for m in w.wire_log if m['kind'] == 'i'])
+
+
+def s31_peer_cap(w):
+    """peers[board] is bounded — 70 distinct T beacons leave at
+    most PEER_CAP senders remembered."""
+    c = w.client('Cap', tracker='a', boards=['main'])
+    c.fire_login(); w.pump()
+    for i in range(70):
+        c.OR().RelayPeer('gob:tag', 'Srv%d' % i)
+    # count via lua (python len() on lupa map counts array part)
+    n = int(c.lua.eval(
+        '(function() local n=0 '
+        'for _ in pairs(GM.Orders.relay.peers.gob) do n=n+1 end '
+        'return n end)()'))
+    check('peers bounded at PEER_CAP', 0 < n <= 64, n)
+
+
+def s32_queue_bounded(w):
+    """A dead writ bus (join fails — WoW's 10-channel cap) must
+    not wedge the queue: writ sends drop at the M.Send gate,
+    market bursts still transmit, whispers still flow."""
+    c = w.client('Lose', tracker='a', boards=['main'])
+    o = w.client('Other', tracker='b', boards=['gob'])
+    c.chan_fail('goblinwritx')
+    c.fire_login(); o.fire_login(); w.pump()
+    sent0 = int(c.Mesh().stats.sent)
+    # a market burst: several records queue + drain on CH_A
+    for i in range(6):
+        c.Mesh().Send('M', c.lua.table_from(
+            ['%d:%d:0' % (2589 + i, 100 + i)]))
+    # writ sends drop at the gate — never reach sendQ
+    c.Mesh().Send('T', c.lua.table_from(['gob:x']))
+    c.Mesh().Send('Q', c.lua.table_from(['gob;1;-;0']))
+    w.pump(12)
+    msent = [m for m in w.wire_log if m['from'] == 'Lose'
+             and m['kind'] == 'M']
+    check('market burst flowed on live bus',
+          len(msent) >= 1, len(msent))
+    check('dead-bus sends never queued',
+          not any(m['from'] == 'Lose' and m['kind'] in
+                  ('T', 'Q') for m in w.wire_log),
+          [m['kind'] for m in w.wire_log if m['from'] == 'Lose'])
+    check('queue fully drained (no wedge)',
+          int(c.Mesh().stats.sent) - sent0 >= len(msent),
+          int(c.Mesh().stats.sent) - sent0)
+    c.Mesh().Whisper('Other', 'R', 'gob;-;-;-;x')
+    w.pump()
+    check('whisper rides with writ bus dead',
+          any(m['from'] == 'Lose' and m['ctype'] == 'WHISPER'
+              for m in w.wire_log), w.wire_log[-2:])
+
+
 SCENARIOS = [
     ('post -> confirm', s01_post_confirm),
     ('claim -> accept -> fill', s02_claim_accept_fill),
@@ -959,6 +1287,13 @@ SCENARIOS = [
     ('reject releases units', s11_reject_release),
     ('underfunded post', s12_underfunded),
     ('order expiry', s13_expiry),
+    ('v2 channel split', s26_channel_split),
+    ('v2 offer -> pull single stream', s27_offer_pull),
+    ('v2 coverage suppression', s28_coverage_suppression),
+    ('v2 offer suppression', s29_offer_suppression),
+    ('v2 item answer bound', s30_item_suppression),
+    ('v2 peer cap', s31_peer_cap),
+    ('v2 queue bounded on channel loss', s32_queue_bounded),
 ]
 
 

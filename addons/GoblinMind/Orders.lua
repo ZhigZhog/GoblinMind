@@ -167,7 +167,13 @@ OR.live = OR.live or {}    -- [board] = {ev, ...}, session-only
 -- rboards table — phantom "0"/"5"/"7" boards were RBoard entries
 -- persisted by ingest paths that ran before admission checks
 OR.relay = { peers = {}, asked = {}, reg = {}, rpend = {}, gen = 0,
-	src = {}, askGen = {} }
+	src = {}, askGen = {}, asks = {}, dom = {}, domAt = {},
+	ians = {}, heard = {}, lastD = 0 }
+local K_REP = 4         -- fresh beaconers = "covered" (Trickle-lite)
+local K_I = 4           -- i answers that suppress further replies
+local PEER_CAP = 64     -- senders remembered per board
+local OFFER_WIN = 4     -- asker's offer-collection window, sec
+                        -- (must exceed jitter 0-2s + pace gap)
 local LIVE_TTL = 600
 
 -- seq breaks same-timestamp ties; sender t (wire records) keeps
@@ -1168,19 +1174,33 @@ function OR.RelayAsk(board, force)
 	end
 	OR.relay.asked[board] = now
 	OR.relay.gen = (OR.relay.gen or 0) + 1
-	OR.relay.askGen[board] = OR.relay.gen
+	-- random nonce: ask gens double as stream pins on a shared
+	-- bus — a per-install counter would collide across clients
+	local gen = math.random(1, 2147483647)
+	OR.relay.askGen[board] = gen
+	OR.relay.asks[gen] = { board = board, t0 = now }
 	if GM.Mesh and GM.Mesh.Send then
-		-- the distributed ask, one broadcast and done: every server
-		-- holding a matching snapshot streams it back on-channel,
-		-- first responder's stream wins. Tag picks the swarm —
+		-- v2 ask: Q carries our KNOWN snapshot t so servers with
+		-- nothing newer stay silent (mDNS known-answer); eligible
+		-- servers reply with tiny F offers; we pick the freshest
+		-- and name ONE streamer in P. Tag picks the swarm —
 		-- local boards want same-tracker servers, remote boards
 		-- want anyone NOT on our tracker ("!" = negative match)
 		local ourTag = OR.TrackerTag()
 		local tag = OR.IsRemote(board)
 			and (ourTag and ("!" .. ourTag) or "-")
 			or (ourTag or "-")
-		GM.Mesh.Send("Q", { board .. ";" .. OR.relay.gen
-			.. ";" .. tag })
+		local askT = ((OR.Board(board) or {}).t) or 0
+		GM.Mesh.Send("Q", { board .. ";" .. gen
+			.. ";" .. tag .. ";" .. askT })
+		GM.After(OFFER_WIN, function()
+			local ask = OR.relay.asks[gen]
+			OR.relay.asks[gen] = nil
+			if ask and ask.best and GM.Mesh.Send then
+				GM.Mesh.Send("P", { board .. ";" .. gen
+					.. ";" .. ask.best.peer })
+			end
+		end)
 	end
 	return true
 end
@@ -1203,7 +1223,17 @@ function OR.RelayPeer(body, sender)
 		else
 		local m = OR.relay.peers[b] or {}
 		m[sender] = { t = time(), tag = tag ~= "" and tag or nil }
+		-- bound the table: keep the freshest PEER_CAP senders —
+		-- unbounded peers is O(N) memory per client at scale
+		local cnt, oldest, ot = 0, nil, nil
+		for name, e in pairs(m) do
+			cnt = cnt + 1
+			local t = type(e) == "table" and e.t or e
+			if not ot or (t or 0) < ot then oldest, ot = name, t end
+		end
+		if cnt > PEER_CAP and oldest then m[oldest] = nil end
 		OR.relay.peers[b] = m
+		OR.relay.heard[sender] = time()
 		local q = OR.relay.rpend[b]
 		if q then
 			OR.relay.rpend[b] = nil
@@ -1238,7 +1268,8 @@ function OR.RelayStage(sender, f)
 		rid .. "|" .. hexenc(OpJSON(body))
 end
 
--- answer a Q pull: stream our pulled board as W/w rows ended by Z
+-- answer a whispered Q (legacy relay path): tag-check then stream.
+-- Channel Qs go through the v2 offer/pull flow in MeshQuery
 function OR.RelayServe(sender, board, gen, tag)
 	if not (sender and board and gen) then return end
 	if not (GM.Mesh and GM.Mesh.Send) then return end
@@ -1250,6 +1281,12 @@ function OR.RelayServe(sender, board, gen, tag)
 			if OR.TrackerTag() == tag:sub(2) then return end
 		elseif OR.TrackerTag() ~= tag then return end
 	end
+	OR.StreamBoard(board, gen)
+end
+
+-- the actual snapshot stream — N announce, W/w rows, Z end. Only
+-- ever runs for a SELECTED source (P pick or whisper ask)
+function OR.StreamBoard(board, gen)
 	-- one stream per board per 10s covers every same-swarm asker —
 	-- listeners ingest opportunistically, so per-asker throttling
 	-- would just multiply identical streams onto the channel
@@ -1467,6 +1504,25 @@ end
 -- a server's 'i' row:
 -- gen;itemID;board;oid;qty;rem;ppu;exp;poster;backed
 function OR.ItemIngest(f, sender)
+	local e = OR.relay.ians[f[1]]
+	if e then e.n = (e.n or 0) + 1
+	else OR.relay.ians[f[1]] = { n = 1, t = time() } end
+	-- nonce-keyed tables grow forever otherwise — sweep stale
+	-- entries on every ingest (cheap, rare table)
+	local now = time()
+	for k, v in pairs(OR.relay.ians) do
+		if now - (v.t or 0) > 60 then OR.relay.ians[k] = nil end
+	end
+	for k, at in pairs(OR.relay.domAt or {}) do
+		if now - at > 60 then
+			OR.relay.domAt[k] = nil
+			OR.relay.dom[k] = nil
+		end
+	end
+	-- senders-heard is the density estimator's memory — same sweep
+	for s, at in pairs(OR.relay.heard) do
+		if now - at > 600 then OR.relay.heard[s] = nil end
+	end
 	local s = OR.search
 	if not s then return end
 	local gen, iid = tonumber(f[1]), tonumber(f[2])
@@ -1534,19 +1590,164 @@ function OR.ItemServe(sender, iid, gen, tag)
 			end
 		end
 	end
-	if #rows > 0 then GM.Mesh.Send("i", rows) end
+	-- jitter + suppress: once K_I answers for this nonce are on the
+	-- wire, further replies are duplicates, not coverage
+	if #rows > 0 then
+		local ikey = tostring(gen)
+		GM.After(math.random(), function()
+			local e = OR.relay.ians[ikey]
+			if e and (e.n or 0) >= K_I then return end
+			GM.Mesh.Send("i", rows)
+		end)
+	end
 end
 
--- channel-broadcast board query ("who serves this board?") — the
--- distributed refresh: any peer holding a tag-matched snapshot
--- answers by streaming it back on-channel
+-- ============ v2 suppression / offer-pull mechanics ============
+
+-- Trickle-lite coverage: beacon only while some board we serve has
+-- < K_REP fresh beaconers. Small swarms keep total coverage; big
+-- swarms stay quiet — the ~4 freshest per board-set carry discovery
+function OR.BeaconNeeded()
+	local now = time()
+	-- self counts too — we can't hear our own beacon, so without
+	-- this an active beaconer always sees K_REP-1 others and the
+	-- swarm never converges to silence
+	local selfFresh = OR.relay.selfAdv
+		and now - OR.relay.selfAdv < RELAY_PEER_TTL
+	for b in pairs(GoblinMindDB and GoblinMindDB.boards or {}) do
+		local n = selfFresh and 1 or 0
+		for _, e in pairs(OR.relay.peers[b] or {}) do
+			local t = type(e) == "table" and e.t or e
+			if now - (t or 0) < RELAY_PEER_TTL then n = n + 1 end
+		end
+		if n < K_REP then return true end
+	end
+	return false
+end
+
+-- probe only when the swarm's actually dark for us: no peers at
+-- all, or one of our boards has no serving peer — and never within
+-- 30s of a probe we heard get traffic (coalesced asks)
+function OR.DiscoveryNeeded()
+	if time() - (OR.relay.lastD or 0) < 30 then return false end
+	if not next(OR.relay.peers) then return true end
+	for b in pairs(GoblinMindDB and GoblinMindDB.boards or {}) do
+		if not next(OR.relay.peers[b] or {}) then return true end
+	end
+	return false
+end
+
+-- a D heard: only answer if OUR boards are under-covered, and even
+-- then on jitter — re-check at fire time so answers that landed
+-- during the delay silence us (mDNS known-answer)
+function OR.MeshProbe(body, sender)
+	if not sender or sender:match("^[^-]+") == UnitName("player") then
+		return
+	end
+	OR.relay.lastD = time()
+	OR.relay.heard[sender] = time()
+	if not OR.BeaconNeeded() then return end
+	GM.After(math.random() * 3, function()
+		if OR.BeaconNeeded() and GM.Mesh
+				and GM.Mesh.Advertise then
+			GM.Mesh.Advertise()
+		end
+	end)
+end
+
+-- channel Q -> tiny F offer (jittered, suppressible), never a
+-- stream. askT = the asker's known snapshot t — servers with
+-- nothing newer don't speak at all
 function OR.MeshQuery(body, sender)
 	if not sender or sender:match("^[^-]+") == UnitName("player") then
 		return
 	end
-	local b, gen, tag = (body or ""):match("^([^;]+);(%d+);?(.*)$")
+	OR.relay.heard[sender] = time()
+	local b, gen, tag, askT = (body or ""):match(
+		"^([^;]+);(%d+);([^;]*);?(.*)$")
 	if not b then return end
-	OR.RelayServe(sender, b, tonumber(gen), tag ~= "" and tag or nil)
+	gen, askT = tonumber(gen), tonumber(askT) or 0
+	if not (gen and GM.Mesh and GM.Mesh.Send) then return end
+	-- swarm rules (same as RelayServe): positive tag = same tracker
+	-- only, "!tag" = only when NOT on the asker's tracker
+	if tag and tag ~= "-" and tag ~= "" then
+		if tag:sub(1, 1) == "!" then
+			if OR.TrackerTag() == tag:sub(2) then return end
+		elseif OR.TrackerTag() ~= tag then return end
+	end
+	local bd = GoblinMindDB and GoblinMindDB.boards
+		and GoblinMindDB.boards[b]
+	if not bd or not bd.orders then return end
+	local t = bd.t or 0
+	if t <= askT then return end  -- known-answer: they have it
+	local key = "f:" .. b .. ":" .. gen
+	-- 0-2s jitter: offers landing inside the same sendQ pace-gap
+	-- can't see each other (transmitted-but-undelivered) and a
+	-- duplicate escapes — bounded residual, not a flaw; OFFER_WIN
+	-- must stay > jitter+gap
+	GM.After(math.random() * 2, function()
+		-- a fresher-or-equal offer already on the wire wins; ours
+		-- dies in the queue (dequeue pred) or never queues at all
+		if (OR.relay.dom[key] or 0) >= t then return end
+		GM.Mesh.Send("F", { table.concat({
+			b, gen, t, #bd.orders, OR.TrackerTag() or "-" }, ";") },
+			key, function()
+				return (OR.relay.dom[key] or 0) >= t
+			end)
+	end)
+end
+
+-- an F offer heard: update dominance for pending offers, and feed
+-- the asker's selection when it's our nonce
+function OR.MeshOffer(body, sender)
+	if not sender or sender:match("^[^-]+") == UnitName("player") then
+		return
+	end
+	OR.relay.heard[sender] = time()
+	local b, gen, t = (body or ""):match(
+		"^([^;]+);(%d+);(%d+)")
+	if not b then return end
+	gen, t = tonumber(gen), tonumber(t)
+	local key = "f:" .. b .. ":" .. gen
+	if t > (OR.relay.dom[key] or 0) then
+		OR.relay.dom[key] = t
+	end
+	OR.relay.domAt = OR.relay.domAt or {}
+	OR.relay.domAt[key] = time()
+	local ask = OR.relay.asks[gen]
+	if ask and (not ask.best or t > ask.best.t) then
+		ask.best = { peer = sender, t = t }
+	end
+end
+
+-- the asker's pick: board;nonce;sender — the named server alone
+-- streams; everyone else drops whatever they queued for the nonce
+function OR.MeshPull(body, sender)
+	if not sender or sender:match("^[^-]+") == UnitName("player") then
+		return
+	end
+	OR.relay.heard[sender] = time()
+	local b, gen, sel = (body or ""):match(
+		"^([^;]+);(%d+);?(.*)$")
+	if not b then return end
+	if sel == CharName() then
+		OR.StreamBoard(b, tonumber(gen))
+	elseif GM.Mesh and GM.Mesh.Cancel then
+		GM.Mesh.Cancel(function(m)
+			return m.key == ("f:" .. b .. ":" .. gen)
+		end)
+	end
+end
+
+-- distinct senders heard recently — the density estimate feeding
+-- any future p-sampling and the §5 congestion ladder
+function OR.MeshDensity()
+	local n, now = 0, time()
+	for s, t in pairs(OR.relay.heard or {}) do
+		if now - t < 600 then n = n + 1
+		else OR.relay.heard[s] = nil end
+	end
+	return n
 end
 
 -- single entry point for whisper-delivered records

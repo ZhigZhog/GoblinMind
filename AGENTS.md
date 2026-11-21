@@ -222,22 +222,37 @@ Primary data = the in-house book feed below.
   unmodified `Orders.lua`/`Mesh.lua` loaded per simulated client in
   `lupa` (Lua 5.5 — `load`, not `loadstring`) against
   `brain/sim/wow_stub.lua` (wire capture, `GM.After` scheduler,
-  SV serializer), real `goblin_server.py` + real watcher consumers
-  (`process_orders`/`process_relay`/`process_board_reqs`/
-  `process_board_refresh`/`boards_pull`) patched to per-client
-  api_state/feeds/out paths. 68 checks: post→confirm, claim→accept→
-  fill, cancel/reject, full relay tunnel, tag poison, item search,
-  solo refresh, dedup, TTL/stat lifecycle (deny/force/release),
-  ignore/board-ban/host-ban, contention, join/leave. Sim gotchas:
+  SV serializer, per-channel membership), real `goblin_server.py`
+  + real watcher consumers (`process_orders`/`process_relay`/
+  `process_board_reqs`/`process_board_refresh`/`boards_pull`)
+  patched to per-client api_state/feeds/out paths. 96 checks:
+  post→confirm, claim→accept→fill, cancel/reject, full relay
+  tunnel, tag poison, item search, solo refresh, dedup, TTL/stat
+  lifecycle (deny/force/release), ignore/board-ban/host-ban,
+  contention, join/leave, plus the v2 block (channel split,
+  offer→pull single-stream, coverage/offer/item suppression,
+  peer cap, dead-bus queue drain). Sim gotchas:
   `time()` must be integer epoch (Lua `format('%d')` chokes on
   floats — `GetTime()` carries the sub-second precision), sim clock
   must be monotonic (a backward jump wedges Mesh `pumping` +
-  sendQ), and each client needs a distinct `name` or the server
-  re-keys them all into one install row. Op results live in
+  sendQ), each client needs a distinct `name` or the server
+  re-keys them all into one install row, `pump()` must drain the
+  wire BEFORE advancing clocks and settle all clients to the
+  global earliest task-due (out-of-order delivery/clock-skew
+  fakes real races), and `fire_login` only advances 10s so the
+  30s/40s beacon/D tasks fire after watcher+reload seeds boards.
+  Tracker keys beyond 'a'/'b' map to hostname-case permutations
+  (`url_for`) — urlHash is case-sensitive raw DJB2, every variant
+  resolves to the sim server but tags differently. Op results live in
   `api_state.order_results` keyed by the staged rid (`OR.Op`
   returns it) — don't max-t pick, results share second-granularity
   timestamps. `orders` has `qty_held` between filled and remaining;
   any pool assertion must read it, `qty_filled==0` is vacuous.
+  **`python brain\test_mesh_scale.py`** — scale model: Phase A
+  measures real wire/dispatch constants in the harness, Phase B
+  extrapolates. v1 protocol is FATAL ≳100k clients (167ms/frame
+  at 1M); v2 as shipped is 2.45ms/frame degraded at 1M; v2 + 8
+  cohorts is ok; +1024 cohorts trivial.
   The watcher also scans `WTF\Account\*\SavedVariables\GoblinMind.lua`
   each poll for staged bug reports (`gm-<ts>-<n>|<hex>` strings in
   `GoblinMindSettings.bugReports`), files them to GitHub issues

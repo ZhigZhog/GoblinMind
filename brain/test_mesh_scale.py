@@ -216,6 +216,91 @@ def model(K, n, m, mit=None):
     }
 
 
+# ---------- Phase B2: v2 model (two buses, bounded responders) --
+#
+# What changed vs the v1 model above, each backed by sim-verified
+# mechanics in Orders.lua/Mesh.lua:
+#   - writ traffic rides goblinwritx, market diffs goblinmindx.
+#     Every client hears only the buses it joined; we report each.
+#   - T beacons are coverage-suppressed: ~K_REP fresh beaconers
+#     per board-set carry discovery, plus one burst per TTL when
+#     coverage goes stale (self-healing). Effective: K_REP per
+#     board-set per TTL, not one per client per 280s.
+#   - D probes coalesce: covered boards draw ZERO answers; only
+#     DARK_FRAC of probes get <=D_ANSWERS responses.
+#   - Q->F->P->stream: each ask costs ~1.2 F offers (residual
+#     sendQ-gap collisions), 1 P selection, ONE N/W/w/Z stream —
+#     the v1 every-server-streams fan-out is gone.
+#   - I->i: <=K_I answers per search (jitter + count suppression).
+#   - peers[ians|dom|asks|heard] tables are all bounded/swept.
+
+K_REP_V2      = 4       # beaconers carrying a covered board-set
+K_I_V2        = 4       # max i answers per search nonce
+PEER_TTL_V2   = 600     # peer freshness window (RELAY_PEER_TTL)
+OFFER_DUP     = 1.2     # expected F per ask (sendQ-gap residual)
+BOARD_SETS    = 3       # distinct board coverage domains
+DARK_FRAC     = 0.10    # probes hitting an uncovered board
+D_ANSWERS     = 4       # bounded answers per dark probe
+O_RATE_HOUR   = 2.0     # live writ overlay events per client-hr
+PEER_CAP_TOTAL = 1280   # PEER_CAP/board x ~20 boards, entries
+O_DISPATCH_US = 5.0     # writ overlay event ingest estimate
+
+
+def model_v2(n, m, mit=None):
+    """v2 per-channel load at population n.
+    mit = dict of levers:
+      shards   : cohort-isolated channels, n/shards clients each
+      pub_cap  : market S/M publishers capped per cohort
+      o_scale  : writ overlay events x population scaling (1.0 =
+                 ops scale with population, <1 = interest-scoped)
+    """
+    mit = mit or {}
+    shards = mit.get('shards', 1)
+    pub_cap = mit.get('pub_cap')
+    o_scale = mit.get('o_scale', 1.0)
+    nc = max(1, n // shards)
+
+    # -- writ bus (goblinwritx) --
+    t_in = K_REP_V2 * BOARD_SETS / PEER_TTL_V2
+    d_s = nc * LOGIN_FRAC_MIN / 60.0
+    d_in = d_s * (1 + D_ANSWERS * DARK_FRAC)
+    q_s = nc * Q_RATE_HOUR / 3600.0
+    i_s = nc * I_RATE_HOUR / 3600.0
+    w_msgs = max(1, int(ORDERS_IN_SNAP * m['w_row_bytes']
+                        // MAX_MSG))
+    # per ask: Q + ~1.2 F + 1 P + one stream of w_msgs rows
+    q_in = q_s * (1 + OFFER_DUP + 1 + w_msgs)
+    i_in = i_s * (1 + min(K_I_V2, nc))
+    o_in = nc * O_RATE_HOUR / 3600.0 * o_scale
+    writ_in = t_in + d_in + q_in + i_in + o_in
+
+    # -- market bus (goblinmindx) --
+    pubs = nc if not pub_cap else min(nc, pub_cap)
+    mkt_in = (pubs * (S_MSGS_PER_SCAN + M_MSGS_PER_SCAN)
+              / SCAN_EVERY)
+
+    # CPU: stream rows dominate when they flow; smalls are ~2-5us
+    cpu_us_s = (
+        (t_in + d_in + q_s * (1 + OFFER_DUP + 1)
+         + i_in) * m['dispatch_us_T']
+        + q_s * w_msgs * m['dispatch_us_N']
+        + o_in * O_DISPATCH_US
+        + mkt_in * m['dispatch_us_S'])
+    cpu_ms_frame = cpu_us_s / 1000.0 * (FRAME_MS / 1000.0)
+
+    peers = min(nc, PEER_CAP_TOTAL)
+    peer_mb = peers * m['peer_bytes'] / 1e6
+
+    return {
+        'nc': nc,
+        'writ_in': writ_in, 'mkt_in': mkt_in,
+        'inbound_s': writ_in + mkt_in,
+        'cpu_ms': cpu_ms_frame, 'peer_mb': peer_mb,
+        'writ_mbps': writ_in * 200 * 8 / 1e6,
+        'mkt_mbps': mkt_in * 200 * 8 / 1e6,
+    }
+
+
 def verdict(r):
     if r['cpu_ms'] >= CPU_DEAD_MS or r['peer_mb'] >= PEER_DEAD_MB:
         return 'FATAL'
@@ -276,6 +361,38 @@ def main():
           (cross_cpu or -1))
     print('crossover (peers table):   ~%d clients' %
           (cross_mem or -1))
+    print()
+
+    print('== v2 protocol (sim-verified mechanics) ==')
+    print('writ bus = goblinwritx · market bus = goblinmindx')
+    print('%-10s %-11s %-11s %-9s %-9s %-9s %-9s %s'
+          % ('clients', 'writ in/s', 'mkt in/s', 'ms/frame',
+             'peers MB', 'writ Mb', 'mkt Mb', 'verdict'))
+    for n in ns:
+        r = model_v2(n, m)
+        print('%-10d %-11.1f %-11.0f %-9.2f %-9.2f %-9.2f %-9.1f %s'
+              % (n, r['writ_in'], r['mkt_in'], r['cpu_ms'],
+                 r['peer_mb'], r['writ_mbps'], r['mkt_mbps'],
+                 verdict(r)))
+    print()
+    print('== v2 at 1M — levers ==')
+    v2rows = [
+        ('v2 as shipped', {}),
+        ('v2 + 8 cohorts', {'shards': 8}),
+        ('v2 + 1024 cohorts', {'shards': 1024}),
+        ('v2 + cohorts + 16 pubs',
+         {'shards': 1024, 'pub_cap': 16}),
+        ('v2 + cohorts + pubs + O/4',
+         {'shards': 1024, 'pub_cap': 16, 'o_scale': 0.25}),
+    ]
+    print('%-26s %-11s %-11s %-9s %-9s %s'
+          % ('lever', 'writ in/s', 'mkt in/s', 'ms/frame',
+             'peers MB', 'verdict'))
+    for name, mit in v2rows:
+        r = model_v2(1000000, m, mit)
+        print('%-26s %-11.1f %-11.0f %-9.2f %-9.2f %s'
+              % (name, r['writ_in'], r['mkt_in'], r['cpu_ms'],
+                 r['peer_mb'], verdict(r)))
 
 
 if __name__ == '__main__':
