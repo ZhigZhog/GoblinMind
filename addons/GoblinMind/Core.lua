@@ -185,6 +185,21 @@ SlashCmdList.GOBLINMIND = function(msg)
 		GM.MailUI.CodProbe()
 		return
 	end
+	if msg == "orders" or msg == "writs" or msg == "writ" then
+		if GM.OrdersUI then GM.OrdersUI.Toggle() end
+		return
+	end
+	if msg:sub(1, 6) == "board " then
+		local name = strtrim(msg:sub(7))
+		if name ~= "" and GM.Orders then
+			local rid = GM.Orders.JoinBoard(name, true)
+			GM.Print("joining board '" .. name ..
+				"' (" .. rid .. ") — applies after next flush")
+		else
+			GM.Print("usage: /goblin board <name>")
+		end
+		return
+	end
 	if msg:sub(1, 7) == "deprobe" then
 		-- dump the raw GetItemInfo fields DisenchantDrops gates on, plus
 		-- its result — isolates client return-shape quirks vs table bugs

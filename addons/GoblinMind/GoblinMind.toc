@@ -28,6 +28,7 @@ Vendoring.lua
 Sniper.lua
 Mesh.lua
 Budgets.lua
+Orders.lua
 Shopping.lua
 Chrome.lua
 Widgets.lua
@@ -45,6 +46,7 @@ MailUI.lua
 BankUI.lua
 GBankUI.lua
 SniperUI.lua
+OrdersUI.lua
 Settings.lua
 ItemInput.lua
 Tooltip.lua

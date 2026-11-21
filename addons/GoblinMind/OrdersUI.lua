@@ -1,0 +1,380 @@
+local _, GM = ...
+
+-- Writ board window — orders + commits + inbound CODs. All writes
+-- stage through GM.Orders into the SV queue (watcher POSTs them);
+-- reads come from the pulled GoblinMindDB.boards snapshot. The UI
+-- is honest about the flush cadence: a hint line tells the user to
+-- /reload for fresh board state.
+
+GM.OrdersUI = {}
+local OU = GM.OrdersUI
+local OR = GM.Orders
+local ui
+
+local ROWS = 14
+
+local function Panel(parent, x, y, w, h, title)
+	local p = CreateFrame("Frame", nil, parent)
+	p:SetPoint("TOPLEFT", x, y)
+	p:SetSize(w, h)
+	GM.Panel(p, "contLowest")
+	local t = GM.MakeFontString(p, GM.FONT_BOLD, 9, "secondary")
+	t:SetPoint("TOPLEFT", 8, -5)
+	t:SetText(title)
+	p.title = t
+	p.count = GM.MakeFontString(p, GM.FONT, 9, "textDim")
+	p.count:SetPoint("TOPRIGHT", -8, -5)
+	return p
+end
+
+local function MkBtn(parent, label, w)
+	local b = CreateFrame("Button", nil, parent)
+	b:SetSize(w or 60, 18)
+	GM.Panel(b, "contHigh")
+	b.text = GM.MakeFontString(b, GM.FONT_BOLD, 9, "accent")
+	b.text:SetPoint("CENTER")
+	b.text:SetText(label)
+	return b
+end
+
+local function MkEdit(parent, w, hint, numeric)
+	local e = CreateFrame("EditBox", nil, parent)
+	e:SetSize(w, 18)
+	e:SetAutoFocus(false)
+	e:SetFontObject(GM.FONT or "GameFontHighlightSmall")
+	GM.Panel(e, "contLowest")
+	e.hint = GM.MakeFontString(e, GM.FONT, 9, "textDim")
+	e.hint:SetPoint("LEFT", 4, 0)
+	e.hint:SetText(hint)
+	e:SetScript("OnTextChanged", function(s)
+		s.hint:SetShown(s:GetText() == "")
+	end)
+	e:SetScript("OnEscapePressed", function(s) s:ClearFocus() end)
+	e:SetTextInsets(4, 4, 0, 0)
+	return e
+end
+
+local function ItemName(id)
+	local n = GetItemInfo and GetItemInfo(id) or nil
+	return n or ("item " .. tostring(id))
+end
+
+local GoldText = GM.MoneyShort
+
+local function has(t, v)
+	for _, x in ipairs(t) do if x == v then return true end end
+	return false
+end
+
+local function Build()
+	if ui then return end
+	ui = {}
+	local f = CreateFrame("Frame", "GoblinMindOrders", UIParent)
+	f:SetSize(720, 520)
+	f:SetPoint("CENTER")
+	f:SetMovable(true)
+	f:EnableMouse(true)
+	f:RegisterForDrag("LeftButton")
+	f:SetScript("OnDragStart", f.StartMoving)
+	f:SetScript("OnDragStop", f.StopMovingOrSizing)
+	f:Hide()
+	GM.Panel(f, "contLow", "outlineVar")
+	ui.frame = f
+
+	local title = GM.MakeFontString(f, GM.FONT_BOLD, 13, "accent")
+	title:SetPoint("TOPLEFT", 12, -10)
+	title:SetText("WRITS")
+	if GM.Dashboard and GM.Dashboard.AddTabs then
+		GM.Dashboard.AddTabs(f, title, "orders")
+	end
+	ui.titleFs = title
+
+	local close = CreateFrame("Button", nil, f)
+	close:SetSize(16, 16)
+	close:SetPoint("TOPRIGHT", -6, -6)
+	close.text = GM.MakeFontString(close, GM.FONT_BOLD, 12, "textDim")
+	close.text:SetPoint("CENTER")
+	close.text:SetText("x")
+	close:SetScript("OnClick", function() f:Hide() end)
+
+	-- board switcher
+	ui.boardBar = GM.MakeFontString(f, GM.FONT_BOLD, 10, "secondary")
+	ui.boardBar:SetPoint("TOPLEFT", 12, -30)
+	ui.boardBtns = {}
+	ui.board = nil
+
+	-- hint line: flush cadence + reserve warning
+	ui.hint = GM.MakeFontString(f, GM.FONT, 9, "textDim")
+	ui.hint:SetPoint("TOPRIGHT", -12, -32)
+
+	-- ===== POST bar =====
+	local post = Panel(f, 10, -48, 700, 46, "POST BUY ORDER")
+	ui.itemE = MkEdit(post, 70, "itemID")
+	ui.itemE:SetPoint("LEFT", 10, -6)
+	ui.qtyE = MkEdit(post, 50, "qty")
+	ui.qtyE:SetPoint("LEFT", ui.itemE, "RIGHT", 6, 0)
+	ui.priceE = MkEdit(post, 70, "gold ea")
+	ui.priceE:SetPoint("LEFT", ui.qtyE, "RIGHT", 6, 0)
+	ui.ttlE = MkEdit(post, 46, "hrs")
+	ui.ttlE:SetPoint("LEFT", ui.priceE, "RIGHT", 6, 0)
+	ui.postBtn = MkBtn(post, "POST", 56)
+	ui.postBtn:SetPoint("LEFT", ui.ttlE, "RIGHT", 8, 0)
+	ui.postMsg = GM.MakeFontString(post, GM.FONT, 9, "textDim")
+	ui.postMsg:SetPoint("LEFT", ui.postBtn, "RIGHT", 8, 0)
+	ui.postBtn:SetScript("OnClick", function() OU.Post() end)
+
+	-- ===== orders list =====
+	local list = Panel(f, 10, -100, 700, 250, "BOARD")
+	ui.listP = list
+	list:EnableMouseWheel(true)
+	list:SetScript("OnMouseWheel", function(_, d)
+		ui.scroll = math.max(0, (ui.scroll or 0) - d * 3)
+		OU.Refresh()
+	end)
+	ui.scroll = 0
+	ui.rows = {}
+	for i = 1, ROWS do
+		local r = CreateFrame("Frame", nil, list)
+		r:SetSize(684, 15)
+		r:SetPoint("TOPLEFT", 8, -16 - (i - 1) * 15.5)
+		r.item = GM.MakeFontString(r, GM.FONT, 10, "text")
+		r.item:SetPoint("LEFT", 0, 0)
+		r.item:SetWidth(170)
+		r.item:SetWordWrap(false)
+		r.qty = GM.MakeFontString(r, GM.FONT, 10, "textDim")
+		r.qty:SetPoint("LEFT", 176, 0)
+		r.qty:SetWidth(72)
+		r.price = GM.MakeFontString(r, GM.FONT, 10, "text")
+		r.price:SetPoint("LEFT", 252, 0)
+		r.price:SetWidth(80)
+		r.poster = GM.MakeFontString(r, GM.FONT, 10, "textDim")
+		r.poster:SetPoint("LEFT", 338, 0)
+		r.poster:SetWidth(110)
+		r.poster:SetWordWrap(false)
+		r.status = GM.MakeFontString(r, GM.FONT, 9, "warn")
+		r.status:SetPoint("LEFT", 452, 0)
+		r.status:SetWidth(90)
+		r.claim = MkBtn(r, "CLAIM", 48)
+		r.claim:SetPoint("RIGHT", -4, 0)
+		ui.rows[i] = r
+	end
+	ui.claimQty = MkEdit(list, 40, "units")
+	ui.claimQty:SetPoint("BOTTOMRIGHT", -6, 4)
+	ui.claimQty:SetText("1")
+
+	-- ===== my commits + inbound COD =====
+	local mine = Panel(f, 10, -356, 342, 152, "MY COMMITS")
+	ui.mineP = mine
+	ui.mineRows = {}
+	for i = 1, 6 do
+		local r = CreateFrame("Frame", nil, mine)
+		r:SetSize(326, 20)
+		r:SetPoint("TOPLEFT", 8, -18 - (i - 1) * 21)
+		r.txt = GM.MakeFontString(r, GM.FONT, 9, "text")
+		r.txt:SetPoint("LEFT", 0, 0)
+		r.txt:SetWidth(240)
+		r.txt:SetWordWrap(false)
+		r.send = MkBtn(r, "SEND COD", 66)
+		r.send:SetPoint("RIGHT", 0, 0)
+		ui.mineRows[i] = r
+	end
+
+	local inc = Panel(f, 362, -356, 348, 152, "INBOUND CODs")
+	ui.incP = inc
+	ui.incRows = {}
+	for i = 1, 6 do
+		local r = CreateFrame("Frame", nil, inc)
+		r:SetSize(332, 20)
+		r:SetPoint("TOPLEFT", 8, -18 - (i - 1) * 21)
+		r.txt = GM.MakeFontString(r, GM.FONT, 9, "text")
+		r.txt:SetPoint("LEFT", 0, 0)
+		r.txt:SetWidth(196)
+		r.txt:SetWordWrap(false)
+		r.acc = MkBtn(r, "PAY", 40)
+		r.acc:SetPoint("RIGHT", -46, 0)
+		r.rej = MkBtn(r, "REJ", 40)
+		r.rej:SetPoint("RIGHT", 0, 0)
+		ui.incRows[i] = r
+	end
+end
+
+function OU.Post()
+	local board = ui.board
+	if not board then
+		ui.postMsg:SetText("no board — join one first (/goblin board <name>)")
+		return
+	end
+	local itemID = tonumber(ui.itemE:GetText())
+	local qty = tonumber(ui.qtyE:GetText())
+	local gold = tonumber(ui.priceE:GetText())
+	local hrs = tonumber(ui.ttlE:GetText())
+	if not (itemID and qty and gold) or qty < 1 or gold <= 0 then
+		ui.postMsg:SetText("itemID + qty + price required")
+		return
+	end
+	local ppu = math.floor(gold * 10000)
+	local ttl = hrs and math.floor(hrs * 3600) or nil
+	local rid = OR.Post(board, itemID, math.floor(qty), ppu, ttl)
+	OR.ReserveAdd(rid, ppu * math.floor(qty), board)
+	if not OR.PurseCovers(0) then
+		ui.postMsg:SetText(GM.CC("warn")
+			.. "posted — UNDERFUNDED (purse < reserves)|r")
+	else
+		ui.postMsg:SetText("posted " .. rid .. " — stages on next flush")
+	end
+	ui.itemE:SetText(""); ui.qtyE:SetText(""); ui.priceE:SetText("")
+end
+
+local function OrderRow(r, o, me)
+	r.item:SetText(ItemName(o.itemID))
+	r.qty:SetText(string.format("%d/%d (+%d)", o.qtyFilled or 0,
+		o.qtyTotal or 0, o.remaining or 0))
+	r.price:SetText(GoldText(o.pricePerUnit or 0) .. " ea")
+	local tag = o.poster or "?"
+	if o.posterUUID == me then tag = tag .. " |cff5fd35f(you)|r" end
+	r.poster:SetText(tag)
+	local flags = {}
+	if not o.backed then flags[#flags + 1] = "underfunded" end
+	if o.posterStats and (o.posterStats.fills_rejected or 0) > 0 then
+		flags[#flags + 1] = "rej:" .. o.posterStats.fills_rejected
+	end
+	r.status:SetText(table.concat(flags, " "))
+	r.claim:Show()
+	r.claim:SetScript("OnClick", function()
+		if o.posterUUID == me then
+			local units = tonumber(ui.claimQty:GetText())
+			OR.Cancel(o.board, o.id, units)
+			OR.ReserveRelease(o.id)
+			ui.postMsg:SetText("cancel staged (flush to apply)")
+		else
+			local units = math.max(1,
+				math.floor(tonumber(ui.claimQty:GetText()) or 1))
+			OR.Claim(o.board, o.id, units)
+			ui.postMsg:SetText("claim staged (flush to apply)")
+		end
+		OU.Refresh()
+	end)
+	r.claim.text:SetText(o.posterUUID == me and "CANCEL" or "CLAIM")
+	r:Show()
+end
+
+function OU.Refresh()
+	if not ui then return end
+	OR.ClearAcked()
+	OR.ReserveSync()
+
+	-- board buttons
+	local boards = OR.Boards()
+	if not ui.board or not has(boards, ui.board) then
+		ui.board = boards[1]
+	end
+	for i, b in ipairs(ui.boardBtns) do b:Hide() end
+	ui.boardBtns = {}
+	local label = "boards:"
+	for i, b in ipairs(boards) do
+		label = label .. "  " .. (b == ui.board and
+			("|cffe1ba00%s|r"):format(b) or b)
+		local btn = MkBtn(ui.frame, b, 8 + #b * 7)
+		btn:SetPoint("TOPLEFT", 70 + (i - 1) * 70, -28)
+		local bn = b
+		btn:SetScript("OnClick", function()
+			ui.board = bn; ui.scroll = 0; OU.Refresh()
+		end)
+		ui.boardBtns[i] = btn
+	end
+	ui.boardBar:SetText(label)
+
+	-- hint: reserve state + cadence note
+	local res = OR.ReserveTotal()
+	local h = "boards refresh on /reload"
+	if res > 0 then
+		h = ("reserved %s — "):format(GoldText(res)) .. h
+	end
+	if OR.Underfunded() then
+		h = GM.CC("warn") .. "UNDERFUNDED RESERVES — " .. h .. "|r"
+	end
+	ui.hint:SetText(h)
+
+	-- orders list
+	local orders = ui.board and OR.Orders(ui.board) or {}
+	ui.listP.title:SetText("BOARD — " .. tostring(ui.board or "none"))
+	ui.listP.count:SetText(#orders .. " open")
+	local me = OR.MyUUID()
+	for i = 1, ROWS do
+		local r = ui.rows[i]
+		local o = orders[i + (ui.scroll or 0)]
+		if o then OrderRow(r, o, me) else r:Hide() end
+	end
+
+	-- my commits
+	local mine = ui.board and OR.MyCommits(ui.board) or {}
+	ui.mineP.count:SetText(tostring(#mine))
+	for i = 1, 6 do
+		local r = ui.mineRows[i]
+		local mc = mine[i]
+		if mc then
+			local c, o = mc.commit, mc.order
+			local left = (c.expires or 0) - time()
+			r.txt:SetText(string.format("%s x%d -> %s | %s (%s)",
+				ItemName(o.itemID), c.units or 0, o.poster or "?",
+				GoldText((c.unitPrice or 0) * (c.units or 0)),
+				left > 0 and string.format("%dh left",
+					math.ceil(left / 3600)) or "expired"))
+			r.send:SetScript("OnClick", function()
+				if GM.MailUI and GM.MailUI.PrepareWrit then
+					GM.MailUI.PrepareWrit(o.poster, o.itemID,
+						(c.units or 1) - (c.unitsFilled or 0),
+						c.unitPrice or 0)
+				else
+					GM.Print("MailUI unavailable")
+				end
+			end)
+			r:Show()
+		else r:Hide() end
+	end
+
+	-- inbound CODs
+	local hits = OR.InboxCODs()
+	ui.incP.count:SetText(tostring(#hits))
+	for i = 1, 6 do
+		local r = ui.incRows[i]
+		local hit = hits[i]
+		if hit then
+			r.txt:SetText(string.format("%s: %s | %s",
+				hit.sender or "?", hit.subject or "?",
+				GoldText(hit.cod or 0)))
+			if not hit.order then
+				r.txt:SetText(r.txt:GetText() .. " |cffd35f5f(unmatched)|r")
+			end
+			r.acc:SetScript("OnClick", function()
+				if hit.order and OR.AcceptCOD(hit) then
+					ui.postMsg:SetText("fill staged (flush to apply)")
+					OR.ReserveRetire(hit.order.id, hit.cod)
+				end
+				OU.Refresh()
+			end)
+			r.rej:SetScript("OnClick", function()
+				if hit.order and OR.RejectCOD(hit) then
+					ui.postMsg:SetText("reject staged (flush to apply)")
+				end
+				OU.Refresh()
+			end)
+			r:Show()
+		else r:Hide() end
+	end
+end
+
+function OU.Show()
+	Build()
+	ui.frame:Show()
+	OU.Refresh()
+end
+
+function OU.Hide()
+	if ui and ui.frame then ui.frame:Hide() end
+end
+
+function OU.Toggle()
+	if ui and ui.frame and ui.frame:IsShown() then OU.Hide()
+	else OU.Show() end
+end

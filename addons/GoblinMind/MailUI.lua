@@ -310,8 +310,18 @@ local function Build()
 	end)
 	ui.money = EditBox(ui.sendBar, 60, "copper")
 	ui.money:SetPoint("LEFT", ui.to, "RIGHT", 6, 0)
+	-- COD toggle: when set the copper box feeds SetSendMailCOD
+	-- (payment on delivery) instead of SetSendMailMoney — the writ
+	-- board's escrow mechanism
+	ui.cod = CreateFrame("CheckButton", nil, ui.sendBar,
+		"UICheckButtonTemplate")
+	ui.cod:SetSize(18, 18)
+	ui.cod:SetPoint("LEFT", ui.money, "RIGHT", 4, 0)
+	ui.cod.text = GM.MakeFontString(ui.cod, GM.FONT, 9, "textDim")
+	ui.cod.text:SetPoint("LEFT", ui.cod, "RIGHT", 0, 0)
+	ui.cod.text:SetText("COD")
 	ui.send = Btn(ui.sendBar, 52, "SEND", function() MU.Send() end)
-	ui.send:SetPoint("LEFT", ui.money, "RIGHT", 6, 0)
+	ui.send:SetPoint("LEFT", ui.cod.text, "RIGHT", 6, 0)
 	ui.send.text:SetTextColor(GM.RGB("accent"))
 	local clear = Btn(ui.sendBar, 52, "CLEAR", function()
 		pcall(ClearSendMail)
@@ -546,7 +556,13 @@ function MU.Send()
 	if copper < 0 then copper = 0 end
 	local name = GetSendMailItem and GetSendMailItem(1)
 	if copper > 0 then
-		pcall(SetSendMailMoney, copper)
+		-- COD checked -> payment-on-delivery; unchecked -> money send.
+		-- SetSendMailCOD is live-verified on Forever (codprobe)
+		if ui.cod and ui.cod:GetChecked() then
+			pcall(SetSendMailCOD, copper)
+		else
+			pcall(SetSendMailMoney, copper)
+		end
 	end
 	-- hint strings survive unfocused boxes — treat them as empty
 	local subj = strtrim(ui.subject and ui.subject:GetText() or "")
@@ -850,6 +866,42 @@ end)
 -- dead globals exist — craftdebug found those in the tradeskill API),
 -- and dumps a real inbox header tuple when mail is readable (reveals
 -- the COD field position for reject detection later).
+-- writ fill path: OrdersUI's SEND COD button calls this inside its
+-- click — the same hardware click can legally pre-attach the stack.
+-- Recipient/subject/COD prefill; the user reviews + hits SEND.
+function MU.PrepareWrit(to, itemID, units, unitPrice)
+	Build()
+	if not MailOpen() then
+		GM.Print(GM.CC("warn") ..
+			"open a mailbox first — then click SEND COD again|r")
+		return
+	end
+	ui.page = "send"
+	if ui.pageTabs and ui.pageTabs.set then
+		ui.pageTabs.set("send")
+	end
+	ui.to:SetText(to or "")
+	ui.money:SetText(tostring(
+		math.floor((unitPrice or 0) * (units or 1))))
+	if ui.cod then ui.cod:SetChecked(true) end
+	local iname = GetItemInfo and GetItemInfo(itemID) or nil
+	if ui.subject then
+		ui.subject:SetText("writ: " .. (iname or tostring(itemID)))
+	end
+	ui.frame:Show()
+	-- best-effort attach: first bag stack of the item. Attach()
+	-- already runs inside a hardware click and ClearCursor-guards.
+	if itemID and GM.Banking and GM.Banking.BagSlots then
+		for _, s in ipairs(GM.Banking.BagSlots()) do
+			if s.itemID == itemID then
+				Attach({ bag = s.bag, slot = s.slot })
+				break
+			end
+		end
+	end
+	MU.Refresh()
+end
+
 function MU.CodProbe()
 	GM.dbgCap = {}
 	-- xpcall the whole body: a mid-run error still reaches the
