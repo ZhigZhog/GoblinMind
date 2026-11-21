@@ -71,7 +71,7 @@ local function Build()
 	ui = {}
 	local f = GM.Widgets.Window({
 		name = "GoblinMindOrders", title = "WRITS",
-		w = 720, h = 520, tab = "orders",
+		w = 720, h = 540, tab = "orders",
 	})
 	ui.frame = f
 
@@ -86,14 +86,14 @@ local function Build()
 	ui.hint:SetPoint("TOPRIGHT", -12, -32)
 
 	-- ===== POST bar: item strip on top, inputs below =====
-	local post = Panel(f, 10, -54, 700, 76, "POST BUY ORDER")
+	local post = Panel(f, 10, -54, 700, 84, "POST BUY ORDER")
 	ui.post = post
 
 	-- the planner's item-target strip — drop retargets the shared
 	-- item channel (planner stats show the market price)
 	local strip = CreateFrame("Button", nil, post)
-	strip:SetPoint("TOPLEFT", 8, -16)
-	strip:SetSize(684, 40)
+	strip:SetPoint("TOPLEFT", 8, -14)
+	strip:SetSize(684, 36)
 	GM.Panel(strip, "contHigh")
 	local iconBox = CreateFrame("Frame", nil, strip)
 	iconBox:SetPoint("LEFT", 4, 0)
@@ -168,7 +168,7 @@ local function Build()
 	OU.SetItem(nil)
 
 	-- ===== orders list =====
-	local list = Panel(f, 10, -136, 700, 218, "BOARD")
+	local list = Panel(f, 10, -144, 700, 240, "BOARD")
 	ui.listP = list
 	list:EnableMouseWheel(true)
 	list:SetScript("OnMouseWheel", function(_, d)
@@ -207,7 +207,7 @@ local function Build()
 	ui.claimQty:SetText("1")
 
 	-- ===== my commits + inbound COD =====
-	local mine = Panel(f, 10, -362, 342, 146, "MY COMMITS")
+	local mine = Panel(f, 10, -390, 342, 146, "MY COMMITS")
 	ui.mineP = mine
 	ui.mineRows = {}
 	for i = 1, 6 do
@@ -223,7 +223,7 @@ local function Build()
 		ui.mineRows[i] = r
 	end
 
-	local inc = Panel(f, 362, -362, 348, 146, "INBOUND CODs")
+	local inc = Panel(f, 362, -390, 348, 146, "INBOUND CODs")
 	ui.incP = inc
 	ui.incRows = {}
 	for i = 1, 6 do
