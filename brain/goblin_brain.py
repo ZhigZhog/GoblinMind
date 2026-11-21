@@ -2225,15 +2225,24 @@ def process_backend_reqs(appdata, root=None):
         LOG.warning('backend request %s rejected: bad url %r', rid, url)
         return
     feeds = load_feeds()
-    feeds['backend'] = {
+    # merge, don't replace — the request only owns url/name/scope/key.
+    # A wholesale `feeds['backend'] = {...}` dropped `boards` (the
+    # subscription list /goblin board maintains) on every re-CONNECT
+    # and silently stopped the boards pull.
+    be = feeds.setdefault('backend', {})
+    same_url = (be.get('url') or '').rstrip('/') == url.rstrip('/')
+    be.update({
         'url': url,
         'name': name or 'goblinmind',
-        'scopes': [scope] if scope else [],
-        'poll_minutes': 15,
+        'scopes': sorted(set(be.get('scopes') or [])
+                         | ({scope} if scope else set())),
+        'poll_minutes': be.get('poll_minutes', 15),
         'upload': True,
-    }
+    })
     if key:
-        feeds['backend']['key'] = key
+        be['key'] = key
+    elif not same_url:
+        be.pop('key', None)  # secrets are per-server; don't carry to a new host
     save_feeds(feeds)
     st['backend_req_at'] = ts
     # a token minted against the old endpoint is wrong for the new one
