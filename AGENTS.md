@@ -10,7 +10,9 @@ fallbacks (`GM.TSMMarket`, `destroy` source) and go nil without TSM.
 Primary data = the in-house book feed below.
 
 - **All notes live in `WoWVault\`** (Obsidian vault). Read
-  `WoWVault\phase-1-architecture.md` first; `WoWVault\code-notes-alpha.md`
+  `WoWVault\roadmap.md` for the current phase map + direction,
+  then `WoWVault\phase-1-architecture.md` first for internals;
+  `WoWVault\code-notes-alpha.md`
   is the complete v0.1 functional map; `WoWVault\tsm-subsumption-plan.md`
   is the 14-part path to full TSM replacement; `WoWVault\phase-1-implementation.md`
   is the Phase-1 (spine) megaplan; theme reference is
