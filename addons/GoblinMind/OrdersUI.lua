@@ -404,11 +404,11 @@ local function OrderRow(r, o, me)
 	r.claim:SetShown(pend ~= "cancel")
 	r.claim:SetScript("OnClick", function()
 		if o.posterUUID == me then
-			-- pending posts cancel whole — the op rides the queue
-			-- behind the post, so the server sees order then cancel
-			local units = pend and nil
-				or tonumber(ui.claimQty:GetText())
-			OR.Cancel(o.board, o.id, units)
+			-- CANCEL always cancels the whole order — the units box
+			-- belongs to CLAIM; sharing it made every cancel a
+			-- PARTIAL cancel of N units and "cancelled" orders kept
+			-- coming back on the next pull
+			OR.Cancel(o.board, o.id, nil)
 			OR.ReserveRelease(o.id)
 			ui.postMsg:SetText("cancel staged (flush to apply)")
 		else
