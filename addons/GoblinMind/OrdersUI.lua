@@ -56,11 +56,6 @@ local function MkEdit(parent, w, hint, numeric)
 	return e
 end
 
-local function ItemName(id)
-	local n = GetItemInfo and GetItemInfo(id) or nil
-	return n or ("item " .. tostring(id))
-end
-
 local GoldText = GM.MoneyShort
 
 local function has(t, v)
@@ -252,9 +247,12 @@ local function Build()
 		local r = CreateFrame("Frame", nil, list)
 		r:SetSize(684, 15)
 		r:SetPoint("TOPLEFT", 8, -22 - (i - 1) * 15.5)
+		r.icon = r:CreateTexture(nil, "ARTWORK")
+		r.icon:SetSize(13, 13)
+		r.icon:SetPoint("LEFT", 0, 0)
 		r.item = GM.MakeFontString(r, GM.FONT, 10, "text")
-		r.item:SetPoint("LEFT", 0, 0)
-		r.item:SetWidth(170)
+		r.item:SetPoint("LEFT", 17, 0)
+		r.item:SetWidth(153)
 		r.item:SetWordWrap(false)
 		r.qty = GM.MakeFontString(r, GM.FONT, 10, "textDim")
 		r.qty:SetPoint("LEFT", 176, 0)
@@ -373,14 +371,26 @@ function OU.Post()
 end
 
 local function OrderRow(r, o, me)
-	r.item:SetText(ItemName(o.itemID))
+	local pend = o._live    -- overlay-only: unconfirmed by a pull yet
+	local icon = GM.ItemIcon(o.itemID)
+	if icon then
+		r.icon:SetTexture(icon)
+		r.icon:SetDesaturated(pend and true or false)
+		r.icon:SetAlpha(pend and 0.5 or 1)
+		r.icon:Show()
+	else r.icon:Hide() end
+	r.item:SetText(GM.ItemNameOr(o.itemID))
+	r.item:SetTextColor(pend and GM.RGB("textDim")
+		or GM.NameColor(o.itemID))
 	r.qty:SetText(string.format("%d/%d (+%d)", o.qtyFilled or 0,
 		o.qtyTotal or 0, o.remaining or 0))
 	r.price:SetText(GoldText(o.pricePerUnit or 0) .. " ea")
+	r.price:SetTextColor(GM.RGB(pend and "textDim" or "text"))
 	local tag = o.poster or "?"
 	if o.posterUUID == me then tag = tag .. " |cff5fd35f(you)|r" end
 	r.poster:SetText(tag)
 	local flags = {}
+	if pend then flags[#flags + 1] = "pending" end
 	if not o.backed then flags[#flags + 1] = "underfunded" end
 	if o.posterStats and (o.posterStats.fills_rejected or 0) > 0 then
 		flags[#flags + 1] = "rej:" .. o.posterStats.fills_rejected
@@ -389,7 +399,10 @@ local function OrderRow(r, o, me)
 	r.claim:Show()
 	r.claim:SetScript("OnClick", function()
 		if o.posterUUID == me then
-			local units = tonumber(ui.claimQty:GetText())
+			-- pending posts cancel whole — the op rides the queue
+			-- behind the post, so the server sees order then cancel
+			local units = pend and nil
+				or tonumber(ui.claimQty:GetText())
 			OR.Cancel(o.board, o.id, units)
 			OR.ReserveRelease(o.id)
 			ui.postMsg:SetText("cancel staged (flush to apply)")
@@ -550,7 +563,7 @@ function OU.Refresh()
 			local c, o = mc.commit, mc.order
 			local left = (c.expires or 0) - time()
 			r.txt:SetText(string.format("%s x%d -> %s | %s (%s)",
-				ItemName(o.itemID), c.units or 0, o.poster or "?",
+				GM.ItemNameOr(o.itemID), c.units or 0, o.poster or "?",
 				GoldText((c.unitPrice or 0) * (c.units or 0)),
 				left > 0 and string.format("%dh left",
 					math.ceil(left / 3600)) or "expired"))
@@ -611,4 +624,11 @@ end
 function OU.Toggle()
 	if ui and ui.frame and ui.frame:IsShown() then OU.Hide()
 	else OU.Show() end
+end
+
+-- names/icons resolve async — repaint when a requested item lands
+if GM.OnItemInfoLoaded then
+	GM.OnItemInfoLoaded(function()
+		if ui and ui.frame and ui.frame:IsShown() then OU.Refresh() end
+	end)
 end

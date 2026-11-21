@@ -149,10 +149,17 @@ local function evConfirmed(ev, byId)
 	return false
 end
 
-local function evDrop(ev, byId, res)
+local function evDrop(ev, byId, res, pullT)
 	if ev.rid then
 		local r = res[ev.rid]
 		if r and not r.ok then return true end  -- my op failed outright
+		-- acked ok + a pull NEWER than the ack missing the effect =
+		-- the server already moved past it (cancelled post, expired
+		-- commit) — no reason to phantom it until TTL
+		if r and r.ok and (pullT or 0) > (r.t or 0)
+				and not evConfirmed(ev, byId) then
+			return true
+		end
 	end
 	if evConfirmed(ev, byId) then return true end
 	return (ev.t or 0) < time() - LIVE_TTL
@@ -340,13 +347,17 @@ function OR.Orders(name)
 	local L = OR.live[name]
 	if L then
 		local res = OR.Results()
+		local pullT = b and b.t or 0
+		-- drop pass goes tail-first (safe removal mid-iteration);
+		-- apply pass goes head-first so chains land in order —
+		-- a cancel/claim must see the post that created the row
 		for i = #L, 1, -1 do
-			local ev = L[i]
-			if evDrop(ev, byId, res) then
+			if evDrop(L[i], byId, res, pullT) then
 				table.remove(L, i)
-			else
-				applyEv(ev, view, byId)
 			end
+		end
+		for _, ev in ipairs(L) do
+			applyEv(ev, view, byId)
 		end
 	end
 	return view
