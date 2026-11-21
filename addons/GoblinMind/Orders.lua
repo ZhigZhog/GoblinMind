@@ -164,7 +164,14 @@ local function evConfirmed(ev, byId, liveIds)
 		end
 		return absent or (o and (o.qtyTotal or 0)
 			<= (ev.newTotal or 0)) or false
-	elseif ev.v == "reject" or ev.v == "release" then
+	elseif ev.v == "accept" then
+		if not o then return false end
+		for _, c in ipairs(o.commits or {}) do
+			if c.id == ev.cid then return c.accepted and true or false end
+		end
+		return false
+	elseif ev.v == "reject" or ev.v == "release"
+			or ev.v == "deny" or ev.v == "force" then
 		if not o then return false end
 		for _, c in ipairs(o.commits or {}) do
 			if c.id == ev.cid then return c.state ~= "active" end
@@ -284,7 +291,19 @@ local function applyEv(ev, view, byId)
 					(o.remaining or 0) - ev.units)
 			end
 		end
-	elseif ev.v == "reject" or ev.v == "release" then
+	elseif ev.v == "accept" then
+		local o = byId[ev.oid]
+		if o then
+			o._pendOp = "accept"
+			for _, c in ipairs(o.commits or {}) do
+				if c.id == ev.cid then
+					c.accepted = true
+					c._pendOp = "accept"
+				end
+			end
+		end
+	elseif ev.v == "reject" or ev.v == "release"
+			or ev.v == "deny" or ev.v == "force" then
 		local o = byId[ev.oid]
 		if o then
 			o._pendOp = ev.v
@@ -354,6 +373,10 @@ function OR.ReplayPending()
 			elseif f.v == "release" then
 				ev = { v = "release", rid = rid, cid = f.cid,
 					oid = oidForCommit(b, f.cid) }
+			elseif f.v == "accept" or f.v == "deny"
+					or f.v == "force" then
+				ev = { v = f.v, rid = rid, oid = f.oid,
+					cid = f.commit }
 			end
 		end
 		if ev then
@@ -534,6 +557,36 @@ function OR.Release(board, cid, oid)
 	return rid
 end
 
+-- poster-side claim management: accept green-lights a crafter,
+-- deny frees the units with no stat hit, force frees them and
+-- books the vendor's rating
+function OR.Accept(board, oid, cid)
+	local rid = OR.Stage({ v = "accept", b = board, oid = oid,
+		commit = cid })
+	OR.LiveEvent(board, { v = "accept", rid = rid, oid = oid,
+		cid = cid })
+	OR.MeshSend(table.concat({ "A", board, oid, cid, time() }, ";"))
+	return rid
+end
+
+function OR.Deny(board, oid, cid)
+	local rid = OR.Stage({ v = "deny", b = board, oid = oid,
+		commit = cid })
+	OR.LiveEvent(board, { v = "deny", rid = rid, oid = oid,
+		cid = cid })
+	OR.MeshSend(table.concat({ "D", board, oid, cid, time() }, ";"))
+	return rid
+end
+
+function OR.Force(board, oid, cid)
+	local rid = OR.Stage({ v = "force", b = board, oid = oid,
+		commit = cid })
+	OR.LiveEvent(board, { v = "force", rid = rid, oid = oid,
+		cid = cid })
+	OR.MeshSend(table.concat({ "K", board, oid, cid, time() }, ";"))
+	return rid
+end
+
 -- mesh 'O' receive: ';'-separated records — ':' can't be the
 -- separator because server ids are 'install:op' and carry colons;
 -- ';' is illegal in char names, board scopes, and rids.
@@ -571,6 +624,15 @@ function OR.MeshEvent(rec)
 			units = tonumber(f[4]) or 0, t = tonumber(f[5]) })
 	elseif v == "L" then
 		OR.LiveEvent(f[2], { v = "release", oid = f[3], cid = f[4],
+			t = tonumber(f[5]) })
+	elseif v == "A" then
+		OR.LiveEvent(f[2], { v = "accept", oid = f[3], cid = f[4],
+			t = tonumber(f[5]) })
+	elseif v == "D" then
+		OR.LiveEvent(f[2], { v = "deny", oid = f[3], cid = f[4],
+			t = tonumber(f[5]) })
+	elseif v == "K" then
+		OR.LiveEvent(f[2], { v = "force", oid = f[3], cid = f[4],
 			t = tonumber(f[5]) })
 	end
 end

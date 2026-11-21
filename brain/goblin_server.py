@@ -190,6 +190,10 @@ def init_db():
         state TEXT DEFAULT 'active')''')
     conn.execute('''CREATE INDEX IF NOT EXISTS cmt_order
         ON commits(order_id, state, expires)''')
+    if 'accepted' not in {
+            r[1] for r in conn.execute('PRAGMA table_info(commits)')}:
+        conn.execute('ALTER TABLE commits ADD COLUMN accepted '
+                     'INTEGER DEFAULT 0')
     conn.execute('''CREATE TABLE IF NOT EXISTS ignores(
         install_id INTEGER, target_uuid TEXT,
         PRIMARY KEY(install_id, target_uuid))''')
@@ -202,7 +206,13 @@ def init_db():
         fills_rejected INTEGER DEFAULT 0,
         orders_posted INTEGER DEFAULT 0,
         orders_filled INTEGER DEFAULT 0,
-        orders_cancelled INTEGER DEFAULT 0)''')
+        orders_cancelled INTEGER DEFAULT 0,
+        commits_forced INTEGER DEFAULT 0)''')
+    if 'commits_forced' not in {
+            r[1] for r in conn.execute(
+                'PRAGMA table_info(install_stats)')}:
+        conn.execute('ALTER TABLE install_stats ADD COLUMN '
+                     'commits_forced INTEGER DEFAULT 0')
     # staged-op dedup — SV replays POST the same op id; first result
     # is replayed verbatim instead of re-applying the mutation
     conn.execute('''CREATE TABLE IF NOT EXISTS order_ops(
@@ -495,7 +505,8 @@ CLAIM_TTL_DEF = 86400
 ORDER_MAX_AGE = 7 * 86400    # same window as book merges
 ORDER_RATE = 60              # board ops per 600s bucket per install
 STAT_COLS = ('commits_filled', 'commits_expired', 'fills_rejected',
-             'orders_posted', 'orders_filled', 'orders_cancelled')
+             'orders_posted', 'orders_filled', 'orders_cancelled',
+             'commits_forced')
 
 
 def _pool_refresh(conn, oid):
@@ -541,8 +552,8 @@ def _order_dict(conn, r):
      backed, created, expires, state) = r[:14]
     cms = conn.execute(
         'SELECT id, units, units_filled, crafter, crafter_uuid, '
-        'expires, state, install_id FROM commits WHERE order_id=? '
-        'ORDER BY created', (oid,)).fetchall()
+        'expires, state, install_id, accepted FROM commits '
+        'WHERE order_id=? ORDER BY created', (oid,)).fetchall()
     return {
         'id': oid, 'board': board, 'itemID': iid,
         'qtyTotal': qty, 'qtyFilled': filled,
@@ -556,7 +567,7 @@ def _order_dict(conn, r):
         'commits': [{'id': c[0], 'units': c[1],
                      'unitsFilled': c[2], 'crafter': c[3],
                      'crafterUUID': c[4], 'expires': int(c[5]),
-                     'state': c[6],
+                     'state': c[6], 'accepted': bool(c[8]),
                      'crafterStats': _stats_of(conn, c[7])}
                     for c in cms]}
 
@@ -778,7 +789,8 @@ class Handler(BaseHTTPRequestHandler):
         if len(p) == 7 and p[4] == 'commits' and p[6] == 'release':
             return self._op_release(conn, board, install, p[5])
         if len(p) == 7 and p[4] == 'orders' and p[6] in (
-                'claim', 'fill', 'reject', 'cancel'):
+                'claim', 'fill', 'reject', 'cancel',
+                'accept', 'deny', 'force'):
             return self._op_order(conn, board, install, uid, p[5],
                                   p[6], body, op, now)
         self._send(404, {'error': 'not found'})
@@ -849,6 +861,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._op_cancel(conn, row, body)
         if opname == 'fill':
             return self._op_fill(conn, board, install, row, body, now)
+        if opname == 'accept':
+            return self._op_accept(conn, row, body)
+        if opname == 'deny':
+            return self._op_commit_end(conn, row, body, 'deny')
+        if opname == 'force':
+            return self._op_commit_end(conn, row, body, 'force')
         return self._op_reject(conn, board, install, row, body)
 
     def _op_claim(self, conn, board, install, uid, row, body, op,
@@ -984,6 +1002,47 @@ class Handler(BaseHTTPRequestHandler):
                 (c[0],))
             _pool_refresh(conn, oid)
         _stat(conn, install, 'fills_rejected')
+        conn.commit()
+        return {'ok': True, 'order': _order_dict(
+            conn, self._order_row(conn, oid))}
+
+    def _op_accept(self, conn, row, body):
+        """Poster green-lights a claim — commits gain an 'accepted'
+        flag the crafter sees as go-ahead signal. No state change:
+        the pool stays committed either way."""
+        oid = row[0]
+        cid = str(body.get('commit') or '')[:64]
+        c = conn.execute(
+            "SELECT id FROM commits WHERE id=? AND order_id=? AND "
+            "state='active'", (cid, oid)).fetchone()
+        if not c:
+            self._send(404, {'error': 'commit'})
+            return None
+        conn.execute('UPDATE commits SET accepted=1 WHERE id=?',
+                     (cid,))
+        conn.commit()
+        return {'ok': True, 'order': _order_dict(
+            conn, self._order_row(conn, oid))}
+
+    def _op_commit_end(self, conn, row, body, how):
+        """Poster ends a claim before delivery. 'deny' is a polite
+        refusal — units return to the pool, NO stat (the design is
+        explicit: deny carries no penalty). 'force' frees the units
+        of a claim that isn't delivering and books
+        commits_forced against the vendor — the rating denominator."""
+        oid = row[0]
+        cid = str(body.get('commit') or '')[:64]
+        c = conn.execute(
+            'SELECT id, install_id FROM commits WHERE id=? AND '
+            "order_id=? AND state='active'", (cid, oid)).fetchone()
+        if not c:
+            self._send(404, {'error': 'commit'})
+            return None
+        conn.execute("UPDATE commits SET state='released' "
+                     "WHERE id=?", (cid,))
+        _pool_refresh(conn, oid)
+        if how == 'force':
+            _stat(conn, c[1], 'commits_forced')
         conn.commit()
         return {'ok': True, 'order': _order_dict(
             conn, self._order_row(conn, oid))}

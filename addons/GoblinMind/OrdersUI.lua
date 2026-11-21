@@ -65,7 +65,7 @@ end
 
 local function Build()
 	if ui then return end
-	ui = {}
+	ui = { expanded = {} }   -- order-id → nested-claims open
 	local f = GM.Widgets.Window({
 		name = "GoblinMindOrders", title = "WRITS",
 		w = 720, h = 540, tab = "orders",
@@ -247,12 +247,14 @@ local function Build()
 		local r = CreateFrame("Frame", nil, list)
 		r:SetSize(684, 15)
 		r:SetPoint("TOPLEFT", 8, -22 - (i - 1) * 15.5)
+		r.fold = MkBtn(r, "+", 14)
+		r.fold:SetPoint("LEFT", 0, 0)
 		r.icon = r:CreateTexture(nil, "ARTWORK")
 		r.icon:SetSize(13, 13)
-		r.icon:SetPoint("LEFT", 0, 0)
+		r.icon:SetPoint("LEFT", 16, 0)
 		r.item = GM.MakeFontString(r, GM.FONT, 10, "text")
-		r.item:SetPoint("LEFT", 17, 0)
-		r.item:SetWidth(153)
+		r.item:SetPoint("LEFT", 32, 0)
+		r.item:SetWidth(140)
 		r.item:SetWordWrap(false)
 		r.qty = GM.MakeFontString(r, GM.FONT, 10, "textDim")
 		r.qty:SetPoint("LEFT", 176, 0)
@@ -269,6 +271,18 @@ local function Build()
 		r.status:SetWidth(90)
 		r.claim = MkBtn(r, "CLAIM", 48)
 		r.claim:SetPoint("RIGHT", -4, 0)
+		-- nested-commit paint elements (hidden unless the row
+		-- renders a claim under an expanded order)
+		r.ctxt = GM.MakeFontString(r, GM.FONT, 9, "textDim")
+		r.ctxt:SetPoint("LEFT", 32, 0)
+		r.ctxt:SetWidth(430)
+		r.ctxt:SetWordWrap(false)
+		r.cforce = MkBtn(r, "FORCE", 46)
+		r.cforce:SetPoint("RIGHT", -2, 0)
+		r.cdeny = MkBtn(r, "DENY", 42)
+		r.cdeny:SetPoint("RIGHT", -50, 0)
+		r.cacc = MkBtn(r, "ACC", 34)
+		r.cacc:SetPoint("RIGHT", -94, 0)
 		ui.rows[i] = r
 	end
 	ui.claimQty = MkEdit(list, 40, "units")
@@ -373,6 +387,14 @@ end
 local function OrderRow(r, o, me)
 	-- overlay-only ops carry their verb — pending post/cancel/claim/...
 	local pend = o._pendOp
+	r.ctxt:Hide(); r.cacc:Hide(); r.cdeny:Hide(); r.cforce:Hide()
+	local ncm = #(o.commits or {})
+	r.fold:SetText(ui.expanded[o.id] and "-" or "+")
+	r.fold:SetShown(ncm > 0)
+	r.fold:SetScript("OnClick", function()
+		ui.expanded[o.id] = not ui.expanded[o.id] or nil
+		OU.Refresh()
+	end)
 	local icon = GM.ItemIcon(o.itemID)
 	if icon then
 		r.icon:SetTexture(icon)
@@ -420,6 +442,58 @@ local function OrderRow(r, o, me)
 		OU.Refresh()
 	end)
 	r.claim.text:SetText(o.posterUUID == me and "CANCEL" or "CLAIM")
+	r:Show()
+end
+
+-- a claim nested under its expanded order. Poster of the order
+-- gets accept/deny/force on live claims; anyone else sees the
+-- claim's state and the vendor's rating.
+local function CommitRow(r, o, c, me)
+	r.icon:Hide(); r.fold:Hide(); r.claim:Hide()
+	r.item:SetText(""); r.qty:SetText(""); r.price:SetText("")
+	r.poster:SetText(""); r.status:SetText("")
+	local flag = c._pendOp and ("· pending " .. c._pendOp)
+		or (c.accepted and "· accepted") or ""
+	local stat = c.crafterStats or {}
+	local res = (stat.commits_filled or 0)
+		+ (stat.commits_forced or 0)
+		+ (stat.commits_expired or 0)
+	-- completed-claim % once history exists; denied and voluntary
+	-- releases don't count either way — that's the design
+	local rating = res >= 3
+		and string.format("%d%%",
+			math.floor((stat.commits_filled or 0) * 100 / res + 0.5))
+		or "new"
+	local left = (c.expires or 0) - time()
+	r.ctxt:SetText(string.format("%s%s  x%d/%d  %s  %s  %s%s",
+		c.crafter or "?",
+		c.crafterUUID == me and " |cff5fd35f(you)|r" or "",
+		c.unitsFilled or 0, c.units or 0,
+		rating,
+		left > 0 and string.format("%dh left",
+			math.ceil(left / 3600)) or "expired",
+		c.state ~= "active" and (c.state .. "  ") or "", flag))
+	local mine = o.posterUUID == me and c.state == "active"
+		and not c._pendOp
+	r.cacc:SetShown(mine and not c.accepted)
+	r.cdeny:SetShown(mine)
+	r.cforce:SetShown(mine)
+	r.cacc:SetScript("OnClick", function()
+		OR.Accept(o.board, o.id, c.id)
+		ui.postMsg:SetText("accept staged (flush to apply)")
+		OU.Refresh()
+	end)
+	r.cdeny:SetScript("OnClick", function()
+		OR.Deny(o.board, o.id, c.id)
+		ui.postMsg:SetText("deny staged — no stat hit")
+		OU.Refresh()
+	end)
+	r.cforce:SetScript("OnClick", function()
+		OR.Force(o.board, o.id, c.id)
+		ui.postMsg:SetText("force cancel staged — counts against vendor")
+		OU.Refresh()
+	end)
+	r.ctxt:Show()
 	r:Show()
 end
 
@@ -546,6 +620,17 @@ function OU.Refresh()
 	else
 		for i = 1, BROWSEROWS do ui.browseRows[i]:Hide() end
 		local orders = ui.board and OR.Orders(ui.board) or {}
+		-- flatten: each expanded order's commits nest under it and
+		-- consume row-pool slots; scroll just pages the flat list
+		local disp = {}
+		for _, o in ipairs(orders) do
+			disp[#disp + 1] = o
+			if ui.expanded and ui.expanded[o.id] then
+				for _, c in ipairs(o.commits or {}) do
+					disp[#disp + 1] = { order = o, commit = c }
+				end
+			end
+		end
 		ui.listP.title:SetText(
 			"BOARD — " .. tostring(ui.board or "none")
 				.. " · " .. #orders .. " open")
@@ -553,8 +638,14 @@ function OU.Refresh()
 		local me = OR.MyUUID()
 		for i = 1, ROWS do
 			local r = ui.rows[i]
-			local o = orders[i + (ui.scroll or 0)]
-			if o then OrderRow(r, o, me) else r:Hide() end
+			local e = disp[i + (ui.scroll or 0)]
+			if not e then
+				r:Hide()
+			elseif e.commit then
+				CommitRow(r, e.order, e.commit, me)
+			else
+				OrderRow(r, e, me)
+			end
 		end
 	end
 
@@ -568,12 +659,13 @@ function OU.Refresh()
 			local c, o = mc.commit, mc.order
 			local left = (c.expires or 0) - time()
 			local cpend = c._pendOp or (c._live and "claim")
+			local cflag = cpend and (" — pending " .. cpend)
+				or (c.accepted and " — accepted" or "")
 			r.txt:SetText(string.format("%s x%d -> %s | %s (%s)%s",
 				GM.ItemNameOr(o.itemID), c.units or 0, o.poster or "?",
 				GoldText((c.unitPrice or 0) * (c.units or 0)),
 				left > 0 and string.format("%dh left",
-					math.ceil(left / 3600)) or "expired",
-				cpend and (" — pending " .. cpend) or ""))
+					math.ceil(left / 3600)) or "expired", cflag))
 			r.txt:SetTextColor(GM.RGB(cpend and "textDim" or "text"))
 			r.send:SetScript("OnClick", function()
 				if GM.MailUI and GM.MailUI.PrepareWrit then

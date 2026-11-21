@@ -413,6 +413,45 @@ def main():
     o2 = next(o for o in r['orders'] if o['id'] == oid2)
     check('released units back in pool', o2['remaining'] == 5, o2)
 
+    print('== writ: accept/deny/force ==')
+    c, r = req(base, '/v1/boards/%s/orders' % B,
+               {'itemID': 444, 'qtyTotal': 8, 'pricePerUnit': 25,
+                'poster': 'Poster', 'op': 'ord4'}, tok_p)
+    oid4 = r['order']['id']
+    c, r = req(base, '/v1/boards/%s/orders/%s/claim' % (B, oid4),
+               {'units': 3, 'crafter': 'Crafter', 'op': 'cla'}, tok_c)
+    cid5 = r['commit']['id']
+    c, _ = req(base, '/v1/boards/%s/orders/%s/accept' % (B, oid4),
+               {'commit': cid5, 'op': 'ac0'}, tok_c)
+    check('non-poster accept -> 403', c == 403, c)
+    c, r = req(base, '/v1/boards/%s/orders/%s/accept' % (B, oid4),
+               {'commit': cid5, 'op': 'ac1'}, tok_p)
+    cm = next(x for x in r['order']['commits'] if x['id'] == cid5)
+    check('accept flags the commit',
+          c == 200 and cm['accepted'] is True, r)
+    c, r = req(base, '/v1/boards/%s/orders/%s/deny' % (B, oid4),
+               {'commit': cid5, 'op': 'dn1'}, tok_p)
+    cm = next(x for x in r['order']['commits'] if x['id'] == cid5)
+    check('deny releases units, commit released',
+          cm['state'] == 'released'
+          and r['order']['remaining'] == 8, r['order'])
+    check('deny carries no stat hit',
+          cm['crafterStats'].get('commits_forced', 0) == 0)
+    c, r = req(base, '/v1/boards/%s/orders/%s/claim' % (B, oid4),
+               {'units': 4, 'crafter': 'Crafter', 'op': 'clb'}, tok_c)
+    cid6 = r['commit']['id']
+    c, r = req(base, '/v1/boards/%s/orders/%s/force' % (B, oid4),
+               {'commit': cid6, 'op': 'fc1'}, tok_p)
+    cm = next(x for x in r['order']['commits'] if x['id'] == cid6)
+    check('force releases commit + pool',
+          cm['state'] == 'released'
+          and r['order']['remaining'] == 8, r['order'])
+    check('force books commits_forced',
+          cm['crafterStats']['commits_forced'] == 1)
+    c, _ = req(base, '/v1/boards/%s/orders/%s/force' % (B, oid4),
+               {'commit': 'bogus', 'op': 'fc2'}, tok_p)
+    check('force on missing commit -> 404', c == 404, c)
+
     print('== writ: cancel ==')
     c, r = req(base, '/v1/boards/%s/orders/%s/cancel' % (B, oid2),
                {'units': 2, 'op': 'cx1'}, tok_p)

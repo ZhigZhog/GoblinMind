@@ -2234,7 +2234,8 @@ def _ord_route(body):
         body.get('oid'), body.get('cid')
     if v == 'post':
         return '/v1/boards/%s/orders' % q(b) if b else None
-    if v in ('claim', 'fill', 'reject', 'cancel'):
+    if v in ('claim', 'fill', 'reject', 'cancel',
+             'accept', 'deny', 'force'):
         return ('/v1/boards/%s/orders/%s/%s' % (q(b), qi(oid), v)
                 if b and oid else None)
     if v == 'release':
