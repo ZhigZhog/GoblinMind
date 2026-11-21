@@ -36,18 +36,19 @@ def check(name, cond, detail=''):
         FAILURES.append(name)
 
 
-def req(base, path, body=None, tok=None):
+def req(base, path, body=None, tok=None, key=None, method=None):
     url = base + path
     headers = {}
     if body is not None:
         data = json.dumps(body).encode()
         headers['Content-Type'] = 'application/json'
-        method = 'POST'
     else:
         data = None
-        method = 'GET'
+    method = method or ('POST' if body is not None else 'GET')
     if tok:
         headers['Authorization'] = 'Bearer ' + tok
+    if key:
+        headers['X-Admin-Key'] = key
     try:
         r = urllib.request.urlopen(
             urllib.request.Request(url, data=data, headers=headers,
@@ -310,6 +311,223 @@ def main():
     check('non-str name dropped', dr.get('names', {}).get('x') is None)
     check('replaced sources drop out',
           dr.get('n', {}).get('c100') == 30, dr.get('n'))
+
+    # ---------- writ board ----------
+    print('== writ: order lifecycle ==')
+    B = 'writs'
+    c, r = req(base, '/v1/register',
+               {'name': 'wp', 'uuid': 'uu-p', 'key': 'sekrit'})
+    tok_p = r['token']
+    c, r = req(base, '/v1/register',
+               {'name': 'wc', 'uuid': 'uu-c', 'key': 'sekrit'})
+    tok_c = r['token']
+
+    c, _ = req(base, '/v1/boards/%s/orders' % B,
+               {'itemID': 12345, 'qtyTotal': 10, 'pricePerUnit': 500,
+                'poster': 'Poster', 'op': 'ord1'})
+    check('unauthed order post -> 401', c == 401, c)
+    c, r = req(base, '/v1/boards/%s/orders' % B,
+               {'itemID': 12345, 'qtyTotal': 10, 'pricePerUnit': 500,
+                'poster': 'Poster', 'op': 'ord1'}, tok_p)
+    check('order posts', c == 200 and r['order']['qtyTotal'] == 10, r)
+    oid = r['order']['id']
+    check('order id is install:op', oid.endswith(':ord1'), oid)
+    check('remaining starts at total', r['order']['remaining'] == 10)
+    c, r = req(base, '/v1/boards/%s/orders' % B,
+               {'itemID': 999, 'qtyTotal': 1, 'pricePerUnit': 1,
+                'poster': 'Poster', 'op': 'ord1'}, tok_p)
+    check('post replay returns same order + dup',
+          r['order']['id'] == oid and r.get('dup'), r)
+
+    c, r = req(base, '/v1/boards')
+    bd = next((b for b in r['boards'] if b['name'] == B), None)
+    check('board listed with open count',
+          bd is not None and bd['open'] == 1, r)
+
+    print('== writ: claim + pool ==')
+    c, r = req(base, '/v1/boards/%s/orders/%s/claim' % (B, oid),
+               {'units': 4, 'crafter': 'Crafter', 'op': 'cl1'}, tok_c)
+    check('claim commits units', c == 200 and r['commit']['units'] == 4,
+          r)
+    cid = r['commit']['id']
+    c, r = req(base, '/v1/boards/%s/orders' % B)
+    check('held units leave the pool', r['orders'][0]['remaining'] == 6,
+          r['orders'])
+    c, r = req(base, '/v1/boards/%s/orders/%s/claim' % (B, oid),
+               {'units': 7, 'crafter': 'Crafter', 'op': 'cl2'}, tok_c)
+    check('over-claim -> 409 + remaining',
+          c == 409 and r.get('remaining') == 6, r)
+    c, r = req(base, '/v1/boards/%s/orders/%s/claim' % (B, oid),
+               {'units': 4, 'crafter': 'Crafter', 'op': 'cl1'}, tok_c)
+    check('claim replay returns same commit',
+          r['commit']['id'] == cid and r.get('dup'), r)
+
+    print('== writ: fill ==')
+    c, _ = req(base, '/v1/boards/%s/orders/%s/fill' % (B, oid),
+               {'units': 4, 'op': 'f0'}, tok_c)
+    check('non-poster fill -> 403', c == 403, c)
+    c, r = req(base, '/v1/boards/%s/orders/%s/fill' % (B, oid),
+               {'units': 4, 'op': 'f1'}, tok_p)
+    check('fill credits order', r['order']['qtyFilled'] == 4, r)
+    check('commit closed on full fill',
+          r['order']['commits'][0]['state'] == 'filled',
+          r['order']['commits'])
+    check('crafter stat commits_filled',
+          r['order']['commits'][0]['crafterStats']
+          ['commits_filled'] == 1)
+    c, r = req(base, '/v1/boards/%s/orders/%s/claim' % (B, oid),
+               {'units': 6, 'crafter': 'Crafter', 'op': 'cl3'}, tok_c)
+    cid2 = r['commit']['id']
+    c, r = req(base, '/v1/boards/%s/orders/%s/fill' % (B, oid),
+               {'units': 6, 'op': 'f2'}, tok_p)
+    check('order completes at qtyTotal',
+          r['order']['state'] == 'filled', r['order']['state'])
+    check('poster stat orders_filled',
+          r['order']['posterStats']['orders_filled'] == 1)
+
+    print('== writ: reject ==')
+    c, r = req(base, '/v1/boards/%s/orders' % B,
+               {'itemID': 222, 'qtyTotal': 5, 'pricePerUnit': 100,
+                'poster': 'Poster', 'op': 'ord2'}, tok_p)
+    oid2 = r['order']['id']
+    req(base, '/v1/boards/%s/orders/%s/claim' % (B, oid2),
+        {'units': 5, 'crafter': 'Crafter', 'op': 'cl4'}, tok_c)
+    c, r = req(base, '/v1/boards/%s/orders/%s/reject' % (B, oid2),
+               {'mailFrom': 'Crafter', 'op': 'rj1'}, tok_p)
+    check('reject returns units to pool',
+          r['order']['remaining'] == 5, r['order'])
+    check('poster stat fills_rejected',
+          r['order']['posterStats']['fills_rejected'] == 1)
+
+    print('== writ: release ==')
+    c, r = req(base, '/v1/boards/%s/orders/%s/claim' % (B, oid2),
+               {'units': 2, 'crafter': 'Crafter', 'op': 'cl5'}, tok_c)
+    cid3 = r['commit']['id']
+    c, _ = req(base, '/v1/boards/%s/commits/%s/release' % (B, cid3),
+               {'op': 'rl0'}, tok_p)
+    check('non-crafter release -> 403', c == 403, c)
+    c, r = req(base, '/v1/boards/%s/commits/%s/release' % (B, cid3),
+               {'op': 'rl1'}, tok_c)
+    check('crafter release ok', c == 200 and r.get('ok'), r)
+    c, r = req(base, '/v1/boards/%s/orders' % B)
+    o2 = next(o for o in r['orders'] if o['id'] == oid2)
+    check('released units back in pool', o2['remaining'] == 5, o2)
+
+    print('== writ: cancel ==')
+    c, r = req(base, '/v1/boards/%s/orders/%s/cancel' % (B, oid2),
+               {'units': 2, 'op': 'cx1'}, tok_p)
+    check('partial cancel shrinks total',
+          r['order']['qtyTotal'] == 3 and r['order']['state'] == 'open',
+          r['order'])
+    c, r = req(base, '/v1/boards/%s/orders/%s/cancel' % (B, oid2),
+               {'units': 2, 'op': 'cx1'}, tok_p)
+    check('cancel replay is idempotent',
+          r.get('dup') and r['order']['qtyTotal'] == 3, r)
+    c, r = req(base, '/v1/boards/%s/orders/%s/cancel' % (B, oid2),
+               {'op': 'cx2'}, tok_p)
+    check('whole cancel -> cancelled',
+          r['order']['state'] == 'cancelled', r['order']['state'])
+
+    print('== writ: commit TTL expiry ==')
+    c, r = req(base, '/v1/boards/%s/orders' % B,
+               {'itemID': 333, 'qtyTotal': 3, 'pricePerUnit': 50,
+                'poster': 'Poster', 'op': 'ord3'}, tok_p)
+    oid3 = r['order']['id']
+    c, r = req(base, '/v1/boards/%s/orders/%s/claim' % (B, oid3),
+               {'units': 2, 'crafter': 'Crafter', 'op': 'cl6'}, tok_c)
+    cid4 = r['commit']['id']
+    conn = sqlite3.connect(gs.DB_PATH)
+    conn.execute('UPDATE commits SET expires=0 WHERE id=?', (cid4,))
+    conn.commit()
+    conn.close()
+    c, r = req(base, '/v1/boards/%s/orders' % B)
+    o3 = next(o for o in r['orders'] if o['id'] == oid3)
+    check('expired commit releases pool', o3['remaining'] == 3, o3)
+    cm = next(x for x in o3['commits'] if x['id'] == cid4)
+    check('expired commit marked released', cm['state'] == 'released')
+    check('crafter stat commits_expired',
+          cm['crafterStats']['commits_expired'] == 1, cm['crafterStats'])
+
+    print('== writ: ignore ==')
+    c, r = req(base, '/v1/ignore', {'uuid': 'uu-c', 'on': True}, tok_p)
+    check('ignore on', c == 200 and r.get('ok'), r)
+    c, _ = req(base, '/v1/boards/%s/orders/%s/claim' % (B, oid3),
+               {'units': 1, 'crafter': 'Crafter', 'op': 'cl7'}, tok_c)
+    check('ignored crafter claim -> 403 ignored',
+          c == 403 and _.get('error') == 'ignored', _)
+    req(base, '/v1/ignore', {'uuid': 'uu-c', 'on': False}, tok_p)
+    c, r = req(base, '/v1/boards/%s/orders/%s/claim' % (B, oid3),
+               {'units': 1, 'crafter': 'Crafter', 'op': 'cl7'}, tok_c)
+    check('unignored crafter claims again', c == 200, c)
+
+    print('== writ: board ACL + owner ban ==')
+    with open(gs.CFG_PATH, 'w') as fh:
+        json.dump({'install_secret': 'sekrit', 'admin_key': 'adk'}, fh)
+    c, r = req(base, '/v1/admin/installs', key='adk')
+    check('admin lists installs', c == 200 and r.get('installs'), r)
+    wp = next(i for i in r['installs'] if i['name'] == 'wp')
+    c, _ = req(base, '/v1/admin/installs')
+    check('admin without key -> 403', c == 403, c)
+    c, r = req(base, '/v1/admin/boards',
+               {'name': 'guild', 'owner': wp['id']}, key='adk')
+    check('admin creates board', c == 200 and r.get('ok'), r)
+    c, r = req(base, '/v1/admin/boards/guild',
+               {'acl': 'members', 'members': ['uu-p', 'uu-c']},
+               key='adk')
+    check('admin sets members ACL', c == 200 and r.get('ok'), r)
+    c, r = req(base, '/v1/admin/boards/guild',
+               {'acl': 'members', 'members': ['uu-p']}, key='adk')
+    check('admin narrows members', c == 200 and r.get('ok'), r)
+    c, _ = req(base, '/v1/boards/guild/orders',
+               {'itemID': 1, 'qtyTotal': 1, 'pricePerUnit': 1,
+                'poster': 'Crafter', 'op': 'og1'}, tok_c)
+    check('non-member post -> 403 members',
+          c == 403 and _.get('error') == 'members', _)
+    c, r = req(base, '/v1/boards/guild/orders',
+               {'itemID': 1, 'qtyTotal': 1, 'pricePerUnit': 1,
+                'poster': 'Poster', 'op': 'og2'}, tok_p)
+    check('member posts', c == 200, c)
+    # re-add uu-c as a member, then ban — exercises the board_ban
+    # branch specifically (a member turned bad)
+    req(base, '/v1/admin/boards/guild',
+        {'acl': 'members', 'members': ['uu-p', 'uu-c']}, key='adk')
+    c, r = req(base, '/v1/boards/guild/ban',
+               {'uuid': 'uu-c', 'on': True}, tok_p)
+    check('board owner bans uuid', c == 200 and r.get('ok'), r)
+    c, _ = req(base, '/v1/boards/guild/orders',
+               {'itemID': 1, 'qtyTotal': 1, 'pricePerUnit': 1,
+                'poster': 'Crafter', 'op': 'og3'}, tok_c)
+    check('banned post -> 403 board_ban',
+          c == 403 and _.get('error') == 'board_ban', _)
+    c, _ = req(base, '/v1/boards/guild/ban',
+               {'uuid': 'uu-p', 'on': True}, tok_c)
+    check('non-owner ban -> 403 owner', c == 403, c)
+
+    print('== writ: host ban = purge ==')
+    c, r = req(base, '/v1/admin/installs', key='adk')
+    wc = next(i for i in r['installs'] if i['name'] == 'wc')
+    # crafter holds 1 unit on oid3 — ban releases it to the pool
+    c, r = req(base, '/v1/admin/installs/%d' % wc['id'],
+               {'banned': True}, key='adk')
+    check('admin ban ok', c == 200 and r.get('ok'), r)
+    c, _ = req(base, '/v1/boards/%s/orders/%s/claim' % (B, oid3),
+               {'units': 1, 'crafter': 'Crafter', 'op': 'cl8'}, tok_c)
+    check('banned token -> 401', c == 401, c)
+    c, r = req(base, '/v1/boards/%s/orders' % B)
+    o3 = next(o for o in r['orders'] if o['id'] == oid3)
+    check('banned crafter hold purged to pool',
+          o3['remaining'] == 3, o3)
+
+    print('== writ: order cap + validation ==')
+    c, _ = req(base, '/v1/boards/%s/orders' % B,
+               {'itemID': 1, 'qtyTotal': 0, 'pricePerUnit': 1,
+                'poster': 'Poster', 'op': 'bad1'}, tok_p)
+    check('zero qty -> 400', c == 400, c)
+    c, _ = req(base, '/v1/boards/%s/orders' % B,
+               {'itemID': 1, 'qtyTotal': 1,
+                'pricePerUnit': gs.MAX_PRICE + 1,
+                'poster': 'Poster', 'op': 'bad2'}, tok_p)
+    check('price over cap -> 400', c == 400, c)
 
     srv.shutdown()
     print()
