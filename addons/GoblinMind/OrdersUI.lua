@@ -165,6 +165,9 @@ local function Build()
 	OU.SetItem(nil)
 
 	-- ===== orders list / item browser (same rect, mode toggles) =====
+	-- column grid: [fold 0-16][icon 18][item 36][qty 190][price 258]
+	-- [poster 348][status 452][action right] — headers label the
+	-- same x's so the eye learns the grid once
 	local list = Panel(f, 10, -144, 700, 240, "BOARD")
 	ui.listP = list
 	list:EnableMouseWheel(true)
@@ -189,6 +192,28 @@ local function Build()
 		ui.browseScroll = 0
 		OU.Refresh()
 	end)
+	-- claim-units box lives in the header next to the mode toggle —
+	-- it feeds the CLAIM buttons in the rows, so it sits where the
+	-- action's affordances are instead of floating at the corner
+	ui.claimQty = MkEdit(list, 40, "units")
+	ui.claimQty:SetPoint("TOPRIGHT", ui.modeBtn, "TOPLEFT", -4, -1)
+	ui.claimQty:SetText("1")
+	ui.claimLbl = GM.MakeFontString(list, GM.FONT, 9, "textDim")
+	ui.claimLbl:SetPoint("RIGHT", ui.claimQty, "LEFT", -4, -1)
+	ui.claimLbl:SetText("claim")
+	-- board titles can outgrow the header — clip, don't collide
+	ui.listP.title:SetWidth(340)
+	ui.listP.title:SetWordWrap(false)
+	-- column headers (board mode only)
+	ui.colHeads = {}
+	local heads = { { 36, "ITEM" }, { 190, "QTY" }, { 258, "PRICE" },
+		{ 348, "POSTER" }, { 452, "STATUS" } }
+	for i, h in ipairs(heads) do
+		local fs = GM.MakeFontString(list, GM.FONT_BOLD, 8, "secondary")
+		fs:SetPoint("TOPLEFT", 8 + h[1], -16)
+		fs:SetText(h[2])
+		ui.colHeads[i] = fs
+	end
 	-- browser search box + rows (hidden unless browseMode)
 	ui.search = MkEdit(list, 220, "filter by name or item id")
 	ui.search:SetPoint("TOPLEFT", 8, -16)
@@ -201,7 +226,7 @@ local function Build()
 	for i = 1, BROWSEROWS do
 		local r = CreateFrame("Button", nil, list)
 		r:SetSize(684, 15)
-		r:SetPoint("TOPLEFT", 8, -36 - (i - 1) * 15.5)
+		r:SetPoint("TOPLEFT", 8, -40 - (i - 1) * 15)
 		r.icon = r:CreateTexture(nil, "ARTWORK")
 		r.icon:SetSize(13, 13)
 		r.icon:SetPoint("LEFT", 0, 0)
@@ -246,37 +271,46 @@ local function Build()
 	for i = 1, ROWS do
 		local r = CreateFrame("Frame", nil, list)
 		r:SetSize(684, 15)
-		r:SetPoint("TOPLEFT", 8, -22 - (i - 1) * 15.5)
+		r:SetPoint("TOPLEFT", 8, -28 - (i - 1) * 15)
+		-- nested-commit tint: subtle lift off the contLowest list so
+		-- expanded claims read as a sub-block, not sibling orders
+		r.cbg = r:CreateTexture(nil, "BACKGROUND")
+		r.cbg:SetPoint("TOPLEFT", 16, 0)
+		r.cbg:SetPoint("BOTTOMRIGHT", 0, 0)
+		r.cbg:SetColorTexture(GM.RGB("contLow"))
+		r.cbg:Hide()
 		r.fold = MkBtn(r, "+", 14)
 		r.fold:SetPoint("LEFT", 0, 0)
 		r.icon = r:CreateTexture(nil, "ARTWORK")
 		r.icon:SetSize(13, 13)
-		r.icon:SetPoint("LEFT", 16, 0)
+		r.icon:SetPoint("LEFT", 18, 0)
 		r.item = GM.MakeFontString(r, GM.FONT, 10, "text")
-		r.item:SetPoint("LEFT", 32, 0)
-		r.item:SetWidth(140)
+		r.item:SetPoint("LEFT", 36, 0)
+		r.item:SetWidth(148)
 		r.item:SetWordWrap(false)
 		r.qty = GM.MakeFontString(r, GM.FONT, 10, "textDim")
-		r.qty:SetPoint("LEFT", 176, 0)
-		r.qty:SetWidth(72)
+		r.qty:SetPoint("LEFT", 190, 0)
+		r.qty:SetWidth(62)
 		r.price = GM.MakeFontString(r, GM.FONT, 10, "text")
-		r.price:SetPoint("LEFT", 252, 0)
-		r.price:SetWidth(80)
+		r.price:SetPoint("LEFT", 258, 0)
+		r.price:SetWidth(84)
 		r.poster = GM.MakeFontString(r, GM.FONT, 10, "textDim")
-		r.poster:SetPoint("LEFT", 338, 0)
-		r.poster:SetWidth(110)
+		r.poster:SetPoint("LEFT", 348, 0)
+		r.poster:SetWidth(98)
 		r.poster:SetWordWrap(false)
-		r.status = GM.MakeFontString(r, GM.FONT, 9, "warn")
+		r.status = GM.MakeFontString(r, GM.FONT, 9, "textDim")
 		r.status:SetPoint("LEFT", 452, 0)
-		r.status:SetWidth(90)
+		r.status:SetWidth(170)
+		r.status:SetWordWrap(false)
 		r.claim = MkBtn(r, "CLAIM", 48)
 		r.claim:SetPoint("RIGHT", -4, 0)
 		-- nested-commit paint elements (hidden unless the row
 		-- renders a claim under an expanded order)
 		r.ctxt = GM.MakeFontString(r, GM.FONT, 9, "textDim")
-		r.ctxt:SetPoint("LEFT", 32, 0)
-		r.ctxt:SetWidth(430)
+		r.ctxt:SetPoint("LEFT", 36, 0)
+		r.ctxt:SetWidth(390)
 		r.ctxt:SetWordWrap(false)
+		r.ctxt:SetJustifyH("LEFT")
 		r.cforce = MkBtn(r, "FORCE", 46)
 		r.cforce:SetPoint("RIGHT", -2, 0)
 		r.cdeny = MkBtn(r, "DENY", 42)
@@ -285,13 +319,17 @@ local function Build()
 		r.cacc:SetPoint("RIGHT", -94, 0)
 		ui.rows[i] = r
 	end
-	ui.claimQty = MkEdit(list, 40, "units")
-	ui.claimQty:SetPoint("BOTTOMRIGHT", -6, 4)
-	ui.claimQty:SetText("1")
 
 	-- ===== my commits + inbound COD =====
 	local mine = Panel(f, 10, -390, 342, 146, "MY COMMITS")
 	ui.mineP = mine
+	mine.hint = GM.MakeFontString(mine, GM.FONT, 9, "textDim")
+	mine.hint:SetPoint("LEFT", mine.title, "RIGHT", 6, 0)
+	mine.hint:SetText("— items you owe, mail COD")
+	ui.mineEmpty = GM.MakeFontString(mine, GM.FONT, 9, "textDim")
+	ui.mineEmpty:SetPoint("CENTER", 0, -6)
+	ui.mineEmpty:SetText("no open commits — claim an order above")
+	ui.mineEmpty:Hide()
 	ui.mineRows = {}
 	for i = 1, 6 do
 		local r = CreateFrame("Frame", nil, mine)
@@ -308,6 +346,13 @@ local function Build()
 
 	local inc = Panel(f, 362, -390, 348, 146, "INBOUND CODs")
 	ui.incP = inc
+	inc.hint = GM.MakeFontString(inc, GM.FONT, 9, "textDim")
+	inc.hint:SetPoint("LEFT", inc.title, "RIGHT", 6, 0)
+	inc.hint:SetText("— payment due on delivery")
+	ui.incEmpty = GM.MakeFontString(inc, GM.FONT, 9, "textDim")
+	ui.incEmpty:SetPoint("CENTER", 0, -6)
+	ui.incEmpty:SetText("nothing inbound")
+	ui.incEmpty:Hide()
 	ui.incRows = {}
 	for i = 1, 6 do
 		local r = CreateFrame("Frame", nil, inc)
@@ -387,6 +432,7 @@ end
 local function OrderRow(r, o, me)
 	-- overlay-only ops carry their verb — pending post/cancel/claim/...
 	local pend = o._pendOp
+	r.cbg:Hide()
 	r.ctxt:Hide(); r.cacc:Hide(); r.cdeny:Hide(); r.cforce:Hide()
 	local ncm = #(o.commits or {})
 	r.fold:SetText(ui.expanded[o.id] and "-" or "+")
@@ -414,13 +460,18 @@ local function OrderRow(r, o, me)
 	local tag = o.poster or "?"
 	if o.posterUUID == me then tag = tag .. " |cff5fd35f(you)|r" end
 	r.poster:SetText(tag)
+	-- short flag tokens — the column is narrow and flags used to
+	-- collide; pending is informational (dim), underfunded is the
+	-- actual warning (warn)
 	local flags = {}
-	if pend then flags[#flags + 1] = "pending " .. pend end
-	if not o.backed then flags[#flags + 1] = "underfunded" end
+	if pend then flags[#flags + 1] = "pend:" .. pend end
+	if not o.backed then flags[#flags + 1] = "unfunded" end
 	if o.posterStats and (o.posterStats.fills_rejected or 0) > 0 then
 		flags[#flags + 1] = "rej:" .. o.posterStats.fills_rejected
 	end
 	r.status:SetText(table.concat(flags, " "))
+	if not o.backed then r.status:SetTextColor(GM.RGB("warn"))
+	else r.status:SetTextColor(GM.RGB("textDim")) end
 	-- a cancel in flight leaves nothing to act on — re-clicking CANCEL
 	-- would stage a second op, CLAIM-ing it is meaningless
 	r.claim:SetShown(pend ~= "cancel")
@@ -452,6 +503,9 @@ local function CommitRow(r, o, c, me)
 	r.icon:Hide(); r.fold:Hide(); r.claim:Hide()
 	r.item:SetText(""); r.qty:SetText(""); r.price:SetText("")
 	r.poster:SetText(""); r.status:SetText("")
+	-- indented tinted sub-block + "»" leader — reads as nested
+	-- under the parent order, not a sibling row
+	r.cbg:Show()
 	local flag = c._pendOp and ("· pending " .. c._pendOp)
 		or (c.accepted and "· accepted") or ""
 	local stat = c.crafterStats or {}
@@ -465,7 +519,7 @@ local function CommitRow(r, o, c, me)
 			math.floor((stat.commits_filled or 0) * 100 / res + 0.5))
 		or "new"
 	local left = (c.expires or 0) - time()
-	r.ctxt:SetText(string.format("%s%s  x%d/%d  %s  %s  %s%s",
+	r.ctxt:SetText(string.format("» %s%s  x%d/%d  %s  %s  %s%s",
 		c.crafter or "?",
 		c.crafterUUID == me and " |cff5fd35f(you)|r" or "",
 		c.unitsFilled or 0, c.units or 0,
@@ -615,6 +669,10 @@ function OU.Refresh()
 	ui.modeBtn.text:SetText(ui.browseMode and "BOARD" or "FIND ITEM")
 	ui.search:SetShown(ui.browseMode)
 	ui.claimQty:SetShown(not ui.browseMode)
+	ui.claimLbl:SetShown(not ui.browseMode)
+	for i = 1, #ui.colHeads do
+		ui.colHeads[i]:SetShown(not ui.browseMode)
+	end
 	if ui.browseMode then
 		BrowsePaint()
 	else
@@ -652,6 +710,7 @@ function OU.Refresh()
 	-- my commits
 	local mine = ui.board and OR.MyCommits(ui.board) or {}
 	ui.mineP.count:SetText(tostring(#mine))
+	ui.mineEmpty:SetShown(#mine == 0)
 	for i = 1, 6 do
 		local r = ui.mineRows[i]
 		local mc = mine[i]
@@ -683,6 +742,7 @@ function OU.Refresh()
 	-- inbound CODs
 	local hits = OR.InboxCODs()
 	ui.incP.count:SetText(tostring(#hits))
+	ui.incEmpty:SetShown(#hits == 0)
 	for i = 1, 6 do
 		local r = ui.incRows[i]
 		local hit = hits[i]
