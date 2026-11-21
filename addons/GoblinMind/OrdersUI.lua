@@ -380,8 +380,10 @@ local function OrderRow(r, o, me)
 		r.icon:Show()
 	else r.icon:Hide() end
 	r.item:SetText(GM.ItemNameOr(o.itemID))
-	r.item:SetTextColor(pend and GM.RGB("textDim")
-		or GM.NameColor(o.itemID))
+	-- and/or truncates GM.RGB's r,g,b to the first value — keep the
+	-- multi-return calls at tail position per branch
+	if pend then r.item:SetTextColor(GM.RGB("textDim"))
+	else r.item:SetTextColor(GM.NameColor(o.itemID)) end
 	r.qty:SetText(string.format("%d/%d (+%d)", o.qtyFilled or 0,
 		o.qtyTotal or 0, o.remaining or 0))
 	r.price:SetText(GoldText(o.pricePerUnit or 0) .. " ea")
