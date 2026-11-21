@@ -11,7 +11,7 @@ local ROWS = 6
 local ui = { art = {} }
 -- forward declarations: Build's OnUpdate tick and Refresh both call
 -- these, but the definitions sit below Build in source order
-local PlanFrac, ApplyProg
+local PlanFrac, ApplyProg, protD
 PQ.protectedOk = PQ.protectedOk or {}
 local GetInfo = C_Item and C_Item.GetItemInfo or GetItemInfo
 
@@ -679,6 +679,16 @@ function PQ.SetScanPlan(plan)
 	PQ.budgetWarn = nil
 	PQ.lossConfirm = nil
 	PQ.protectedOk = {}
+	-- scroll state is per-plan: stepIndex matching the old plan's by
+	-- coincidence must not keep the old view offset
+	ui.lastStep = nil
+	ui.stepOff, ui.manualOff = nil, nil
+	-- a landing plan supersedes any live scan fraction — a scan that
+	-- never sent its Progress(nil) would mask plan progress forever
+	ui.scanFrac = nil
+	-- an open protect dialog still points at the replaced plan's step —
+	-- its POST ANYWAY would spend the confirm on the new plan's step
+	if protD then protD._step = nil protD:Hide() end
 	PQ.Refresh()
 end
 
@@ -858,13 +868,15 @@ function PQ.Solve(asks, workID)
 	PQ.stepIndex = 1
 	PQ.lossConfirm = nil
 	PQ.protectedOk = {}
+	ui.lastStep = nil
+	ui.stepOff, ui.manualOff = nil, nil
+	ui.scanFrac = nil
 	PQ.Refresh()
 end
 
 -- protected-group confirm: a small modal warning that this plan step
 -- would sell or post an item the user flagged protected via its group.
 -- One confirm per item per plan — HOLD leaves the step armed.
-local protD
 local function BuildProtDialog()
 	if protD then return protD end
 	local d = CreateFrame("Frame", "GoblinMindProtectDialog", UIParent)
@@ -950,7 +962,12 @@ function PQ.ExecuteNext()
 				-- again: the duplicate-quote bounce. Scan-mode plans
 				-- skip rescan by design; this matches that.
 				if not (PQ.plan and PQ.plan.mode) then
-					GM.After(1.0, function() PQ.Rescan() end)
+					local p = PQ.plan
+					GM.After(1.0, function()
+						-- a plan loaded in the gap must not eat a rescan
+						-- fired under the old one — identity, not presence
+						if PQ.plan == p then PQ.Rescan() end
+					end)
 				end
 			end
 		else
@@ -1078,9 +1095,15 @@ function PQ.ExecuteNext()
 		end
 		PQ.stepIndex = PQ.stepIndex + 1
 		-- single-item plans rescan after each action; scan-mode plans are
-		-- independent steps — re-querying the book per click would stall
+		-- independent steps — re-querying the book per click would stall.
+		-- The deferral must re-check identity: a plan loaded inside the
+		-- 1s gap owns its own lifecycle — a rescan fired under the old
+		-- plan would re-emit/re-scan over it and wipe its progress
 		if not (PQ.plan and PQ.plan.mode) then
-			GM.After(1.0, function() PQ.Rescan() end)
+			local p = PQ.plan
+			GM.After(1.0, function()
+				if PQ.plan == p then PQ.Rescan() end
+			end)
 		end
 	end
 	PQ.Refresh()
