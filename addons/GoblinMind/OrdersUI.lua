@@ -113,7 +113,7 @@ local function Build()
 
 	-- the planner's item-target strip — drop retargets the shared
 	-- item channel (planner stats show the market price)
-	local strip = CreateFrame("Frame", nil, post)
+	local strip = CreateFrame("Button", nil, post)
 	strip:SetPoint("TOPLEFT", 8, -16)
 	strip:SetSize(684, 40)
 	GM.Panel(strip, "contHigh")
