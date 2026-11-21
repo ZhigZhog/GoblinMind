@@ -1119,6 +1119,76 @@ def backend_pull(cfg=None):
     return books
 
 
+def boards_pull(cfg=None):
+    """GET /v1/boards/{b}/orders per configured board — the writ
+    feed. Stored beside the remote books in api_book.json under
+    'boards' so cmd_book's emit folds it as GoblinMindDB.boards.
+    Boards unconfigured in feeds.json stop pulling (their stored
+    snapshot is dropped)."""
+    cfg = cfg or _backend_cfg()
+    if not cfg.get('url'):
+        return {}
+    names = cfg.get('boards') or []
+    if isinstance(names, str):
+        names = [names]
+    names = [str(n) for n in names]
+    try:
+        with open(API_BOOK_PATH, encoding='utf-8') as fh:
+            cur = json.load(fh)
+    except (OSError, ValueError):
+        cur = {}
+    boards = cur.setdefault('boards', {})
+    for b in names:
+        try:
+            d = _backend_req(
+                cfg, '/v1/boards/%s/orders'
+                % urllib.parse.quote(b, safe=''))
+            boards[b] = {'t': int(time.time()),
+                         'orders': d.get('orders') or []}
+            LOG.debug('board pull %s: %d orders', b,
+                      len(d.get('orders') or []))
+        except Exception as e:
+            LOG.warning('board pull %s failed: %s', b, e)
+    for b in list(boards):
+        if b not in names:
+            boards.pop(b)
+    if boards or names:
+        tmp = API_BOOK_PATH + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as fh:
+            json.dump(cur, fh)
+        os.replace(tmp, API_BOOK_PATH)
+    return boards
+
+
+def api_boards():
+    """Pulled writ-board snapshots for the emit."""
+    try:
+        with open(API_BOOK_PATH, encoding='utf-8') as fh:
+            return (json.load(fh).get('boards') or {})
+    except (OSError, ValueError):
+        return {}
+
+
+def _backend_op(cfg, path, body):
+    """POST a staged writ op — returns (code, body) with the server's
+    own error JSON surfaced (409 remaining, 403 reason), unlike
+    _backend_req which raises."""
+    headers = {'Authorization': 'Bearer ' + _backend_token(cfg),
+               'Content-Type': 'application/json'}
+    req = urllib.request.Request(
+        cfg['url'].rstrip('/') + path,
+        data=json.dumps(body).encode(), headers=headers,
+        method='POST')
+    try:
+        r = urllib.request.urlopen(req, timeout=30)
+        return r.status, json.load(r)
+    except urllib.error.HTTPError as e:
+        try:
+            return e.code, json.loads(e.read() or b'{}')
+        except Exception:
+            return e.code, {}
+
+
 def _backend_health(kind, ok, n=0, err=None):
     """last-attempt status per direction, surfaced in the emitted DB
     so /goblin status can report backend health — err text lets the
@@ -1774,6 +1844,10 @@ def cmd_book(sv_arg, out_paths, root=None, feed=None, realm=None):
         # last-attempt backend health for /goblin status + config
         # state for the in-game onboarding popup
         'backend': _backend_emit(),
+        # pulled writ boards {name: {t, orders[]}} + this install's
+        # op outcomes keyed by staging rid — Orders.lua watches both
+        'boards': api_boards(),
+        'orderResults': _order_results_emit(),
         'api': _api_emit(),
         # where the companion app lives — absolute paths so the
         # wizard can show them in a copyable box
@@ -2125,6 +2199,144 @@ def process_api_reqs(appdata, root=None):
     LOG.info('blizzard api configured from in-game request %s', rid)
 
 
+# writ ops stage in GoblinMindSettings.orderQueue as
+# 'ord-<ts>-<n>|<hex(json {v,b,oid/cid,...})>' — same SV staging
+# convention as bug reports; the rid doubles as the server's 'op'
+# nonce (idempotent replay) and the orderResults key the addon
+# watches to clear its queue.
+ORDER_RE = re.compile(r'"(ord-[^"|]+)\|([0-9a-fA-F]+)"')
+# board join/leave stages 'bo-<ts>-<n>|<hex(name\non)>' — consumed
+# in ts order, edits feeds.json's backend.boards list
+BOARD_REQ_RE = re.compile(r'"(bo-(\d+)-[^"|]+)\|([0-9a-fA-F]+)"')
+
+
+def _ord_route(body):
+    """Map a staged op to its server path. The addon supplies v/b/
+    oid/cid plus verb fields; everything rides the POST body — the
+    server ignores keys it doesn't use."""
+    q = lambda s: urllib.parse.quote(str(s or ''), safe='')
+    qi = lambda s: urllib.parse.quote(str(s or ''), safe=':')
+    v, b, oid, cid = body.get('v'), body.get('b'), \
+        body.get('oid'), body.get('cid')
+    if v == 'post':
+        return '/v1/boards/%s/orders' % q(b) if b else None
+    if v in ('claim', 'fill', 'reject', 'cancel'):
+        return ('/v1/boards/%s/orders/%s/%s' % (q(b), qi(oid), v)
+                if b and oid else None)
+    if v == 'release':
+        return ('/v1/boards/%s/commits/%s/release' % (q(b), qi(cid))
+                if b and cid else None)
+    if v == 'ignore':
+        return '/v1/ignore'
+    if v == 'ban':
+        return '/v1/boards/%s/ban' % q(b) if b else None
+    return None
+
+
+def process_orders(appdata, root=None):
+    """POST staged writ ops to the backend. Each result lands in
+    api_state.order_results[rid] → emitted as GoblinMindDB.
+    orderResults → the addon clears its queue and surfaces the
+    outcome. Transport failures retry next pass (server dedups by
+    the op nonce, so a double-apply is safe)."""
+    cfg = _backend_cfg()
+    if not cfg.get('url'):
+        return
+    st = _load_api_state()
+    done = st.setdefault('order_results', {})
+    dirty = False
+    for sv in sv_paths(appdata, root):
+        try:
+            with open(sv, encoding='utf-8', errors='replace') as fh:
+                text = fh.read()
+        except OSError:
+            continue
+        for rid, hexbody in ORDER_RE.findall(text):
+            if rid in done:
+                continue
+            try:
+                body = json.loads(
+                    bytes.fromhex(hexbody).decode('utf-8'))
+            except (ValueError, UnicodeDecodeError):
+                done[rid] = {'ok': False, 'err': 'decode',
+                             't': int(time.time())}
+                dirty = True
+                continue
+            path = _ord_route(body)
+            if not path:
+                done[rid] = {'ok': False, 'err': 'verb',
+                             't': int(time.time())}
+                dirty = True
+                continue
+            body['op'] = rid
+            try:
+                code, r = _backend_op(cfg, path, body)
+            except Exception as e:
+                LOG.warning('order op %s transport failed: %s',
+                            rid, e)
+                continue
+            res = {'ok': 200 <= code < 300, 'code': code,
+                   't': int(time.time())}
+            for k in ('error', 'remaining', 'order', 'commit'):
+                if r.get(k) is not None:
+                    res[k] = r[k]
+            done[rid] = res
+            dirty = True
+            LOG.info('order op %s (%s) -> %d', rid,
+                     body.get('v'), code)
+    if dirty:
+        keys = sorted(done, key=lambda k: done[k].get('t') or 0)
+        while len(done) > 128:
+            done.pop(keys.pop(0), None)
+        _save_api_state(st)
+
+
+def process_board_reqs(appdata, root=None):
+    """In-game board join/leave — edits feeds.json's backend.boards
+    list in ts order. Consumed rids live in api_state.board_reqs."""
+    reqs = []
+    for sv in sv_paths(appdata, root):
+        try:
+            with open(sv, encoding='utf-8', errors='replace') as fh:
+                text = fh.read()
+        except OSError:
+            continue
+        for rid, ts, hexbody in BOARD_REQ_RE.findall(text):
+            try:
+                payload = bytes.fromhex(hexbody).decode('utf-8')
+            except ValueError:
+                continue
+            name, _, on = payload.partition('\n')
+            reqs.append((int(ts), rid, name.strip(), on.strip()))
+    if not reqs:
+        return
+    st = _load_api_state()
+    done = st.setdefault('board_reqs', {})
+    feeds = None
+    for ts, rid, name, on in sorted(reqs):
+        if rid in done or not name:
+            continue
+        if feeds is None:
+            feeds = load_feeds()
+        boards = feeds.setdefault('backend', {}).setdefault(
+            'boards', [])
+        if on == '1':
+            if name not in boards:
+                boards.append(name)
+        else:
+            boards[:] = [b for b in boards if b != name]
+        done[rid] = ts
+        LOG.info('board %s: %s', 'join' if on == '1' else 'leave',
+                 name)
+    if feeds is not None:
+        save_feeds(feeds)
+        _save_api_state(st)
+
+
+def _order_results_emit():
+    return (_load_api_state().get('order_results') or {})
+
+
 def _api_emit():
     """Emitted 'api' block: whether feeds.json carries credentials,
     the staged-request watermark (ack), and last-poll health so a
@@ -2177,6 +2389,7 @@ def _backend_emit():
     if cfg.get('url'):
         out['url'] = cfg['url']
         out['name'] = cfg.get('name') or 'goblinmind'
+        out['boards'] = cfg.get('boards') or []
     # the public half of install identity — emitted even with no
     # backend configured so the same uuid anchors in-game writs.
     # Safe to emit: the bearer token stays in api_state.
@@ -2312,6 +2525,7 @@ def cmd_watch(appdata, outs, interval=5, settle=20, feed='tsm',
     backend_poll_secs = float(
         backend_cfg_raw.get('poll_minutes', 15)) * 60
     last_backend_poll = time.time()
+    last_boards_poll = time.time()  # first pull after one interval
     LOG.info('watching %s', appdata)
     LOG.info('outputs: %s', ' ; '.join(outs))
     LOG.info('poll=%ss settle=%ss', interval, settle)
@@ -2379,6 +2593,8 @@ def cmd_watch(appdata, outs, interval=5, settle=20, feed='tsm',
                     # backend block already shows configured
                     process_backend_reqs(appdata, root)
                     process_api_reqs(appdata, root)
+                    process_board_reqs(appdata, root)
+                    process_orders(appdata, root)
                     newly = process_bugs(appdata, root)
                     if feed == 'book':
                         # a flush means the session wrote fresh book +
@@ -2446,6 +2662,17 @@ def cmd_watch(appdata, outs, interval=5, settle=20, feed='tsm',
                     emit_book('backend pull')
                 except Exception:
                     LOG.exception('backend pull failed')
+            # writ boards pull on their own (faster) cadence — the
+            # result folds into the next emit's GoblinMindDB.boards
+            boards_secs = float(
+                backend_cfg_raw.get('boards_poll_minutes', 2)) * 60
+            if backend_cfg_raw.get('boards') and \
+                    now - last_boards_poll >= boards_secs:
+                last_boards_poll = now
+                try:
+                    boards_pull(backend_cfg_raw)
+                except Exception:
+                    LOG.exception('boards pull failed')
         # cadence floor: book mode re-merges at least once an hour —
         # keeps `generated` moving through quiet stretches so the
         # addon's staleness flag means what it says
