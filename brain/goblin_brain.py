@@ -30,6 +30,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.parse
 import urllib.request
@@ -706,10 +707,46 @@ def _load_api_state():
 
 
 def _save_api_state(st):
+    if getattr(_EMIT_LOCAL, 'defer', False):
+        # emit-thread writes MUST go through _api_put (key-scoped,
+        # drained by the main loop) — a whole-st write here carries
+        # keys loaded before the merge started and would revert
+        # state the main loop touched meanwhile
+        LOG.error('_save_api_state on emit thread — write dropped '
+                  '(convert the call site to _api_put)')
+        return
     tmp = API_STATE_PATH + '.tmp'
     with open(tmp, 'w', encoding='utf-8') as fh:
         json.dump(st, fh)
     os.replace(tmp, API_STATE_PATH)
+
+
+# --- emit-thread plumbing (watch runs cmd_book on a daemon thread) ---
+# The main loop stays api_state's single writer: emit-thread saves
+# queue here as {key: value} dicts and the loop merges them onto a
+# fresh load, so a 5-min merge can never clobber order_results,
+# boards, or anything else the loop wrote while it ran.
+_EMIT_LOCAL = threading.local()
+_DEFERRED_API = []
+# serializes first-register paths — without it, main-loop and emit
+# threads can both see "no token" and each register, the second
+# silently invalidating the first's bearer
+_REG_LOCK = threading.Lock()
+
+
+def _api_put(st, *keys):
+    """api_state write scoped to `keys` — the only save callable
+    from inside cmd_book's graph. On the emit thread the write is
+    queued for the main loop; on the main loop it merges the named
+    keys onto a fresh load instead of writing back a stale whole-st
+    snapshot."""
+    if getattr(_EMIT_LOCAL, 'defer', False):
+        _DEFERRED_API.append({k: st.get(k) for k in keys})
+        return
+    fresh = _load_api_state()
+    for k in keys:
+        fresh[k] = st.get(k)
+    _save_api_state(fresh)
 
 
 def _api_token(cfg):
@@ -1013,11 +1050,25 @@ def _install_uuid():
     if not uid:
         uid = str(uuid.uuid4())
         st['install_uuid'] = uid
-        _save_api_state(st)
+        _api_put(st, 'install_uuid')
     return uid
 
 
 def _backend_token(cfg):
+    st = _load_api_state()
+    tok = st.get('backend_token')
+    if tok and st.get('backend_uuid_sent'):
+        return tok
+    # register once across both threads — a second register re-keys
+    # the install row and invalidates the token another thread just
+    # pulled
+    with _REG_LOCK:
+        return _backend_register(cfg)
+
+
+def _backend_register(cfg):
+    # re-read under the lock — a waiting thread may already have
+    # registered while this one blocked
     st = _load_api_state()
     tok = st.get('backend_token')
     uid = _install_uuid()   # lazily creates the install's stable id
@@ -1046,7 +1097,8 @@ def _backend_token(cfg):
     st['backend_uuid_sent'] = True
     if resp.get('uuid'):
         st['install_uuid'] = resp['uuid']
-    _save_api_state(st)
+    _api_put(st, 'backend_token', 'backend_install_id',
+             'backend_uuid_sent', 'install_uuid')
     return resp['token']
 
 
@@ -1211,7 +1263,7 @@ def _backend_health(kind, ok, n=0, err=None):
     st.setdefault('backend', {})[kind] = {
         't': int(time.time()), 'n': n, 'ok': ok,
         'err': None if ok else err}
-    _save_api_state(st)
+    _api_put(st, 'backend')
 
 
 def backend_upload_books(books_by_scope, drops_by_scope=None,
@@ -1275,7 +1327,7 @@ def backend_upload_books(books_by_scope, drops_by_scope=None,
         acked = st.get('drops_acked') or {}
         acked.update(pending_acks)
         st['drops_acked'] = acked
-    _save_api_state(st)
+    _api_put(st, 'backend_up', 'backend_up_at', 'drops_acked')
 
 
 # ---------- sale delta engine (proposal §4) ----------
@@ -1456,7 +1508,7 @@ def delta_record(books):
     st['lots'] = prev
     st['lotsT'] = prev_t
     st['sales'] = sales
-    _save_api_state(st)
+    _api_put(st, 'lots', 'lotsT', 'sales')
 
 
 def delta_stats(scope):
@@ -1587,7 +1639,7 @@ def cmd_book(sv_arg, out_paths, root=None, feed=None, realm=None):
             added += 1
         if added:
             st['sales'] = sales
-            _save_api_state(st)
+            _api_put(st, 'sales')
             LOG.info('mesh: %d wire events folded into sales', added)
     # push each scope's newest local book upstream — remote-flagged
     # (pulled) entries skip themselves inside
@@ -2553,20 +2605,63 @@ def cmd_watch(appdata, outs, interval=5, settle=20, feed='tsm',
         LOG.info('api feed: realm=%s poll=%dm',
                  _api_realm_names(api_cfg_raw), api_poll_secs / 60)
 
+    # cmd_book runs on a daemon thread — a ~5min merge must not
+    # freeze the poll loop (order ops, board pulls, bug reports all
+    # ride it). One emit at a time; triggers during a run coalesce
+    # into a single catch-up. The thread never writes api_state —
+    # its saves queue into _DEFERRED_API for the loop to merge.
+    emit_state = {'busy': False, 'again': False}
+
     def emit_book(why):
         nonlocal last_emit
+        if emit_state['busy']:
+            emit_state['again'] = True
+            return
+        # an emit is ~5min of merge work — if the file changed since
+        # this process started, restart FIRST instead of spending it
+        # on stale code (the new process re-fires the emit anyway)
         try:
-            t0 = time.time()
-            cmd_book(appdata, outs, root, feedname, realm)
-            LOG.debug('  book emit (%s) done in %.1fs', why,
-                      time.time() - t0)
-            # a successful emit folds current SV state — stamp the
-            # signature so an identical autosave doesn't rebuild it
-            last_sv_sig[0] = sv_signature()
-            last_sv_emit[0] = time.time()
-        except Exception:  # never die on a mid-write file
-            LOG.exception('book emit failed')
+            if os.path.getmtime(os.path.abspath(__file__)) != own_mtime:
+                LOG.info('goblin_brain.py changed on disk — restarting')
+                subprocess.Popen([sys.executable] + sys.argv,
+                                 cwd=os.getcwd())
+                os._exit(0)
+        except OSError:
+            pass
+        emit_state['busy'] = True
         last_emit = time.time()
+
+        def _run():
+            _EMIT_LOCAL.defer = True
+            try:
+                t0 = time.time()
+                cmd_book(appdata, outs, root, feedname, realm)
+                LOG.debug('  book emit (%s) done in %.1fs', why,
+                          time.time() - t0)
+                # a successful emit folds current SV state — stamp the
+                # signature so an identical autosave doesn't rebuild it
+                last_sv_sig[0] = sv_signature()
+                last_sv_emit[0] = time.time()
+            except Exception:  # never die on a mid-write file
+                LOG.exception('book emit failed')
+            finally:
+                emit_state['busy'] = False
+        threading.Thread(target=_run, daemon=True,
+                         name='book-emit').start()
+
+    def drain_deferred():
+        """Apply api_state writes the emit thread queued — the loop
+        stays the single writer, so a mid-merge emit can't clobber
+        order_results/boards. The len-slice keeps entries appended
+        while this runs for the next pass."""
+        if not _DEFERRED_API:
+            return
+        pending = _DEFERRED_API[:]
+        del _DEFERRED_API[:len(pending)]
+        st = _load_api_state()
+        for kv in pending:
+            st.update(kv)
+        _save_api_state(st)
 
     while True:
         try:
@@ -2576,7 +2671,23 @@ def cmd_watch(appdata, outs, interval=5, settle=20, feed='tsm',
             mtime, size = 0, -1
             LOG.debug('stat failed: %s', e)
         now = time.time()
-        ops_dirty = False  # set when process_orders consumed anything
+        drain_deferred()
+        if not emit_state['busy'] and emit_state['again']:
+            emit_state['again'] = False
+            emit_book('queued')
+        # order ops are the latency-critical path — scan every poll,
+        # not just on an observed mtime change, so a queued op never
+        # waits behind an emit trigger or a missed stat. The scan is
+        # a regex over the SV file — milliseconds, cheap to always run.
+        ops_dirty = False
+        if process_orders(appdata, root):
+            ops_dirty = True
+            # ops just hit the server — pull the board this same
+            # pass (the 2-min cadence is for quiet stretches) and let
+            # its emit ignore the 5-min floor, so a /reload right
+            # after shows the row confirmed, not still pending
+            last_boards_poll = 0
+            last_boards_emit = 0
         if mtime != last_mtime:
             LOG.info('AppData touched (mtime=%s size=%s) — settling',
                      time.strftime('%H:%M:%S', time.localtime(mtime))
@@ -2615,15 +2726,9 @@ def cmd_watch(appdata, outs, interval=5, settle=20, feed='tsm',
                     process_backend_reqs(appdata, root)
                     process_api_reqs(appdata, root)
                     process_board_reqs(appdata, root)
-                    if process_orders(appdata, root):
-                        ops_dirty = True
-                        # ops just hit the server — pull the board
-                        # this same pass (the 2-min cadence is for
-                        # quiet stretches) and let its emit ignore
-                        # the 5-min floor, so a /reload right after
-                        # shows the row confirmed, not still pending
-                        last_boards_poll = 0
-                        last_boards_emit = 0
+                    # order ops moved to the every-iteration scan
+                    # above — the SV mtime path is for the heavier
+                    # consumers (bug reports, board reqs, emits)
                     newly = process_bugs(appdata, root)
                     if feed == 'book':
                         # a flush means the session wrote fresh book +
@@ -2728,7 +2833,11 @@ def cmd_watch(appdata, outs, interval=5, settle=20, feed='tsm',
                       time.strftime('%H:%M:%S', time.localtime(last_mtime))
                       if last_mtime else 'none yet')
         try:
-            if os.path.getmtime(os.path.abspath(__file__)) != own_mtime:
+            # busy-guard: os._exit kills the daemon thread mid-merge
+            # — a cut-short emit can leave Data.lua half-written
+            if not emit_state['busy'] and \
+                    os.path.getmtime(
+                        os.path.abspath(__file__)) != own_mtime:
                 LOG.info('goblin_brain.py changed on disk — restarting')
                 subprocess.Popen([sys.executable] + sys.argv,
                                  cwd=os.getcwd())
