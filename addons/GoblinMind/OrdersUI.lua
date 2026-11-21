@@ -86,7 +86,7 @@ local function Build()
 	ui.hint:SetPoint("TOPRIGHT", -12, -32)
 
 	-- ===== POST bar: item strip on top, inputs below =====
-	local post = Panel(f, 10, -48, 700, 76, "POST BUY ORDER")
+	local post = Panel(f, 10, -54, 700, 76, "POST BUY ORDER")
 	ui.post = post
 
 	-- the planner's item-target strip — drop retargets the shared
@@ -168,7 +168,7 @@ local function Build()
 	OU.SetItem(nil)
 
 	-- ===== orders list =====
-	local list = Panel(f, 10, -132, 700, 224, "BOARD")
+	local list = Panel(f, 10, -136, 700, 218, "BOARD")
 	ui.listP = list
 	list:EnableMouseWheel(true)
 	list:SetScript("OnMouseWheel", function(_, d)
@@ -347,19 +347,22 @@ function OU.Refresh()
 	end
 	for i, b in ipairs(ui.boardBtns) do b:Hide() end
 	ui.boardBtns = {}
-	local label = "boards:"
+	ui.boardBar:SetText("boards:")
+	local bx = 62
 	for i, b in ipairs(boards) do
-		label = label .. "  " .. (b == ui.board and
-			("|cffe1ba00%s|r"):format(b) or b)
-		local btn = MkBtn(ui.frame, b, 8 + #b * 7)
-		btn:SetPoint("TOPLEFT", 70 + (i - 1) * 70, -28)
+		local w = 10 + #b * 8
+		local btn = MkBtn(ui.frame, b, w)
+		btn:SetPoint("TOPLEFT", bx, -27)
+		bx = bx + w + 6
+		if b ~= ui.board then
+			btn.text:SetTextColor(GM.RGB("textDim"))
+		end
 		local bn = b
 		btn:SetScript("OnClick", function()
 			ui.board = bn; ui.scroll = 0; OU.Refresh()
 		end)
 		ui.boardBtns[i] = btn
 	end
-	ui.boardBar:SetText(label)
 
 	-- hint: reserve state + refresh semantics
 	local res = OR.ReserveTotal()
