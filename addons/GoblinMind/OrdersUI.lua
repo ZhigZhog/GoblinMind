@@ -84,15 +84,7 @@ local function Build()
 	ui.refreshBtn = MkBtn(f, "REFRESH", 66, 15)
 	ui.refreshBtn:SetPoint("TOPRIGHT", -12, -30)
 	ui.refreshBtn:SetScript("OnClick", function()
-		local peer, why = OR.RelayAsk(ui.board, true)
-		if peer then
-			ui.hint:SetText(GM.CC("good")
-				.. ("asked %s — snapshot inbound|r"):format(peer))
-		elseif why == "cooldown" then
-			ui.hint:SetText("asked just now — waiting on peer")
-		else
-			ui.hint:SetText("no peer serves this board — pull at /reload")
-		end
+		ui.hint:SetText(OR.RefreshBoard(ui.board))
 	end)
 
 	-- hint line: flush cadence + reserve warning (right of REFRESH)

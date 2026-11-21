@@ -1130,14 +1130,22 @@ function OR.RelayAsk(board, force)
 		return nil, "cooldown"
 	end
 	OR.relay.asked[board] = now
-	local peer = OR.RelayServing(board)
-	if not peer or not (GM.Mesh and GM.Mesh.Whisper) then
-		return nil
-	end
 	OR.relay.gen = (OR.relay.gen or 0) + 1
 	OR.RBoard(board).askGen = OR.relay.gen
-	GM.Mesh.Whisper(peer, "Q", board .. ";" .. OR.relay.gen)
-	return peer
+	if GM.Mesh and GM.Mesh.Send then
+		-- the distributed ask, one broadcast and done: every server
+		-- holding a matching snapshot streams it back on-channel,
+		-- first responder's stream wins. Tag picks the swarm —
+		-- local boards want same-tracker servers, remote boards
+		-- want anyone NOT on our tracker ("!" = negative match)
+		local ourTag = OR.TrackerTag()
+		local tag = OR.IsRemote(board)
+			and (ourTag and ("!" .. ourTag) or "-")
+			or (ourTag or "-")
+		GM.Mesh.Send("Q", { board .. ";" .. OR.relay.gen
+			.. ";" .. tag })
+	end
+	return true
 end
 
 -- T beacon: peer advertises the boards it can serve — build the
@@ -1189,31 +1197,55 @@ function OR.RelayStage(sender, f)
 end
 
 -- answer a Q pull: stream our pulled board as W/w rows ended by Z
-function OR.RelayServe(sender, board, gen)
+function OR.RelayServe(sender, board, gen, tag)
 	if not (sender and board and gen) then return end
-	if not (GM.Mesh and GM.Mesh.Whisper) then return end
+	if not (GM.Mesh and GM.Mesh.Send) then return end
+	-- swarm selection: a positive tag only answers when we sit on
+	-- the asker's tracker; "!tag" means serve only when we DON'T
+	-- (a remote-board ask must not pull our same-named local board)
+	if tag and tag ~= "-" then
+		if tag:sub(1, 1) == "!" then
+			if OR.TrackerTag() == tag:sub(2) then return end
+		elseif OR.TrackerTag() ~= tag then return end
+	end
+	-- one stream per board per 10s covers every same-swarm asker —
+	-- listeners ingest opportunistically, so per-asker throttling
+	-- would just multiply identical streams onto the channel
+	local now = time()
+	OR.relay.served = OR.relay.served or {}
+	if now - (OR.relay.served[board] or 0) < 10 then return end
+	OR.relay.served[board] = now
 	local b = GoblinMindDB and GoblinMindDB.boards
 		and GoblinMindDB.boards[board]
 	if not b or not b.orders then return end  -- can't serve it
+	-- S announces the stream + our tracker tag so listeners can
+	-- verify the swarm before ingesting opportunistically. Rows
+	-- batch per kind — Broadcast comma-joins them into as few
+	-- channel messages as MAX_MSG allows
+	GM.Mesh.Send("S", { board .. ";" .. gen .. ";"
+		.. (OR.TrackerTag() or "-") })
+	local ws, cs = {}, {}
 	for _, o in ipairs(b.orders) do
-		GM.Mesh.Whisper(sender, "W", table.concat({
+		ws[#ws + 1] = table.concat({
 			board, gen, o.id, o.itemID, o.qtyTotal or 0,
 			o.qtyFilled or 0, o.remaining or 0,
 			o.pricePerUnit or 0, o.claimTTL or 0,
 			o.poster or "-", o.posterUUID or "-",
 			math.floor(o.expires or 0), o.state or "open",
-			o.backed and 1 or 0, statCSV(o.posterStats) }, ";"))
+			o.backed and 1 or 0, statCSV(o.posterStats) }, ";")
 		for _, c in ipairs(o.commits or {}) do
-			GM.Mesh.Whisper(sender, "w", table.concat({
+			cs[#cs + 1] = table.concat({
 				board, gen, o.id, c.id, c.units or 0,
 				c.unitsFilled or 0, c.crafter or "-",
 				c.crafterUUID or "-",
 				math.floor(c.expires or 0),
 				c.state or "active", c.accepted and 1 or 0,
-				statCSV(c.crafterStats) }, ";"))
+				statCSV(c.crafterStats) }, ";")
 		end
 	end
-	GM.Mesh.Whisper(sender, "Z", board .. ";" .. gen)
+	GM.Mesh.Send("W", ws)
+	GM.Mesh.Send("w", cs)
+	GM.Mesh.Send("Z", { board .. ";" .. gen })
 end
 
 -- our watcher surfaced relay results in the emit — whisper them
@@ -1240,13 +1272,47 @@ end
 
 -- ============ tunneled side (snapshot ingest) ============
 
-function OR.RelayIngest(kind, f)
+-- S announces a stream on the channel: board;gen;serverTag. This is
+-- the admission gate — rows are only ingested for a (gen,sender)
+-- pair an S pinned, never by gen alone. A local board demands a
+-- tag match (our swarm only — a foreign same-named stream would
+-- poison the view); a remote board admits the first S answering
+-- our ask's gen.
+function OR.StreamStart(body, sender)
+	if not sender or sender:match("^[^-]+") == UnitName("player") then
+		return
+	end
+	local b, gen, tag = (body or ""):match("^([^;]+);(%d+);?(.*)$")
+	if not b then return end
+	local local_ = GoblinMindDB and GoblinMindDB.boards
+		and GoblinMindDB.boards[b]
+	if local_ then
+		if tag ~= OR.TrackerTag() then return end
+		local rb = OR.RBoard(b)
+		rb.srcGen, rb.srcPeer, rb.srcT =
+			tonumber(gen), sender, time()
+	else
+		local rb, g = OR.RBoard(b), tonumber(gen)
+		if g == rb.askGen and
+				(not rb.srcPeer or time() - (rb.srcT or 0) > 30) then
+			rb.srcGen, rb.srcPeer, rb.srcT = g, sender, time()
+		end
+	end
+end
+
+function OR.RelayIngest(kind, f, sender)
 	local rb = OR.RBoard(f[1])
 	local gen = tonumber(f[2])
-	if not gen or gen < (rb.askGen or 0) then return end -- stale
+	-- admitted only by an S pin for this (gen,sender) — gen alone
+	-- proves nothing on a broadcast medium
+	if not gen or gen ~= rb.srcGen or sender ~= rb.srcPeer then
+		return
+	end
 	if kind == "Z" then
-		-- stream end: rows not stamped this gen are gone
+		-- stream end: rows not stamped this gen are gone; release
+		-- the pin so the next stream (any asker, any server) can bind
 		rb.t = time()
+		rb.srcPeer = nil
 		for i = #rb.orders, 1, -1 do
 			if rb.orders[i]._gen ~= gen then
 				table.remove(rb.orders, i)
@@ -1309,6 +1375,18 @@ function OR.RelayIngest(kind, f)
 	end
 end
 
+-- channel-broadcast board query ("who serves this board?") — the
+-- distributed refresh: any peer holding a tag-matched snapshot
+-- answers by streaming it back over whisper
+function OR.MeshQuery(body, sender)
+	if not sender or sender:match("^[^-]+") == UnitName("player") then
+		return
+	end
+	local b, gen, tag = (body or ""):match("^([^;]+);(%d+);?(.*)$")
+	if not b then return end
+	OR.RelayServe(sender, b, tonumber(gen), tag ~= "" and tag or nil)
+end
+
 -- single entry point for whisper-delivered records
 function OR.MeshWhisper(kind, body, sender)
 	local f = {}
@@ -1316,9 +1394,9 @@ function OR.MeshWhisper(kind, body, sender)
 	if kind == "R" then
 		OR.RelayStage(sender, f)
 	elseif kind == "Q" then
-		OR.RelayServe(sender, f[1], tonumber(f[2]))
+		OR.RelayServe(sender, f[1], tonumber(f[2]), f[3])
 	elseif kind == "W" or kind == "w" or kind == "Z" then
-		OR.RelayIngest(kind, f)
+		OR.RelayIngest(kind, f, sender)
 	elseif kind == "Y" then
 		OR.RelayCredsSet(f[1], tonumber(f[2]), f[3], f[4])
 	elseif kind == "X" then
@@ -1346,11 +1424,61 @@ local _relayTick = false
 function OR.RelayStart()
 	if _relayTick or not (GM.After and GM.db) then return end
 	_relayTick = true
+	-- solo REFRESH, reload #2: the staged 'br-' request flushed on
+	-- the first reload; the watcher pulls + patch-emits inside its
+	-- 5s poll, so a reload ~20s out lands on the fresh boards.
+	-- refPend.fired marks the second reload done — clear and stop.
+	local rp = GM.db.refPend
+	if rp then
+		if rp.fired or time() - (rp.t or 0) > 120 then
+			GM.db.refPend = nil
+		else
+			rp.fired = true
+			GM.After(20, ReloadUI)
+		end
+	end
 	local function loop()
 		OR.RelayScanResults()
 		GM.After(15, loop)
 	end
 	GM.After(15, loop)
+end
+
+-- unified REFRESH entry — first the distributed ask (broadcast Q,
+-- peers stream their newest pull live), then the solo fallback:
+-- no stream in ~8s on a local board means no peer can help, so
+-- stage a pull request for our own watcher and let it reload.
+function OR.RefreshBoard(board)
+	if not board then return "no board selected" end
+	local t0 = (OR.Board(board) or {}).t or 0
+	local asked = OR.RelayAsk(board, true)
+	if not OR.IsRemote(board) then
+		GM.After(8, function()
+			local b = OR.Board(board)
+			if b and (b.t or 0) > t0 then return end -- a peer answered
+			OR.RefreshLocal()
+		end)
+		return asked and "asking channel — solo pull if quiet"
+			or "asked just now — waiting"
+	end
+	return asked and ("asking channel for " .. board)
+		or "asked just now — waiting"
+end
+
+-- the only path to OUR server: stage a 'br-' pull request, reload
+-- to flush it into the SV file, watcher pulls + patch-emits, a
+-- second reload (scheduled post-login) reads it. No whisper can
+-- reach the tracker — the file boundary is the channel.
+function OR.RefreshLocal()
+	GM.db.boardReqs = GM.db.boardReqs or {}
+	local rid = ("br-%d-%d"):format(time(), math.random(999))
+	GM.db.boardReqs[#GM.db.boardReqs + 1] =
+		rid .. "|" .. hexenc("pull")
+	if #GM.db.boardReqs > 10 then
+		table.remove(GM.db.boardReqs, 1)
+	end
+	GM.db.refPend = { t = time(), rid = rid }
+	ReloadUI()
 end
 
 -- ============ ledger reserve (advisory — addons can't custody gold) ============

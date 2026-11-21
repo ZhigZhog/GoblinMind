@@ -2392,6 +2392,10 @@ ORDER_RE = re.compile(r'"(ord-[^"|]+)\|([0-9a-fA-F]+)"')
 # board join/leave stages 'bo-<ts>-<n>|<hex(name\non)>' — consumed
 # in ts order, edits feeds.json's backend.boards list
 BOARD_REQ_RE = re.compile(r'"(bo-(\d+)-[^"|]+)\|([0-9a-fA-F]+)"')
+# REFRESH-with-no-peers stages 'br-<ts>-<n>|<hex>' — a pull request:
+# forces a boards pull + patch emit this pass so the auto-reload
+# the addon just did lands on fresh data
+BOARD_REFRESH_RE = re.compile(r'"(br-[^"|]+)\|([0-9a-fA-F]+)"')
 
 
 def _ord_route(body):
@@ -2657,6 +2661,37 @@ def process_board_reqs(appdata, root=None):
     if feeds is not None:
         save_feeds(feeds)
         _save_api_state(st)
+
+
+def process_board_refresh(appdata, root=None):
+    """Consume staged 'br-' refresh requests — the addon's solo
+    REFRESH path (no mesh peer answered a broadcast Q). A new rid
+    means a ReloadUI already flushed the request to disk and a
+    second one is ~20s out; the caller forces a boards pull + patch
+    emit this same pass so that reload sees fresh board data."""
+    st = _load_api_state()
+    seen = st.setdefault('board_refresh', {})
+    new = []
+    for sv in sv_paths(appdata, root):
+        try:
+            with open(sv, encoding='utf-8', errors='replace') as fh:
+                text = fh.read()
+        except OSError:
+            continue
+        for rid, _ in BOARD_REFRESH_RE.findall(text):
+            if rid not in seen:
+                new.append(rid)
+    if not new:
+        return False
+    for rid in new:
+        seen[rid] = int(time.time())
+        LOG.info('board refresh requested: %s — pulling now', rid)
+    # cap the dedup map — requests are one-shots, don't let it grow
+    if len(seen) > 200:
+        for rid in sorted(seen, key=seen.get)[:-100]:
+            del seen[rid]
+    _save_api_state(st)
+    return True
 
 
 def _order_results_emit():
@@ -2956,6 +2991,13 @@ def cmd_watch(appdata, outs, interval=5, settle=20, feed='tsm',
         if process_relay(appdata, root):
             # relayed envelopes hit the server too — same fast
             # confirm path; the requester's next snapshot shows it
+            ops_dirty = True
+            last_boards_poll = 0
+            last_boards_emit = 0
+        if process_board_refresh(appdata, root):
+            # a solo REFRESH staged a pull request — the addon is
+            # already reloaded and counting down to a second one;
+            # pull + emit this pass so it lands on fresh data
             ops_dirty = True
             last_boards_poll = 0
             last_boards_emit = 0

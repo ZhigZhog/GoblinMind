@@ -309,6 +309,29 @@ local function OnAddon(_, prefix, msg, ctype, sender)
 		-- out the beacon cycle. Throttled so a login burst can't
 		-- turn the channel into a beacon storm
 		if GetTime() - (M._advT or 0) > 10 then M.Advertise() end
+	elseif kind == "Q" then
+		-- distributed board query — "who serves a fresh pull of
+		-- this board?" Servers answer by streaming their snapshot
+		-- back on-channel; Orders.lua owns the tag/serve rules
+		if GM.Orders and GM.Orders.MeshQuery then
+			GM.Orders.MeshQuery(body, sender)
+		end
+	elseif kind == "S" then
+		-- stream announcement — binds (board,gen) to a sender +
+		-- tracker tag; ingest only admits pinned streams
+		if GM.Orders and GM.Orders.StreamStart then
+			GM.Orders.StreamStart(body, sender)
+		end
+	elseif kind == "W" or kind == "w" or kind == "Z" then
+		-- snapshot stream rows — records batch comma-joined in one
+		-- message; ingest only admits streams its S pinned
+		for rec in (body or ""):gmatch("[^,]+") do
+			local f = {}
+			for s in rec:gmatch("[^;]*") do f[#f + 1] = s end
+			if GM.Orders and GM.Orders.RelayIngest then
+				GM.Orders.RelayIngest(kind, f, sender)
+			end
+		end
 	elseif kind == "O" then
 		-- writ events are volatile overlays — Orders.lua owns the
 		-- grammar and the confirmation/drop rules; mesh just relays
