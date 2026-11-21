@@ -2304,6 +2304,7 @@ def process_orders(appdata, root=None):
         while len(done) > 128:
             done.pop(keys.pop(0), None)
         _save_api_state(st)
+    return dirty
 
 
 def process_board_reqs(appdata, root=None):
@@ -2575,6 +2576,7 @@ def cmd_watch(appdata, outs, interval=5, settle=20, feed='tsm',
             mtime, size = 0, -1
             LOG.debug('stat failed: %s', e)
         now = time.time()
+        ops_dirty = False  # set when process_orders consumed anything
         if mtime != last_mtime:
             LOG.info('AppData touched (mtime=%s size=%s) — settling',
                      time.strftime('%H:%M:%S', time.localtime(mtime))
@@ -2613,7 +2615,15 @@ def cmd_watch(appdata, outs, interval=5, settle=20, feed='tsm',
                     process_backend_reqs(appdata, root)
                     process_api_reqs(appdata, root)
                     process_board_reqs(appdata, root)
-                    process_orders(appdata, root)
+                    if process_orders(appdata, root):
+                        ops_dirty = True
+                        # ops just hit the server — pull the board
+                        # this same pass (the 2-min cadence is for
+                        # quiet stretches) and let its emit ignore
+                        # the 5-min floor, so a /reload right after
+                        # shows the row confirmed, not still pending
+                        last_boards_poll = 0
+                        last_boards_emit = 0
                     newly = process_bugs(appdata, root)
                     if feed == 'book':
                         # a flush means the session wrote fresh book +
@@ -2695,10 +2705,14 @@ def cmd_watch(appdata, outs, interval=5, settle=20, feed='tsm',
                     # in api_state until the next cadence emit. Floor
                     # keeps a busy board from thrashing the 5-min
                     # book merge; unchanged pulls cost nothing.
-                    if _boards_snapshot() != before and \
+                    # ops_dirty flushes result acks even when the
+                    # board didn't move (a rejected op is still news)
+                    changed = _boards_snapshot() != before
+                    if (changed or ops_dirty) and \
                             now - last_boards_emit >= 300:
                         last_boards_emit = now
-                        emit_book('boards changed')
+                        emit_book('boards changed' if changed
+                                  else 'order results')
                 except Exception:
                     LOG.exception('boards pull failed')
         # cadence floor: book mode re-merges at least once an hour —
