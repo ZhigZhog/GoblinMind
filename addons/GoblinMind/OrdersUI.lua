@@ -371,7 +371,8 @@ function OU.Post()
 end
 
 local function OrderRow(r, o, me)
-	local pend = o._live    -- overlay-only: unconfirmed by a pull yet
+	-- overlay-only ops carry their verb — pending post/cancel/claim/...
+	local pend = o._pendOp
 	local icon = GM.ItemIcon(o.itemID)
 	if icon then
 		r.icon:SetTexture(icon)
@@ -392,13 +393,15 @@ local function OrderRow(r, o, me)
 	if o.posterUUID == me then tag = tag .. " |cff5fd35f(you)|r" end
 	r.poster:SetText(tag)
 	local flags = {}
-	if pend then flags[#flags + 1] = "pending" end
+	if pend then flags[#flags + 1] = "pending " .. pend end
 	if not o.backed then flags[#flags + 1] = "underfunded" end
 	if o.posterStats and (o.posterStats.fills_rejected or 0) > 0 then
 		flags[#flags + 1] = "rej:" .. o.posterStats.fills_rejected
 	end
 	r.status:SetText(table.concat(flags, " "))
-	r.claim:Show()
+	-- a cancel in flight leaves nothing to act on — re-clicking CANCEL
+	-- would stage a second op, CLAIM-ing it is meaningless
+	r.claim:SetShown(pend ~= "cancel")
 	r.claim:SetScript("OnClick", function()
 		if o.posterUUID == me then
 			-- pending posts cancel whole — the op rides the queue
@@ -564,11 +567,14 @@ function OU.Refresh()
 		if mc then
 			local c, o = mc.commit, mc.order
 			local left = (c.expires or 0) - time()
-			r.txt:SetText(string.format("%s x%d -> %s | %s (%s)",
+			local cpend = c._pendOp or (c._live and "claim")
+			r.txt:SetText(string.format("%s x%d -> %s | %s (%s)%s",
 				GM.ItemNameOr(o.itemID), c.units or 0, o.poster or "?",
 				GoldText((c.unitPrice or 0) * (c.units or 0)),
 				left > 0 and string.format("%dh left",
-					math.ceil(left / 3600)) or "expired"))
+					math.ceil(left / 3600)) or "expired",
+				cpend and (" — pending " .. cpend) or ""))
+			r.txt:SetTextColor(GM.RGB(cpend and "textDim" or "text"))
 			r.send:SetScript("OnClick", function()
 				if GM.MailUI and GM.MailUI.PrepareWrit then
 					GM.MailUI.PrepareWrit(o.poster, o.itemID,

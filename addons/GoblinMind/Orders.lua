@@ -122,7 +122,7 @@ function OR.LiveEvent(board, ev)
 	end
 end
 
-local function evConfirmed(ev, byId)
+local function evConfirmed(ev, byId, liveIds)
 	local o = ev.oid and byId[ev.oid]
 	if ev.v == "post" then
 		return ev.realID and byId[ev.realID] ~= nil
@@ -135,10 +135,17 @@ local function evConfirmed(ev, byId)
 	elseif ev.v == "fill" then
 		return o and (o.qtyFilled or 0) >= (ev.newFilled or 0)
 	elseif ev.v == "cancel" then
+		-- `not o` = order absent from the pull. But when the cancel
+		-- targets an overlay-only order (pending post), absence just
+		-- means the post hasn't been pulled yet — NOT that the cancel
+		-- landed. Only treat missing as confirmed when no live post
+		-- ev could still create it.
+		local absent = not o and not (liveIds and liveIds[ev.oid])
 		if (ev.units or 0) == 0 then
-			return not o or o.state ~= "open"
+			return absent or (o and o.state ~= "open") or false
 		end
-		return not o or (o.qtyTotal or 0) <= (ev.newTotal or 0)
+		return absent or (o and (o.qtyTotal or 0)
+			<= (ev.newTotal or 0)) or false
 	elseif ev.v == "reject" or ev.v == "release" then
 		if not o then return false end
 		for _, c in ipairs(o.commits or {}) do
@@ -149,7 +156,7 @@ local function evConfirmed(ev, byId)
 	return false
 end
 
-local function evDrop(ev, byId, res, pullT)
+local function evDrop(ev, byId, res, pullT, liveIds)
 	if ev.rid then
 		local r = res[ev.rid]
 		if r and not r.ok then return true end  -- my op failed outright
@@ -157,11 +164,11 @@ local function evDrop(ev, byId, res, pullT)
 		-- the server already moved past it (cancelled post, expired
 		-- commit) — no reason to phantom it until TTL
 		if r and r.ok and (pullT or 0) > (r.t or 0)
-				and not evConfirmed(ev, byId) then
+				and not evConfirmed(ev, byId, liveIds) then
 			return true
 		end
 	end
-	if evConfirmed(ev, byId) then return true end
+	if evConfirmed(ev, byId, liveIds) then return true end
 	return (ev.t or 0) < time() - LIVE_TTL
 end
 
@@ -193,7 +200,8 @@ local function applyEv(ev, view, byId)
 				claimTTL = ev.ttl, poster = ev.poster,
 				posterUUID = ev.posterUUID, backed = true,
 				created = ev.t, expires = ev.t + 7 * 86400,
-				state = "open", _live = true, commits = {},
+				state = "open", _live = true, _pendOp = "post",
+				commits = {},
 			}
 			byId[o.id] = o
 			view[#view + 1] = o
@@ -203,12 +211,13 @@ local function applyEv(ev, view, byId)
 		if o and o.state == "open" then
 			o.remaining = math.max(0,
 				(o.remaining or 0) - (ev.units or 0))
+			o._pendOp = "claim"
 			o.commits = o.commits or {}
 			o.commits[#o.commits + 1] = {
 				id = ev.cid, units = ev.units, unitsFilled = 0,
 				crafter = ev.crafter, crafterUUID = ev.crafterUUID,
 				expires = ev.t + (o.claimTTL or 86400),
-				state = "active", _live = true,
+				state = "active", _live = true, _pendOp = "claim",
 			}
 		end
 	elseif ev.v == "fill" then
@@ -233,6 +242,7 @@ local function applyEv(ev, view, byId)
 			end
 			ev.newFilled = (o.qtyFilled or 0) + (ev.units or 0)
 			o.qtyFilled = ev.newFilled
+			o._pendOp = "fill"
 			if not seen then
 				o.remaining = math.max(0,
 					(o.remaining or 0) - (ev.units or 0))
@@ -244,13 +254,11 @@ local function applyEv(ev, view, byId)
 	elseif ev.v == "cancel" then
 		local o = byId[ev.oid]
 		if o then
-			if (ev.units or 0) == 0 then
-				o.state = "cancelled"
-				for i, x in ipairs(view) do
-					if x == o then table.remove(view, i) break end
-				end
-				byId[ev.oid] = nil
-			else
+			-- pending cancel keeps the row (grayed + flagged) until a
+			-- pull confirms — a failed cancel op drops the ev and the
+			-- order snaps back, never having visibly left
+			o._pendOp = "cancel"
+			if (ev.units or 0) > 0 then
 				ev.newTotal = math.max((o.qtyFilled or 0),
 					(o.qtyTotal or 0) - ev.units)
 				o.qtyTotal = ev.newTotal
@@ -261,9 +269,11 @@ local function applyEv(ev, view, byId)
 	elseif ev.v == "reject" or ev.v == "release" then
 		local o = byId[ev.oid]
 		if o then
+			o._pendOp = ev.v
 			for _, c in ipairs(o.commits or {}) do
 				if c.id == ev.cid and c.state == "active" then
 					c.state = ev.v == "reject" and "rejected" or "released"
+					c._pendOp = ev.v
 					o.remaining = (o.remaining or 0)
 						+ ((c.units or 0) - (c.unitsFilled or 0))
 				end
@@ -348,11 +358,20 @@ function OR.Orders(name)
 	if L then
 		local res = OR.Results()
 		local pullT = b and b.t or 0
+		-- ids the overlay itself can still create — a cancel ev must
+		-- not read "absent from pull" as confirmed when its target is
+		-- a pending post
+		local liveIds = {}
+		for _, ev in ipairs(L) do
+			if ev.v == "post" and ev.realID then
+				liveIds[ev.realID] = true
+			end
+		end
 		-- drop pass goes tail-first (safe removal mid-iteration);
 		-- apply pass goes head-first so chains land in order —
 		-- a cancel/claim must see the post that created the row
 		for i = #L, 1, -1 do
-			if evDrop(L[i], byId, res, pullT) then
+			if evDrop(L[i], byId, res, pullT, liveIds) then
 				table.remove(L, i)
 			end
 		end
