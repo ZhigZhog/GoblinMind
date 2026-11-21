@@ -247,8 +247,15 @@ end
 
 local function OnAddon(_, prefix, msg, ctype, sender)
 	if prefix ~= PREFIX then return end
-	if not me then me = UnitName("player") end
-	if sender and sender:match("^[^-]+") == me then return end -- own echo
+	-- UnitName is "Unknown Entity" before PLAYER_LOGIN — never cache
+	-- that, or the echo filter stays broken for the whole session
+	if not me then
+		local n = UnitName("player")
+		if n and n ~= "Unknown Entity" then me = n end
+	end
+	if me and sender and sender:match("^[^-]+") == me then
+		return -- own echo
+	end
 	if not GM.db then return end
 	local proto, kind, scope, body = msg:match(
 		"^(%d+)|([%a]+)|([^|]*)|?(.*)$")

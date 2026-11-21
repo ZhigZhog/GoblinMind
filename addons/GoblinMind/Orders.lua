@@ -1144,6 +1144,10 @@ end
 -- peer map and flush any envelopes pended behind discovery
 function OR.RelayPeer(body, sender)
 	if not sender or sender == "" then return end
+	-- never register ourselves: Mesh's echo filter can miss when it
+	-- captured "Unknown Entity" pre-login, and a self-whispered Q is
+	-- dropped by the client (REFRESH would dead-end asking ourselves)
+	if sender:match("^[^-]+") == UnitName("player") then return end
 	for entry in (body or ""):gmatch("[^,]+") do
 		-- "board[:tag]" — tag is the serving peer's tracker hash;
 		-- absent = legacy beacon (only trusted for remote boards)
