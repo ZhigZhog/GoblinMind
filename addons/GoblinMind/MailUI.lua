@@ -217,28 +217,18 @@ end
 local function Build()
 	if ui then return end
 	ui = { page = "inbox", scroll = 0 }
-	local f = CreateFrame("Frame", "GoblinMindMail", UIParent)
-	f:SetSize(560, 480)
-	f:SetPoint("CENTER", -80, -20)
-	f:SetFrameStrata("HIGH")
-	f:SetToplevel(true)
-	f:SetMovable(true)
-	f:EnableMouse(true)
-	f:RegisterForDrag("LeftButton")
-	f:SetScript("OnDragStart", f.StartMoving)
-	f:SetScript("OnDragStop", f.StopMovingOrSizing)
-	f:SetClampedToScreen(true)
-	f:Hide()
-	GM.Panel(f, "contLow", "outlineVar")
-	tinsert(UISpecialFrames, "GoblinMindMail")
-	ui.frame = f
-
 	-- close means close: restore the native frame quietly and end the
-	-- mail session — unless the user asked for the Blizzard frame
-	f:SetScript("OnHide", function()
-		GM.FramePark.Restore(MailFrame)
-		if not ui.wantDefault and CloseMail then pcall(CloseMail) end
-	end)
+	-- mail session — unless the user asked for the Blizzard frame.
+	-- Contextual takeover (mail session only) — no dashboard tabs.
+	local f = GM.Widgets.Window({
+		name = "GoblinMindMail", title = "MAIL",
+		w = 560, h = 480, x = -80, y = -20,
+		onHide = function()
+			GM.FramePark.Restore(MailFrame)
+			if not ui.wantDefault and CloseMail then pcall(CloseMail) end
+		end,
+	})
+	ui.frame = f
 	-- inbox/bag changes → repaint (debounced)
 	pcall(f.RegisterEvent, f, "MAIL_INBOX_UPDATE")
 	pcall(f.RegisterEvent, f, "MAIL_SEND_INFO_UPDATE")
@@ -253,19 +243,6 @@ local function Build()
 			MU.Refresh()
 		end)
 	end)
-
-	local title = GM.MakeFontString(f, GM.FONT_BOLD, 13, "accent")
-	title:SetPoint("TOPLEFT", 12, -10)
-	title:SetText("MAIL")
-	-- contextual takeover (mail session only) — no dashboard tab strip
-
-	local close = CreateFrame("Button", nil, f)
-	close:SetSize(16, 16)
-	close:SetPoint("TOPRIGHT", -6, -6)
-	close.text = GM.MakeFontString(close, GM.FONT_BOLD, 12, "textDim")
-	close.text:SetPoint("CENTER")
-	close.text:SetText("x")
-	close:SetScript("OnClick", function() f:Hide() end)
 
 	-- toolbar: page toggles + actions — PageTabs strides 62px per tab,
 	-- so host width and the button offset both follow the defs count

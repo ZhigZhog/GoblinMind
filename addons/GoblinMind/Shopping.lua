@@ -126,35 +126,11 @@ end
 local function Build()
 	if ui then return end
 	ui = {}
-	local f = CreateFrame("Frame", "GoblinMindMarketUI", UIParent)
-	f:SetSize(680, 436)
-	f:SetPoint("CENTER", 100, 0)
-	f:SetMovable(true)
-	f:EnableMouse(true)
-	f:RegisterForDrag("LeftButton")
-	f:SetScript("OnDragStart", f.StartMoving)
-	f:SetScript("OnDragStop", f.StopMovingOrSizing)
-	f:SetFrameStrata("HIGH")
-	f:SetToplevel(true)
-	f:SetScript("OnMouseDown", function(fr)
-		if fr.Raise then fr:Raise() elseif RaiseFrame then RaiseFrame(fr) end
-	end)
-	GM.Panel(f, "contLow", "outlineVar")
-	tinsert(UISpecialFrames, "GoblinMindMarketUI")
-	f:Hide()
+	local f, title = GM.Widgets.Window({
+		name = "GoblinMindMarketUI", title = "GOBLINMIND MARKET",
+		w = 680, h = 436, x = 100, tab = "market",
+	})
 	ui.frame = f
-
-	local title = GM.MakeFontString(f, GM.FONT_BOLD, 13, "accent")
-	title:SetPoint("TOPLEFT", 14, -10)
-	title:SetText("GOBLINMIND MARKET")
-
-	local close = CreateFrame("Button", nil, f)
-	close:SetSize(18, 18)
-	close:SetPoint("TOPRIGHT", -8, -8)
-	close.text = GM.MakeFontString(close, GM.FONT_BOLD, 12, "textDim")
-	close.text:SetAllPoints()
-	close.text:SetText("×")
-	close:SetScript("OnClick", function() f:Hide() end)
 
 	-- mode + action buttons ride the title row
 	local function TitleBtn(label, w, onclick)
@@ -177,9 +153,6 @@ local function Build()
 	ui.snipeBtn:SetPoint("LEFT", ui.shopBtn, "RIGHT", 6, 0)
 	ui.craftBtn = TitleBtn("CRAFT", 52, function() S.SetMode("craft") end)
 	ui.craftBtn:SetPoint("LEFT", ui.snipeBtn, "RIGHT", 6, 0)
-	if GM.Dashboard and GM.Dashboard.AddTabs then
-		GM.Dashboard.AddTabs(f, title, "market")
-	end
 	-- primary action lives at the bottom-right — the title row is
 	-- title + mode buttons + module tabs, no room for it up there
 	ui.action = TitleBtn("SCAN", 80, function() S.Action() end)

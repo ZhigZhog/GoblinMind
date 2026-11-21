@@ -139,29 +139,12 @@ end
 local function Build()
 	if ui then return end
 	ui = {}
-	local f = CreateFrame("Frame", "GoblinMindTaskList", UIParent)
-	f:SetSize(320, 160)
-	f:SetPoint("CENTER", -260, 0)
-	f:SetFrameStrata("HIGH")
-	f:SetToplevel(true)
-	f:SetMovable(true)
-	f:EnableMouse(true)
-	f:RegisterForDrag("LeftButton")
-	f:SetScript("OnDragStart", f.StartMoving)
-	f:SetScript("OnDragStop", f.StopMovingOrSizing)
-	f:SetClampedToScreen(true)
-	f:Hide()
-	GM.Panel(f, "contLow", "outlineVar")
-	tinsert(UISpecialFrames, "GoblinMindTaskList")
+	local f = GM.Widgets.Window({
+		name = "GoblinMindTaskList", title = "TASKS",
+		w = 320, h = 160, x = -260,
+	})
 	ui.frame = f
-
-	local hdr = GM.MakeFontString(f, GM.FONT, 14, "accent")
-	hdr:SetPoint("TOPLEFT", 10, -8)
-	hdr:SetText("TASKS")
-
-	local x = Btn(f, 18, "x", function() f:Hide() end)
-	x:SetPoint("TOPRIGHT", -8, -8)
-	Tip(x, "close")
+	Tip(f.closeBtn, "close")
 
 	ui.rows = {}
 	ui.body = f

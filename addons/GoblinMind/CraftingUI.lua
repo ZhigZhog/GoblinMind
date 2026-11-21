@@ -138,19 +138,11 @@ end
 local function BuildUI()
 	if ui then return end
 	ui = {}
-	local f = CreateFrame("Frame", "GoblinMindCrafts", UIParent)
-	f:SetSize(WIN_W, WIN_H)
-	f:SetPoint("CENTER")
-	f:SetFrameStrata("HIGH")
-	f:SetToplevel(true)
-	f:SetMovable(true)
-	f:EnableMouse(true)
-	f:RegisterForDrag("LeftButton")
-	f:SetScript("OnDragStart", f.StartMoving)
-	f:SetScript("OnDragStop", f.StopMovingOrSizing)
-	f:Hide()
-	tinsert(UISpecialFrames, "GoblinMindCrafts")
-	GM.Panel(f, "contLow", "outlineVar")
+	local f = GM.Widgets.Window({
+		name = "GoblinMindCrafts", title = "CRAFTING",
+		w = WIN_W, h = WIN_H, tab = "crafting",
+		onClose = function() ui.closing = true end,
+	})
 	ui.frame = f
 	-- craftable counts move with the bags — debounced repaint
 	pcall(f.RegisterEvent, f, "BAG_UPDATE")
@@ -176,22 +168,6 @@ local function BuildUI()
 			pcall(C_TradeSkillUI.CloseTradeSkill)
 		end
 		ui.closing = nil
-	end)
-
-	local title = GM.MakeFontString(f, GM.FONT_BOLD, 12, "accent")
-	title:SetPoint("TOPLEFT", 12, -10)
-	title:SetText("CRAFTING")
-	GM.Dashboard.AddTabs(f, title, "crafting")
-
-	local close = CreateFrame("Button", nil, f)
-	close:SetSize(16, 16)
-	close:SetPoint("TOPRIGHT", -8, -8)
-	close.text = GM.MakeFontString(close, GM.FONT_BOLD, 10, "textDim")
-	close.text:SetPoint("CENTER")
-	close.text:SetText("x")
-	close:SetScript("OnClick", function()
-		ui.closing = true -- deliberate close → OnHide ends the session
-		f:Hide()
 	end)
 
 	-- toolbar: name filter + craftable-only (Blizzard frame parity)

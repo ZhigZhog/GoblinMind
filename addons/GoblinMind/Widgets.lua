@@ -647,3 +647,67 @@ function W.AcctAdd(parent)
 	f.hint = hint
 	return f
 end
+
+-- Standard module window chrome — every window was hand-copying the
+-- same block (strata/toplevel/movable/drag/clamp/panel/ESC/title/x/
+-- dashboard tabs) with drift: OrdersUI/OpsUI/CraftingUI missed ESC
+-- and clamping, close buttons wandered between "x"/"×" at -6/-8,
+-- titles between 12/13pt at 10/12/14px. One recipe, opts for deltas:
+--   name, title, w, h, x, y        -- frame basics (CENTER offset)
+--   tab                            -- dashboard tab key (nil = no strip)
+--   fill, border                   -- GM.Panel colors
+--   strata, level                  -- layering overrides
+--   onHide                         -- session-teardown hook
+--   onClose                        -- fires on X click before Hide
+--     (CraftingUI sets ui.closing — deliberate-close semantics)
+--   noChrome                       -- frame+drag+panel+ESC only: no
+--     title/close/tabs (PlanQueue's title strip is bespoke)
+-- Returns frame, titleFS, closeBtn.
+function W.Window(o)
+	local f = CreateFrame("Frame", o.name, UIParent)
+	f:SetSize(o.w or 640, o.h or 480)
+	f:SetPoint("CENTER", o.x or 0, o.y or 0)
+	-- "normal" window strata on this client (PlanQueue's note): HIGH +
+	-- Toplevel stacks with TSM/Ellesmere panels. Toplevel's auto-raise
+	-- is unreliable here, so clicks raise manually — last-clicked wins.
+	f:SetFrameStrata(o.strata or "HIGH")
+	f:SetToplevel(true)
+	f:SetMovable(true)
+	f:EnableMouse(true)
+	f:RegisterForDrag("LeftButton")
+	f:SetScript("OnDragStart", f.StartMoving)
+	f:SetScript("OnDragStop", f.StopMovingOrSizing)
+	f:SetClampedToScreen(true)
+	if o.level then f:SetFrameLevel(o.level) end
+	f:SetScript("OnMouseDown", function(fr)
+		if fr.Raise then fr:Raise()
+		elseif RaiseFrame then RaiseFrame(fr) end
+	end)
+	GM.Panel(f, o.fill or "contLow", o.border or "outlineVar")
+	if o.name then tinsert(UISpecialFrames, o.name) end
+	f:Hide()
+	if o.onHide then f:SetScript("OnHide", o.onHide) end
+	if o.noChrome then return f end
+
+	local title = GM.MakeFontString(f, GM.FONT_BOLD, 13, "accent")
+	title:SetPoint("TOPLEFT", 12, -10)
+	title:SetText(o.title or "")
+	f.titleFs = title
+
+	local close = CreateFrame("Button", nil, f)
+	close:SetSize(16, 16)
+	close:SetPoint("TOPRIGHT", -6, -6)
+	close.text = GM.MakeFontString(close, GM.FONT_BOLD, 12, "textDim")
+	close.text:SetPoint("CENTER")
+	close.text:SetText("x")
+	close:SetScript("OnClick", function()
+		if o.onClose then o.onClose() end
+		f:Hide()
+	end)
+	f.closeBtn = close
+
+	if o.tab and GM.Dashboard and GM.Dashboard.AddTabs then
+		GM.Dashboard.AddTabs(f, title, o.tab)
+	end
+	return f, title, close
+end

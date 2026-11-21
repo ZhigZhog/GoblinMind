@@ -326,31 +326,21 @@ end
 local function Build()
 	if ui then return end
 	ui = { page = "shop", scroll = 0, askScroll = 0 }
-	local f = CreateFrame("Frame", "GoblinMindAH", UIParent)
-	f:SetSize(800, 470)
-	f:SetPoint("CENTER", -40, -10)
-	f:SetFrameStrata("HIGH")
-	f:SetToplevel(true)
-	f:SetMovable(true)
-	f:EnableMouse(true)
-	f:RegisterForDrag("LeftButton")
-	f:SetScript("OnDragStart", f.StartMoving)
-	f:SetScript("OnDragStop", f.StopMovingOrSizing)
-	f:SetClampedToScreen(true)
-	f:Hide()
-	GM.Panel(f, "contLow", "outlineVar")
-	tinsert(UISpecialFrames, "GoblinMindAH")
-	ui.frame = f
-
 	-- close means close: restore the native frame quietly and end the
-	-- AH session — unless the user asked for the Blizzard frame
-	f:SetScript("OnHide", function()
-		GM.FramePark.Restore(AuctionHouseFrame)
-		if not ui.wantDefault then
-			pcall(C_AuctionHouse and C_AuctionHouse.CloseAuctionHouse
-				or CloseAuctionHouse)
-		end
-	end)
+	-- AH session — unless the user asked for the Blizzard frame.
+	-- Contextual takeover (AH session only) — no tab strip.
+	local f = GM.Widgets.Window({
+		name = "GoblinMindAH", title = "AUCTION HOUSE",
+		w = 800, h = 470, x = -40, y = -10,
+		onHide = function()
+			GM.FramePark.Restore(AuctionHouseFrame)
+			if not ui.wantDefault then
+				pcall(C_AuctionHouse and C_AuctionHouse.CloseAuctionHouse
+					or CloseAuctionHouse)
+			end
+		end,
+	})
+	ui.frame = f
 	-- browse results + owned-auction changes → repaint; throttle events
 	-- drive the pending-query pump
 	pcall(f.RegisterEvent, f, "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED")
@@ -392,19 +382,6 @@ local function Build()
 			AU.Refresh()
 		end)
 	end)
-
-	local title = GM.MakeFontString(f, GM.FONT_BOLD, 13, "accent")
-	title:SetPoint("TOPLEFT", 12, -10)
-	title:SetText("AUCTION HOUSE")
-	-- contextual takeover (AH session only) — no dashboard tab strip
-
-	local close = CreateFrame("Button", nil, f)
-	close:SetSize(16, 16)
-	close:SetPoint("TOPRIGHT", -6, -6)
-	close.text = GM.MakeFontString(close, GM.FONT_BOLD, 12, "textDim")
-	close.text:SetPoint("CENTER")
-	close.text:SetText("x")
-	close:SetScript("OnClick", function() f:Hide() end)
 
 	-- toolbar: search + page toggles + scan shortcuts
 	ui.search = EditBox(f, 170, "search…")

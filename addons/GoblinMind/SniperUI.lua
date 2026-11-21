@@ -54,38 +54,16 @@ local function Build()
 	-- filters live on GM.Sniper (Sniper.lua loads first) so the task
 	-- surfaces count the same actionable feed this window shows
 	ui = { scroll = 0, filters = GM.Sniper.filters }
-	local f = CreateFrame("Frame", "GoblinMindSniper", UIParent)
-	f:SetSize(680, 400)
-	f:SetPoint("CENTER", 120, 0)
-	f:SetFrameStrata("HIGH")
-	f:SetToplevel(true)
-	f:SetMovable(true)
-	f:EnableMouse(true)
-	f:RegisterForDrag("LeftButton")
-	f:SetScript("OnDragStart", f.StartMoving)
-	f:SetScript("OnDragStop", f.StopMovingOrSizing)
-	f:SetClampedToScreen(true)
-	f:Hide()
-	GM.Panel(f, "contLow", "outlineVar")
-	tinsert(UISpecialFrames, "GoblinMindSniper")
+	local f = GM.Widgets.Window({
+		name = "GoblinMindSniper", title = "SNIPER",
+		w = 680, h = 400, x = 120,
+	})
 	ui.frame = f
 
 	-- hit state changes come from Sniper's book-diff passes
 	pcall(f.RegisterEvent, f, "AUCTION_HOUSE_SHOW")
 	pcall(f.RegisterEvent, f, "AUCTION_HOUSE_CLOSED")
 	f:SetScript("OnEvent", SU.Refresh)
-
-	local title = GM.MakeFontString(f, GM.FONT_BOLD, 13, "accent")
-	title:SetPoint("TOPLEFT", 12, -10)
-	title:SetText("SNIPER")
-
-	local close = CreateFrame("Button", nil, f)
-	close:SetSize(16, 16)
-	close:SetPoint("TOPRIGHT", -6, -6)
-	close.text = GM.MakeFontString(close, GM.FONT_BOLD, 12, "textDim")
-	close.text:SetPoint("CENTER")
-	close.text:SetText("x")
-	close:SetScript("OnClick", function() f:Hide() end)
 
 	-- toolbar: scan controls + feed management
 	ui.snap = Btn(f, 88, "SNAPSHOT", function()

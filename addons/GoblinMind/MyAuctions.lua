@@ -27,36 +27,11 @@ local Btn = W.Btn
 local function Build()
 	if ui then return end
 	ui = { scroll = 0 }
-	local f = CreateFrame("Frame", "GoblinMindMyAuctions", UIParent)
-	f:SetSize(800, 500)
-	f:SetPoint("CENTER", 60, 10)
-	f:SetFrameStrata("HIGH")
-	f:SetToplevel(true)
-	f:SetMovable(true)
-	f:RegisterForDrag("LeftButton")
-	f:SetScript("OnDragStart", f.StartMoving)
-	f:SetScript("OnDragStop", f.StopMovingOrSizing)
-	f:SetClampedToScreen(true)
-	f:EnableMouse(true)
-	f:Hide()
-	GM.Panel(f, "contLow", "outlineVar")
-	tinsert(UISpecialFrames, "GoblinMindMyAuctions")
+	local f = GM.Widgets.Window({
+		name = "GoblinMindMyAuctions", title = "MY AUCTIONS",
+		w = 800, h = 500, x = 60, y = 10, tab = "auctions",
+	})
 	ui.frame = f
-
-	local title = GM.MakeFontString(f, GM.FONT_BOLD, 13, "accent")
-	title:SetPoint("TOPLEFT", 12, -10)
-	title:SetText("MY AUCTIONS")
-	if GM.Dashboard and GM.Dashboard.AddTabs then
-		GM.Dashboard.AddTabs(f, title, "auctions")
-	end
-
-	local close = CreateFrame("Button", nil, f)
-	close:SetSize(16, 16)
-	close:SetPoint("TOPRIGHT", -6, -6)
-	close.text = GM.MakeFontString(close, GM.FONT_BOLD, 12, "textDim")
-	close.text:SetPoint("CENTER")
-	close.text:SetText("x")
-	close:SetScript("OnClick", function() f:Hide() end)
 
 	-- page segs: POSTED (owned auctions) | BAGS (post picker)
 	ui.page = "posted"

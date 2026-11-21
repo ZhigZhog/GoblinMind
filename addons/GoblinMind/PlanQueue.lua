@@ -150,23 +150,12 @@ local HEAD_COLS = {
 local function Build()
 	if ui.frame then return end
 
-	local frame = CreateFrame("Frame", "GoblinMindPlanFrame", UIParent)
-	frame:SetSize(WIN_W, 542)
-	frame:SetPoint("CENTER")
-	frame:SetMovable(true)
-	frame:EnableMouse(true)
-	-- convention on this client: "normal" windows live on HIGH — TSM's
-	-- ApplicationFrame and EllesmereUI's skinned Blizzard panels both.
-	-- SetToplevel gives click-to-raise so we stack WITH them instead of
-	-- pinned above (FULLSCREEN_DIALOG) or buried under (MEDIUM).
-	frame:SetFrameStrata("HIGH")
-	frame:SetToplevel(true)
-	-- manual raise on click: SetToplevel's auto-raise may be a no-op on
-	-- this client; Raise() bumps us to top of HIGH — TSM/Blizzard handle
-	-- their own clicks, so last-clicked wins like a normal window
-	frame:SetScript("OnMouseDown", function(f)
-		if f.Raise then f:Raise() elseif RaiseFrame then RaiseFrame(f) end
-	end)
+	-- strata/raise convention lives in W.Window: HIGH + Toplevel +
+	-- manual raise = stack WITH TSM/Ellesmere panels, last-clicked wins
+	local frame = GM.Widgets.Window({
+		name = "GoblinMindPlanFrame", w = WIN_W, h = 542,
+		noChrome = true, -- title strip/close here are bespoke
+	})
 	-- the bar animates within a step (cast progress) — Refresh is
 	-- event-driven so a 4s cast would sit still between events; a
 	-- 0.1s tick on the window keeps it moving while a plan is armed
@@ -179,8 +168,6 @@ local function Build()
 		ui.planFrac = PlanFrac()
 		ApplyProg()
 	end)
-	GM.Panel(frame, "contLow", "outlineVar")
-	tinsert(UISpecialFrames, "GoblinMindPlanFrame")
 
 	local title = GM.MakeFontString(frame, GM.FONT_BOLD, 13, "accent")
 	title:SetPoint("TOPLEFT", 14, -10)
@@ -193,11 +180,6 @@ local function Build()
 		GM.Dashboard.AddTabs(frame, title,
 			PQ.homeMode and "dash" or "plan")
 	end
-	-- drag on the frame title zone (RegisterForDrag on the frame itself
-	-- — no chrome overlay any more)
-	frame:RegisterForDrag("LeftButton")
-	frame:SetScript("OnDragStart", frame.StartMoving)
-	frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
 	-- first-show font heal: the window builds HIDDEN at login (Prewarm)
 	-- and fontstrings on a hidden frame may never rasterize — the
 	-- one-shot login FixupFonts can't reach text that only exists after

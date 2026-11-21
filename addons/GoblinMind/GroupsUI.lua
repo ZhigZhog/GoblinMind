@@ -131,43 +131,13 @@ local function BuildUI()
 	if ui then return end
 	ui = { catOff = 0, memOff = 0, treeOff = 0, page = "items",
 		nameCache = {}, collapsed = {} }
-	local f = CreateFrame("Frame", "GoblinMindGroupsUI", UIParent)
-	f:SetSize(WIN_W, WIN_H)
-	f:SetPoint("CENTER", -40, 20)
-	f:SetFrameStrata("HIGH")
-	f:SetToplevel(true)
-	f:SetScript("OnMouseDown", function(f)
-		if f.Raise then f:Raise() elseif RaiseFrame then RaiseFrame(f) end
-	end)
-	f:SetFrameLevel(100)
-	tinsert(UISpecialFrames, "GoblinMindGroupsUI")
-	f:SetClampedToScreen(true)
-	f:EnableMouse(true)
-	f:SetMovable(true)
-	f:RegisterForDrag("LeftButton")
-	f:SetScript("OnDragStart", f.StartMoving)
-	f:SetScript("OnDragStop", f.StopMovingOrSizing)
-	f:Hide()
-	GM.Panel(f, "contLow", "outlineVar")
-	f:SetScript("OnHide", function()
-		ui.pending, ui.drag = nil, nil
-	end)
+	local f = GM.Widgets.Window({
+		name = "GoblinMindGroupsUI", title = "GROUPS",
+		w = WIN_W, h = WIN_H, x = -40, y = 20, level = 100,
+		tab = "groups",
+		onHide = function() ui.pending, ui.drag = nil, nil end,
+	})
 	ui.frame = f
-
-	local title = GM.MakeFontString(f, GM.FONT_BOLD, 13, "accent")
-	title:SetPoint("TOPLEFT", 10, -8)
-	title:SetText("GROUPS")
-	if GM.Dashboard and GM.Dashboard.AddTabs then
-		GM.Dashboard.AddTabs(f, title, "groups")
-	end
-
-	local close = CreateFrame("Button", nil, f)
-	close:SetSize(16, 16)
-	close:SetPoint("TOPRIGHT", -6, -6)
-	close.text = GM.MakeFontString(close, GM.FONT_BOLD, 12, "textDim")
-	close.text:SetPoint("CENTER")
-	close.text:SetText("x")
-	close:SetScript("OnClick", function() f:Hide() end)
 
 	-- page segments: ITEMS | OPS
 	ui.pageSegs = {}

@@ -536,39 +536,14 @@ end
 local function Build()
 	if ui then return end
 	ui = { scroll = 0, art = {}, page = "activity", tables = {} }
-	local f = CreateFrame("Frame", "GoblinMindOverview", UIParent)
-	f:SetSize(860, 560)
-	f:SetPoint("CENTER", 60, 20)
-	f:SetFrameStrata("HIGH")
-	f:SetToplevel(true)
-	f:SetMovable(true)
-	f:RegisterForDrag("LeftButton")
-	f:SetScript("OnDragStart", f.StartMoving)
-	f:SetScript("OnDragStop", f.StopMovingOrSizing)
-	f:SetClampedToScreen(true)
-	f:EnableMouse(true)
-	f:Hide()
-	tinsert(UISpecialFrames, "GoblinMindOverview")
-	GM.Panel(f, "contLow", "outlineVar")
+	local f, title = GM.Widgets.Window({
+		name = "GoblinMindOverview", title = "LEDGER",
+		w = 860, h = 560, x = 60, y = 20, tab = "overview",
+	})
 	ui.frame = f
-
-	local title = GM.MakeFontString(f, GM.FONT_BOLD, 13, "accent")
-	title:SetPoint("TOPLEFT", 12, -10)
 	title:SetWidth(400)
 	title:SetJustifyH("LEFT")
 	title:SetWordWrap(false)
-	title:SetText("LEDGER")
-	if GM.Dashboard and GM.Dashboard.AddTabs then
-		GM.Dashboard.AddTabs(f, title, "overview")
-	end
-
-	local close = CreateFrame("Button", nil, f)
-	close:SetSize(16, 16)
-	close:SetPoint("TOPRIGHT", -6, -6)
-	close.text = GM.MakeFontString(close, GM.FONT_BOLD, 12, "textDim")
-	close.text:SetPoint("CENTER")
-	close.text:SetText("x")
-	close:SetScript("OnClick", function() f:Hide() end)
 
 	-- char switcher: cycles the char whose tx stream drives the views.
 	-- Shows the name part only — full Name-Realm-Region keys are

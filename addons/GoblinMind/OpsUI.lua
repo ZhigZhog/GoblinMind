@@ -218,34 +218,11 @@ end
 local function BuildUI()
 	if ui then return end
 	ui = {}
-	local f = CreateFrame("Frame", "GoblinMindOps", UIParent)
-	f:SetSize(WIN_W, WIN_H)
-	f:SetPoint("CENTER")
-	f:SetFrameStrata("HIGH")
-	f:SetToplevel(true)
-	f:SetMovable(true)
-	f:EnableMouse(true)
-	f:RegisterForDrag("LeftButton")
-	f:SetScript("OnDragStart", f.StartMoving)
-	f:SetScript("OnDragStop", f.StopMovingOrSizing)
-	f:EnableMouse(true)
-	f:Hide()
-	tinsert(UISpecialFrames, "GoblinMindOps")
-	GM.Panel(f, "contLow", "outlineVar")
+	local f = GM.Widgets.Window({
+		name = "GoblinMindOps", title = "OPERATIONS",
+		w = WIN_W, h = WIN_H, tab = "ops",
+	})
 	ui.frame = f
-
-	local title = GM.MakeFontString(f, GM.FONT_BOLD, 12, "accent")
-	title:SetPoint("TOPLEFT", 12, -10)
-	title:SetText("OPERATIONS")
-	GM.Dashboard.AddTabs(f, title, "ops")
-
-	local close = CreateFrame("Button", nil, f)
-	close:SetSize(16, 16)
-	close:SetPoint("TOPRIGHT", -8, -8)
-	close.text = GM.MakeFontString(close, GM.FONT_BOLD, 10, "textDim")
-	close.text:SetPoint("CENTER")
-	close.text:SetText("x")
-	close:SetScript("OnClick", function() f:Hide() end)
 
 	-- left: op types
 	local typeP = Panel(f, 10, 140, "TYPE")

@@ -185,28 +185,18 @@ end
 local function Build()
 	if ui then return end
 	ui = { lScroll = 0, rScroll = 0 }
-	local f = CreateFrame("Frame", "GoblinMindGBank", UIParent)
-	f:SetSize(680, 460)
-	f:SetPoint("CENTER", -60, -20)
-	f:SetFrameStrata("HIGH")
-	f:SetToplevel(true)
-	f:SetMovable(true)
-	f:EnableMouse(true)
-	f:RegisterForDrag("LeftButton")
-	f:SetScript("OnDragStart", f.StartMoving)
-	f:SetScript("OnDragStop", f.StopMovingOrSizing)
-	f:SetClampedToScreen(true)
-	f:Hide()
-	GM.Panel(f, "contLow", "outlineVar")
-	tinsert(UISpecialFrames, "GoblinMindGBank")
+	-- contextual takeover (gbank session only) — no tab strip
+	local f = GM.Widgets.Window({
+		name = "GoblinMindGBank", title = "GUILD BANK",
+		w = 680, h = 460, x = -60, y = -20,
+		onHide = function()
+			GM.FramePark.Restore(GuildBankFrame)
+			if not ui.wantDefault and CloseGuildBankFrame then
+				pcall(CloseGuildBankFrame)
+			end
+		end,
+	})
 	ui.frame = f
-
-	f:SetScript("OnHide", function()
-		GM.FramePark.Restore(GuildBankFrame)
-		if not ui.wantDefault and CloseGuildBankFrame then
-			pcall(CloseGuildBankFrame)
-		end
-	end)
 	pcall(f.RegisterEvent, f, "BAG_UPDATE")
 	pcall(f.RegisterEvent, f, "GUILDBANKBAGSLOTS_CHANGED")
 	pcall(f.RegisterEvent, f, "GUILDBANKTAB_CHANGED")
@@ -219,19 +209,6 @@ local function Build()
 			GU.Refresh()
 		end)
 	end)
-
-	local title = GM.MakeFontString(f, GM.FONT_BOLD, 13, "accent")
-	title:SetPoint("TOPLEFT", 12, -10)
-	title:SetText("GUILD BANK")
-	-- contextual takeover (gbank session only) — no dashboard tab strip
-
-	local close = CreateFrame("Button", nil, f)
-	close:SetSize(16, 16)
-	close:SetPoint("TOPRIGHT", -6, -6)
-	close.text = GM.MakeFontString(close, GM.FONT_BOLD, 12, "textDim")
-	close.text:SetPoint("CENTER")
-	close.text:SetText("x")
-	close:SetScript("OnClick", function() f:Hide() end)
 
 	ui.summary = GM.MakeFontString(f, GM.FONT, 9, "textDim")
 	ui.summary:SetPoint("TOPLEFT", 12, -38)

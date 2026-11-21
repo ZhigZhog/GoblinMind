@@ -127,28 +127,20 @@ end
 local function Build()
 	if ui then return end
 	ui = { lScroll = 0, rScroll = 0 }
-	local f = CreateFrame("Frame", "GoblinMindBank", UIParent)
-	f:SetSize(680, 430)
-	f:SetPoint("CENTER", -60, -20)
-	f:SetFrameStrata("HIGH")
-	f:SetToplevel(true)
-	f:SetMovable(true)
-	f:EnableMouse(true)
-	f:RegisterForDrag("LeftButton")
-	f:SetScript("OnDragStart", f.StartMoving)
-	f:SetScript("OnDragStop", f.StopMovingOrSizing)
-	f:SetClampedToScreen(true)
-	f:Hide()
-	GM.Panel(f, "contLow", "outlineVar")
-	tinsert(UISpecialFrames, "GoblinMindBank")
-	ui.frame = f
-
 	-- close means close: restore the native frame quietly and end the
-	-- bank session — unless the user asked for the Blizzard frame
-	f:SetScript("OnHide", function()
-		GM.FramePark.Restore(BankFrame)
-		if not ui.wantDefault and CloseBankFrame then pcall(CloseBankFrame) end
-	end)
+	-- bank session — unless the user asked for the Blizzard frame.
+	-- Contextual takeover (bank session only) — no tab strip.
+	local f = GM.Widgets.Window({
+		name = "GoblinMindBank", title = "BANK",
+		w = 680, h = 430, x = -60, y = -20,
+		onHide = function()
+			GM.FramePark.Restore(BankFrame)
+			if not ui.wantDefault and CloseBankFrame then
+				pcall(CloseBankFrame)
+			end
+		end,
+	})
+	ui.frame = f
 	pcall(f.RegisterEvent, f, "BAG_UPDATE")
 	pcall(f.RegisterEvent, f, "PLAYERBANKSLOTS_CHANGED")
 	pcall(f.RegisterEvent, f, "PLAYERBANKBAGSLOTS_CHANGED")
@@ -161,19 +153,6 @@ local function Build()
 			BU.Refresh()
 		end)
 	end)
-
-	local title = GM.MakeFontString(f, GM.FONT_BOLD, 13, "accent")
-	title:SetPoint("TOPLEFT", 12, -10)
-	title:SetText("BANK")
-	-- contextual takeover (bank session only) — no dashboard tab strip
-
-	local close = CreateFrame("Button", nil, f)
-	close:SetSize(16, 16)
-	close:SetPoint("TOPRIGHT", -6, -6)
-	close.text = GM.MakeFontString(close, GM.FONT_BOLD, 12, "textDim")
-	close.text:SetPoint("CENTER")
-	close.text:SetText("x")
-	close:SetScript("OnClick", function() f:Hide() end)
 
 	-- toolbar
 	local scan = Btn(f, 120, "WAREHOUSING SCAN", function()

@@ -193,29 +193,19 @@ end
 local function Build()
 	if ui then return end
 	ui = { page = "buy", scroll = 0, collapsed = {} }
-	local f = CreateFrame("Frame", "GoblinMindVendor", UIParent)
-	f:SetSize(560, 470)
-	f:SetPoint("CENTER", -80, -20)
-	f:SetFrameStrata("HIGH")
-	f:SetToplevel(true)
-	f:SetMovable(true)
-	f:EnableMouse(true)
-	f:RegisterForDrag("LeftButton")
-	f:SetScript("OnDragStart", f.StartMoving)
-	f:SetScript("OnDragStop", f.StopMovingOrSizing)
-	f:SetClampedToScreen(true)
-	f:Hide()
-	GM.Panel(f, "contLow", "outlineVar")
-	tinsert(UISpecialFrames, "GoblinMindVendor")
-	ui.frame = f
-
 	-- closing our window: BLIZZARD UI hands the frame back with the
 	-- session intact; otherwise close means close — unpark quietly and
-	-- end the merchant session so nothing invisible stays alive
-	f:SetScript("OnHide", function()
-		GM.FramePark.Restore(MerchantFrame)
-		if not ui.wantDefault then pcall(CloseMerchant) end
-	end)
+	-- end the merchant session so nothing invisible stays alive.
+	-- Contextual takeover (merchant session only) — no tab strip.
+	local f = GM.Widgets.Window({
+		name = "GoblinMindVendor", title = "VENDOR",
+		w = 560, h = 470, x = -80, y = -20,
+		onHide = function()
+			GM.FramePark.Restore(MerchantFrame)
+			if not ui.wantDefault then pcall(CloseMerchant) end
+		end,
+	})
+	ui.frame = f
 	-- sells/buybacks change bags + stock — debounced repaint
 	pcall(f.RegisterEvent, f, "BAG_UPDATE")
 	pcall(f.RegisterEvent, f, "MERCHANT_UPDATE")
@@ -228,19 +218,6 @@ local function Build()
 			VU.Refresh()
 		end)
 	end)
-
-	local title = GM.MakeFontString(f, GM.FONT_BOLD, 13, "accent")
-	title:SetPoint("TOPLEFT", 12, -10)
-	title:SetText("VENDOR")
-	-- contextual takeover window (merchant session only) — no tab strip
-
-	local close = CreateFrame("Button", nil, f)
-	close:SetSize(16, 16)
-	close:SetPoint("TOPRIGHT", -6, -6)
-	close.text = GM.MakeFontString(close, GM.FONT_BOLD, 12, "textDim")
-	close.text:SetPoint("CENTER")
-	close.text:SetText("x")
-	close:SetScript("OnClick", function() f:Hide() end)
 
 	-- toolbar: page toggles + actions
 	local x = 12

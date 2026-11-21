@@ -25,36 +25,11 @@ local Btn = W.Btn
 local function Build()
 	if ui then return end
 	ui = { scroll = 0 }
-	local f = CreateFrame("Frame", "GoblinMindDestroying", UIParent)
-	f:SetSize(620, 430)
-	f:SetPoint("CENTER", 40, -20)
-	f:SetFrameStrata("HIGH")
-	f:SetToplevel(true)
-	f:SetMovable(true)
-	f:RegisterForDrag("LeftButton")
-	f:SetScript("OnDragStart", f.StartMoving)
-	f:SetScript("OnDragStop", f.StopMovingOrSizing)
-	f:SetClampedToScreen(true)
-	f:EnableMouse(true)
-	f:Hide()
-	GM.Panel(f, "contLow", "outlineVar")
-	tinsert(UISpecialFrames, "GoblinMindDestroying")
+	local f = GM.Widgets.Window({
+		name = "GoblinMindDestroying", title = "DESTROYING",
+		w = 620, h = 430, x = 40, y = -20, tab = "destroy",
+	})
 	ui.frame = f
-
-	local title = GM.MakeFontString(f, GM.FONT_BOLD, 13, "accent")
-	title:SetPoint("TOPLEFT", 12, -10)
-	title:SetText("DESTROYING")
-	if GM.Dashboard and GM.Dashboard.AddTabs then
-		GM.Dashboard.AddTabs(f, title, "destroy")
-	end
-
-	local close = CreateFrame("Button", nil, f)
-	close:SetSize(16, 16)
-	close:SetPoint("TOPRIGHT", -6, -6)
-	close.text = GM.MakeFontString(close, GM.FONT_BOLD, 12, "textDim")
-	close.text:SetPoint("CENTER")
-	close.text:SetText("x")
-	close:SetScript("OnClick", function() f:Hide() end)
 
 	-- toolbar
 	local refresh = Btn(f, 66, "REFRESH", DU.Refresh)

@@ -517,36 +517,11 @@ local function Build()
 	-- name must NOT collide with the GoblinMindSettings SavedVariable —
 	-- SVs populate after file load and would overwrite the frame global,
 	-- leaving UISpecialFrames pointing at a plain table (IsShown crash)
-	local f = CreateFrame("Frame", "GoblinMindSettingsFrame", UIParent)
-	f:SetSize(620, 716)
-	f:SetPoint("CENTER", -60, 10)
-	f:SetFrameStrata("HIGH")
-	f:SetToplevel(true)
-	f:SetMovable(true)
-	f:RegisterForDrag("LeftButton")
-	f:SetScript("OnDragStart", f.StartMoving)
-	f:SetScript("OnDragStop", f.StopMovingOrSizing)
-	f:SetClampedToScreen(true)
-	f:EnableMouse(true)
-	f:Hide()
-	GM.Panel(f, "contLow", "outlineVar")
-	tinsert(UISpecialFrames, "GoblinMindSettingsFrame")
+	local f = GM.Widgets.Window({
+		name = "GoblinMindSettingsFrame", title = "SETTINGS",
+		w = 620, h = 716, x = -60, y = 10, tab = "settings",
+	})
 	ui.frame = f
-
-	local title = GM.MakeFontString(f, GM.FONT_BOLD, 13, "accent")
-	title:SetPoint("TOPLEFT", 12, -10)
-	title:SetText("SETTINGS")
-	if GM.Dashboard and GM.Dashboard.AddTabs then
-		GM.Dashboard.AddTabs(f, title, "settings")
-	end
-
-	local close = CreateFrame("Button", nil, f)
-	close:SetSize(16, 16)
-	close:SetPoint("TOPRIGHT", -6, -6)
-	close.text = GM.MakeFontString(close, GM.FONT_BOLD, 12, "textDim")
-	close.text:SetPoint("CENTER")
-	close.text:SetText("x")
-	close:SetScript("OnClick", function() f:Hide() end)
 
 	-- reload-required banner: appears when a flagged option changes
 	local bar = CreateFrame("Frame", nil, f)

@@ -69,33 +69,11 @@ end
 local function Build()
 	if ui then return end
 	ui = {}
-	local f = CreateFrame("Frame", "GoblinMindOrders", UIParent)
-	f:SetSize(720, 520)
-	f:SetPoint("CENTER")
-	f:SetMovable(true)
-	f:EnableMouse(true)
-	f:RegisterForDrag("LeftButton")
-	f:SetScript("OnDragStart", f.StartMoving)
-	f:SetScript("OnDragStop", f.StopMovingOrSizing)
-	f:Hide()
-	GM.Panel(f, "contLow", "outlineVar")
+	local f = GM.Widgets.Window({
+		name = "GoblinMindOrders", title = "WRITS",
+		w = 720, h = 520, tab = "orders",
+	})
 	ui.frame = f
-
-	local title = GM.MakeFontString(f, GM.FONT_BOLD, 13, "accent")
-	title:SetPoint("TOPLEFT", 12, -10)
-	title:SetText("WRITS")
-	if GM.Dashboard and GM.Dashboard.AddTabs then
-		GM.Dashboard.AddTabs(f, title, "orders")
-	end
-	ui.titleFs = title
-
-	local close = CreateFrame("Button", nil, f)
-	close:SetSize(16, 16)
-	close:SetPoint("TOPRIGHT", -6, -6)
-	close.text = GM.MakeFontString(close, GM.FONT_BOLD, 12, "textDim")
-	close.text:SetPoint("CENTER")
-	close.text:SetText("x")
-	close:SetScript("OnClick", function() f:Hide() end)
 
 	-- board switcher
 	ui.boardBar = GM.MakeFontString(f, GM.FONT_BOLD, 10, "secondary")
