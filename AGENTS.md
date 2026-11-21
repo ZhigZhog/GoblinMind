@@ -213,11 +213,31 @@ Primary data = the in-house book feed below.
   `/v1/health`+`/v1/scopes` before writing config — bad IP or a
   closed firewall is caught at install, not at first pull.
   **Tests**: `python brain\test_server.py` — in-process server on an
-  ephemeral port + temp DB; 56 checks over register/auth/cleaning/
-  merge/cutoff/GC/rate-limit/key-gate/scopes/health-detail.
-  Known wart it documents:
+  ephemeral port + temp DB; 117 checks over register/auth/cleaning/
+  merge/cutoff/GC/rate-limit/key-gate/scopes/health-detail +
+  the writ/relay surface. Known wart it documents:
   the rate bucket increments before payload validation, so
   malformed uploads still burn quota.
+  **`python brain\test_mesh_sim.py`** — end-to-end mesh+writ sim:
+  unmodified `Orders.lua`/`Mesh.lua` loaded per simulated client in
+  `lupa` (Lua 5.5 — `load`, not `loadstring`) against
+  `brain/sim/wow_stub.lua` (wire capture, `GM.After` scheduler,
+  SV serializer), real `goblin_server.py` + real watcher consumers
+  (`process_orders`/`process_relay`/`process_board_reqs`/
+  `process_board_refresh`/`boards_pull`) patched to per-client
+  api_state/feeds/out paths. 68 checks: post→confirm, claim→accept→
+  fill, cancel/reject, full relay tunnel, tag poison, item search,
+  solo refresh, dedup, TTL/stat lifecycle (deny/force/release),
+  ignore/board-ban/host-ban, contention, join/leave. Sim gotchas:
+  `time()` must be integer epoch (Lua `format('%d')` chokes on
+  floats — `GetTime()` carries the sub-second precision), sim clock
+  must be monotonic (a backward jump wedges Mesh `pumping` +
+  sendQ), and each client needs a distinct `name` or the server
+  re-keys them all into one install row. Op results live in
+  `api_state.order_results` keyed by the staged rid (`OR.Op`
+  returns it) — don't max-t pick, results share second-granularity
+  timestamps. `orders` has `qty_held` between filled and remaining;
+  any pool assertion must read it, `qty_filled==0` is vacuous.
   The watcher also scans `WTF\Account\*\SavedVariables\GoblinMind.lua`
   each poll for staged bug reports (`gm-<ts>-<n>|<hex>` strings in
   `GoblinMindSettings.bugReports`), files them to GitHub issues
