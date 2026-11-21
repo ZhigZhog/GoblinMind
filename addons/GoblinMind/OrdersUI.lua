@@ -216,7 +216,10 @@ local function Build()
 	-- browser search box + rows (hidden unless browseMode)
 	ui.search = MkEdit(list, 220, "filter by name or item id")
 	ui.search:SetPoint("TOPLEFT", 8, -16)
-	ui.search:SetScript("OnTextChanged", function()
+	-- SetScript replaces MkEdit's own handler — keep the hint
+	-- toggle or it draws under the typed text
+	ui.search:SetScript("OnTextChanged", function(s)
+		s.hint:SetShown(s:GetText() == "")
 		ui.browseScroll = 0
 		OU.Refresh()
 	end)
