@@ -12,6 +12,8 @@ local OR = GM.Orders
 local ui
 
 local ROWS = 14
+local BROWSEROWS = 12
+local BROWSE_MAX = 600
 
 local function Panel(parent, x, y, w, h, title)
 	local p = CreateFrame("Frame", nil, parent)
@@ -167,15 +169,83 @@ local function Build()
 	ui.postBtn:SetScript("OnClick", function() OU.Post() end)
 	OU.SetItem(nil)
 
-	-- ===== orders list =====
+	-- ===== orders list / item browser (same rect, mode toggles) =====
 	local list = Panel(f, 10, -144, 700, 240, "BOARD")
 	ui.listP = list
 	list:EnableMouseWheel(true)
 	list:SetScript("OnMouseWheel", function(_, d)
-		ui.scroll = math.max(0, (ui.scroll or 0) - d * 3)
+		if ui.browseMode then
+			ui.browseScroll = math.max(0,
+				(ui.browseScroll or 0) - d * 3)
+		else
+			ui.scroll = math.max(0, (ui.scroll or 0) - d * 3)
+		end
 		OU.Refresh()
 	end)
 	ui.scroll = 0
+	ui.browseScroll = 0
+	-- mode toggle rides the panel header; the count string is
+	-- consumed by the title line in both modes
+	ui.modeBtn = MkBtn(list, "FIND ITEM", 66)
+	ui.modeBtn:SetPoint("TOPRIGHT", -6, -4)
+	ui.modeBtn:SetScript("OnClick", function()
+		ui.browseMode = not ui.browseMode
+		ui.browseScroll = 0
+		OU.Refresh()
+	end)
+	-- browser search box + rows (hidden unless browseMode)
+	ui.search = MkEdit(list, 220, "filter by name or item id")
+	ui.search:SetPoint("TOPLEFT", 8, -16)
+	ui.search:SetScript("OnTextChanged", function()
+		ui.browseScroll = 0
+		OU.Refresh()
+	end)
+	ui.search:Hide()
+	ui.browseRows = {}
+	for i = 1, BROWSEROWS do
+		local r = CreateFrame("Button", nil, list)
+		r:SetSize(684, 15)
+		r:SetPoint("TOPLEFT", 8, -36 - (i - 1) * 15.5)
+		r.icon = r:CreateTexture(nil, "ARTWORK")
+		r.icon:SetSize(13, 13)
+		r.icon:SetPoint("LEFT", 0, 0)
+		r.name = GM.MakeFontString(r, GM.FONT, 10, "text")
+		r.name:SetPoint("LEFT", 18, 0)
+		r.name:SetWidth(330)
+		r.name:SetWordWrap(false)
+		r.name:SetJustifyH("LEFT")
+		r.price = GM.MakeFontString(r, GM.FONT, 10, "textDim")
+		r.price:SetPoint("LEFT", 356, 0)
+		r.price:SetWidth(110)
+		r.price:SetJustifyH("LEFT")
+		r.idfs = GM.MakeFontString(r, GM.FONT, 9, "textDim")
+		r.idfs:SetPoint("RIGHT", -4, 0)
+		r:SetScript("OnEnter", function(s)
+			if not s.itemID then return end
+			GameTooltip:SetOwner(s, "ANCHOR_RIGHT")
+			if GameTooltip.SetItemByID then
+				GameTooltip:SetItemByID(s.itemID)
+			else
+				GameTooltip:SetHyperlink("item:" .. s.itemID)
+			end
+			GameTooltip:Show()
+		end)
+		r:SetScript("OnLeave", function() GameTooltip:Hide() end)
+		r:SetScript("OnClick", function(s)
+			if not s.itemID then return end
+			if IsModifiedClick() then
+				GM.ModifiedItemClick(s.itemID)
+				return
+			end
+			-- shared target channel — planner retargets too — then
+			-- the strip shows the same pick
+			local _, link = GetItemInfo and GetItemInfo(s.itemID)
+			GM.PlanQueue.SetItem(s.itemID, link)
+			OU.SetItem(s.itemID)
+		end)
+		r:Hide()
+		ui.browseRows[i] = r
+	end
 	ui.rows = {}
 	for i = 1, ROWS do
 		local r = CreateFrame("Frame", nil, list)
@@ -335,6 +405,79 @@ local function OrderRow(r, o, me)
 	r:Show()
 end
 
+-- every item the backend has ever priced, as {id, name, lname}
+-- sorted by name (unnamed items sink to the bottom, still
+-- reachable via the numeric filter). Rebuilt when the emit
+-- changes; names resolve async via ReqOnce and a later refresh
+-- picks them up.
+local function BrowseIndex()
+	local db = GoblinMindDB
+	local gen = db and db.generated or 0
+	if ui.idxGen == gen and ui.idx then return ui.idx end
+	local items = db and ((db.realms and db.realms[GM.Scope()]
+		and db.realms[GM.Scope()].items) or db.items) or {}
+	local idx = {}
+	for id in pairs(items) do
+		local n = GM.ItemName(id)
+		idx[#idx + 1] = { id = id, name = n,
+			lname = (n or ""):lower() }
+	end
+	table.sort(idx, function(a, b)
+		if (a.name ~= nil) ~= (b.name ~= nil) then
+			return a.name ~= nil
+		end
+		if a.name and b.name and a.name ~= b.name then
+			return a.name < b.name
+		end
+		return a.id < b.id
+	end)
+	ui.idx, ui.idxGen = idx, gen
+	return idx
+end
+
+local function BrowsePaint()
+	for i = 1, ROWS do ui.rows[i]:Hide() end
+	ui.listP.title:SetText("FIND ITEM")
+	local q = (ui.search:GetText() or ""):lower():gsub("^%s+", "")
+		:gsub("%s+$", "")
+	local qid = tonumber(q)
+	local idx = BrowseIndex()
+	local hits = {}
+	if q == "" then
+		hits = idx
+	else
+		for i = 1, #idx do
+			local e = idx[i]
+			if (e.lname ~= "" and e.lname:find(q, 1, true))
+				or (qid and tostring(e.id):find(q, 1, true)) then
+				hits[#hits + 1] = e
+				if #hits >= BROWSE_MAX then break end
+			end
+		end
+	end
+	local more = #idx - #hits
+	ui.listP.count:SetText(q == ""
+		and (#idx .. " items")
+		or (#hits .. (more > 0 and "+" .. more or "") .. " match"))
+	for i = 1, BROWSEROWS do
+		local r = ui.browseRows[i]
+		local e = hits[i + (ui.browseScroll or 0)]
+		if e then
+			r.itemID = e.id
+			local icon = GM.ItemIcon(e.id)
+			if icon then r.icon:SetTexture(icon) r.icon:Show()
+			else r.icon:Hide() end
+			r.name:SetText(e.name or ("item " .. e.id))
+			r.name:SetTextColor(GM.NameColor(e.id))
+			local row = GM.ItemEntry and GM.ItemEntry(e.id)
+			local mkt = row and (row.mkt or row.mb or row.p)
+			r.price:SetText(mkt and GoldText(mkt) .. " ea" or "—")
+			r.idfs:SetText("#" .. e.id)
+			r:Show()
+		else r:Hide() end
+	end
+end
+
 function OU.Refresh()
 	if not ui then return end
 	OR.ClearAcked()
@@ -375,15 +518,24 @@ function OU.Refresh()
 	end
 	ui.hint:SetText(h)
 
-	-- orders list
-	local orders = ui.board and OR.Orders(ui.board) or {}
-	ui.listP.title:SetText("BOARD — " .. tostring(ui.board or "none"))
-	ui.listP.count:SetText(#orders .. " open")
-	local me = OR.MyUUID()
-	for i = 1, ROWS do
-		local r = ui.rows[i]
-		local o = orders[i + (ui.scroll or 0)]
-		if o then OrderRow(r, o, me) else r:Hide() end
+	-- orders list / item browser
+	ui.modeBtn.text:SetText(ui.browseMode and "BOARD" or "FIND ITEM")
+	ui.search:SetShown(ui.browseMode)
+	ui.claimQty:SetShown(not ui.browseMode)
+	if ui.browseMode then
+		BrowsePaint()
+	else
+		for i = 1, BROWSEROWS do ui.browseRows[i]:Hide() end
+		local orders = ui.board and OR.Orders(ui.board) or {}
+		ui.listP.title:SetText(
+			"BOARD — " .. tostring(ui.board or "none"))
+		ui.listP.count:SetText(#orders .. " open")
+		local me = OR.MyUUID()
+		for i = 1, ROWS do
+			local r = ui.rows[i]
+			local o = orders[i + (ui.scroll or 0)]
+			if o then OrderRow(r, o, me) else r:Hide() end
+		end
 	end
 
 	-- my commits
