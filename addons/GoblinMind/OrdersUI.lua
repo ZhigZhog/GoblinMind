@@ -58,6 +58,13 @@ end
 
 local GoldText = GM.MoneyShort
 
+-- list views: orders (board list / MY BUY ORDERS) -> find (item
+-- browser for posting) -> search (distributed mesh item query)
+local VIEW_NEXT = { orders = "find", find = "search",
+	search = "orders" }
+local VIEW_LBL = { orders = "FIND ITEM", find = "SEARCH",
+	search = "BOARD" }
+
 local function has(t, v)
 	for _, x in ipairs(t) do if x == v then return true end end
 	return false
@@ -181,7 +188,7 @@ local function Build()
 	ui.listP = list
 	list:EnableMouseWheel(true)
 	list:SetScript("OnMouseWheel", function(_, d)
-		if ui.browseMode then
+		if ui.view ~= "orders" then
 			ui.browseScroll = math.max(0,
 				(ui.browseScroll or 0) - d * 3)
 		else
@@ -191,20 +198,35 @@ local function Build()
 	end)
 	ui.scroll = 0
 	ui.browseScroll = 0
-	-- mode toggle rides the panel header row — count folds into the
-	-- title text so the corner is free for it
+	ui.view = "orders"
+	ui.mineOnly = true
+	ui.searchItem = nil
+	-- view toggle rides the panel header row — cycles
+	-- MY ORDERS -> FIND ITEM -> SEARCH -> back. Count folds into
+	-- the title text so the corner is free for it
 	ui.modeBtn = MkBtn(list, "FIND ITEM", 66, 13)
 	ui.modeBtn:SetPoint("TOPRIGHT", -4, -2)
 	ui.modeBtn:SetScript("OnClick", function()
-		ui.browseMode = not ui.browseMode
+		ui.view = VIEW_NEXT[ui.view] or "orders"
 		ui.browseScroll = 0
+		if ui.view ~= "search" then ui.searchItem = nil end
+		OU.Refresh()
+	end)
+	-- MINE filter — the MY BUY ORDERS view: only my postings,
+	-- aggregated across every board. Default on — the window's
+	-- primary job is your orders, the full board is one click away
+	ui.mineBtn = MkBtn(list, "MINE", 34, 13)
+	ui.mineBtn:SetPoint("TOPRIGHT", ui.modeBtn, "TOPLEFT", -3, -1)
+	ui.mineBtn:SetScript("OnClick", function()
+		ui.mineOnly = not ui.mineOnly
+		ui.scroll = 0
 		OU.Refresh()
 	end)
 	-- claim-units box lives in the header next to the mode toggle —
 	-- it feeds the CLAIM buttons in the rows, so it sits where the
 	-- action's affordances are instead of floating at the corner
 	ui.claimQty = MkEdit(list, 40, "units")
-	ui.claimQty:SetPoint("TOPRIGHT", ui.modeBtn, "TOPLEFT", -4, -1)
+	ui.claimQty:SetPoint("TOPRIGHT", ui.mineBtn, "TOPLEFT", -4, -1)
 	ui.claimQty:SetText("1")
 	ui.claimLbl = GM.MakeFontString(list, GM.FONT, 9, "textDim")
 	ui.claimLbl:SetPoint("RIGHT", ui.claimQty, "LEFT", -4, -1)
@@ -222,7 +244,7 @@ local function Build()
 		fs:SetText(h[2])
 		ui.colHeads[i] = fs
 	end
-	-- browser search box + rows (hidden unless browseMode)
+	-- browser search box + rows (hidden in the orders view)
 	ui.search = MkEdit(list, 220, "filter by name or item id")
 	ui.search:SetPoint("TOPLEFT", 8, -16)
 	-- SetScript replaces MkEdit's own handler — keep the hint
@@ -233,6 +255,15 @@ local function Build()
 		OU.Refresh()
 	end)
 	ui.search:Hide()
+	-- back-to-picker in search results — takes the search box's spot
+	ui.searchBack = MkBtn(list, "« ITEMS", 52, 13)
+	ui.searchBack:SetPoint("TOPLEFT", 8, -18)
+	ui.searchBack:SetScript("OnClick", function()
+		ui.searchItem = nil
+		ui.browseScroll = 0
+		OU.Refresh()
+	end)
+	ui.searchBack:Hide()
 	ui.browseRows = {}
 	for i = 1, BROWSEROWS do
 		local r = CreateFrame("Button", nil, list)
@@ -267,6 +298,15 @@ local function Build()
 			if not s.itemID then return end
 			if IsModifiedClick() then
 				GM.ModifiedItemClick(s.itemID)
+				return
+			end
+			if ui.view == "search" then
+				-- mesh search: pick the item, broadcast the query,
+				-- results list takes over the rows
+				ui.searchItem = s.itemID
+				OR.SearchItem(s.itemID)
+				ui.browseScroll = 0
+				OU.Refresh()
 				return
 			end
 			-- shared target channel — planner retargets too — then
@@ -669,6 +709,82 @@ local function BrowsePaint()
 	end
 end
 
+-- SEARCH view: picker state = the same catalog browse but clicks
+-- fire the mesh query; results state = matched open buy orders
+-- from every tracker in earshot, rendered as order rows (CLAIM
+-- works — each row carries its own board)
+local function SearchPaint()
+	ui.searchBack:SetShown(ui.searchItem ~= nil)
+	ui.search:SetShown(ui.searchItem == nil)
+	if not ui.searchItem then
+		for i = 1, ROWS do ui.rows[i]:Hide() end
+		-- same paint as FIND ITEM, different click target
+		local q = (ui.search:GetText() or ""):lower()
+			:gsub("^%s+", ""):gsub("%s+$", "")
+		local qid = tonumber(q)
+		local idx = BrowseIndex()
+		local hits = {}
+		for i = 1, #idx do
+			local e = idx[i]
+			if q == "" or (e.lname ~= ""
+					and e.lname:find(q, 1, true))
+				or (qid and tostring(e.id):find(q, 1, true)) then
+				hits[#hits + 1] = e
+				if #hits >= BROWSE_MAX then break end
+			end
+		end
+		ui.listP.title:SetText("SEARCH — pick an item"
+			.. (#hits > 0 and (" · " .. #hits .. " match") or ""))
+		ui.listP.count:SetText("")
+		for i = 1, BROWSEROWS do
+			local r = ui.browseRows[i]
+			local e = hits[i + (ui.browseScroll or 0)]
+			if e then
+				r.itemID = e.id
+				local icon = GM.ItemIcon(e.id)
+				if icon then r.icon:SetTexture(icon) r.icon:Show()
+				else r.icon:Hide() end
+				r.name:SetText(e.name or ("item " .. e.id))
+				r.name:SetTextColor(GM.NameColor(e.id))
+				local row = GM.ItemEntry and GM.ItemEntry(e.id)
+				local mkt = row and (row.mkt or row.mb or row.p)
+				r.price:SetText(mkt
+					and GoldText(mkt) .. " ea" or "—")
+				r.idfs:SetText("#" .. e.id)
+				r:Show()
+			else r:Hide() end
+		end
+		return
+	end
+	-- results state
+	for i = 1, BROWSEROWS do ui.browseRows[i]:Hide() end
+	local rows, _, age = OR.SearchRows()
+	local name = GM.ItemNameOr(ui.searchItem)
+	ui.listP.title:SetText(("SEARCH — %s · %d listings · %ds")
+		:format(name, rows and #rows or 0, age or 0))
+	ui.listP.count:SetText("")
+	local me = OR.MyUUID()
+	for i = 1, ROWS do
+		local r = ui.rows[i]
+		local e = rows and rows[i + (ui.scroll or 0)]
+		if not e then
+			r:Hide()
+		else
+			OrderRow(r, {
+				id = e.oid, board = e.board,
+				itemID = ui.searchItem, qtyTotal = e.qty or 0,
+				qtyFilled = (e.qty or 0) - (e.rem or 0),
+				remaining = e.rem or 0,
+				pricePerUnit = e.ppu or 0, expires = e.exp,
+				poster = e.poster, backed = e.backed,
+				commits = {},
+			}, me)
+			r.item:SetText("[" .. (e.board or "?") .. "] "
+				.. r.item:GetText())
+		end
+	end
+end
+
 function OU.Refresh()
 	if not ui then return end
 	OR.ClearAcked()
@@ -715,19 +831,40 @@ function OU.Refresh()
 	end
 	ui.hint:SetText(h)
 
-	-- orders list / item browser
-	ui.modeBtn.text:SetText(ui.browseMode and "BOARD" or "FIND ITEM")
-	ui.search:SetShown(ui.browseMode)
-	ui.claimQty:SetShown(not ui.browseMode)
-	ui.claimLbl:SetShown(not ui.browseMode)
+	-- orders list / item browser / mesh search
+	ui.modeBtn.text:SetText(VIEW_LBL[ui.view] or "BOARD")
+	ui.search:SetShown(ui.view ~= "orders")
+	ui.searchBack:SetShown(ui.view == "search"
+		and ui.searchItem ~= nil)
+	local showOrders = ui.view == "orders"
+	ui.claimQty:SetShown(showOrders or ui.searchItem ~= nil)
+	ui.claimLbl:SetShown(showOrders or ui.searchItem ~= nil)
+	ui.mineBtn:SetShown(showOrders)
 	for i = 1, #ui.colHeads do
-		ui.colHeads[i]:SetShown(not ui.browseMode)
+		ui.colHeads[i]:SetShown(showOrders
+			or ui.searchItem ~= nil)
 	end
-	if ui.browseMode then
+	if ui.view == "find" then
 		BrowsePaint()
+	elseif ui.view == "search" then
+		SearchPaint()
 	else
 		for i = 1, BROWSEROWS do ui.browseRows[i]:Hide() end
-		local orders = ui.board and OR.Orders(ui.board) or {}
+		local orders
+		if ui.mineOnly then
+			-- MY BUY ORDERS: aggregate every board, keep only mine
+			orders = {}
+			local me2 = OR.MyUUID()
+			for _, b in ipairs(OR.Boards()) do
+				for _, o in ipairs(OR.Orders(b)) do
+					if o.posterUUID == me2 then
+						orders[#orders + 1] = o
+					end
+				end
+			end
+		else
+			orders = ui.board and OR.Orders(ui.board) or {}
+		end
 		-- flatten: each expanded order's commits nest under it and
 		-- consume row-pool slots; scroll just pages the flat list
 		local disp = {}
@@ -739,9 +876,10 @@ function OU.Refresh()
 				end
 			end
 		end
-		ui.listP.title:SetText(
-			"BOARD — " .. tostring(ui.board or "none")
-				.. " · " .. #orders .. " open")
+		ui.listP.title:SetText(ui.mineOnly
+			and ("MY BUY ORDERS · " .. #orders)
+			or ("BOARD — " .. tostring(ui.board or "none")
+				.. " · " .. #orders .. " open"))
 		ui.listP.count:SetText("")
 		local me = OR.MyUUID()
 		for i = 1, ROWS do
@@ -753,6 +891,11 @@ function OU.Refresh()
 				CommitRow(r, e.order, e.commit, me)
 			else
 				OrderRow(r, e, me)
+				-- mine aggregates boards — name the board on the row
+				if ui.mineOnly then
+					r.item:SetText("[" .. (e.board or "?")
+						.. "] " .. r.item:GetText())
+				end
 			end
 		end
 	end

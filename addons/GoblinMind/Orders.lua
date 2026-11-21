@@ -161,8 +161,13 @@ end
 
 OR.live = OR.live or {}    -- [board] = {ev, ...}, session-only
 -- relay session state: peers[board][name]=t from T beacons,
--- asked[board]=t (Q throttle), gen counters, reg flags, rpend
-OR.relay = { peers = {}, asked = {}, reg = {}, rpend = {}, gen = 0 }
+-- asked[board]=t (Q throttle), gen counters, reg flags, rpend,
+-- src[board]=stream pin, askGen[board]=last asked gen.
+-- Stream pins and ask-gens live here (session), never in the SV
+-- rboards table — phantom "0"/"5"/"7" boards were RBoard entries
+-- persisted by ingest paths that ran before admission checks
+OR.relay = { peers = {}, asked = {}, reg = {}, rpend = {}, gen = 0,
+	src = {}, askGen = {} }
 local LIVE_TTL = 600
 
 -- seq breaks same-timestamp ties; sender t (wire records) keeps
@@ -1131,7 +1136,7 @@ function OR.RelayAsk(board, force)
 	end
 	OR.relay.asked[board] = now
 	OR.relay.gen = (OR.relay.gen or 0) + 1
-	OR.RBoard(board).askGen = OR.relay.gen
+	OR.relay.askGen[board] = OR.relay.gen
 	if GM.Mesh and GM.Mesh.Send then
 		-- the distributed ask, one broadcast and done: every server
 		-- holding a matching snapshot streams it back on-channel,
@@ -1218,11 +1223,12 @@ function OR.RelayServe(sender, board, gen, tag)
 	local b = GoblinMindDB and GoblinMindDB.boards
 		and GoblinMindDB.boards[board]
 	if not b or not b.orders then return end  -- can't serve it
-	-- S announces the stream + our tracker tag so listeners can
+	-- N announces the stream + our tracker tag so listeners can
 	-- verify the swarm before ingesting opportunistically. Rows
 	-- batch per kind — Broadcast comma-joins them into as few
-	-- channel messages as MAX_MSG allows
-	GM.Mesh.Send("S", { board .. ";" .. gen .. ";"
+	-- channel messages as MAX_MSG allows. (NOT "S" — the mesh
+	-- protocol already uses S for price-scan records)
+	GM.Mesh.Send("N", { board .. ";" .. gen .. ";"
 		.. (OR.TrackerTag() or "-") })
 	local ws, cs = {}, {}
 	for _, o in ipairs(b.orders) do
@@ -1284,35 +1290,37 @@ function OR.StreamStart(body, sender)
 	end
 	local b, gen, tag = (body or ""):match("^([^;]+);(%d+);?(.*)$")
 	if not b then return end
-	local local_ = GoblinMindDB and GoblinMindDB.boards
-		and GoblinMindDB.boards[b]
-	if local_ then
+	local g = tonumber(gen)
+	if GoblinMindDB and GoblinMindDB.boards
+			and GoblinMindDB.boards[b] then
+		-- local board: only our own swarm may refresh it
 		if tag ~= OR.TrackerTag() then return end
-		local rb = OR.RBoard(b)
-		rb.srcGen, rb.srcPeer, rb.srcT =
-			tonumber(gen), sender, time()
-	else
-		local rb, g = OR.RBoard(b), tonumber(gen)
-		if g == rb.askGen and
-				(not rb.srcPeer or time() - (rb.srcT or 0) > 30) then
-			rb.srcGen, rb.srcPeer, rb.srcT = g, sender, time()
+		OR.relay.src[b] = { gen = g, peer = sender, t = time() }
+	elseif g == OR.relay.askGen[b] then
+		-- remote board: first stream answering our pending ask wins
+		local s = OR.relay.src[b]
+		if not (s and s.peer and time() - (s.t or 0) < 30) then
+			OR.relay.src[b] = { gen = g, peer = sender,
+				t = time() }
 		end
 	end
 end
 
 function OR.RelayIngest(kind, f, sender)
-	local rb = OR.RBoard(f[1])
 	local gen = tonumber(f[2])
-	-- admitted only by an S pin for this (gen,sender) — gen alone
-	-- proves nothing on a broadcast medium
-	if not gen or gen ~= rb.srcGen or sender ~= rb.srcPeer then
+	local s = gen and OR.relay.src[f[1]]
+	-- admitted only by an N pin for this (gen,sender) — gen alone
+	-- proves nothing on a broadcast medium. The pin check runs
+	-- BEFORE RBoard so stray rows can't persist phantom boards
+	if not s or gen ~= s.gen or sender ~= s.peer then
 		return
 	end
+	local rb = OR.RBoard(f[1])
 	if kind == "Z" then
 		-- stream end: rows not stamped this gen are gone; release
 		-- the pin so the next stream (any asker, any server) can bind
 		rb.t = time()
-		rb.srcPeer = nil
+		OR.relay.src[f[1]] = nil
 		for i = #rb.orders, 1, -1 do
 			if rb.orders[i]._gen ~= gen then
 				table.remove(rb.orders, i)
@@ -1375,9 +1383,126 @@ function OR.RelayIngest(kind, f, sender)
 	end
 end
 
+-- ============ distributed item search ============
+-- I query broadcast: "itemID;gen;tag" — every server holding open
+-- orders for the item answers with 'i' rows on-channel. Tag picks
+-- the swarm the same way as board Qs; "-" asks every tracker in
+-- earshot, which is what a market-wide search wants.
+
+OR.search = nil  -- {gen, t, itemID, rows={[board|oid]=row}}
+
+function OR.SearchItem(itemID)
+	if not (GM.Mesh and GM.Mesh.Send) then return 0 end
+	local iid = tonumber(itemID)
+	if not iid then return 0 end
+	OR.relay.gen = (OR.relay.gen or 0) + 1
+	local g = OR.relay.gen
+	OR.search = { gen = g, t = time(), itemID = iid, rows = {} }
+	-- our own boards seed the results locally — freshest source,
+	-- no wire needed
+	for b, bd in pairs(GoblinMindDB and GoblinMindDB.boards or {}) do
+		for _, o in ipairs(bd.orders or {}) do
+			if o.itemID == iid and o.state == "open"
+					and (o.remaining or 0) > 0 then
+				OR.search.rows[b .. "|" .. o.id] = {
+					board = b, oid = o.id, qty = o.qtyTotal,
+					rem = o.remaining, ppu = o.pricePerUnit,
+					exp = o.expires, poster = o.poster }
+			end
+		end
+	end
+	-- "-" tag: every swarm answers — a market search wants all
+	-- reachable listings, not just our tracker's
+	GM.Mesh.Send("I", { iid .. ";" .. g .. ";-" })
+	return g
+end
+
+function OR.SearchRows()
+	local s = OR.search
+	if not s then return nil, 0 end
+	local out = {}
+	for _, r in pairs(s.rows) do out[#out + 1] = r end
+	table.sort(out, function(a, b)
+		return (a.ppu or 0) < (b.ppu or 0) end)
+	return out, s.itemID, time() - s.t
+end
+
+-- a server's 'i' row:
+-- gen;itemID;board;oid;qty;rem;ppu;exp;poster;backed
+function OR.ItemIngest(f, sender)
+	local s = OR.search
+	if not s then return end
+	local gen, iid = tonumber(f[1]), tonumber(f[2])
+	if gen ~= s.gen or iid ~= s.itemID then return end
+	local key = (f[3] or "?") .. "|" .. (f[4] or "?")
+	s.rows[key] = {
+		board = f[3], oid = f[4],
+		qty = tonumber(f[5]), rem = tonumber(f[6]),
+		ppu = tonumber(f[7]), exp = tonumber(f[8]),
+		poster = f[9] ~= "-" and f[9] or nil,
+		backed = f[10] == "1", via = sender }
+	-- a server answering for a board is proof it can serve it —
+	-- register it as a peer so claims on foreign boards route
+	-- through the relay like any other remote board
+	if sender and not (GoblinMindDB and GoblinMindDB.boards
+			and GoblinMindDB.boards[f[3]]) then
+		local m = OR.relay.peers[f[3]] or {}
+		m[sender] = { t = time() }
+		OR.relay.peers[f[3]] = m
+	end
+	if GM.OrdersUI and GM.OrdersUI.Refresh then
+		GM.OrdersUI.Refresh()
+	end
+end
+
+-- host side: 'I' record asks for open listings of one item
+function OR.MeshItemQuery(body, sender)
+	if not sender or sender:match("^[^-]+") == UnitName("player") then
+		return
+	end
+	local iid, gen, tag = (body or ""):match("^(%d+);(%d+);?(.*)$")
+	if not iid then return end
+	OR.ItemServe(sender, tonumber(iid), tonumber(gen),
+		tag ~= "" and tag or nil)
+end
+
+function OR.ItemServe(sender, iid, gen, tag)
+	if not (sender and iid and gen) then return end
+	if not (GM.Mesh and GM.Mesh.Send) then return end
+	-- same swarm rules as board streams
+	if tag and tag ~= "-" then
+		if tag:sub(1, 1) == "!" then
+			if OR.TrackerTag() == tag:sub(2) then return end
+		elseif OR.TrackerTag() ~= tag then return end
+	end
+	-- responses are asker-scoped (they echo the ask's gen), so
+	-- throttle per asker+item
+	local now = time()
+	OR.relay.served = OR.relay.served or {}
+	local key = "i:" .. iid .. ":" .. sender
+	if now - (OR.relay.served[key] or 0) < 10 then return end
+	OR.relay.served[key] = now
+	local rows = {}
+	for b, bd in pairs(GoblinMindDB
+			and GoblinMindDB.boards or {}) do
+		for _, o in ipairs(bd.orders or {}) do
+			if o.itemID == iid and o.state == "open"
+					and (o.remaining or 0) > 0 then
+				rows[#rows + 1] = table.concat({
+					gen, iid, b, o.id, o.qtyTotal or 0,
+					o.remaining or 0, o.pricePerUnit or 0,
+					math.floor(o.expires or 0),
+					o.poster or "-",
+					o.backed and 1 or 0 }, ";")
+			end
+		end
+	end
+	if #rows > 0 then GM.Mesh.Send("i", rows) end
+end
+
 -- channel-broadcast board query ("who serves this board?") — the
 -- distributed refresh: any peer holding a tag-matched snapshot
--- answers by streaming it back over whisper
+-- answers by streaming it back on-channel
 function OR.MeshQuery(body, sender)
 	if not sender or sender:match("^[^-]+") == UnitName("player") then
 		return
@@ -1424,6 +1549,13 @@ local _relayTick = false
 function OR.RelayStart()
 	if _relayTick or not (GM.After and GM.db) then return end
 	_relayTick = true
+	-- purge phantom remote boards — junk entries old ingest paths
+	-- persisted (t=0, no orders: never populated by a real stream)
+	for k, v in pairs(GM.db.rboards or {}) do
+		if (v.t or 0) == 0 and not next(v.orders or {}) then
+			GM.db.rboards[k] = nil
+		end
+	end
 	-- solo REFRESH, reload #2: the staged 'br-' request flushed on
 	-- the first reload; the watcher pulls + patch-emits inside its
 	-- 5s poll, so a reload ~20s out lands on the fresh boards.

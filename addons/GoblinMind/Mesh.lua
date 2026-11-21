@@ -316,11 +316,27 @@ local function OnAddon(_, prefix, msg, ctype, sender)
 		if GM.Orders and GM.Orders.MeshQuery then
 			GM.Orders.MeshQuery(body, sender)
 		end
-	elseif kind == "S" then
+	elseif kind == "N" then
 		-- stream announcement — binds (board,gen) to a sender +
-		-- tracker tag; ingest only admits pinned streams
+		-- tracker tag; ingest only admits pinned streams. Kind is
+		-- "N" not "S": the S branch above owns price-scan records
 		if GM.Orders and GM.Orders.StreamStart then
 			GM.Orders.StreamStart(body, sender)
+		end
+	elseif kind == "I" then
+		-- distributed item search — "who holds open listings for
+		-- this itemID?" Servers answer with 'i' rows on-channel
+		if GM.Orders and GM.Orders.MeshItemQuery then
+			GM.Orders.MeshItemQuery(body, sender)
+		end
+	elseif kind == "i" then
+		-- item-search responses — rows batch comma-joined
+		for rec in (body or ""):gmatch("[^,]+") do
+			local f = {}
+			for s in rec:gmatch("[^;]*") do f[#f + 1] = s end
+			if GM.Orders and GM.Orders.ItemIngest then
+				GM.Orders.ItemIngest(f, sender)
+			end
 		end
 	elseif kind == "W" or kind == "w" or kind == "Z" then
 		-- snapshot stream rows — records batch comma-joined in one
