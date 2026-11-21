@@ -83,6 +83,16 @@ local function Broadcast(recs, kind)
 	if not pumping then pumping = true Pump() end
 end
 
+-- generic send for other modules — writ board uses kind "O"; the
+-- M/S kinds stay owned by OnBook's book-diff machinery. Volatile
+-- realtime records drop when the channel is down rather than queue
+-- — a writ event that arrives late is worse than one that doesn't.
+function M.Send(kind, recs)
+	if chanID == 0 then chanID = FindChannel() or 0 end
+	if chanID == 0 then return end
+	Broadcast(recs, kind)
+end
+
 -- ============ broadcast source: book diffs ============
 
 local TL_FP = "^(%d+):(%d+):(%d+):?(%w*)$"
@@ -226,6 +236,14 @@ local function OnAddon(_, prefix, msg, ctype, sender)
 				Stage("mb", STAGE_CAP, { t = t, s = scope,
 					i = tonumber(i), m = tonumber(m),
 					sup = tonumber(s) or 0 })
+			end
+		end
+	elseif kind == "O" then
+		-- writ events are volatile overlays — Orders.lua owns the
+		-- grammar and the confirmation/drop rules; mesh just relays
+		if GM.Orders and GM.Orders.MeshEvent then
+			for rec in body:gmatch("[^,]+") do
+				GM.Orders.MeshEvent(rec)
 			end
 		end
 	end

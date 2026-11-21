@@ -71,9 +71,198 @@ function OR.Board(name)
 	return bs and bs[name] or nil
 end
 
+function OR.MyInstallID()
+	return GoblinMindDB and GoblinMindDB.backend
+		and GoblinMindDB.backend.installID or nil
+end
+
+-- ============ live overlay (mesh 'O' events) ============
+-- Pulled boards are authoritative but flush-timescale. Order events
+-- also ride the mesh as 'O' records — volatile hints applied on top
+-- of the pulled view until a pull CONFIRMS them (matching id/commit/
+-- state), the op's own result errors out, or a 10-min TTL orphans
+-- them. Server truth always wins on the next pull.
+
+OR.live = OR.live or {}    -- [board] = {ev, ...}, session-only
+local LIVE_TTL = 600
+
+function OR.LiveEvent(board, ev)
+	if not board or board == "" then return end
+	ev.t = ev.t or time()
+	local L = OR.live[board]
+	if not L then L = {} OR.live[board] = L end
+	L[#L + 1] = ev
+	while #L > 200 do table.remove(L, 1) end
+	if GM.OrdersUI and GM.OrdersUI.Refresh then
+		GM.OrdersUI.Refresh()
+	end
+end
+
+local function evConfirmed(ev, byId)
+	local o = ev.oid and byId[ev.oid]
+	if ev.v == "post" then
+		return ev.realID and byId[ev.realID] ~= nil
+	elseif ev.v == "claim" then
+		if not o then return false end
+		for _, c in ipairs(o.commits or {}) do
+			if c.id == ev.cid then return true end
+		end
+		return false
+	elseif ev.v == "fill" then
+		return o and (o.qtyFilled or 0) >= (ev.newFilled or 0)
+	elseif ev.v == "cancel" then
+		if (ev.units or 0) == 0 then
+			return not o or o.state ~= "open"
+		end
+		return not o or (o.qtyTotal or 0) <= (ev.newTotal or 0)
+	elseif ev.v == "reject" or ev.v == "release" then
+		if not o then return false end
+		for _, c in ipairs(o.commits or {}) do
+			if c.id == ev.cid then return c.state ~= "active" end
+		end
+		return false
+	end
+	return false
+end
+
+local function evDrop(ev, byId, res)
+	if ev.rid then
+		local r = res[ev.rid]
+		if r and not r.ok then return true end  -- my op failed outright
+	end
+	if evConfirmed(ev, byId) then return true end
+	return (ev.t or 0) < time() - LIVE_TTL
+end
+
+local function shallow(o)
+	local c = {}
+	for k, v in pairs(o) do c[k] = v end
+	-- clone the commits list too — applyEv appends/flags it and the
+	-- pulled GoblinMindDB rows must stay pristine
+	if o.commits then
+		local cs = {}
+		for i, cm in ipairs(o.commits) do
+			local cc = {}
+			for k, v in pairs(cm) do cc[k] = v end
+			cs[i] = cc
+		end
+		c.commits = cs
+	end
+	return c
+end
+
+local function applyEv(ev, view, byId)
+	if ev.v == "post" then
+		if ev.realID and not byId[ev.realID] then
+			local o = {
+				id = ev.realID, board = ev.board,
+				itemID = ev.itemID, qtyTotal = ev.qtyTotal,
+				qtyFilled = 0, remaining = ev.qtyTotal,
+				pricePerUnit = ev.pricePerUnit,
+				claimTTL = ev.ttl, poster = ev.poster,
+				posterUUID = ev.posterUUID, backed = true,
+				created = ev.t, expires = ev.t + 7 * 86400,
+				state = "open", _live = true, commits = {},
+			}
+			byId[o.id] = o
+			view[#view + 1] = o
+		end
+	elseif ev.v == "claim" then
+		local o = byId[ev.oid]
+		if o and o.state == "open" then
+			o.remaining = math.max(0,
+				(o.remaining or 0) - (ev.units or 0))
+			o.commits = o.commits or {}
+			o.commits[#o.commits + 1] = {
+				id = ev.cid, units = ev.units, unitsFilled = 0,
+				crafter = ev.crafter, crafterUUID = ev.crafterUUID,
+				expires = ev.t + (o.claimTTL or 86400),
+				state = "active", _live = true,
+			}
+		end
+	elseif ev.v == "fill" then
+		local o = byId[ev.oid]
+		if o then
+			-- server: fill moves units held→filled (remaining stays —
+			-- the claim already took them out). Only decrement
+			-- remaining when we never saw the claim (blind fill).
+			local seen
+			for _, c in ipairs(o.commits or {}) do
+				if c.id == ev.cid then
+					seen = c
+					break
+				end
+			end
+			if seen and seen.state == "active" then
+				seen.unitsFilled = (seen.unitsFilled or 0)
+					+ (ev.units or 0)
+				if seen.unitsFilled >= (seen.units or 0) then
+					seen.state = "filled"
+				end
+			end
+			ev.newFilled = (o.qtyFilled or 0) + (ev.units or 0)
+			o.qtyFilled = ev.newFilled
+			if not seen then
+				o.remaining = math.max(0,
+					(o.remaining or 0) - (ev.units or 0))
+			end
+			if o.qtyFilled >= (o.qtyTotal or 0) then
+				o.state = "filled"
+			end
+		end
+	elseif ev.v == "cancel" then
+		local o = byId[ev.oid]
+		if o then
+			if (ev.units or 0) == 0 then
+				o.state = "cancelled"
+				for i, x in ipairs(view) do
+					if x == o then table.remove(view, i) break end
+				end
+				byId[ev.oid] = nil
+			else
+				ev.newTotal = math.max((o.qtyFilled or 0),
+					(o.qtyTotal or 0) - ev.units)
+				o.qtyTotal = ev.newTotal
+				o.remaining = math.max(0,
+					(o.remaining or 0) - ev.units)
+			end
+		end
+	elseif ev.v == "reject" or ev.v == "release" then
+		local o = byId[ev.oid]
+		if o then
+			for _, c in ipairs(o.commits or {}) do
+				if c.id == ev.cid and c.state == "active" then
+					c.state = ev.v == "reject" and "rejected" or "released"
+					o.remaining = (o.remaining or 0)
+						+ ((c.units or 0) - (c.unitsFilled or 0))
+				end
+			end
+		end
+	end
+end
+
 function OR.Orders(name)
 	local b = OR.Board(name)
-	return b and b.orders or {}
+	local pulled = b and b.orders or {}
+	local view, byId = {}, {}
+	for _, o in ipairs(pulled) do
+		local c = shallow(o)
+		byId[o.id] = c
+		view[#view + 1] = c
+	end
+	local L = OR.live[name]
+	if L then
+		local res = OR.Results()
+		for i = #L, 1, -1 do
+			local ev = L[i]
+			if evDrop(ev, byId, res) then
+				table.remove(L, i)
+			else
+				applyEv(ev, view, byId)
+			end
+		end
+	end
+	return view
 end
 
 -- my orders on a board (posterUUID == my install uuid)
@@ -113,39 +302,118 @@ function OR.Stage(fields)
 	return rid
 end
 
+function OR.MeshSend(rec)
+	if GM.Mesh and GM.Mesh.Send then
+		GM.Mesh.Send("O", { rec })
+	end
+end
+
 function OR.Post(board, itemID, qty, ppu, ttl, charname)
-	return OR.Stage({
+	local poster = charname or CharName()
+	local rid = OR.Stage({
 		v = "post", b = board, itemID = itemID, qtyTotal = qty,
-		pricePerUnit = ppu, claimTTL = ttl, poster = charname or CharName(),
+		pricePerUnit = ppu, claimTTL = ttl, poster = poster,
 		backed = OR.PurseCovers(ppu * qty),
 	})
+	local inst = OR.MyInstallID() or "?"
+	local ev = { v = "post", rid = rid, board = board,
+		itemID = itemID, qtyTotal = qty, pricePerUnit = ppu,
+		ttl = ttl, poster = poster, posterUUID = OR.MyUUID() }
+	if inst ~= "?" then ev.realID = inst .. ":" .. rid end
+	OR.LiveEvent(board, ev)
+	OR.MeshSend(table.concat({ "P", board, rid, itemID, qty, ppu,
+		ttl or 0, inst, OR.MyUUID() or "?", poster }, ";"))
+	return rid
 end
 
 function OR.Claim(board, oid, units, charname)
-	return OR.Stage({
+	local crafter = charname or CharName()
+	local rid = OR.Stage({
 		v = "claim", b = board, oid = oid, units = units,
-		crafter = charname or CharName(),
+		crafter = crafter,
 	})
+	local inst = OR.MyInstallID() or "?"
+	local ev = { v = "claim", rid = rid, oid = oid, units = units,
+		crafter = crafter, crafterUUID = OR.MyUUID() }
+	if inst ~= "?" then ev.cid = inst .. ":" .. rid end
+	OR.LiveEvent(board, ev)
+	OR.MeshSend(table.concat({ "C", board, oid, rid, units,
+		inst, OR.MyUUID() or "?", crafter }, ";"))
+	return rid
 end
 
 function OR.Fill(board, oid, units, cid, mailFrom)
-	return OR.Stage({
+	local rid = OR.Stage({
 		v = "fill", b = board, oid = oid, units = units,
 		commit = cid, mailFrom = mailFrom,
 	})
+	OR.LiveEvent(board, { v = "fill", rid = rid, oid = oid,
+		units = units, cid = cid })
+	OR.MeshSend(table.concat({ "F", board, oid, units,
+		cid or "" }, ";"))
+	return rid
 end
 
 function OR.Reject(board, oid, cid, mailFrom)
-	return OR.Stage({ v = "reject", b = board, oid = oid,
+	local rid = OR.Stage({ v = "reject", b = board, oid = oid,
 		commit = cid, mailFrom = mailFrom })
+	OR.LiveEvent(board, { v = "reject", rid = rid, oid = oid,
+		cid = cid })
+	OR.MeshSend(table.concat({ "R", board, oid, cid or "" }, ";"))
+	return rid
 end
 
 function OR.Cancel(board, oid, units)
-	return OR.Stage({ v = "cancel", b = board, oid = oid, units = units })
+	local rid = OR.Stage({ v = "cancel", b = board, oid = oid,
+		units = units })
+	OR.LiveEvent(board, { v = "cancel", rid = rid, oid = oid,
+		units = units or 0 })
+	OR.MeshSend(table.concat({ "X", board, oid, units or 0 }, ";"))
+	return rid
 end
 
-function OR.Release(board, cid)
-	return OR.Stage({ v = "release", b = board, cid = cid })
+function OR.Release(board, cid, oid)
+	local rid = OR.Stage({ v = "release", b = board, cid = cid })
+	OR.LiveEvent(board, { v = "release", rid = rid, oid = oid,
+		cid = cid })
+	OR.MeshSend(table.concat({ "L", board, oid or "", cid }, ";"))
+	return rid
+end
+
+-- mesh 'O' receive: ';'-separated records — ':' can't be the
+-- separator because server ids are 'install:op' and carry colons;
+-- ';' is illegal in char names, board scopes, and rids.
+function OR.MeshEvent(rec)
+	local f = {}
+	for x in rec:gmatch("[^;]*") do f[#f + 1] = x end
+	local v = f[1]
+	if v == "P" then
+		local ev = { v = "post", board = f[2],
+			itemID = tonumber(f[4]), qtyTotal = tonumber(f[5]),
+			pricePerUnit = tonumber(f[6]), ttl = tonumber(f[7]),
+			posterUUID = f[9], poster = f[10] }
+		if f[8] and f[8] ~= "?" and f[8] ~= "0" then
+			ev.realID = f[8] .. ":" .. f[3]
+		end
+		if ev.itemID and ev.qtyTotal then OR.LiveEvent(f[2], ev) end
+	elseif v == "C" then
+		local ev = { v = "claim", board = f[2], oid = f[3],
+			units = tonumber(f[5]), crafterUUID = f[7], crafter = f[8] }
+		if f[6] and f[6] ~= "?" and f[6] ~= "0" then
+			ev.cid = f[6] .. ":" .. f[4]
+		end
+		if ev.oid and ev.units then OR.LiveEvent(f[2], ev) end
+	elseif v == "F" then
+		OR.LiveEvent(f[2], { v = "fill", oid = f[3],
+			units = tonumber(f[4]), cid = f[5] })
+	elseif v == "R" then
+		OR.LiveEvent(f[2], { v = "reject", oid = f[3], cid = f[4] })
+	elseif v == "X" then
+		OR.LiveEvent(f[2], { v = "cancel", oid = f[3],
+			units = tonumber(f[4]) or 0 })
+	elseif v == "L" then
+		OR.LiveEvent(f[2], { v = "release", oid = f[3], cid = f[4] })
+	end
 end
 
 function OR.Ignore(uuid, on)

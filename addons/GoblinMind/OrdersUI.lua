@@ -2,9 +2,9 @@ local _, GM = ...
 
 -- Writ board window — orders + commits + inbound CODs. All writes
 -- stage through GM.Orders into the SV queue (watcher POSTs them);
--- reads come from the pulled GoblinMindDB.boards snapshot. The UI
--- is honest about the flush cadence: a hint line tells the user to
--- /reload for fresh board state.
+-- the visible board merges the pulled GoblinMindDB.boards snapshot
+-- with the volatile mesh overlay (GM.Orders.live), so peers' posts
+-- and claims show in real time and the next pull reconciles them.
 
 GM.OrdersUI = {}
 local OU = GM.OrdersUI
@@ -107,24 +107,90 @@ local function Build()
 	ui.hint = GM.MakeFontString(f, GM.FONT, 9, "textDim")
 	ui.hint:SetPoint("TOPRIGHT", -12, -32)
 
-	-- ===== POST bar =====
-	local post = Panel(f, 10, -48, 700, 46, "POST BUY ORDER")
-	ui.itemE = MkEdit(post, 70, "itemID")
-	ui.itemE:SetPoint("LEFT", 10, -6)
-	ui.qtyE = MkEdit(post, 50, "qty")
-	ui.qtyE:SetPoint("LEFT", ui.itemE, "RIGHT", 6, 0)
+	-- ===== POST bar: item strip on top, inputs below =====
+	local post = Panel(f, 10, -48, 700, 76, "POST BUY ORDER")
+	ui.post = post
+
+	-- the planner's item-target strip — drop retargets the shared
+	-- item channel (planner stats show the market price)
+	local strip = CreateFrame("Frame", nil, post)
+	strip:SetPoint("TOPLEFT", 8, -16)
+	strip:SetSize(684, 40)
+	GM.Panel(strip, "contHigh")
+	local iconBox = CreateFrame("Frame", nil, strip)
+	iconBox:SetPoint("LEFT", 4, 0)
+	iconBox:SetSize(32, 32)
+	GM.Panel(iconBox, "contLowest")
+	ui.icon = iconBox:CreateTexture(nil, "ARTWORK")
+	ui.icon:SetSize(30, 30)
+	ui.icon:SetPoint("CENTER")
+	ui.iconBtn = CreateFrame("Button", nil, iconBox)
+	ui.iconBtn:SetAllPoints()
+	ui.iconBtn:SetScript("OnEnter", function(s)
+		if not s.itemID then return end
+		GameTooltip:SetOwner(s, "ANCHOR_RIGHT")
+		if GameTooltip.SetItemByID then
+			GameTooltip:SetItemByID(s.itemID)
+		else
+			GameTooltip:SetHyperlink("item:" .. s.itemID)
+		end
+		GameTooltip:Show()
+	end)
+	ui.iconBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+	ui.itemName = GM.MakeFontString(strip, GM.FONT_MED, 11, "text")
+	ui.itemName:SetPoint("TOPLEFT", iconBox, "TOPRIGHT", 8, -3)
+	ui.itemName:SetWidth(400)
+	ui.itemName:SetWordWrap(false)
+	ui.itemName:SetJustifyH("LEFT")
+	ui.itemSub = GM.MakeFontString(strip, GM.FONT, 9, "textDim")
+	ui.itemSub:SetPoint("TOPLEFT", ui.itemName, "BOTTOMLEFT", 0, -3)
+	ui.itemSub:SetJustifyH("LEFT")
+	local function DropItem()
+		local infoType, itemID, link = GetCursorInfo()
+		if infoType ~= "item" then return end
+		ClearCursor()
+		-- shared target channel — planner stays in sync (its stats
+		-- pane shows the market price) but isn't force-popped over us
+		GM.PlanQueue.SetItem(itemID, link)
+		OU.SetItem(itemID)
+	end
+	strip:EnableMouse(true)
+	strip:SetScript("OnReceiveDrag", DropItem)
+	strip:SetScript("OnClick", function()
+		if IsModifiedClick() then
+			GM.ModifiedItemClick(ui.iconBtn.itemID)
+		elseif CursorHasItem() then
+			DropItem()
+		end
+	end)
+	ui.iconBtn:SetScript("OnReceiveDrag", DropItem)
+	ui.iconBtn:SetScript("OnClick", function()
+		if IsModifiedClick() then
+			GM.ModifiedItemClick(ui.iconBtn.itemID)
+		elseif CursorHasItem() then
+			DropItem()
+		end
+	end)
+
+	-- input row below the strip
+	ui.qtyE = MkEdit(post, 60, "qty")
+	ui.qtyE:SetPoint("BOTTOMLEFT", 10, 8)
 	ui.priceE = MkEdit(post, 70, "gold ea")
 	ui.priceE:SetPoint("LEFT", ui.qtyE, "RIGHT", 6, 0)
-	ui.ttlE = MkEdit(post, 46, "hrs")
+	ui.ttlE = MkEdit(post, 50, "hrs")
 	ui.ttlE:SetPoint("LEFT", ui.priceE, "RIGHT", 6, 0)
 	ui.postBtn = MkBtn(post, "POST", 56)
 	ui.postBtn:SetPoint("LEFT", ui.ttlE, "RIGHT", 8, 0)
 	ui.postMsg = GM.MakeFontString(post, GM.FONT, 9, "textDim")
 	ui.postMsg:SetPoint("LEFT", ui.postBtn, "RIGHT", 8, 0)
+	ui.postMsg:SetPoint("RIGHT", post, "RIGHT", -8, 0)
+	ui.postMsg:SetJustifyH("LEFT")
+	ui.postMsg:SetWordWrap(false)
 	ui.postBtn:SetScript("OnClick", function() OU.Post() end)
+	OU.SetItem(nil)
 
 	-- ===== orders list =====
-	local list = Panel(f, 10, -100, 700, 250, "BOARD")
+	local list = Panel(f, 10, -132, 700, 224, "BOARD")
 	ui.listP = list
 	list:EnableMouseWheel(true)
 	list:SetScript("OnMouseWheel", function(_, d)
@@ -163,7 +229,7 @@ local function Build()
 	ui.claimQty:SetText("1")
 
 	-- ===== my commits + inbound COD =====
-	local mine = Panel(f, 10, -356, 342, 152, "MY COMMITS")
+	local mine = Panel(f, 10, -362, 342, 146, "MY COMMITS")
 	ui.mineP = mine
 	ui.mineRows = {}
 	for i = 1, 6 do
@@ -179,7 +245,7 @@ local function Build()
 		ui.mineRows[i] = r
 	end
 
-	local inc = Panel(f, 362, -356, 348, 152, "INBOUND CODs")
+	local inc = Panel(f, 362, -362, 348, 146, "INBOUND CODs")
 	ui.incP = inc
 	ui.incRows = {}
 	for i = 1, 6 do
@@ -198,18 +264,51 @@ local function Build()
 	end
 end
 
+function OU.SetItem(itemID)
+	ui.itemID = itemID
+	ui.iconBtn.itemID = itemID
+	if not itemID then
+		ui.icon:Hide()
+		ui.itemName:SetText(GM.CC("textDim")
+			.. "drop an item here to post a buy order|r")
+		ui.itemSub:SetText("")
+		return
+	end
+	-- planner's icon path: instant icon first, GetItemInfo fallback
+	local icon = C_Item and C_Item.GetItemIconByID
+		and C_Item.GetItemIconByID(itemID)
+	if not icon and GetItemInfo then
+		icon = select(10, GetItemInfo(itemID))
+	end
+	if icon then ui.icon:SetTexture(icon) ui.icon:Show()
+	else ui.icon:Hide() end
+	ui.itemName:SetText(GM.ItemName(itemID))
+	ui.itemName:SetTextColor(GM.NameColor(itemID))
+	-- market value from the universal source pipeline — same number
+	-- the planner/tooltip show
+	local row = GM.ItemEntry and GM.ItemEntry(itemID)
+	local mkt = row and (row.mkt or row.mb or row.p)
+	ui.itemSub:SetText(mkt
+		and ("market " .. GoldText(mkt) .. " ea")
+		or "no market data for this item")
+end
+
 function OU.Post()
 	local board = ui.board
 	if not board then
 		ui.postMsg:SetText("no board — join one first (/goblin board <name>)")
 		return
 	end
-	local itemID = tonumber(ui.itemE:GetText())
+	local itemID = ui.itemID
 	local qty = tonumber(ui.qtyE:GetText())
 	local gold = tonumber(ui.priceE:GetText())
 	local hrs = tonumber(ui.ttlE:GetText())
-	if not (itemID and qty and gold) or qty < 1 or gold <= 0 then
-		ui.postMsg:SetText("itemID + qty + price required")
+	if not itemID then
+		ui.postMsg:SetText("drop an item on the strip first")
+		return
+	end
+	if not (qty and gold) or qty < 1 or gold <= 0 then
+		ui.postMsg:SetText("qty + price required")
 		return
 	end
 	local ppu = math.floor(gold * 10000)
@@ -220,9 +319,9 @@ function OU.Post()
 		ui.postMsg:SetText(GM.CC("warn")
 			.. "posted — UNDERFUNDED (purse < reserves)|r")
 	else
-		ui.postMsg:SetText("posted " .. rid .. " — stages on next flush")
+		ui.postMsg:SetText("posted " .. rid .. " — live on mesh + next flush")
 	end
-	ui.itemE:SetText(""); ui.qtyE:SetText(""); ui.priceE:SetText("")
+	ui.qtyE:SetText(""); ui.priceE:SetText("")
 end
 
 local function OrderRow(r, o, me)
@@ -284,9 +383,9 @@ function OU.Refresh()
 	end
 	ui.boardBar:SetText(label)
 
-	-- hint: reserve state + cadence note
+	-- hint: reserve state + refresh semantics
 	local res = OR.ReserveTotal()
-	local h = "boards refresh on /reload"
+	local h = "live via mesh · pull reconciles"
 	if res > 0 then
 		h = ("reserved %s — "):format(GoldText(res)) .. h
 	end

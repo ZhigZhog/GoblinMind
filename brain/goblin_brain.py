@@ -2394,6 +2394,9 @@ def _backend_emit():
     # backend configured so the same uuid anchors in-game writs.
     # Safe to emit: the bearer token stays in api_state.
     out['install'] = st.get('install_uuid') or _install_uuid()
+    # the numeric half lets the addon rebuild server row ids
+    # (orders are 'install:op') — mesh posts become claimable live
+    out['installID'] = st.get('backend_install_id')
     if st.get('backend_req_at'):
         out['ack'] = st['backend_req_at']
     # newest failed direction wins — its err string rides the record
