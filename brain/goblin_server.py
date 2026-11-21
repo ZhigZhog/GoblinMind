@@ -539,37 +539,106 @@ def _stat(conn, install_id, col):
         % (col, col, col), (install_id,))
 
 
-def _stats_of(conn, install_id):
-    row = conn.execute(
-        'SELECT %s FROM install_stats WHERE install_id=?'
-        % ','.join(STAT_COLS), (install_id,)).fetchone()
-    return dict(zip(STAT_COLS, row)) if row else {
-        c: 0 for c in STAT_COLS}
+def _stats_bulk(conn, iids):
+    """One stats read for a whole board pull — every poster and
+    crafter at once instead of a query per lookup."""
+    out = {i: {c: 0 for c in STAT_COLS} for i in iids}
+    if iids:
+        q = ('SELECT install_id,%s FROM install_stats WHERE '
+             'install_id IN (%s)' % (
+                 ','.join(STAT_COLS), ','.join('?' * len(iids))))
+        for row in conn.execute(q, tuple(iids)):
+            out[row[0]] = dict(zip(STAT_COLS, row[1:]))
+    return out
 
 
-def _order_dict(conn, r):
-    (oid, board, iid, qty, filled, held, ppu, ttl, poster, puuid,
-     backed, created, expires, state) = r[:14]
-    cms = conn.execute(
-        'SELECT id, units, units_filled, crafter, crafter_uuid, '
-        'expires, state, install_id, accepted FROM commits '
-        'WHERE order_id=? ORDER BY created', (oid,)).fetchall()
-    return {
-        'id': oid, 'board': board, 'itemID': iid,
-        'qtyTotal': qty, 'qtyFilled': filled,
-        'remaining': qty - filled - held,
-        'pricePerUnit': ppu, 'claimTTL': int(ttl),
-        'poster': poster, 'posterUUID': puuid,
-        'backed': bool(backed),
-        'created': int(created), 'expires': int(expires),
-        'state': state,
-        'posterStats': _stats_of(conn, r[14]),
-        'commits': [{'id': c[0], 'units': c[1],
-                     'unitsFilled': c[2], 'crafter': c[3],
-                     'crafterUUID': c[4], 'expires': int(c[5]),
-                     'state': c[6], 'accepted': bool(c[8]),
-                     'crafterStats': _stats_of(conn, c[7])}
-                    for c in cms]}
+def _order_row(conn, oid):
+    """15-col row: the 14 order_dict fields + install_id."""
+    return conn.execute(
+        'SELECT id,board,item_id,qty_total,qty_filled,qty_held,'
+        'price_per_unit,claim_ttl,poster,poster_uuid,backed,'
+        'created,expires,state,install_id FROM orders WHERE id=?',
+        (oid,)).fetchone()
+
+
+def _order_dicts(conn, rows):
+    """Serialize 15-col order rows with commits + stats — the batch
+    path: 2 queries for the whole list (commits IN, stats IN)
+    instead of a commits query per order and a stats query per
+    order+commit. A 200-order pull was ~600 queries."""
+    oids = [r[0] for r in rows]
+    cms = {o: [] for o in oids}
+    iids = {r[14] for r in rows}
+    if oids:
+        q = ('SELECT order_id,id,units,units_filled,crafter,'
+             'crafter_uuid,expires,state,install_id,accepted '
+             'FROM commits WHERE order_id IN (%s) ORDER BY created'
+             % ','.join('?' * len(oids)))
+        for c in conn.execute(q, oids):
+            cms[c[0]].append(c)
+            iids.add(c[8])
+    stats = _stats_bulk(conn, iids)
+    out = []
+    for r in rows:
+        (oid, board, iid, qty, filled, held, ppu, ttl, poster,
+         puuid, backed, created, expires, state) = r[:14]
+        out.append({
+            'id': oid, 'board': board, 'itemID': iid,
+            'qtyTotal': qty, 'qtyFilled': filled,
+            'remaining': qty - filled - held,
+            'pricePerUnit': ppu, 'claimTTL': int(ttl),
+            'poster': poster, 'posterUUID': puuid,
+            'backed': bool(backed),
+            'created': int(created), 'expires': int(expires),
+            'state': state,
+            'posterStats': stats[r[14]],
+            'commits': [
+                {'id': c[1], 'units': c[2],
+                 'unitsFilled': c[3], 'crafter': c[4],
+                 'crafterUUID': c[5], 'expires': int(c[6]),
+                 'state': c[7], 'accepted': bool(c[9]),
+                 'crafterStats': stats[c[8]]}
+                for c in cms[oid]]})
+    return out
+
+
+def _order_json(conn, oid):
+    """Single-order serialize — same payload as the board list."""
+    row = _order_row(conn, oid)
+    return _order_dicts(conn, [row])[0] if row else None
+
+
+def _commit_of(conn, board, cid):
+    r = conn.execute(
+        'SELECT id,order_id,units,units_filled,crafter,'
+        'crafter_uuid,unit_price,expires,state,install_id '
+        'FROM commits WHERE board=? AND id=?',
+        (board, cid)).fetchone()
+    return {'id': r[0], 'orderID': r[1], 'units': r[2],
+            'unitsFilled': r[3], 'crafter': r[4],
+            'crafterUUID': r[5], 'unitPrice': r[6],
+            'expires': int(r[7]), 'state': r[8]}
+
+
+def _commit_pick(conn, oid, body):
+    """Which active commit does a fill/reject land on? Explicit
+    'commit' id wins, else oldest with unfilled units matching
+    the mail sender's name (alt-mismatch → unmatched COD stays
+    client-side)."""
+    cid = body.get('commit')
+    if cid:
+        return conn.execute(
+            "SELECT id,install_id,units,units_filled FROM commits "
+            "WHERE id=? AND order_id=? AND state='active'",
+            (str(cid)[:64], oid)).fetchone()
+    mail = str(body.get('mailFrom') or '')[:24]
+    q = "SELECT id,install_id,units,units_filled FROM commits " \
+        "WHERE order_id=? AND state='active' AND " \
+        "units_filled<units %s ORDER BY created"
+    if mail:
+        return conn.execute(q % 'AND crafter=?',
+                            (oid, mail)).fetchone()
+    return conn.execute(q % '', (oid,)).fetchone()
 
 
 def _board_row(conn, name):
@@ -618,7 +687,741 @@ def _uuid_of(conn, install_id):
     return row[0] if row else None
 
 
+def _orate(conn, install):
+    """Order-op token bucket — 60/10min, separate from the
+    upload bucket so board chatter can't starve book uploads.
+    Same wart as uploads by design: counts before validation."""
+    bucket = time.time() // 600
+    conn.execute(
+        'INSERT INTO orate(install_id,bucket,n) VALUES(?,?,1) '
+        'ON CONFLICT(install_id,bucket) DO UPDATE SET n=n+1',
+        (install, bucket))
+    n = conn.execute('SELECT n FROM orate WHERE install_id=? '
+                     'AND bucket=?', (install, bucket)).fetchone()[0]
+    conn.commit()
+    return n > ORDER_RATE
+
+
+# ============ route table ============
+# One registry for every endpoint — @route declares method, path
+# pattern ({x} captures one segment, trailing /* = prefix match),
+# and flags beside the handler it dispatches to. do_GET/POST/DELETE
+# all funnel through the single _handle dispatch — no parallel
+# if-chains per method.
+#
+# flags: OPEN = no bearer required; AUTH = Bearer install token;
+#        ORDOP = AUTH + orate bucket + op-nonce dedup wrapper.
+OPEN, AUTH, ORDOP = 1, 2, 4
+ROUTES = []
+
+
+def _compile(pattern):
+    segs = pattern.split('/')
+    prefix = segs[-1] == '*'
+    if prefix:
+        segs = segs[:-1]
+
+    def match(p):
+        ps = p.split('/')
+        if prefix:
+            if len(ps) <= len(segs) or ps[:len(segs)] != segs:
+                return None
+            return {}
+        if len(ps) != len(segs):
+            return None
+        caps = {}
+        for want, got in zip(segs, ps):
+            if want[:1] == '{' and want[-1:] == '}':
+                caps[want[1:-1]] = got
+            elif want != got:
+                return None
+        return caps
+    return match
+
+
+def _route(method, pattern, flags):
+    def deco(fn):
+        ROUTES.append((method, _compile(pattern), fn, flags))
+        return fn
+    return deco
+
+
+def _route_match(method, path):
+    for m, match, fn, flags in ROUTES:
+        if m == '*' or m == method:
+            caps = match(path)
+            if caps is not None:
+                return fn, flags, caps
+    return None
+
+
+# ============ handlers (conn, ctx) ============
+# ctx carries everything a route needs: 'm'ethod, 'p'ath, 'q'uery,
+# 'body' (POST JSON or None), 'now', 'send' (bound _send),
+# 'is_admin' (bound checker), 'install' (authed id or None), plus
+# captured path segments. One signature for the whole surface.
+
+
+@_route('GET', '/v1/health', OPEN)
+def h_health(conn, ctx):
+    scopes = [r[0] for r in conn.execute(
+        'SELECT DISTINCT scope FROM uploads')]
+    installs = [{'name': name, 'uuid': uid,
+                 'scopes': (scs or '').split(',') if scs else [],
+                 'uploads': n, 'last': last, 'seen': seen}
+                for name, uid, scs, n, last, seen in conn.execute(
+            'SELECT i.name, i.uuid, '
+            'GROUP_CONCAT(DISTINCT u.scope), '
+            'COUNT(u.id), MAX(u.t), i.last_seen '
+            'FROM installs i '
+            'LEFT JOIN uploads u ON u.install_id=i.id '
+            'GROUP BY i.id ORDER BY i.name')]
+    ctx['send'](200, {'ok': True, 'scopes': scopes,
+                      'installs': installs})
+
+
+@_route('GET', '/v1/scopes', OPEN)
+def h_scopes(conn, ctx):
+    # open like health — lets installers offer real scope choices
+    # instead of asking the user to type one
+    ctx['send'](200, {'scopes': [r[0] for r in conn.execute(
+        'SELECT DISTINCT scope FROM uploads')]})
+
+
+@_route('GET', '/v1/book', 0)
+def h_book(conn, ctx):
+    scope = (ctx['q'].get('scope') or [''])[0]
+    if not SCOPE_RE.match(scope):
+        ctx['send'](400, {'error': 'bad scope'})
+        return
+    ctx['send_raw'](200, book_json(conn, scope))
+
+
+@_route('GET', '/v1/boards', 0)
+def h_boards(conn, ctx):
+    # open read — boards = explicit rows ∪ names seen on orders;
+    # implicit boards report open order counts
+    open_ct = dict(conn.execute(
+        "SELECT board, COUNT(*) FROM orders WHERE "
+        "state='open' GROUP BY board"))
+    rows = {r[0]: (r[1], r[2], r[3], r[4]) for r in conn.execute(
+        'SELECT name, owner_install, post_acl, members, closed '
+        'FROM boards')}
+    names = sorted(set(open_ct) | set(rows))
+    ctx['send'](200, {'boards': [
+        {'name': n, 'open': open_ct.get(n, 0),
+         'acl': rows[n][1] if n in rows else 'open',
+         'members': json.loads(rows[n][2]) if n in rows else [],
+         'closed': bool(rows[n][3]) if n in rows else False}
+        for n in names]})
+
+
+@_route('GET', '/v1/boards/{b}/orders', 0)
+def h_orders(conn, ctx):
+    board = ctx['b']
+    if not SCOPE_RE.match(board):
+        ctx['send'](400, {'error': 'bad board'})
+        return
+    now = ctx['now']
+    # lazy commit-TTL sweep, batched for the board — one probe
+    # covers every open order instead of a query each
+    exp = conn.execute(
+        "SELECT id, install_id, order_id FROM commits WHERE "
+        "state='active' AND expires<? AND order_id IN (SELECT id "
+        "FROM orders WHERE board=? AND state='open')",
+        (now, board)).fetchall()
+    for cid, inst, oid in exp:
+        conn.execute("UPDATE commits SET state='released' WHERE id=?",
+                     (cid,))
+        _stat(conn, inst, 'commits_expired')
+    for oid in {r[2] for r in exp}:
+        _pool_refresh(conn, oid)
+    conn.commit()
+    rows = conn.execute(
+        'SELECT id,board,item_id,qty_total,qty_filled,qty_held,'
+        'price_per_unit,claim_ttl,poster,poster_uuid,backed,'
+        'created,expires,state,install_id FROM orders WHERE '
+        "board=? AND (state='open' OR (? AND expires>?-86400)) "
+        'ORDER BY created DESC LIMIT 200',
+        (board, bool(ctx['q'].get('all') == ['1']), now)).fetchall()
+    ctx['send'](200, {'orders': _order_dicts(conn, rows)})
+
+
+@_route('POST', '/v1/register', OPEN)
+def h_register(conn, ctx):
+    body = ctx['body'] or {}
+    cfg = _server_cfg()
+    # register_mode: 'open' | 'secret' (key required) |
+    # 'whitelist' (uuid in cfg.whitelist). Absent mode =
+    # legacy: secret required iff install_secret set.
+    mode = cfg.get('register_mode') or (
+        'secret' if cfg.get('install_secret') else 'open')
+    if mode == 'secret' and not secrets.compare_digest(
+            str(body.get('key') or ''),
+            str(cfg.get('install_secret') or '')):
+        ctx['send'](403, {'error': 'key'})
+        return
+    uid = str(body.get('uuid') or '')[:64] or None
+    if mode == 'whitelist' and uid not in (
+            cfg.get('whitelist') or []):
+        ctx['send'](403, {'error': 'whitelist'})
+        return
+    name = str(body.get('name') or 'install')[:64]
+    # client-supplied stable id — 'who is who' without
+    # handmade accounts; COALESCE keeps a stored uuid
+    # when a re-register doesn't send one
+    row = conn.execute(
+        'SELECT id FROM installs WHERE name=?', (name,)).fetchone()
+    tok = secrets.token_urlsafe(24)
+    if row:
+        # re-register = re-key the existing install (lost
+        # api_state / reinstall) — no zombie rows per name
+        conn.execute(
+            'UPDATE installs SET token=?, '
+            'uuid=COALESCE(?, uuid) WHERE id=?',
+            (tok, uid, row[0]))
+        conn.commit()
+        ctx['send'](200, {'install_id': row[0], 'token': tok,
+                          'uuid': uid or _install_uuid(conn, row[0])})
+        return
+    cur = conn.execute(
+        'INSERT INTO installs(name, token, uuid, created) '
+        'VALUES(?,?,?,?)',
+        (name, tok, uid, ctx['now']))
+    conn.commit()
+    ctx['send'](200, {'install_id': cur.lastrowid,
+                      'token': tok, 'uuid': uid})
+
+
+@_route('POST', '/v1/upload', AUTH)
+def h_upload(conn, ctx):
+    install = ctx['install']
+    # 10 uploads / 10 minutes per install
+    bucket = ctx['now'] // 600
+    conn.execute(
+        'INSERT INTO rate(install_id,bucket,n) VALUES(?,?,1) '
+        'ON CONFLICT(install_id,bucket) DO UPDATE SET n=n+1',
+        (install, bucket))
+    if (conn.execute('SELECT n FROM rate WHERE install_id=? '
+                     'AND bucket=?', (install, bucket))
+            .fetchone()[0]) > 10:
+        conn.commit()
+        ctx['send'](429, {'error': 'rate'})
+        return
+    body = ctx['body']
+    if not isinstance(body, dict):
+        ctx['send'](400, {'error': 'body'})
+        return
+    scope = str(body.get('scope') or '')
+    t = body.get('t')
+    items = clean_items(body.get('items'))
+    lots = body.get('lots') or {}
+    if not SCOPE_RE.match(scope) or not isinstance(
+            t, (int, float)) or not items or \
+            len(items) > MAX_ITEMS:
+        ctx['send'](400, {'error': 'payload'})
+        conn.commit()
+        return
+    lots = {str(k): int(v) for k, v in lots.items()
+            if isinstance(v, (int, float))}
+    # t is client-claimed and drives newest-wins, the staleness
+    # cutoff, and GC — a book can't be newer than now, so cap
+    # future dates. Past values pass through: an old scan
+    # uploaded late is legitimately old data.
+    t = min(float(t), ctx['now'])
+    conn.execute(
+        'INSERT OR REPLACE INTO '
+        'uploads(install_id,scope,t,items,lots) '
+        'VALUES(?,?,?,?,?)',
+        (install, scope, t, json.dumps(items),
+         json.dumps(lots)))
+    # retention: keep newest KEEP_PER_INSTALL per install+scope
+    conn.execute(
+        'DELETE FROM uploads WHERE install_id=? AND scope=? '
+        'AND id NOT IN (SELECT id FROM uploads WHERE '
+        'install_id=? AND scope=? ORDER BY t DESC LIMIT ?)',
+        (install, scope, install, scope, KEEP_PER_INSTALL))
+    store_drops(conn, install, scope, body.get('drops'))
+    conn.execute('UPDATE installs SET last_seen=? WHERE id=?',
+                 (ctx['now'], install))
+    conn.commit()
+    _book_invalidate(scope)
+    ctx['send'](200, {'ok': True, 'items': len(items)})
+
+
+# ---- writ ops (ORDOP wrapper: orate -> body -> dedup -> run) ----
+
+
+def _ordop(conn, ctx, fn):
+    """Authed board mutation — every mutating op is idempotent via
+    its 'op' nonce (order_ops) or its own row id. The ONE wrapper
+    for every write route: rate limit -> body check -> replay ->
+    run -> store -> respond. Handlers return the result dict to
+    store+send, or None after sending their own error (validation
+    failures are NOT deduped — a retried op re-evaluates)."""
+    if _orate(conn, ctx['install']):
+        ctx['send'](429, {'error': 'rate'})
+        return
+    body = ctx['body']
+    if not isinstance(body, dict):
+        ctx['send'](400, {'error': 'body'})
+        return
+    if 'b' in ctx and not SCOPE_RE.match(ctx['b']):
+        ctx['send'](400, {'error': 'bad board'})
+        return
+    op = str(body.get('op') or '')[:64]
+    seen = _op_seen(conn, ctx['install'], op)
+    if seen is not None:
+        seen['dup'] = True
+        ctx['send'](200, seen)
+        return
+    ctx['uid'] = _uuid_of(conn, ctx['install']) or ''
+    res = fn(conn, ctx)
+    if res is None:
+        return
+    _op_store(conn, ctx['install'], op, res)
+    conn.commit()
+    ctx['send'](200, res)
+
+
+@_route('POST', '/v1/ignore', ORDOP)
+def o_ignore(conn, ctx):
+    tgt = str(ctx['body'].get('uuid') or '')[:64]
+    if not tgt:
+        ctx['send'](400, {'error': 'uuid'})
+        return None
+    if ctx['body'].get('on'):
+        conn.execute('INSERT OR IGNORE INTO ignores VALUES(?,?)',
+                     (ctx['install'], tgt))
+    else:
+        conn.execute('DELETE FROM ignores WHERE install_id=? AND '
+                     'target_uuid=?', (ctx['install'], tgt))
+    conn.commit()
+    return {'ok': True}
+
+
+@_route('POST', '/v1/boards/{b}/ban', ORDOP)
+def o_ban(conn, ctx):
+    brow = _board_row(conn, ctx['b'])
+    if not brow or brow[1] != ctx['install']:
+        ctx['send'](403, {'error': 'owner'})
+        return None
+    tgt = str(ctx['body'].get('uuid') or '')[:64]
+    if not tgt:
+        ctx['send'](400, {'error': 'uuid'})
+        return None
+    if ctx['body'].get('on'):
+        conn.execute('INSERT OR REPLACE INTO board_bans VALUES(?,?)',
+                     (ctx['b'], tgt))
+    else:
+        conn.execute('DELETE FROM board_bans WHERE board=? AND '
+                     'uuid=?', (ctx['b'], tgt))
+    conn.commit()
+    return {'ok': True}
+
+
+@_route('POST', '/v1/boards/{b}/orders', ORDOP)
+def o_post(conn, ctx):
+    """Create a standing buy order. id = install:op so a staged-
+    op replay hits INSERT-IGNORE and returns the same row."""
+    board, body, install = ctx['b'], ctx['body'], ctx['install']
+    now, op, uid = ctx['now'], ctx['body'].get('op'), ctx['uid']
+    gate = _board_write_ok(conn, board, uid)
+    if gate:
+        ctx['send'](403, {'error': gate})
+        return None
+    try:
+        iid = int(body.get('itemID'))
+        qty = int(body.get('qtyTotal'))
+        ppu = int(body.get('pricePerUnit'))
+    except (TypeError, ValueError):
+        ctx['send'](400, {'error': 'payload'})
+        return None
+    if not (1 <= qty <= ORDER_MAX_QTY and 1 <= ppu <= MAX_PRICE):
+        ctx['send'](400, {'error': 'payload'})
+        return None
+    ttl = body.get('claimTTL')
+    ttl = min(max(int(ttl), CLAIM_TTL_MIN), CLAIM_TTL_MAX) \
+        if isinstance(ttl, (int, float)) else CLAIM_TTL_DEF
+    exp = body.get('expires')
+    exp = min(float(exp), now + ORDER_MAX_AGE) \
+        if isinstance(exp, (int, float)) and exp > now + 600 \
+        else now + ORDER_MAX_AGE
+    n = conn.execute(
+        "SELECT COUNT(*) FROM orders WHERE install_id=? AND "
+        "board=? AND state='open'", (install, board)).fetchone()[0]
+    if n >= ORDER_OPEN_CAP:
+        ctx['send'](429, {'error': 'cap'})
+        return None
+    oid = '%s:%s' % (install, op or secrets.token_hex(6))
+    poster = str(body.get('poster') or '')[:24]
+    conn.execute(
+        'INSERT OR IGNORE INTO orders(id,board,install_id,'
+        'item_id,qty_total,qty_filled,qty_held,price_per_unit,'
+        'claim_ttl,poster,poster_uuid,backed,created,expires,'
+        'state) VALUES(?,?,?,?,?,0,0,?,?,?,?,?,?,?,"open")',
+        (oid, board, install, iid, qty, ppu, ttl, poster, uid,
+         1 if body.get('backed', True) else 0, now, exp))
+    row = _order_row(conn, oid)
+    if not row or row[14] != install:
+        ctx['send'](403, {'error': 'id'})
+        return None
+    _stat(conn, install, 'orders_posted')
+    conn.commit()
+    return {'ok': True, 'order': _order_dicts(conn, [row])[0]}
+
+
+@_route('POST', '/v1/boards/{b}/orders/{oid}/{verb}', ORDOP)
+def o_verb(conn, ctx):
+    spec = ORDER_VERBS.get(ctx['verb'])
+    if spec is None:
+        ctx['send'](404, {'error': 'not found'})
+        return None
+    row = _order_row(conn, ctx['oid'])
+    if not row or row[1] != ctx['b'] or row[13] != 'open':
+        ctx['send'](404, {'error': 'order'})
+        return None
+    _expire_order(conn, ctx['oid'], ctx['now'])
+    if spec[0] == 'poster' and row[14] != ctx['install']:
+        ctx['send'](403, {'error': 'poster'})
+        return None
+    return spec[1](conn, ctx, row, *spec[2:])
+
+
+def _op_claim(conn, ctx, row):
+    oid, body = row[0], ctx['body']
+    gate = _board_write_ok(conn, ctx['b'], ctx['uid'])
+    if gate:
+        ctx['send'](403, {'error': gate})
+        return None
+    if conn.execute('SELECT 1 FROM ignores WHERE install_id=? '
+                    'AND target_uuid=?',
+                    (row[14], ctx['uid'])).fetchone():
+        ctx['send'](403, {'error': 'ignored'})
+        return None
+    try:
+        units = int(body.get('units'))
+    except (TypeError, ValueError):
+        units = 0
+    if not 1 <= units <= ORDER_MAX_QTY:
+        ctx['send'](400, {'error': 'units'})
+        return None
+    crafter = str(body.get('crafter') or '')[:24]
+    cid = '%s:%s' % (ctx['install'],
+                     ctx['body'].get('op') or secrets.token_hex(6))
+    cur = conn.execute(
+        'INSERT OR IGNORE INTO commits(id,order_id,board,'
+        'install_id,crafter,crafter_uuid,units,units_filled,'
+        'unit_price,created,expires,state) '
+        'VALUES(?,?,?,?,?,?,?,0,?,?,?,"active")',
+        (cid, oid, ctx['b'], ctx['install'], crafter, ctx['uid'],
+         units, row[6], ctx['now'], min(ctx['now'] + row[7], row[12])))
+    if not cur.rowcount:                # replay — same commit id
+        return {'ok': True, 'commit': _commit_of(conn, ctx['b'], cid)}
+    held = conn.execute(
+        "UPDATE orders SET qty_held=qty_held+? WHERE id=? AND "
+        "state='open' AND qty_total-qty_filled-qty_held>=?",
+        (units, oid, units)).rowcount
+    if not held:
+        conn.execute("UPDATE commits SET state='void' WHERE id=?",
+                     (cid,))
+        conn.commit()
+        rem = row[3] - row[4] - conn.execute(
+            'SELECT qty_held FROM orders WHERE id=?',
+            (oid,)).fetchone()[0]
+        ctx['send'](409, {'error': 'units', 'remaining': rem})
+        return None
+    conn.commit()
+    return {'ok': True, 'commit': _commit_of(conn, ctx['b'], cid)}
+
+
+def _op_fill(conn, ctx, row):
+    """Poster looted a COD — credit units to the matching commit
+    and the order. Unmatched fills (no active commit) still
+    count: the goods arrived, the order needs fewer units."""
+    oid, body = row[0], ctx['body']
+    try:
+        units = int(body.get('units'))
+    except (TypeError, ValueError):
+        units = 0
+    if not 1 <= units <= ORDER_MAX_QTY:
+        ctx['send'](400, {'error': 'units'})
+        return None
+    c = _commit_pick(conn, oid, body)
+    applied = min(units, row[3] - row[4])   # cap at order need
+    if applied <= 0:
+        ctx['send'](400, {'error': 'units'})
+        return None
+    if c:
+        left = c[2] - c[3]
+        take = min(applied, left)
+        conn.execute(
+            'UPDATE commits SET units_filled=units_filled+? '
+            'WHERE id=?', (take, c[0]))
+        if take >= left:
+            conn.execute(
+                "UPDATE commits SET state='filled' WHERE id=?",
+                (c[0],))
+            _stat(conn, c[1], 'commits_filled')
+    conn.execute(
+        'UPDATE orders SET qty_filled=qty_filled+? WHERE id=?',
+        (applied, oid))
+    conn.execute(
+        "UPDATE orders SET state='filled' WHERE id=? AND "
+        "qty_filled>=qty_total", (oid,))
+    _pool_refresh(conn, oid)
+    if conn.execute("SELECT state FROM orders WHERE id=?",
+                    (oid,)).fetchone()[0] == 'filled':
+        _stat(conn, ctx['install'], 'orders_filled')
+    conn.commit()
+    return {'ok': True, 'order': _order_json(conn, oid)}
+
+
+def _op_reject(conn, ctx, row):
+    """Poster returned a COD — the commit's unfilled units go
+    back to the pool; poster's fills_rejected climbs (the stat
+    crafters see)."""
+    oid = row[0]
+    c = _commit_pick(conn, oid, ctx['body'])
+    if c:
+        conn.execute(
+            "UPDATE commits SET state='rejected' WHERE id=?",
+            (c[0],))
+        _pool_refresh(conn, oid)
+    _stat(conn, ctx['install'], 'fills_rejected')
+    conn.commit()
+    return {'ok': True, 'order': _order_json(conn, oid)}
+
+
+def _op_accept(conn, ctx, row):
+    """Poster green-lights a claim — commits gain an 'accepted'
+    flag the crafter sees as go-ahead signal. No state change:
+    the pool stays committed either way."""
+    oid = row[0]
+    cid = str(ctx['body'].get('commit') or '')[:64]
+    c = conn.execute(
+        "SELECT id FROM commits WHERE id=? AND order_id=? AND "
+        "state='active'", (cid, oid)).fetchone()
+    if not c:
+        ctx['send'](404, {'error': 'commit'})
+        return None
+    conn.execute('UPDATE commits SET accepted=1 WHERE id=?',
+                 (cid,))
+    conn.commit()
+    return {'ok': True, 'order': _order_json(conn, oid)}
+
+
+def _op_commit_end(conn, ctx, row, how):
+    """Poster ends a claim before delivery. 'deny' is a polite
+    refusal — units return to the pool, NO stat (the design is
+    explicit: deny carries no penalty). 'force' frees the units
+    of a claim that isn't delivering and books
+    commits_forced against the vendor — the rating denominator."""
+    oid = row[0]
+    cid = str(ctx['body'].get('commit') or '')[:64]
+    c = conn.execute(
+        'SELECT id, install_id FROM commits WHERE id=? AND '
+        "order_id=? AND state='active'", (cid, oid)).fetchone()
+    if not c:
+        ctx['send'](404, {'error': 'commit'})
+        return None
+    conn.execute("UPDATE commits SET state='released' "
+                 "WHERE id=?", (cid,))
+    _pool_refresh(conn, oid)
+    if how == 'force':
+        _stat(conn, c[1], 'commits_forced')
+    conn.commit()
+    return {'ok': True, 'order': _order_json(conn, oid)}
+
+
+def _op_cancel(conn, ctx, row):
+    """units absent/≥uncommitted pool → whole cancel (commits
+    void). Fewer → pool shrinks by that much, commits keep."""
+    oid = row[0]
+    uncommitted = row[3] - row[4] - row[5]
+    try:
+        units = ctx['body'].get('units')
+        units = int(units) if units is not None else None
+    except (TypeError, ValueError):
+        units = None
+    if units is None or units >= uncommitted:
+        conn.execute(
+            "UPDATE commits SET state='void' WHERE order_id=? "
+            "AND state='active'", (oid,))
+        conn.execute(
+            "UPDATE orders SET state='cancelled' WHERE id=?",
+            (oid,))
+        _stat(conn, row[14], 'orders_cancelled')
+    else:
+        if units < 1:
+            ctx['send'](400, {'error': 'units'})
+            return None
+        conn.execute(
+            'UPDATE orders SET qty_total=qty_total-? WHERE id=?',
+            (units, oid))
+    _pool_refresh(conn, oid)
+    conn.commit()
+    return {'ok': True, 'order': _order_json(conn, oid)}
+
+
+# order verbs — 'poster' ops 403 unless the caller owns the order;
+# 'any' ops only need the order open (claim = crafter side).
+# The 'how' tail feeds the shared commit-end handler. Defined
+# after the _op_* functions so the entries are real references.
+ORDER_VERBS = {
+    'claim':  ('any',    _op_claim),
+    'fill':   ('poster', _op_fill),
+    'reject': ('poster', _op_reject),
+    'cancel': ('poster', _op_cancel),
+    'accept': ('poster', _op_accept),
+    'deny':   ('poster', _op_commit_end, 'deny'),
+    'force':  ('poster', _op_commit_end, 'force'),
+}
+
+
+@_route('POST', '/v1/boards/{b}/commits/{cid}/release', ORDOP)
+def o_release(conn, ctx):
+    """Crafter gives up a hold — unfilled units return to the
+    pool. Stat-free: voluntary abandon ≠ TTL flake."""
+    r = conn.execute(
+        "SELECT order_id, install_id, state FROM commits WHERE "
+        "board=? AND id=?", (ctx['b'], ctx['cid'])).fetchone()
+    if not r or r[2] != 'active':
+        ctx['send'](404, {'error': 'commit'})
+        return None
+    if r[1] != ctx['install']:
+        ctx['send'](403, {'error': 'crafter'})
+        return None
+    conn.execute("UPDATE commits SET state='released' WHERE id=?",
+                 (ctx['cid'],))
+    _pool_refresh(conn, r[0])
+    conn.commit()
+    return {'ok': True}
+
+
+# ---- host admin (loopback + X-Admin-Key) ----
+
+
+@_route('*', '/v1/admin/*', 0)
+def admin_op(conn, ctx):
+    if not ctx['is_admin']():
+        ctx['send'](403, {'error': 'admin'})
+        return
+    method, p = ctx['m'], ctx['p'].split('/')
+    if method == 'GET' and ctx['p'] == '/v1/admin/installs':
+        ctx['send'](200, {'installs': [
+            {'id': r[0], 'name': r[1], 'uuid': r[2],
+             'seen': r[3], 'banned': bool(r[4])}
+            for r in conn.execute(
+                'SELECT id,name,uuid,last_seen,banned FROM '
+                'installs ORDER BY id')]})
+        return
+    if method == 'GET' and ctx['p'] == '/v1/admin/boards':
+        ctx['send'](200, {'boards': [
+            {'name': r[0], 'owner': r[1], 'acl': r[2],
+             'members': json.loads(r[3] or '[]'),
+             'closed': bool(r[4])}
+            for r in conn.execute(
+                'SELECT name,owner_install,post_acl,members,'
+                'closed FROM boards ORDER BY name')]})
+        return
+    if method == 'POST' and len(p) == 4 and p[3] == 'boards':
+        body = ctx['body'] or {}
+        name = str(body.get('name') or '')[:64]
+        if not SCOPE_RE.match(name):
+            ctx['send'](400, {'error': 'name'})
+            return
+        owner = body.get('owner')
+        conn.execute(
+            'INSERT OR IGNORE INTO boards(name,owner_install,'
+            'post_acl,members,closed,created) VALUES(?,?,?,?,0,?)',
+            (name, int(owner) if owner else None, 'open', '[]',
+             ctx['now']))
+        conn.commit()
+        ctx['send'](200, {'ok': True})
+        return
+    if method == 'POST' and len(p) == 5 and p[3] == 'boards':
+        body = ctx['body'] or {}
+        brow = _board_row(conn, p[4])
+        if not brow:
+            ctx['send'](404, {'error': 'board'})
+            return
+        sets, vals = [], []
+        if 'acl' in body and body['acl'] in ('open', 'members'):
+            sets.append('post_acl=?')
+            vals.append(body['acl'])
+        if 'members' in body and isinstance(body['members'], list):
+            sets.append('members=?')
+            vals.append(json.dumps(
+                [str(m)[:64] for m in body['members']][:200]))
+        if 'closed' in body:
+            sets.append('closed=?')
+            vals.append(1 if body['closed'] else 0)
+        if 'owner' in body:
+            sets.append('owner_install=?')
+            vals.append(int(body['owner'])
+                        if body['owner'] else None)
+        if sets:
+            conn.execute('UPDATE boards SET %s WHERE name=?'
+                         % ','.join(sets), vals + [p[4]])
+            conn.commit()
+        ctx['send'](200, {'ok': True})
+        return
+    if method == 'POST' and len(p) == 5 and p[3] == 'installs':
+        body = ctx['body'] or {}
+        try:
+            iid = int(p[4])
+        except ValueError:
+            ctx['send'](400, {'error': 'id'})
+            return
+        if body.get('banned'):
+            conn.execute('UPDATE installs SET banned=1 WHERE id=?',
+                         (iid,))
+            _purge_install(conn, iid)
+        elif 'banned' in body:
+            conn.execute('UPDATE installs SET banned=0 WHERE id=?',
+                         (iid,))
+        conn.commit()
+        ctx['send'](200, {'ok': True})
+        return
+    if method == 'DELETE' and len(p) == 5 and p[3] == 'orders':
+        conn.execute(
+            "UPDATE commits SET state='void' WHERE order_id=? "
+            "AND state='active'", (p[4],))
+        conn.execute('DELETE FROM orders WHERE id=?', (p[4],))
+        conn.commit()
+        ctx['send'](200, {'ok': True})
+        return
+    ctx['send'](404, {'error': 'not found'})
+
+
+def _purge_install(conn, iid):
+    """Ban-side purge: the install's own orders and uploads die,
+    its live commits on OTHERS' orders void (units return to
+    those pools), its bookkeeping rows go."""
+    oids = [r[0] for r in conn.execute(
+        "SELECT DISTINCT order_id FROM commits WHERE "
+        "install_id=? AND state='active'", (iid,))]
+    conn.execute("UPDATE commits SET state='void' WHERE "
+                 "install_id=? AND state='active'", (iid,))
+    for oid in oids:
+        _pool_refresh(conn, oid)
+    conn.execute(
+        "UPDATE commits SET state='void' WHERE state='active' "
+        "AND order_id IN (SELECT id FROM orders WHERE "
+        "install_id=?)", (iid,))
+    conn.execute('DELETE FROM orders WHERE install_id=?', (iid,))
+    for t in ('uploads', 'drop_n', 'drop_k', 'drop_name', 'rate',
+              'orate', 'order_ops', 'ignores', 'install_stats'):
+        conn.execute('DELETE FROM %s WHERE install_id=?' % t,
+                     (iid,))
+    _book_invalidate()
+
+
 class Handler(BaseHTTPRequestHandler):
+    """Pure plumbing: send/body/auth + the single _handle dispatch.
+    Routing lives in ROUTES, op semantics in the handlers above —
+    no per-method if-chains down here."""
     protocol_version = 'HTTP/1.1'
 
     def _send_raw(self, code, body):
@@ -664,752 +1467,49 @@ class Handler(BaseHTTPRequestHandler):
         return secrets.compare_digest(
             self.headers.get('X-Admin-Key') or '', key)
 
-    def _orate(self, conn, install):
-        """Order-op token bucket — 60/10min, separate from the
-        upload bucket so board chatter can't starve book uploads.
-        Same wart as uploads by design: counts before validation."""
-        bucket = time.time() // 600
-        conn.execute(
-            'INSERT INTO orate(install_id,bucket,n) VALUES(?,?,1) '
-            'ON CONFLICT(install_id,bucket) DO UPDATE SET n=n+1',
-            (install, bucket))
-        n = conn.execute('SELECT n FROM orate WHERE install_id=? '
-                         'AND bucket=?', (install, bucket)).fetchone()[0]
-        conn.commit()
-        return n > ORDER_RATE
-
     def log_message(self, fmt, *args):
         sys.stderr.write('%s %s\n' % (self.address_string(),
                                       fmt % args))
 
-    # ---- writ board dispatch ----
-    # paths: POST /v1/boards/{b}/orders        create
-    #        POST /v1/boards/{b}/orders/{id}/{op}
-    #        POST /v1/boards/{b}/commits/{id}/release
-    #        POST /v1/boards/{b}/ban          {uuid, on} (owner)
-    #        POST /v1/ignore                  {uuid, on}
-
-    def _order_row(self, conn, oid):
-        """15-col row: the 14 _order_dict fields + install_id."""
-        return conn.execute(
-            'SELECT id,board,item_id,qty_total,qty_filled,qty_held,'
-            'price_per_unit,claim_ttl,poster,poster_uuid,backed,'
-            'created,expires,state,install_id FROM orders WHERE id=?',
-            (oid,)).fetchone()
-
-    def _board_orders(self, conn, board, show_all):
-        now = time.time()
-        for (oid,) in conn.execute(
-                "SELECT id FROM orders WHERE board=? AND "
-                "state='open'", (board,)):
-            _expire_order(conn, oid, now)
-        conn.commit()
-        rows = conn.execute(
-            'SELECT id,board,item_id,qty_total,qty_filled,qty_held,'
-            'price_per_unit,claim_ttl,poster,poster_uuid,backed,'
-            'created,expires,state,install_id FROM orders WHERE '
-            "board=? AND (state='open' OR (? AND expires>?-86400)) "
-            'ORDER BY created DESC LIMIT 200',
-            (board, bool(show_all), now)).fetchall()
-        self._send(200, {'orders': [
-            _order_dict(conn, r) for r in rows]})
-
-    def _board_op(self, conn, path, install):
-        """Authed board mutation — every mutating op is idempotent
-        via its 'op' nonce (order_ops) or its own row id."""
-        if self._orate(conn, install):
-            self._send(429, {'error': 'rate'})
-            return
-        body = self._body()
-        if not isinstance(body, dict):
-            self._send(400, {'error': 'body'})
-            return
-        op = str(body.get('op') or '')[:64]
-        seen = _op_seen(conn, install, op)
-        if seen is not None:
-            seen['dup'] = True
-            self._send(200, seen)
-            return
-        seen = self._board_op_run(conn, path, install, body, op)
-        if seen is None:
-            return                          # response already sent
-        _op_store(conn, install, op, seen)
-        conn.commit()
-        self._send(200, seen)
-
-    def _board_op_run(self, conn, path, install, body, op):
-        """Returns the result dict to send/store, or None when the
-        response was sent already (validation/moderation failures
-        are NOT deduped — a retried op should re-evaluate)."""
-        now = time.time()
-        uid = _uuid_of(conn, install) or ''
-        p = path.split('/')
-        # /v1/ignore
-        if path == '/v1/ignore':
-            tgt = str(body.get('uuid') or '')[:64]
-            if not tgt:
-                self._send(400, {'error': 'uuid'})
-                return None
-            if body.get('on'):
-                conn.execute('INSERT OR IGNORE INTO ignores '
-                             'VALUES(?,?)', (install, tgt))
-            else:
-                conn.execute('DELETE FROM ignores WHERE install_id=? '
-                             'AND target_uuid=?', (install, tgt))
-            conn.commit()
-            return {'ok': True}
-        if len(p) < 4 or p[2] != 'boards':
-            self._send(404, {'error': 'not found'})
-            return None
-        board = p[3]
-        if not SCOPE_RE.match(board):
-            self._send(400, {'error': 'bad board'})
-            return None
-        # /v1/boards/{b}/ban
-        if len(p) == 5 and p[4] == 'ban':
-            brow = _board_row(conn, board)
-            if not brow or brow[1] != install:
-                self._send(403, {'error': 'owner'})
-                return None
-            tgt = str(body.get('uuid') or '')[:64]
-            if not tgt:
-                self._send(400, {'error': 'uuid'})
-                return None
-            if body.get('on'):
-                conn.execute('INSERT OR REPLACE INTO board_bans '
-                             'VALUES(?,?)', (board, tgt))
-            else:
-                conn.execute('DELETE FROM board_bans WHERE board=? '
-                             'AND uuid=?', (board, tgt))
-            conn.commit()
-            return {'ok': True}
-        if len(p) == 5 and p[4] == 'orders':
-            return self._op_post(conn, board, install, uid, body,
-                                 op, now)
-        if len(p) == 7 and p[4] == 'commits' and p[6] == 'release':
-            return self._op_release(conn, board, install, p[5])
-        if len(p) == 7 and p[4] == 'orders' and p[6] in (
-                'claim', 'fill', 'reject', 'cancel',
-                'accept', 'deny', 'force'):
-            return self._op_order(conn, board, install, uid, p[5],
-                                  p[6], body, op, now)
-        self._send(404, {'error': 'not found'})
-        return None
-
-    def _op_post(self, conn, board, install, uid, body, op, now):
-        """Create a standing buy order. id = install:op so a staged-
-        op replay hits INSERT-IGNORE and returns the same row."""
-        gate = _board_write_ok(conn, board, uid)
-        if gate:
-            self._send(403, {'error': gate})
-            return None
-        try:
-            iid = int(body.get('itemID'))
-            qty = int(body.get('qtyTotal'))
-            ppu = int(body.get('pricePerUnit'))
-        except (TypeError, ValueError):
-            self._send(400, {'error': 'payload'})
-            return None
-        if not (1 <= qty <= ORDER_MAX_QTY and 1 <= ppu <= MAX_PRICE):
-            self._send(400, {'error': 'payload'})
-            return None
-        ttl = body.get('claimTTL')
-        ttl = min(max(int(ttl), CLAIM_TTL_MIN), CLAIM_TTL_MAX) \
-            if isinstance(ttl, (int, float)) else CLAIM_TTL_DEF
-        exp = body.get('expires')
-        exp = min(float(exp), now + ORDER_MAX_AGE) \
-            if isinstance(exp, (int, float)) and exp > now + 600 \
-            else now + ORDER_MAX_AGE
-        n = conn.execute(
-            "SELECT COUNT(*) FROM orders WHERE install_id=? AND "
-            "board=? AND state='open'", (install, board)).fetchone()[0]
-        if n >= ORDER_OPEN_CAP:
-            self._send(429, {'error': 'cap'})
-            return None
-        oid = '%s:%s' % (install, op or secrets.token_hex(6))
-        poster = str(body.get('poster') or '')[:24]
-        conn.execute(
-            'INSERT OR IGNORE INTO orders(id,board,install_id,'
-            'item_id,qty_total,qty_filled,qty_held,price_per_unit,'
-            'claim_ttl,poster,poster_uuid,backed,created,expires,'
-            'state) VALUES(?,?,?,?,?,0,0,?,?,?,?,?,?,?,"open")',
-            (oid, board, install, iid, qty, ppu, ttl, poster, uid,
-             1 if body.get('backed', True) else 0, now, exp))
-        row = self._order_row(conn, oid)
-        if not row or row[14] != install:
-            self._send(403, {'error': 'id'})
-            return None
-        _stat(conn, install, 'orders_posted')
-        conn.commit()
-        return {'ok': True, 'order': _order_dict(conn, row)}
-
-    def _op_order(self, conn, board, install, uid, oid, opname,
-                  body, op, now):
-        row = self._order_row(conn, oid)
-        if not row or row[1] != board or row[13] != 'open':
-            self._send(404, {'error': 'order'})
-            return None
-        _expire_order(conn, oid, now)
-        if opname == 'claim':
-            return self._op_claim(conn, board, install, uid, row,
-                                  body, op, now)
-        # fill/reject/cancel are poster-side ops
-        if row[14] != install:
-            self._send(403, {'error': 'poster'})
-            return None
-        if opname == 'cancel':
-            return self._op_cancel(conn, row, body)
-        if opname == 'fill':
-            return self._op_fill(conn, board, install, row, body, now)
-        if opname == 'accept':
-            return self._op_accept(conn, row, body)
-        if opname == 'deny':
-            return self._op_commit_end(conn, row, body, 'deny')
-        if opname == 'force':
-            return self._op_commit_end(conn, row, body, 'force')
-        return self._op_reject(conn, board, install, row, body)
-
-    def _op_claim(self, conn, board, install, uid, row, body, op,
-                  now):
-        oid = row[0]
-        gate = _board_write_ok(conn, board, uid)
-        if gate:
-            self._send(403, {'error': gate})
-            return None
-        if conn.execute('SELECT 1 FROM ignores WHERE install_id=? '
-                        'AND target_uuid=?',
-                        (row[14], uid)).fetchone():
-            self._send(403, {'error': 'ignored'})
-            return None
-        try:
-            units = int(body.get('units'))
-        except (TypeError, ValueError):
-            units = 0
-        if not 1 <= units <= ORDER_MAX_QTY:
-            self._send(400, {'error': 'units'})
-            return None
-        crafter = str(body.get('crafter') or '')[:24]
-        cid = '%s:%s' % (install, op or secrets.token_hex(6))
-        cur = conn.execute(
-            'INSERT OR IGNORE INTO commits(id,order_id,board,'
-            'install_id,crafter,crafter_uuid,units,units_filled,'
-            'unit_price,created,expires,state) '
-            'VALUES(?,?,?,?,?,?,?,0,?,?,?,"active")',
-            (cid, oid, board, install, crafter, uid, units,
-             row[6], now, min(now + row[7], row[12])))
-        if not cur.rowcount:                # replay — same commit id
-            return {'ok': True, 'commit': self._commit_of(
-                conn, board, cid)}
-        held = conn.execute(
-            "UPDATE orders SET qty_held=qty_held+? WHERE id=? AND "
-            "state='open' AND qty_total-qty_filled-qty_held>=?",
-            (units, oid, units)).rowcount
-        if not held:
-            conn.execute("UPDATE commits SET state='void' WHERE id=?",
-                         (cid,))
-            conn.commit()
-            rem = row[3] - row[4] - conn.execute(
-                'SELECT qty_held FROM orders WHERE id=?',
-                (oid,)).fetchone()[0]
-            self._send(409, {'error': 'units', 'remaining': rem})
-            return None
-        conn.commit()
-        return {'ok': True, 'commit': self._commit_of(
-            conn, board, cid)}
-
-    def _commit_of(self, conn, board, cid):
-        r = conn.execute(
-            'SELECT id,order_id,units,units_filled,crafter,'
-            'crafter_uuid,unit_price,expires,state,install_id '
-            'FROM commits WHERE board=? AND id=?',
-            (board, cid)).fetchone()
-        return {'id': r[0], 'orderID': r[1], 'units': r[2],
-                'unitsFilled': r[3], 'crafter': r[4],
-                'crafterUUID': r[5], 'unitPrice': r[6],
-                'expires': int(r[7]), 'state': r[8]}
-
-    def _commit_pick(self, conn, oid, body):
-        """Which active commit does a fill/reject land on? Explicit
-        'commit' id wins, else oldest with unfilled units matching
-        the mail sender's name (alt-mismatch → unmatched COD stays
-        client-side)."""
-        cid = body.get('commit')
-        if cid:
-            return conn.execute(
-                "SELECT id,install_id,units,units_filled FROM commits "
-                "WHERE id=? AND order_id=? AND state='active'",
-                (str(cid)[:64], oid)).fetchone()
-        mail = str(body.get('mailFrom') or '')[:24]
-        q = "SELECT id,install_id,units,units_filled FROM commits " \
-            "WHERE order_id=? AND state='active' AND " \
-            "units_filled<units %s ORDER BY created"
-        if mail:
-            return conn.execute(q % 'AND crafter=?',
-                                (oid, mail)).fetchone()
-        return conn.execute(q % '', (oid,)).fetchone()
-
-    def _op_fill(self, conn, board, install, row, body, now):
-        """Poster looted a COD — credit units to the matching commit
-        and the order. Unmatched fills (no active commit) still
-        count: the goods arrived, the order needs fewer units."""
-        oid = row[0]
-        try:
-            units = int(body.get('units'))
-        except (TypeError, ValueError):
-            units = 0
-        if not 1 <= units <= ORDER_MAX_QTY:
-            self._send(400, {'error': 'units'})
-            return None
-        c = self._commit_pick(conn, oid, body)
-        applied = min(units, row[3] - row[4])   # cap at order need
-        if applied <= 0:
-            self._send(400, {'error': 'units'})
-            return None
-        if c:
-            left = c[2] - c[3]
-            take = min(applied, left)
-            conn.execute(
-                'UPDATE commits SET units_filled=units_filled+? '
-                'WHERE id=?', (take, c[0]))
-            if take >= left:
-                conn.execute(
-                    "UPDATE commits SET state='filled' WHERE id=?",
-                    (c[0],))
-                _stat(conn, c[1], 'commits_filled')
-        conn.execute(
-            'UPDATE orders SET qty_filled=qty_filled+? WHERE id=?',
-            (applied, oid))
-        conn.execute(
-            "UPDATE orders SET state='filled' WHERE id=? AND "
-            "qty_filled>=qty_total", (oid,))
-        _pool_refresh(conn, oid)
-        if conn.execute("SELECT state FROM orders WHERE id=?",
-                        (oid,)).fetchone()[0] == 'filled':
-            _stat(conn, install, 'orders_filled')
-        conn.commit()
-        return {'ok': True, 'order': _order_dict(
-            conn, self._order_row(conn, oid))}
-
-    def _op_reject(self, conn, board, install, row, body):
-        """Poster returned a COD — the commit's unfilled units go
-        back to the pool; poster's fills_rejected climbs (the stat
-        crafters see)."""
-        oid = row[0]
-        c = self._commit_pick(conn, oid, body)
-        if c:
-            conn.execute(
-                "UPDATE commits SET state='rejected' WHERE id=?",
-                (c[0],))
-            _pool_refresh(conn, oid)
-        _stat(conn, install, 'fills_rejected')
-        conn.commit()
-        return {'ok': True, 'order': _order_dict(
-            conn, self._order_row(conn, oid))}
-
-    def _op_accept(self, conn, row, body):
-        """Poster green-lights a claim — commits gain an 'accepted'
-        flag the crafter sees as go-ahead signal. No state change:
-        the pool stays committed either way."""
-        oid = row[0]
-        cid = str(body.get('commit') or '')[:64]
-        c = conn.execute(
-            "SELECT id FROM commits WHERE id=? AND order_id=? AND "
-            "state='active'", (cid, oid)).fetchone()
-        if not c:
-            self._send(404, {'error': 'commit'})
-            return None
-        conn.execute('UPDATE commits SET accepted=1 WHERE id=?',
-                     (cid,))
-        conn.commit()
-        return {'ok': True, 'order': _order_dict(
-            conn, self._order_row(conn, oid))}
-
-    def _op_commit_end(self, conn, row, body, how):
-        """Poster ends a claim before delivery. 'deny' is a polite
-        refusal — units return to the pool, NO stat (the design is
-        explicit: deny carries no penalty). 'force' frees the units
-        of a claim that isn't delivering and books
-        commits_forced against the vendor — the rating denominator."""
-        oid = row[0]
-        cid = str(body.get('commit') or '')[:64]
-        c = conn.execute(
-            'SELECT id, install_id FROM commits WHERE id=? AND '
-            "order_id=? AND state='active'", (cid, oid)).fetchone()
-        if not c:
-            self._send(404, {'error': 'commit'})
-            return None
-        conn.execute("UPDATE commits SET state='released' "
-                     "WHERE id=?", (cid,))
-        _pool_refresh(conn, oid)
-        if how == 'force':
-            _stat(conn, c[1], 'commits_forced')
-        conn.commit()
-        return {'ok': True, 'order': _order_dict(
-            conn, self._order_row(conn, oid))}
-
-    def _op_cancel(self, conn, row, body):
-        """units absent/≥uncommitted pool → whole cancel (commits
-        void). Fewer → pool shrinks by that much, commits keep."""
-        oid = row[0]
-        uncommitted = row[3] - row[4] - row[5]
-        try:
-            units = body.get('units')
-            units = int(units) if units is not None else None
-        except (TypeError, ValueError):
-            units = None
-        if units is None or units >= uncommitted:
-            conn.execute(
-                "UPDATE commits SET state='void' WHERE order_id=? "
-                "AND state='active'", (oid,))
-            conn.execute(
-                "UPDATE orders SET state='cancelled' WHERE id=?",
-                (oid,))
-            _stat(conn, row[14], 'orders_cancelled')
-        else:
-            if units < 1:
-                self._send(400, {'error': 'units'})
-                return None
-            conn.execute(
-                'UPDATE orders SET qty_total=qty_total-? WHERE id=?',
-                (units, oid))
-        _pool_refresh(conn, oid)
-        conn.commit()
-        return {'ok': True, 'order': _order_dict(
-            conn, self._order_row(conn, oid))}
-
-    def _op_release(self, conn, board, install, cid):
-        """Crafter gives up a hold — unfilled units return to the
-        pool. Stat-free: voluntary abandon ≠ TTL flake."""
-        r = conn.execute(
-            "SELECT order_id, install_id, state FROM commits WHERE "
-            "board=? AND id=?", (board, cid)).fetchone()
-        if not r or r[2] != 'active':
-            self._send(404, {'error': 'commit'})
-            return None
-        if r[1] != install:
-            self._send(403, {'error': 'crafter'})
-            return None
-        conn.execute("UPDATE commits SET state='released' WHERE id=?",
-                     (cid,))
-        _pool_refresh(conn, r[0])
-        conn.commit()
-        return {'ok': True}
-
-    # ---- host admin (loopback + X-Admin-Key) ----
-
-    def _admin_op(self, conn, method, path):
-        if not self._admin():
-            self._send(403, {'error': 'admin'})
-            return
-        p = path.split('/')
-        if method == 'GET' and path == '/v1/admin/installs':
-            self._send(200, {'installs': [
-                {'id': r[0], 'name': r[1], 'uuid': r[2],
-                 'seen': r[3], 'banned': bool(r[4])}
-                for r in conn.execute(
-                    'SELECT id,name,uuid,last_seen,banned FROM '
-                    'installs ORDER BY id')]})
-            return
-        if method == 'GET' and path == '/v1/admin/boards':
-            self._send(200, {'boards': [
-                {'name': r[0], 'owner': r[1], 'acl': r[2],
-                 'members': json.loads(r[3] or '[]'),
-                 'closed': bool(r[4])}
-                for r in conn.execute(
-                    'SELECT name,owner_install,post_acl,members,'
-                    'closed FROM boards ORDER BY name')]})
-            return
-        if method == 'POST' and len(p) == 4 and p[3] == 'boards':
-            body = self._body() or {}
-            name = str(body.get('name') or '')[:64]
-            if not SCOPE_RE.match(name):
-                self._send(400, {'error': 'name'})
-                return
-            owner = body.get('owner')
-            conn.execute(
-                'INSERT OR IGNORE INTO boards(name,owner_install,'
-                'post_acl,members,closed,created) VALUES(?,?,?,?,0,?)',
-                (name, int(owner) if owner else None, 'open', '[]',
-                 time.time()))
-            conn.commit()
-            self._send(200, {'ok': True})
-            return
-        if method == 'POST' and len(p) == 5 and p[3] == 'boards':
-            body = self._body() or {}
-            brow = _board_row(conn, p[4])
-            if not brow:
-                self._send(404, {'error': 'board'})
-                return
-            sets, vals = [], []
-            if 'acl' in body and body['acl'] in ('open', 'members'):
-                sets.append('post_acl=?')
-                vals.append(body['acl'])
-            if 'members' in body and isinstance(body['members'], list):
-                sets.append('members=?')
-                vals.append(json.dumps(
-                    [str(m)[:64] for m in body['members']][:200]))
-            if 'closed' in body:
-                sets.append('closed=?')
-                vals.append(1 if body['closed'] else 0)
-            if 'owner' in body:
-                sets.append('owner_install=?')
-                vals.append(int(body['owner'])
-                            if body['owner'] else None)
-            if sets:
-                conn.execute('UPDATE boards SET %s WHERE name=?'
-                             % ','.join(sets), vals + [p[4]])
-                conn.commit()
-            self._send(200, {'ok': True})
-            return
-        if method == 'POST' and len(p) == 5 and p[3] == 'installs':
-            body = self._body() or {}
-            try:
-                iid = int(p[4])
-            except ValueError:
-                self._send(400, {'error': 'id'})
-                return
-            if body.get('banned'):
-                conn.execute('UPDATE installs SET banned=1 WHERE id=?',
-                             (iid,))
-                self._purge_install(conn, iid)
-            elif 'banned' in body:
-                conn.execute('UPDATE installs SET banned=0 WHERE id=?',
-                             (iid,))
-            conn.commit()
-            self._send(200, {'ok': True})
-            return
-        if method == 'DELETE' and len(p) == 5 and p[3] == 'orders':
-            conn.execute(
-                "UPDATE commits SET state='void' WHERE order_id=? "
-                "AND state='active'", (p[4],))
-            conn.execute('DELETE FROM orders WHERE id=?', (p[4],))
-            conn.commit()
-            self._send(200, {'ok': True})
-            return
-        self._send(404, {'error': 'not found'})
-
-    def _purge_install(self, conn, iid):
-        """Ban-side purge: the install's own orders and uploads die,
-        its live commits on OTHERS' orders void (units return to
-        those pools), its bookkeeping rows go."""
-        oids = [r[0] for r in conn.execute(
-            "SELECT DISTINCT order_id FROM commits WHERE "
-            "install_id=? AND state='active'", (iid,))]
-        conn.execute("UPDATE commits SET state='void' WHERE "
-                     "install_id=? AND state='active'", (iid,))
-        for oid in oids:
-            _pool_refresh(conn, oid)
-        conn.execute(
-            "UPDATE commits SET state='void' WHERE state='active' "
-            "AND order_id IN (SELECT id FROM orders WHERE "
-            "install_id=?)", (iid,))
-        conn.execute('DELETE FROM orders WHERE install_id=?', (iid,))
-        for t in ('uploads', 'drop_n', 'drop_k', 'drop_name', 'rate',
-                  'orate', 'order_ops', 'ignores', 'install_stats'):
-            conn.execute('DELETE FROM %s WHERE install_id=?' % t,
-                         (iid,))
-        _book_invalidate()
-
-    def do_DELETE(self):
+    def _handle(self, method):
         if not _allowed_ip(self.client_address[0]):
             self._send(403, {'error': 'ip'})
             return
+        u = urllib.parse.urlparse(self.path)
+        hit = _route_match(method, u.path)
+        if hit is None:
+            self._send(404, {'error': 'not found'})
+            return
+        fn, flags, caps = hit
         conn = db()
         try:
-            if self.path.startswith('/v1/admin/'):
-                self._admin_op(conn, 'DELETE', self.path)
+            ctx = {'m': method, 'p': u.path,
+                   'q': urllib.parse.parse_qs(u.query),
+                   'send': self._send, 'send_raw': self._send_raw,
+                   'is_admin': self._admin,
+                   'body': self._body() if method == 'POST' else None,
+                   'now': time.time(), 'install': None}
+            ctx.update(caps)
+            if flags & (AUTH | ORDOP):
+                ctx['install'] = self._auth(conn)
+                if ctx['install'] is None:
+                    self._send(401, {'error': 'auth'})
+                    return
+            if flags & ORDOP:
+                _ordop(conn, ctx, fn)
             else:
-                self._send(404, {'error': 'not found'})
+                fn(conn, ctx)
         finally:
             conn.close()
 
     def do_GET(self):
-        if not _allowed_ip(self.client_address[0]):
-            self._send(403, {'error': 'ip'})
-            return
-        u = urllib.parse.urlparse(self.path)
-        q = urllib.parse.parse_qs(u.query)
-        conn = db()
-        try:
-            if u.path == '/v1/health':
-                scopes = [r[0] for r in conn.execute(
-                    'SELECT DISTINCT scope FROM uploads')]
-                installs = [{'name': name, 'uuid': uid,
-                             'scopes': (scs or '').split(',')
-                             if scs else [],
-                             'uploads': n, 'last': last, 'seen': seen}
-                            for name, uid, scs, n, last, seen in
-                            conn.execute(
-                        'SELECT i.name, i.uuid, '
-                        'GROUP_CONCAT(DISTINCT u.scope), '
-                        'COUNT(u.id), MAX(u.t), i.last_seen '
-                        'FROM installs i '
-                        'LEFT JOIN uploads u ON u.install_id=i.id '
-                        'GROUP BY i.id ORDER BY i.name')]
-                self._send(200, {'ok': True, 'scopes': scopes,
-                                 'installs': installs})
-            elif u.path == '/v1/scopes':
-                # open like health — lets installers offer real scope
-                # choices instead of asking the user to type one
-                scopes = [r[0] for r in conn.execute(
-                    'SELECT DISTINCT scope FROM uploads')]
-                self._send(200, {'scopes': scopes})
-            elif u.path == '/v1/book':
-                scope = (q.get('scope') or [''])[0]
-                if not SCOPE_RE.match(scope):
-                    self._send(400, {'error': 'bad scope'})
-                    return
-                self._send_raw(200, book_json(conn, scope))
-            elif u.path == '/v1/boards':
-                # open read — boards = explicit rows ∪ names seen on
-                # orders; implicit boards report open order counts
-                open_ct = dict(conn.execute(
-                    "SELECT board, COUNT(*) FROM orders WHERE "
-                    "state='open' GROUP BY board"))
-                rows = {r[0]: (r[1], r[2], r[3], r[4]) for r in
-                        conn.execute(
-                            'SELECT name, owner_install, post_acl, '
-                            'members, closed FROM boards')}
-                names = sorted(set(open_ct) | set(rows))
-                self._send(200, {'boards': [
-                    {'name': n, 'open': open_ct.get(n, 0),
-                     'acl': rows[n][1] if n in rows else 'open',
-                     'members': json.loads(rows[n][2])
-                     if n in rows else [],
-                     'closed': bool(rows[n][3]) if n in rows else
-                     False} for n in names]})
-            elif u.path.startswith('/v1/boards/') and \
-                    u.path.endswith('/orders'):
-                board = u.path.split('/')[3]
-                if not SCOPE_RE.match(board):
-                    self._send(400, {'error': 'bad board'})
-                    return
-                self._board_orders(conn, board,
-                                   q.get('all') == ['1'])
-            elif u.path.startswith('/v1/admin/'):
-                self._admin_op(conn, 'GET', u.path)
-            else:
-                self._send(404, {'error': 'not found'})
-        finally:
-            conn.close()
+        self._handle('GET')
 
     def do_POST(self):
-        if not _allowed_ip(self.client_address[0]):
-            self._send(403, {'error': 'ip'})
-            return
-        u = urllib.parse.urlparse(self.path)
-        conn = db()
-        try:
-            if u.path == '/v1/register':
-                body = self._body() or {}
-                cfg = _server_cfg()
-                # register_mode: 'open' | 'secret' (key required) |
-                # 'whitelist' (uuid in cfg.whitelist). Absent mode =
-                # legacy: secret required iff install_secret set.
-                mode = cfg.get('register_mode') or (
-                    'secret' if cfg.get('install_secret') else 'open')
-                if mode == 'secret' and not secrets.compare_digest(
-                        str(body.get('key') or ''),
-                        str(cfg.get('install_secret') or '')):
-                    self._send(403, {'error': 'key'})
-                    return
-                uid = str(body.get('uuid') or '')[:64] or None
-                if mode == 'whitelist' and uid not in (
-                        cfg.get('whitelist') or []):
-                    self._send(403, {'error': 'whitelist'})
-                    return
-                name = str(body.get('name') or 'install')[:64]
-                # client-supplied stable id — 'who is who' without
-                # handmade accounts; COALESCE keeps a stored uuid
-                # when a re-register doesn't send one
-                row = conn.execute(
-                    'SELECT id FROM installs WHERE name=?',
-                    (name,)).fetchone()
-                tok = secrets.token_urlsafe(24)
-                if row:
-                    # re-register = re-key the existing install (lost
-                    # api_state / reinstall) — no zombie rows per name
-                    conn.execute(
-                        'UPDATE installs SET token=?, '
-                        'uuid=COALESCE(?, uuid) WHERE id=?',
-                        (tok, uid, row[0]))
-                    conn.commit()
-                    self._send(200, {'install_id': row[0],
-                                     'token': tok,
-                                     'uuid': uid or _install_uuid(
-                                         conn, row[0])})
-                    return
-                cur = conn.execute(
-                    'INSERT INTO installs(name, token, uuid, created) '
-                    'VALUES(?,?,?,?)',
-                    (name, tok, uid, time.time()))
-                conn.commit()
-                self._send(200, {'install_id': cur.lastrowid,
-                                 'token': tok, 'uuid': uid})
-                return
-            if u.path.startswith('/v1/admin/'):
-                self._admin_op(conn, 'POST', u.path)
-                return
-            install = self._auth(conn)
-            if install is None:
-                self._send(401, {'error': 'auth'})
-                return
-            if u.path != '/v1/upload':
-                self._board_op(conn, u.path, install)
-                return
-            # 10 uploads / 10 minutes per install
-            bucket = time.time() // 600
-            conn.execute(
-                'INSERT INTO rate(install_id,bucket,n) VALUES(?,?,1) '
-                'ON CONFLICT(install_id,bucket) DO UPDATE SET n=n+1',
-                (install, bucket))
-            if (conn.execute('SELECT n FROM rate WHERE install_id=? '
-                             'AND bucket=?', (install, bucket))
-                    .fetchone()[0]) > 10:
-                conn.commit()
-                self._send(429, {'error': 'rate'})
-                return
-            body = self._body()
-            if not isinstance(body, dict):
-                self._send(400, {'error': 'body'})
-                return
-            scope = str(body.get('scope') or '')
-            t = body.get('t')
-            items = clean_items(body.get('items'))
-            lots = body.get('lots') or {}
-            if not SCOPE_RE.match(scope) or not isinstance(
-                    t, (int, float)) or not items or \
-                    len(items) > MAX_ITEMS:
-                self._send(400, {'error': 'payload'})
-                conn.commit()
-                return
-            lots = {str(k): int(v) for k, v in lots.items()
-                    if isinstance(v, (int, float))}
-            # t is client-claimed and drives newest-wins, the staleness
-            # cutoff, and GC — a book can't be newer than now, so cap
-            # future dates. Past values pass through: an old scan
-            # uploaded late is legitimately old data.
-            t = min(float(t), time.time())
-            conn.execute(
-                'INSERT OR REPLACE INTO '
-                'uploads(install_id,scope,t,items,lots) '
-                'VALUES(?,?,?,?,?)',
-                (install, scope, t, json.dumps(items),
-                 json.dumps(lots)))
-            # retention: keep newest KEEP_PER_INSTALL per install+scope
-            conn.execute(
-                'DELETE FROM uploads WHERE install_id=? AND scope=? '
-                'AND id NOT IN (SELECT id FROM uploads WHERE '
-                'install_id=? AND scope=? ORDER BY t DESC LIMIT ?)',
-                (install, scope, install, scope, KEEP_PER_INSTALL))
-            store_drops(conn, install, scope, body.get('drops'))
-            conn.execute('UPDATE installs SET last_seen=? WHERE id=?',
-                         (time.time(), install))
-            conn.commit()
-            _book_invalidate(scope)
-            self._send(200, {'ok': True, 'items': len(items)})
-        finally:
-            conn.close()
+        self._handle('POST')
+
+    def do_DELETE(self):
+        self._handle('DELETE')
 
 
 def _self_restart():
