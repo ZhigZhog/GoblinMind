@@ -110,9 +110,14 @@ end
 OR.live = OR.live or {}    -- [board] = {ev, ...}, session-only
 local LIVE_TTL = 600
 
+-- seq breaks same-timestamp ties; sender t (wire records) keeps
+-- cross-client events ordered even when packets arrive scrambled
+local _evSeq = 0
 function OR.LiveEvent(board, ev)
 	if not board or board == "" then return end
-	ev.t = ev.t or time()
+	ev.t = math.min(ev.t or time(), time())  -- fast remote clocks
+	_evSeq = _evSeq + 1
+	ev.seq = _evSeq
 	local L = OR.live[board]
 	if not L then L = {} OR.live[board] = L end
 	L[#L + 1] = ev
@@ -133,7 +138,20 @@ local function evConfirmed(ev, byId, liveIds)
 		end
 		return false
 	elseif ev.v == "fill" then
-		return o and (o.qtyFilled or 0) >= (ev.newFilled or 0)
+		if not o then return false end
+		-- confirm against the filled commit — ev.newFilled is only
+		-- set during applyEv, never at drop-check time, so the old
+		-- qtyFilled>=newFilled test confirmed every fill instantly
+		-- (>=0) and dropped it unapplied
+		for _, c in ipairs(o.commits or {}) do
+			if c.id == ev.cid then
+				return (c.unitsFilled or 0) >= (ev.units or 0)
+					or c.state == "filled"
+			end
+		end
+		-- blind fill (claim never seen): the order reaching a
+		-- terminal state is the only observable confirmation
+		return o.state ~= "open"
 	elseif ev.v == "cancel" then
 		-- `not o` = order absent from the pull. But when the cancel
 		-- targets an overlay-only order (pending post), absence just
@@ -305,6 +323,10 @@ function OR.ReplayPending()
 		local rid, h = rec:match("^(ord%-[^|]+)|(%x+)$")
 		local f = h and unjson(unhex(h)) or nil
 		local b = f and f.b or nil
+		-- the rid embeds the stage timestamp — replayed ops keep
+		-- their real age (TTL, event-order sort) instead of
+		-- looking brand new every login
+		local ridT = tonumber(rid and rid:match("^ord%-(%d+)"))
 		local ev
 		if f and b then
 			if f.v == "post" then
@@ -335,6 +357,7 @@ function OR.ReplayPending()
 			end
 		end
 		if ev then
+			ev.t = ridT
 			local dup = false
 			for _, e in ipairs(OR.live[b] or {}) do
 				if e.rid == rid then dup = true break end
@@ -375,7 +398,17 @@ function OR.Orders(name)
 				table.remove(L, i)
 			end
 		end
-		for _, ev in ipairs(L) do
+		-- apply in event-time order, not arrival order — reordered
+		-- mesh packets and replayed queue entries both land right
+		local ord = {}
+		for _, ev in ipairs(L) do ord[#ord + 1] = ev end
+		table.sort(ord, function(a, b)
+			if (a.t or 0) ~= (b.t or 0) then
+				return (a.t or 0) < (b.t or 0)
+			end
+			return (a.seq or 0) < (b.seq or 0)
+		end)
+		for _, ev in ipairs(ord) do
 			applyEv(ev, view, byId)
 		end
 	end
@@ -439,7 +472,8 @@ function OR.Post(board, itemID, qty, ppu, ttl, charname)
 	if inst ~= "?" then ev.realID = inst .. ":" .. rid end
 	OR.LiveEvent(board, ev)
 	OR.MeshSend(table.concat({ "P", board, rid, itemID, qty, ppu,
-		ttl or 0, inst, OR.MyUUID() or "?", poster }, ";"))
+		ttl or 0, inst, OR.MyUUID() or "?", poster,
+		time() }, ";"))
 	return rid
 end
 
@@ -455,7 +489,7 @@ function OR.Claim(board, oid, units, charname)
 	if inst ~= "?" then ev.cid = inst .. ":" .. rid end
 	OR.LiveEvent(board, ev)
 	OR.MeshSend(table.concat({ "C", board, oid, rid, units,
-		inst, OR.MyUUID() or "?", crafter }, ";"))
+		inst, OR.MyUUID() or "?", crafter, time() }, ";"))
 	return rid
 end
 
@@ -467,7 +501,7 @@ function OR.Fill(board, oid, units, cid, mailFrom)
 	OR.LiveEvent(board, { v = "fill", rid = rid, oid = oid,
 		units = units, cid = cid })
 	OR.MeshSend(table.concat({ "F", board, oid, units,
-		cid or "" }, ";"))
+		cid or "", time() }, ";"))
 	return rid
 end
 
@@ -476,7 +510,8 @@ function OR.Reject(board, oid, cid, mailFrom)
 		commit = cid, mailFrom = mailFrom })
 	OR.LiveEvent(board, { v = "reject", rid = rid, oid = oid,
 		cid = cid })
-	OR.MeshSend(table.concat({ "R", board, oid, cid or "" }, ";"))
+	OR.MeshSend(table.concat({ "R", board, oid, cid or "",
+		time() }, ";"))
 	return rid
 end
 
@@ -485,7 +520,8 @@ function OR.Cancel(board, oid, units)
 		units = units })
 	OR.LiveEvent(board, { v = "cancel", rid = rid, oid = oid,
 		units = units or 0 })
-	OR.MeshSend(table.concat({ "X", board, oid, units or 0 }, ";"))
+	OR.MeshSend(table.concat({ "X", board, oid, units or 0,
+		time() }, ";"))
 	return rid
 end
 
@@ -493,7 +529,8 @@ function OR.Release(board, cid, oid)
 	local rid = OR.Stage({ v = "release", b = board, cid = cid })
 	OR.LiveEvent(board, { v = "release", rid = rid, oid = oid,
 		cid = cid })
-	OR.MeshSend(table.concat({ "L", board, oid or "", cid }, ";"))
+	OR.MeshSend(table.concat({ "L", board, oid or "", cid,
+		time() }, ";"))
 	return rid
 end
 
@@ -508,28 +545,33 @@ function OR.MeshEvent(rec)
 		local ev = { v = "post", board = f[2],
 			itemID = tonumber(f[4]), qtyTotal = tonumber(f[5]),
 			pricePerUnit = tonumber(f[6]), ttl = tonumber(f[7]),
-			posterUUID = f[9], poster = f[10] }
+			posterUUID = f[9], poster = f[10],
+			t = tonumber(f[11]) }
 		if f[8] and f[8] ~= "?" and f[8] ~= "0" then
 			ev.realID = f[8] .. ":" .. f[3]
 		end
 		if ev.itemID and ev.qtyTotal then OR.LiveEvent(f[2], ev) end
 	elseif v == "C" then
 		local ev = { v = "claim", board = f[2], oid = f[3],
-			units = tonumber(f[5]), crafterUUID = f[7], crafter = f[8] }
+			units = tonumber(f[5]), crafterUUID = f[7],
+			crafter = f[8], t = tonumber(f[9]) }
 		if f[6] and f[6] ~= "?" and f[6] ~= "0" then
 			ev.cid = f[6] .. ":" .. f[4]
 		end
 		if ev.oid and ev.units then OR.LiveEvent(f[2], ev) end
 	elseif v == "F" then
 		OR.LiveEvent(f[2], { v = "fill", oid = f[3],
-			units = tonumber(f[4]), cid = f[5] })
+			units = tonumber(f[4]), cid = f[5],
+			t = tonumber(f[6]) })
 	elseif v == "R" then
-		OR.LiveEvent(f[2], { v = "reject", oid = f[3], cid = f[4] })
+		OR.LiveEvent(f[2], { v = "reject", oid = f[3], cid = f[4],
+			t = tonumber(f[5]) })
 	elseif v == "X" then
 		OR.LiveEvent(f[2], { v = "cancel", oid = f[3],
-			units = tonumber(f[4]) or 0 })
+			units = tonumber(f[4]) or 0, t = tonumber(f[5]) })
 	elseif v == "L" then
-		OR.LiveEvent(f[2], { v = "release", oid = f[3], cid = f[4] })
+		OR.LiveEvent(f[2], { v = "release", oid = f[3], cid = f[4],
+			t = tonumber(f[5]) })
 	end
 end
 
