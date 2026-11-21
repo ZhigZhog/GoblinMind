@@ -1041,7 +1041,7 @@ function OR.RelayQueueOp(board, verb, fields)
 	GM.db.relayPend[board] = q
 end
 
-local function RelayPeer(board)
+function OR.RelayServing(board)
 	local best, bt, now = nil, nil, time()
 	for name, t in pairs(OR.relay.peers[board] or {}) do
 		if now - (t or 0) < RELAY_PEER_TTL
@@ -1053,7 +1053,7 @@ local function RelayPeer(board)
 end
 
 function OR.RelayWhisper(board, rec)
-	local peer = RelayPeer(board)
+	local peer = OR.RelayServing(board)
 	if peer and GM.Mesh and GM.Mesh.Whisper then
 		GM.Mesh.Whisper(peer, "R", rec)
 		return true
@@ -1095,7 +1095,7 @@ function OR.RelayAsk(board)
 		return
 	end
 	OR.relay.asked[board] = now
-	local peer = RelayPeer(board)
+	local peer = OR.RelayServing(board)
 	if not peer or not (GM.Mesh and GM.Mesh.Whisper) then
 		return
 	end

@@ -355,6 +355,58 @@ function M.Status()
 		Ago(be.pull and be.pull.t),
 		be.pull and (be.pull.ok and "" or " (failed)") or "",
 		be.peers or 0, be.peers == 1 and "" or "s"))
+	-- writ boards: local pulls are served by our tracker; remote
+	-- boards are T-beacon discovered and ride the whisper tunnel
+	if GM.Orders then
+		local OR = GM.Orders
+		local loc, rem = {}, {}
+		for _, b in ipairs(OR.Boards and OR.Boards() or {}) do
+			local bd = OR.Board(b)
+			local open = 0
+			for _, o in ipairs(bd and bd.orders or {}) do
+				if (o.state or "open") == "open" then open = open + 1 end
+			end
+			local s = b .. " (" .. open .. " open)"
+			if OR.IsRemote(b) then
+				s = s .. " via " .. (OR.RelayServing(b) or "?")
+					.. (OR.RelayCreds(b) and ""
+						or " — registering")
+				rem[#rem + 1] = s
+			else
+				loc[#loc + 1] = s
+			end
+		end
+		if #loc > 0 or #rem > 0 then
+			GM.Print("boards: "
+				.. (#loc > 0 and table.concat(loc, ", ") or "")
+				.. (#loc > 0 and #rem > 0 and " · " or "")
+				.. (#rem > 0 and ("mesh " .. table.concat(rem, ", "))
+					or ""))
+		end
+		-- relay health: ops deferred behind register, our outbound
+		-- forwarding queue (host side), and unacked staged ops
+		local regq, out = 0, GM.db and GM.db.relayOut
+		for _, q in pairs(GM.db and GM.db.relayPend or {}) do
+			regq = regq + #q
+		end
+		local pendN = OR.Pending and #OR.Pending() or 0
+		if regq > 0 or (out and #out > 0) or pendN > 0 then
+			GM.Print(format("relay: %d op%s pending%s%s",
+				pendN, pendN == 1 and "" or "s",
+				regq > 0 and format(" · %d waiting for creds", regq)
+					or "",
+				out and #out > 0
+					and format(" · forwarding %d for peers", #out)
+					or ""))
+		end
+		local u, iid = OR.MyUUID and OR.MyUUID(),
+			OR.MyInstallID and OR.MyInstallID()
+		if u then
+			GM.Print("install: " .. tostring(u)
+				.. (iid and (" · tracker id " .. iid)
+					or " · mesh-only (no tracker id)"))
+		end
+	end
 	-- staged work waiting on the companion app — reports, connect
 	-- and api requests queue in the SV until the watcher consumes them
 	local q = 0
