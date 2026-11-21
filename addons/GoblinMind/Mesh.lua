@@ -54,7 +54,16 @@ local function Pump()
 	if chanID == 0 then chanID = FindChannel() or 0 end
 	local msg = tremove(sendQ, 1)
 	if not msg then pumping = false return end
-	if chanID > 0 then
+	if type(msg) == "table" then
+		-- whisper transport — the relay tunnel rides directed
+		-- comms to a specific peer, not the shared channel
+		local ok, sent = pcall(Send, PREFIX, msg.msg, "WHISPER",
+			msg.target)
+		if ok and sent ~= false then
+			M.stats.sent = M.stats.sent + 1
+			M.stats.lastSend = time()
+		end
+	elseif chanID > 0 then
 		local ok, sent = pcall(Send, PREFIX, msg, "CHANNEL", chanID)
 		if ok and sent ~= false then
 			M.stats.sent = M.stats.sent + 1
@@ -91,6 +100,31 @@ function M.Send(kind, recs)
 	if chanID == 0 then chanID = FindChannel() or 0 end
 	if chanID == 0 then return end
 	Broadcast(recs, kind)
+end
+
+-- whisper transport: the writ relay tunnel — op envelopes and
+-- board snapshots ride directed WHISPER comms between a tunneled
+-- peer and its relay. Same 1|kind|scope|rec envelope, same pump
+-- pacing; sends don't need the channel joined.
+function M.Whisper(target, kind, rec)
+	if not target or target == "" then return end
+	sendQ[#sendQ + 1] = {
+		msg = "1|" .. kind .. "|" .. (GM.Scope() or "")
+			.. "|" .. rec,
+		target = target,
+	}
+	if not pumping then pumping = true Pump() end
+end
+
+-- relay capability beacon: the boards THIS install can serve —
+-- the ones its own backend pulls. A tunneled peer picks a serving
+-- advertiser and whispers its envelopes there.
+function M.Advertise()
+	local bs = GoblinMindDB and GoblinMindDB.boards
+	local names = {}
+	for b in pairs(bs or {}) do names[#names + 1] = b end
+	if #names == 0 then return end
+	M.Send("T", { table.concat(names, ",") })
 end
 
 -- ============ broadcast source: book diffs ============
@@ -204,14 +238,25 @@ local function Stage(list, cap, rec)
 end
 
 local function OnAddon(_, prefix, msg, ctype, sender)
-	if prefix ~= PREFIX or ctype ~= "CHANNEL" then return end
+	if prefix ~= PREFIX then return end
 	if not me then me = UnitName("player") end
 	if sender and sender:match("^[^-]+") == me then return end -- own echo
 	if not GM.db then return end
-	GM.db.mesh = GM.db.mesh or { ev = {}, mb = {}, seq = 0 }
 	local proto, kind, scope, body = msg:match(
-		"^(%d+)|(%u+)|([^|]*)|?(.*)$")
+		"^(%d+)|([%a]+)|([^|]*)|?(.*)$")
 	if proto ~= "1" or not body then return end
+	if ctype == "WHISPER" then
+		-- relay tunnel records (R/Q/W/w/Z/Y) — Orders.lua owns the
+		-- grammar; mesh just delivers
+		M.stats.heard = M.stats.heard + 1
+		M.stats.lastHear = time()
+		if GM.Orders and GM.Orders.MeshWhisper then
+			GM.Orders.MeshWhisper(kind, body, sender)
+		end
+		return
+	end
+	if ctype ~= "CHANNEL" then return end
+	GM.db.mesh = GM.db.mesh or { ev = {}, mb = {}, seq = 0 }
 	local t = time()
 	M.stats.heard = M.stats.heard + 1
 	M.stats.lastHear = t
@@ -237,6 +282,11 @@ local function OnAddon(_, prefix, msg, ctype, sender)
 					i = tonumber(i), m = tonumber(m),
 					sup = tonumber(s) or 0 })
 			end
+		end
+	elseif kind == "T" then
+		-- relay capability — Orders.lua maps board -> serving peers
+		if GM.Orders and GM.Orders.RelayPeer then
+			GM.Orders.RelayPeer(body, sender)
 		end
 	elseif kind == "O" then
 		-- writ events are volatile overlays — Orders.lua owns the
@@ -342,5 +392,18 @@ f:SetScript("OnEvent", function(_, ev, ...)
 		if RegPrefix then pcall(RegPrefix, PREFIX) end
 		GM.After(4, function() TryJoin(0) end)
 		GM.After(8, M.Purge)
+		if GM.Orders and GM.Orders.RelayStart then
+			GM.Orders.RelayStart()
+		end
+		-- relay capability beacons — cadence low enough to be
+		-- noise-free, frequent enough for peers to find us
+		GM.After(30, function()
+			M.Advertise()
+			local function advTick()
+				M.Advertise()
+				GM.After(280, advTick)
+			end
+			GM.After(280, advTick)
+		end)
 	end
 end)

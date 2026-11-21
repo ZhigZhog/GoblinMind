@@ -557,6 +557,73 @@ def main():
     check('banned crafter hold purged to pool',
           o3['remaining'] == 3, o3)
 
+    print('== writ: mesh relay (uuid+rtoken auth) ==')
+    # a tunneled install registers through a peer: relay creds
+    # come back and NO bearer is issued — the install can't reach
+    # the tracker directly so its bearer would be a dead secret
+    c, r = req(base, '/v1/register',
+               {'name': 'tunneled', 'uuid': 'uu-tun',
+                'relay': True, 'key': 'sekrit'})
+    check('relay register issues rtoken, no bearer',
+          c == 200 and r.get('relay_token')
+          and 'token' not in r, r)
+    rtok = r['relay_token']
+    tinstall = r['install_id']
+    check('relay-only install has no usable bearer',
+          req(base, '/v1/upload',
+              {'scope': 'x', 't': 1, 'items': {'1': item()}},
+              tok=rtok)[0] == 401)
+
+    # ops POSTed unauthenticated but carrying the author's
+    # uuid+rtoken in the body apply under THAT install — the
+    # relaying watcher is a dumb pipe
+    c, r = req(base, '/v1/boards/%s/orders' % B,
+               {'itemID': 333, 'qtyTotal': 8, 'pricePerUnit': 10,
+                'poster': 'Tunneled', 'op': 'rord1',
+                'uuid': 'uu-tun', 'rtoken': rtok})
+    check('relayed post applies under author install',
+          c == 200 and r['order']['id']
+          .startswith('%s:' % tinstall), r)
+    roid = r['order']['id']
+    check('relayed order carries author uuid',
+          r['order']['posterUUID'] == 'uu-tun', r['order'])
+    c, r = req(base, '/v1/boards/%s/orders' % B,
+               {'itemID': 333, 'qtyTotal': 1, 'pricePerUnit': 1,
+                'poster': 'Tunneled', 'op': 'rord9',
+                'uuid': 'uu-tun', 'rtoken': 'wrong-token'})
+    check('bad rtoken -> 401', c == 401, c)
+    c, r = req(base, '/v1/boards/%s/orders' % B,
+               {'itemID': 333, 'qtyTotal': 1, 'pricePerUnit': 1,
+                'poster': 'Tunneled', 'op': 'rord9',
+                'uuid': 'uu-tun'})
+    check('uuid without rtoken -> 401', c == 401, c)
+    c, r = req(base, '/v1/boards/%s/orders' % B,
+               {'itemID': 333, 'qtyTotal': 8, 'pricePerUnit': 10,
+                'poster': 'Tunneled', 'op': 'rord1',
+                'uuid': 'uu-tun', 'rtoken': rtok})
+    check('relayed op dedups by nonce',
+          r.get('dup') and r['order']['id'] == roid, r)
+
+    # the tunneled install can claim on a live order
+    c, r = req(base, '/v1/boards/%s/orders' % B,
+               {'itemID': 444, 'qtyTotal': 4, 'pricePerUnit': 10,
+                'poster': 'Poster', 'op': 'ordR'}, tok_p)
+    roid2 = r['order']['id']
+    c, r = req(base, '/v1/boards/%s/orders/%s/claim' % (B, roid2),
+               {'units': 2, 'crafter': 'Tunneled', 'op': 'rcl1',
+                'uuid': 'uu-tun', 'rtoken': rtok})
+    check('relayed claim commits under author uuid',
+          c == 200 and r['commit']['crafterUUID'] == 'uu-tun', r)
+
+    # host ban kills the relay path too
+    c, _ = req(base, '/v1/admin/installs/%d' % tinstall,
+               {'banned': True}, key='adk')
+    c, r = req(base, '/v1/boards/%s/orders' % B,
+               {'itemID': 333, 'qtyTotal': 1, 'pricePerUnit': 1,
+                'poster': 'Tunneled', 'op': 'rord8',
+                'uuid': 'uu-tun', 'rtoken': rtok})
+    check('banned install relayed op -> 401', c == 401, c)
+
     print('== writ: order cap + validation ==')
     c, _ = req(base, '/v1/boards/%s/orders' % B,
                {'itemID': 1, 'qtyTotal': 0, 'pricePerUnit': 1,

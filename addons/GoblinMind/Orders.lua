@@ -70,14 +70,25 @@ end
 -- ============ identity ============
 
 function OR.MyUUID()
-	return GoblinMindDB and GoblinMindDB.backend
-		and GoblinMindDB.backend.install or nil
+	local u = GoblinMindDB and GoblinMindDB.backend
+		and GoblinMindDB.backend.install
+	if u then return u end
+	-- pure-mesh peer: no backend emit means no install uuid, but
+	-- relay envelopes still need a stable author id — generate one
+	-- and keep it in SV so it survives reloads
+	if GM.db then
+		GM.db.myUUID = GM.db.myUUID
+			or ("gm-%x-%04x"):format(time(), math.random(0xffff))
+		return GM.db.myUUID
+	end
+	return nil
 end
 
 -- ============ board data ============
 
 function OR.Boards()
 	-- configured names (backend.boards) ∪ pulled snapshots (boards)
+	-- ∪ relayed boards (rboards snapshots ∪ T-beacon discovery)
 	local out, seen = {}, {}
 	local be = GoblinMindDB and GoblinMindDB.backend
 	for _, b in ipairs(be and be.boards or {}) do
@@ -86,13 +97,21 @@ function OR.Boards()
 	for b in pairs(GoblinMindDB and GoblinMindDB.boards or {}) do
 		if not seen[b] then seen[b] = true; out[#out + 1] = b end
 	end
+	for b in pairs(GM.db and GM.db.rboards or {}) do
+		if not seen[b] then seen[b] = true; out[#out + 1] = b end
+	end
+	for b in pairs(OR.relay.peers) do
+		if not seen[b] then seen[b] = true; out[#out + 1] = b end
+	end
 	table.sort(out)
 	return out
 end
 
 function OR.Board(name)
 	local bs = GoblinMindDB and GoblinMindDB.boards
-	return bs and bs[name] or nil
+	if bs and bs[name] then return bs[name] end
+	local rb = GM.db and GM.db.rboards
+	return rb and rb[name] or nil
 end
 
 function OR.MyInstallID()
@@ -121,6 +140,9 @@ end
 -- them. Server truth always wins on the next pull.
 
 OR.live = OR.live or {}    -- [board] = {ev, ...}, session-only
+-- relay session state: peers[board][name]=t from T beacons,
+-- asked[board]=t (Q throttle), gen counters, reg flags, rpend
+OR.relay = { peers = {}, asked = {}, reg = {}, rpend = {}, gen = 0 }
 local LIVE_TTL = 600
 
 -- seq breaks same-timestamp ties; sender t (wire records) keeps
@@ -593,10 +615,15 @@ function OR.ReplayPending()
 		local rid, h = rec:match("^(ord%-[^|]+)|(%x+)$")
 		local f = h and unjson(unhex(h)) or nil
 		local b = f and f.b or nil
+		-- remote ops confirm against the RELAY install's server ids
+		-- (<iid>:<rid>), not the local backend install's
+		ctx.inst = (f and f.rly and OR.RelayCreds(b)
+			and OR.RelayCreds(b).i) or OR.MyInstallID()
 		ctx.rid, ctx.board = rid, b
 		local def = f and VERBS[f.v]
 		local ev = def and def.replay and def.replay(f, ctx)
 		if ev and b then
+			ev.rly = f.rly and true or nil
 			-- the rid embeds the stage timestamp — replayed ops keep
 			-- their real age (TTL, event-order sort) instead of
 			-- looking brand new every login
@@ -613,6 +640,7 @@ function OR.ReplayPending()
 end
 
 function OR.Orders(name)
+	OR.RelayStart()
 	OR.ReplayPending()
 	local b = OR.Board(name)
 	local pulled = b and b.orders or {}
@@ -640,6 +668,10 @@ function OR.Orders(name)
 		-- a cancel/claim must see the post that created the row
 		for i = #L, 1, -1 do
 			if evDrop(L[i], byId, res, pullT, liveIds) then
+				-- remote ops never reach orderResults — when
+				-- their ev drops, unstage so reload can't
+				-- re-pend a phantom
+				if L[i].rly then OR.Unstage(L[i].rid) end
 				table.remove(L, i)
 			end
 		end
@@ -715,15 +747,48 @@ function OR.Op(verb, board, fields, evFields)
 	fields = fields or {}
 	fields.v = verb
 	fields.b = fields.b or board
+	local remote = board and OR.IsRemote(board)
+	local creds
+	if remote then
+		-- tunneled board: the op must carry our relay creds; on
+		-- first contact the whole op defers behind register —
+		-- RelayCredsSet flushes GM.db.relayPend through OR.Op
+		creds = OR.RelayCreds(board)
+		if not creds then
+			OR.RelayRegister(board)
+			OR.RelayQueueOp(board, verb, fields)
+			return nil
+		end
+		fields.rly = 1     -- our own watcher must not POST this
+	end
 	local rid = OR.Stage(fields)
 	local ev = evFields or (def.ev and def.ev(fields, rid))
 	if ev then
 		ev.v = verb
 		ev.rid = rid
+		if remote then
+			ev.rly = true
+			-- server ids are <install_id>:<op> — our RELAY
+			-- install id, not the local one (which is absent
+			-- for pure-mesh peers anyway)
+			if creds.i then
+				if verb == "post" then
+					ev.realID = creds.i .. ":" .. rid
+				elseif verb == "claim" then
+					ev.cid = creds.i .. ":" .. rid
+				end
+			end
+		end
 		OR.LiveEvent(board, ev)
-		if def.wire then
+		-- remote ops skip the channel O-record — a same-named
+		-- board on a peer's tracker is a different swarm; the
+		-- record would mislead their overlay
+		if def.wire and not remote then
 			OR.MeshSend(def.wire(ev, rid, board))
 		end
+	end
+	if remote then
+		OR.RelaySend(board, verb, fields, rid, creds)
 	end
 	return rid
 end
@@ -808,7 +873,20 @@ end
 -- ============ op results ============
 
 function OR.Results()
-	return (GoblinMindDB and GoblinMindDB.orderResults) or {}
+	local r = GoblinMindDB and GoblinMindDB.orderResults or {}
+	local re = GM.db and GM.db.relayErr
+	if not re then return r end
+	-- relayed ops never land in orderResults — their failures come
+	-- back over the tunnel as X records; merge so evDrop treats a
+	-- rejected remote op like any other server error
+	local merged = {}
+	for k, v in pairs(r) do merged[k] = v end
+	for rid, code in pairs(re) do
+		if not merged[rid] then
+			merged[rid] = { ok = false, code = code }
+		end
+	end
+	return merged
 end
 
 function OR.Result(rid)
@@ -840,6 +918,391 @@ function OR.ClearAcked()
 	local rq = GM.db.boardReqs
 	-- boardReqs ack comes via backend.boards — leave them; they're
 	-- idempotent and the watcher watermarks by rid anyway
+end
+
+-- ============ relay (the mesh NAT tunnel) ============
+-- A peer that can't reach a board's tracker tunnels the whole
+-- client<->tracker conversation through WHISPER comms to a peer
+-- that can — the chat channel IS the tunnel:
+--
+--   A (tunneled)             B (relay — its watcher reaches T)
+--   op     -> R whisper -> SV relayOut -> watcher POSTs -> T
+--   board  <- W/w/Z    <- pulled snapshot (B's own board data)
+--   creds  <- Y        <- register-relay result via relayResults
+--   errors <- X        <- op failure result via relayResults
+--
+-- The op applies under A's OWN install — the envelope carries A's
+-- uuid + relay_token, an op-scoped credential safe to whisper to
+-- the chosen relay (never the bearer — that authorizes uploads).
+-- B is a dumb pipe: it cannot poster-verb A's orders.
+--
+-- Wire records (whisper-only, ';'-delimited):
+--   R;<board>;<uuid>;<rtoken>;<op>;<verb>;<fields...>  op envelope
+--   Q;<board>;<gen>                                  pull request
+--   W;<board>;<gen>;<order fields>                   order row
+--   w;<board>;<gen>;<oid>;<commit fields>            commit row
+--   Z;<board>;<gen>                                  stream end
+--   Y;<board>;<iid>;<uuid>;<rtoken>                  issued creds
+--   X;<arid>;<code>                                  op failure
+-- Channel-side: T;<board,...> advertises serving capability.
+
+local RELAY_ASK_TTL = 60    -- seconds between Q polls per board
+local RELAY_PEER_TTL = 600  -- a T beacon older than this is stale
+
+-- positional field order inside the R envelope — the host decodes
+-- back into the staged body; v/b/op/uuid/rtoken ride the envelope
+local RELAY_KEYS = {
+	post = { "itemID", "qtyTotal", "pricePerUnit", "claimTTL",
+		"expires", "poster", "backed" },
+	claim = { "oid", "units", "crafter" },
+	fill = { "oid", "units", "commit", "mailFrom" },
+	reject = { "oid", "commit", "mailFrom" },
+	cancel = { "oid", "units" },
+	accept = { "oid", "commit" },
+	deny = { "oid", "commit" },
+	force = { "oid", "commit" },
+	release = { "cid" },
+	ignore = { "uuid", "on" },
+	ban = { "uuid", "on" },
+	register = { "name" },
+}
+
+local STAT_FIELDS = { "commits_filled", "commits_expired",
+	"fills_rejected", "orders_posted", "orders_filled",
+	"orders_cancelled", "commits_forced" }
+
+local function statCSV(s)
+	if not s then return "-" end
+	local p = {}
+	for i, k in ipairs(STAT_FIELDS) do
+		p[i] = tostring(s[k] or 0)
+	end
+	return table.concat(p, ",")
+end
+
+local function unstatCSV(s)
+	if not s or s == "-" then return nil end
+	local out, i = {}, 0
+	for v in s:gmatch("[^,]+") do
+		i = i + 1
+		out[STAT_FIELDS[i]] = tonumber(v) or 0
+	end
+	return i > 0 and out or nil
+end
+
+-- ============ remote board view ============
+
+function OR.RBoard(board)
+	GM.db.rboards = GM.db.rboards or {}
+	local rb = GM.db.rboards[board]
+	if not rb then
+		rb = { orders = {}, t = 0, _remote = true }
+		GM.db.rboards[board] = rb
+	end
+	return rb
+end
+
+function OR.IsRemote(b)
+	if not b or b == "" then return false end
+	local bs = GoblinMindDB and GoblinMindDB.boards
+	if bs and bs[b] then return false end  -- own tracker serves it
+	if GM.db and GM.db.rboards and GM.db.rboards[b] then
+		return true
+	end
+	return OR.relay.peers[b] ~= nil         -- discovered via T
+end
+
+-- ============ creds + envelopes (tunneled side) ============
+
+function OR.RelayCreds(board)
+	local r = GM.db and GM.db.relay and GM.db.relay[board]
+	return (r and r.k) and r or nil
+end
+
+function OR.RelayCredsSet(board, iid, uuid, rtoken)
+	if not (board and rtoken and rtoken ~= "-") then return end
+	GM.db.relay = GM.db.relay or {}
+	GM.db.relay[board] = { i = iid, u = uuid, k = rtoken }
+	OR.relay.reg[board] = nil
+	-- ops pended behind register flush as real ops now
+	local q = GM.db.relayPend and GM.db.relayPend[board]
+	GM.db.relayPend[board] = nil
+	for _, o in ipairs(q or {}) do
+		OR.Op(o.v, board, o.f)
+	end
+end
+
+function OR.RelayQueueOp(board, verb, fields)
+	GM.db.relayPend = GM.db.relayPend or {}
+	local q = GM.db.relayPend[board] or {}
+	local f = {}
+	for k, v in pairs(fields) do f[k] = v end
+	q[#q + 1] = { v = verb, f = f }
+	GM.db.relayPend[board] = q
+end
+
+local function RelayPeer(board)
+	local best, bt, now = nil, nil, time()
+	for name, t in pairs(OR.relay.peers[board] or {}) do
+		if now - (t or 0) < RELAY_PEER_TTL
+				and (not bt or t > bt) then
+			best, bt = name, t
+		end
+	end
+	return best
+end
+
+function OR.RelayWhisper(board, rec)
+	local peer = RelayPeer(board)
+	if peer and GM.Mesh and GM.Mesh.Whisper then
+		GM.Mesh.Whisper(peer, "R", rec)
+		return true
+	end
+	-- no serving peer yet — pend; T beacons and Y replies flush
+	local q = OR.relay.rpend[board] or {}
+	q[#q + 1] = rec
+	OR.relay.rpend[board] = q
+	return false
+end
+
+function OR.RelayRegister(board)
+	if OR.relay.reg[board] then return end
+	OR.relay.reg[board] = true
+	-- register is a pseudo-verb: no creds exist yet — the Y reply
+	-- IS the creds
+	local rec = table.concat({ board, OR.MyUUID() or "?", "-",
+		"-", "register", CharName() }, ";")
+	OR.RelayWhisper(board, rec)
+end
+
+function OR.RelaySend(board, verb, fields, rid, creds)
+	local keys = RELAY_KEYS[verb]
+	if not keys then return end
+	local p = { board, (creds and creds.u) or OR.MyUUID() or "?",
+		creds.k or "-", rid, verb }
+	for _, k in ipairs(keys) do
+		local v = fields[k]
+		if type(v) == "boolean" then v = v and 1 or 0 end
+		p[#p + 1] = tostring(v == nil and "-" or v)
+	end
+	OR.RelayWhisper(board, table.concat(p, ";"))
+end
+
+function OR.RelayAsk(board)
+	if not board or not OR.IsRemote(board) then return end
+	local now = time()
+	if now - (OR.relay.asked[board] or 0) < RELAY_ASK_TTL then
+		return
+	end
+	OR.relay.asked[board] = now
+	local peer = RelayPeer(board)
+	if not peer or not (GM.Mesh and GM.Mesh.Whisper) then
+		return
+	end
+	OR.relay.gen = (OR.relay.gen or 0) + 1
+	OR.RBoard(board).askGen = OR.relay.gen
+	GM.Mesh.Whisper(peer, "Q", board .. ";" .. OR.relay.gen)
+end
+
+-- T beacon: peer advertises the boards it can serve — build the
+-- peer map and flush any envelopes pended behind discovery
+function OR.RelayPeer(body, sender)
+	if not sender or sender == "" then return end
+	for b in (body or ""):gmatch("[^,]+") do
+		local m = OR.relay.peers[b] or {}
+		m[sender] = time()
+		OR.relay.peers[b] = m
+		local q = OR.relay.rpend[b]
+		if q then
+			OR.relay.rpend[b] = nil
+			for _, rec in ipairs(q) do
+				OR.RelayWhisper(b, rec)
+			end
+		end
+	end
+end
+
+-- ============ host side (relay serving) ============
+
+-- a tunneled peer's envelope -> our SV relayOut queue, which OUR
+-- watcher POSTs to OUR backend. from/b/op ride alongside the op
+-- body so the result can route back to the asker.
+function OR.RelayStage(sender, f)
+	local board, uuid, rtok, arid, v = f[1], f[2], f[3], f[4], f[5]
+	local keys = RELAY_KEYS[v]
+	if not (board and v and keys) then return end
+	local body = { from = sender, b = board, v = v }
+	if uuid and uuid ~= "-" then body.uuid = uuid end
+	if rtok and rtok ~= "-" then body.rtoken = rtok end
+	if arid and arid ~= "-" then body.op = arid end
+	for i, k in ipairs(keys) do
+		local x = f[5 + i]
+		if x and x ~= "-" then body[k] = x end
+	end
+	GM.db.relayOut = GM.db.relayOut or {}
+	local rid = ("rel-%d-%d"):format(time(), math.random(100, 999))
+	GM.db.relayOut[#GM.db.relayOut + 1] =
+		rid .. "|" .. hexenc(OpJSON(body))
+end
+
+-- answer a Q pull: stream our pulled board as W/w rows ended by Z
+function OR.RelayServe(sender, board, gen)
+	if not (sender and board and gen) then return end
+	if not (GM.Mesh and GM.Mesh.Whisper) then return end
+	local b = GoblinMindDB and GoblinMindDB.boards
+		and GoblinMindDB.boards[board]
+	if not b or not b.orders then return end  -- can't serve it
+	for _, o in ipairs(b.orders) do
+		GM.Mesh.Whisper(sender, "W", table.concat({
+			board, gen, o.id, o.itemID, o.qtyTotal or 0,
+			o.qtyFilled or 0, o.remaining or 0,
+			o.pricePerUnit or 0, o.claimTTL or 0,
+			o.poster or "-", o.posterUUID or "-",
+			math.floor(o.expires or 0), o.state or "open",
+			o.backed and 1 or 0, statCSV(o.posterStats) }, ";"))
+		for _, c in ipairs(o.commits or {}) do
+			GM.Mesh.Whisper(sender, "w", table.concat({
+				board, gen, o.id, c.id, c.units or 0,
+				c.unitsFilled or 0, c.crafter or "-",
+				c.crafterUUID or "-",
+				math.floor(c.expires or 0),
+				c.state or "active", c.accepted and 1 or 0,
+				statCSV(c.crafterStats) }, ";"))
+		end
+	end
+	GM.Mesh.Whisper(sender, "Z", board .. ";" .. gen)
+end
+
+-- our watcher surfaced relay results in the emit — whisper them
+-- back to their requesters: register creds (Y), op failures (X)
+function OR.RelayScanResults()
+	local rr = GoblinMindDB and GoblinMindDB.relayResults
+	if not rr or not (GM.Mesh and GM.Mesh.Whisper) then return end
+	GM.db.relayAcked = GM.db.relayAcked or {}
+	for rid, r in pairs(rr) do
+		if not GM.db.relayAcked[rid] and r.from then
+			if r.relay_token and r.b then
+				GM.Mesh.Whisper(r.from, "Y", table.concat({
+					r.b, r.install_id or "-",
+					r.uuid or "-", r.relay_token }, ";"))
+				GM.db.relayAcked[rid] = true
+			elseif r.arid and not r.ok then
+				GM.Mesh.Whisper(r.from, "X",
+					r.arid .. ";" .. (r.code or 0))
+				GM.db.relayAcked[rid] = true
+			end
+		end
+	end
+end
+
+-- ============ tunneled side (snapshot ingest) ============
+
+function OR.RelayIngest(kind, f)
+	local rb = OR.RBoard(f[1])
+	local gen = tonumber(f[2])
+	if not gen or gen < (rb.askGen or 0) then return end -- stale
+	if kind == "Z" then
+		-- stream end: rows not stamped this gen are gone
+		rb.t = time()
+		for i = #rb.orders, 1, -1 do
+			if rb.orders[i]._gen ~= gen then
+				table.remove(rb.orders, i)
+			end
+		end
+		return
+	end
+	if kind == "W" then
+		local o = {
+			id = f[3], board = f[1], itemID = tonumber(f[4]),
+			qtyTotal = tonumber(f[5]), qtyFilled = tonumber(f[6]),
+			remaining = tonumber(f[7]),
+			pricePerUnit = tonumber(f[8]),
+			claimTTL = tonumber(f[9]),
+			poster = f[10] ~= "-" and f[10] or nil,
+			posterUUID = f[11] ~= "-" and f[11] or nil,
+			expires = tonumber(f[12]), state = f[13],
+			backed = f[14] == "1",
+			posterStats = unstatCSV(f[15]),
+			_gen = gen, commits = {},
+		}
+		for i, x in ipairs(rb.orders) do
+			if x.id == o.id then
+				o.commits = x.commits or {}
+				o.created = x.created
+				rb.orders[i] = o
+				return
+			end
+		end
+		rb.orders[#rb.orders + 1] = o
+	elseif kind == "w" then
+		local o
+		for _, x in ipairs(rb.orders) do
+			if x.id == f[3] then o = x break end
+		end
+		if not o then
+			o = { id = f[3], board = f[1], commits = {},
+				_gen = gen }
+			rb.orders[#rb.orders + 1] = o
+		end
+		o.commits = o.commits or {}
+		local c = {
+			id = f[4], units = tonumber(f[5]),
+			unitsFilled = tonumber(f[6]),
+			crafter = f[7] ~= "-" and f[7] or nil,
+			crafterUUID = f[8] ~= "-" and f[8] or nil,
+			expires = tonumber(f[9]), state = f[10],
+			accepted = f[11] == "1",
+			crafterStats = unstatCSV(f[12]),
+		}
+		for i, x in ipairs(o.commits) do
+			if x.id == c.id then o.commits[i] = c return end
+		end
+		o.commits[#o.commits + 1] = c
+	end
+end
+
+-- single entry point for whisper-delivered records
+function OR.MeshWhisper(kind, body, sender)
+	local f = {}
+	for s in (body or ""):gmatch("[^;]*") do f[#f + 1] = s end
+	if kind == "R" then
+		OR.RelayStage(sender, f)
+	elseif kind == "Q" then
+		OR.RelayServe(sender, f[1], tonumber(f[2]))
+	elseif kind == "W" or kind == "w" or kind == "Z" then
+		OR.RelayIngest(kind, f)
+	elseif kind == "Y" then
+		OR.RelayCredsSet(f[1], tonumber(f[2]), f[3], f[4])
+	elseif kind == "X" then
+		GM.db.relayErr = GM.db.relayErr or {}
+		GM.db.relayErr[f[1]] = tonumber(f[2]) or 0
+	end
+end
+
+-- drop a queue line by rid — remote ops never reach orderResults,
+-- so their queue entries clear when the overlay ev drops instead
+-- of lingering and re-pending phantom rows on reload
+function OR.Unstage(rid)
+	local q = GM.db and GM.db.orderQueue
+	if not (q and rid) then return end
+	for i = #q, 1, -1 do
+		if q[i]:match("^(ord%-[^|]+)") == rid then
+			table.remove(q, i)
+		end
+	end
+end
+
+-- result sweep — cheap cadence; runs whether or not the window is
+-- open since the host half has a duty even when we're not looking
+local _relayTick = false
+function OR.RelayStart()
+	if _relayTick or not (GM.After and GM.db) then return end
+	_relayTick = true
+	local function loop()
+		OR.RelayScanResults()
+		GM.After(15, loop)
+	end
+	GM.After(15, loop)
 end
 
 -- ============ ledger reserve (advisory — addons can't custody gold) ============

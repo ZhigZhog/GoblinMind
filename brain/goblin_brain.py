@@ -1235,12 +1235,15 @@ def api_boards():
         return {}
 
 
-def _backend_op(cfg, path, body):
+def _backend_op(cfg, path, body, auth=True):
     """POST a staged writ op — returns (code, body) with the server's
     own error JSON surfaced (409 remaining, 403 reason), unlike
-    _backend_req which raises."""
-    headers = {'Authorization': 'Bearer ' + _backend_token(cfg),
-               'Content-Type': 'application/json'}
+    _backend_req which raises. auth=False posts without the bearer
+    for relayed envelopes — the body carries the author's own
+    uuid+rtoken creds."""
+    headers = {'Content-Type': 'application/json'}
+    if auth:
+        headers['Authorization'] = 'Bearer ' + _backend_token(cfg)
     req = urllib.request.Request(
         cfg['url'].rstrip('/') + path,
         data=json.dumps(body).encode(), headers=headers,
@@ -1914,6 +1917,10 @@ def cmd_book(sv_arg, out_paths, root=None, feed=None, realm=None):
         # op outcomes keyed by staging rid — Orders.lua watches both
         'boards': api_boards(),
         'orderResults': _order_results_emit(),
+        # relay-host results — staged relayOut envelopes we've
+        # POSTed; the addon whispers register creds (Y) and op
+        # failures (X) back to their requesters from this
+        'relayResults': _relay_results_emit(),
         'api': _api_emit(),
         # where the companion app lives — absolute paths so the
         # wizard can show them in a copyable box
@@ -2329,6 +2336,11 @@ def process_orders(appdata, root=None):
                              't': int(time.time())}
                 dirty = True
                 continue
+            if body.get('rly'):
+                # remote-board op — rides the mesh relay, not our
+                # backend; leaves the queue for overlay replay and
+                # clears client-side on snapshot confirm
+                continue
             path = _ord_route(body)
             if not path:
                 done[rid] = {'ok': False, 'err': 'verb',
@@ -2357,6 +2369,90 @@ def process_orders(appdata, root=None):
             done.pop(keys.pop(0), None)
         _save_api_state(st)
     return dirty
+
+
+# mesh-relayed ops stage in GoblinMindSettings.relayOut as
+# 'rel-<ts>-<n>|<hex(json {from, b, op, uuid, rtoken, v, ...})>' —
+# a tunneled peer whispers its envelope to a client that CAN reach
+# this backend; we forward it and report via relayResults. The body
+# carries the AUTHOR's uuid+rtoken — we never send our bearer.
+RELAY_RE = re.compile(r'"(rel-[^"|]+)\|([0-9a-fA-F]+)"')
+
+
+def process_relay(appdata, root=None):
+    """The watcher half of the mesh NAT tunnel. Tunneled installs
+    can't reach this tracker at all — ops arrive by addon whisper
+    and stage here; we POST them unauthenticated (body creds) and
+    the results flow back over whispers from the addon's
+    relayResults scan. register envelopes get our guild key so a
+    member vouches the new peer through the secret gate."""
+    cfg = _backend_cfg()
+    if not cfg.get('url'):
+        return
+    st = _load_api_state()
+    done = st.setdefault('relay_results', {})
+    dirty = False
+    for sv in sv_paths(appdata, root):
+        try:
+            with open(sv, encoding='utf-8', errors='replace') as fh:
+                text = fh.read()
+        except OSError:
+            continue
+        for rid, hexbody in RELAY_RE.findall(text):
+            if rid in done:
+                continue
+            try:
+                env = json.loads(
+                    bytes.fromhex(hexbody).decode('utf-8'))
+            except (ValueError, UnicodeDecodeError):
+                done[rid] = {'ok': False, 'err': 'decode',
+                             't': int(time.time())}
+                dirty = True
+                continue
+            res = {'from': env.get('from'), 'b': env.get('b'),
+                   'arid': env.get('op'), 't': int(time.time())}
+            try:
+                if env.get('v') == 'register':
+                    body = {'name': env.get('name'),
+                            'uuid': env.get('uuid'),
+                            'relay': True}
+                    if cfg.get('key'):
+                        body['key'] = cfg['key']
+                    code, r = _backend_op(
+                        cfg, '/v1/register', body, auth=False)
+                    for k in ('uuid', 'relay_token', 'install_id'):
+                        if r.get(k) is not None:
+                            res[k] = r[k]
+                else:
+                    path = _ord_route(env)
+                    if not path:
+                        done[rid] = dict(res, ok=False, err='verb')
+                        dirty = True
+                        continue
+                    code, r = _backend_op(cfg, path, env, auth=False)
+                res['ok'] = 200 <= code < 300
+                res['code'] = code
+                for k in ('error', 'remaining', 'order', 'commit'):
+                    if r.get(k) is not None:
+                        res[k] = r[k]
+            except Exception as e:
+                LOG.warning('relay %s transport failed: %s', rid, e)
+                continue
+            done[rid] = res
+            dirty = True
+            LOG.info('relay %s (%s@%s for %s) -> %s', rid,
+                     env.get('v'), env.get('b'), env.get('from'),
+                     res.get('code'))
+    if dirty:
+        keys = sorted(done, key=lambda k: done[k].get('t') or 0)
+        while len(done) > 128:
+            done.pop(keys.pop(0), None)
+        _save_api_state(st)
+    return dirty
+
+
+def _relay_results_emit():
+    return _load_api_state().get('relay_results') or {}
 
 
 def process_board_reqs(appdata, root=None):
@@ -2686,6 +2782,12 @@ def cmd_watch(appdata, outs, interval=5, settle=20, feed='tsm',
             # pass (the 2-min cadence is for quiet stretches) and let
             # its emit ignore the 5-min floor, so a /reload right
             # after shows the row confirmed, not still pending
+            last_boards_poll = 0
+            last_boards_emit = 0
+        if process_relay(appdata, root):
+            # relayed envelopes hit the server too — same fast
+            # confirm path; the requester's next snapshot shows it
+            ops_dirty = True
             last_boards_poll = 0
             last_boards_emit = 0
         if mtime != last_mtime:

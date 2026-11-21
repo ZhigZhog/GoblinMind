@@ -644,13 +644,19 @@ function OU.Refresh()
 	if not ui.board or not has(boards, ui.board) then
 		ui.board = boards[1]
 	end
+	-- a remote board needs its snapshot asked over the tunnel —
+	-- throttled inside RelayAsk (60s per board)
+	if ui.board and OR.IsRemote(ui.board) then
+		OR.RelayAsk(ui.board)
+	end
 	for i, b in ipairs(ui.boardBtns) do b:Hide() end
 	ui.boardBtns = {}
 	ui.boardBar:SetText("boards:")
 	local bx = 62
 	for i, b in ipairs(boards) do
-		local w = 10 + #b * 8
-		local btn = MkBtn(ui.frame, b, w)
+		local lbl = OR.IsRemote(b) and (b .. "·") or b
+		local w = 10 + #lbl * 8
+		local btn = MkBtn(ui.frame, lbl, w)
 		btn:SetPoint("TOPLEFT", bx, -27)
 		bx = bx + w + 6
 		if b ~= ui.board then

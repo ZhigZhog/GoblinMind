@@ -167,6 +167,9 @@ def init_db():
     if 'banned' not in cols:
         conn.execute('ALTER TABLE installs ADD COLUMN banned '
                      'INTEGER DEFAULT 0')
+    if 'relay_token' not in cols:
+        conn.execute('ALTER TABLE installs ADD COLUMN relay_token '
+                     'TEXT')
     conn.execute('''CREATE TABLE IF NOT EXISTS boards(
         name TEXT PRIMARY KEY, owner_install INTEGER,
         post_acl TEXT DEFAULT 'open', members TEXT DEFAULT '[]',
@@ -869,28 +872,48 @@ def h_register(conn, ctx):
     name = str(body.get('name') or 'install')[:64]
     # client-supplied stable id — 'who is who' without
     # handmade accounts; COALESCE keeps a stored uuid
-    # when a re-register doesn't send one
+    # when a re-register doesn't send one.
+    # relay:true = a mesh peer registering a tunneled install (its
+    # only route is the chat channel). The response carries
+    # relay_token — op-scoped creds for the uuid+rtoken body auth —
+    # and NO bearer, which would be a dead secret anyway.
+    relay = bool(body.get('relay'))
+    tok = None if relay else secrets.token_urlsafe(24)
     row = conn.execute(
         'SELECT id FROM installs WHERE name=?', (name,)).fetchone()
-    tok = secrets.token_urlsafe(24)
     if row:
         # re-register = re-key the existing install (lost
         # api_state / reinstall) — no zombie rows per name
         conn.execute(
-            'UPDATE installs SET token=?, '
-            'uuid=COALESCE(?, uuid) WHERE id=?',
-            (tok, uid, row[0]))
+            'UPDATE installs SET token=COALESCE(?, token), '
+            'uuid=COALESCE(?, uuid), '
+            'relay_token=COALESCE(relay_token, ?) WHERE id=?',
+            (tok, uid, secrets.token_urlsafe(16), row[0]))
         conn.commit()
-        ctx['send'](200, {'install_id': row[0], 'token': tok,
-                          'uuid': uid or _install_uuid(conn, row[0])})
+        out = {'install_id': row[0],
+               'uuid': uid or _install_uuid(conn, row[0]),
+               'relay_token': _rtok_of(conn, row[0])}
+        if not relay:
+            out['token'] = tok
+        ctx['send'](200, out)
         return
+    rtok = secrets.token_urlsafe(16)
     cur = conn.execute(
-        'INSERT INTO installs(name, token, uuid, created) '
-        'VALUES(?,?,?,?)',
-        (name, tok, uid, ctx['now']))
+        'INSERT INTO installs(name, token, uuid, relay_token, '
+         'created) VALUES(?,?,?,?,?)',
+        (name, tok, uid, rtok, ctx['now']))
     conn.commit()
-    ctx['send'](200, {'install_id': cur.lastrowid,
-                      'token': tok, 'uuid': uid})
+    out = {'install_id': cur.lastrowid, 'uuid': uid,
+           'relay_token': rtok}
+    if not relay:
+        out['token'] = tok
+    ctx['send'](200, out)
+
+
+def _rtok_of(conn, install_id):
+    row = conn.execute('SELECT relay_token FROM installs WHERE id=?',
+                       (install_id,)).fetchone()
+    return row[0] if row else None
 
 
 @_route('POST', '/v1/upload', AUTH)
@@ -955,16 +978,31 @@ def h_upload(conn, ctx):
 def _ordop(conn, ctx, fn):
     """Authed board mutation — every mutating op is idempotent via
     its 'op' nonce (order_ops) or its own row id. The ONE wrapper
-    for every write route: rate limit -> body check -> replay ->
+    for every write route: body -> auth -> rate limit -> replay ->
     run -> store -> respond. Handlers return the result dict to
     store+send, or None after sending their own error (validation
-    failures are NOT deduped — a retried op re-evaluates)."""
-    if _orate(conn, ctx['install']):
-        ctx['send'](429, {'error': 'rate'})
-        return
+    failures are NOT deduped — a retried op re-evaluates).
+
+    Install resolution: Bearer first; when absent, the body's
+    uuid+rtoken pair — the envelope a mesh peer POSTs on behalf of
+    a tunneled install (the chat channel is its only route to the
+    tracker). The op still applies under the AUTHOR's install."""
     body = ctx['body']
     if not isinstance(body, dict):
         ctx['send'](400, {'error': 'body'})
+        return
+    if ctx['install'] is None:
+        row = conn.execute(
+            'SELECT id FROM installs WHERE uuid=? AND '
+            'relay_token=? AND COALESCE(banned,0)=0',
+            (str(body.get('uuid') or '')[:64],
+             str(body.get('rtoken') or '')[:64])).fetchone()
+        if not row:
+            ctx['send'](401, {'error': 'auth'})
+            return
+        ctx['install'] = row[0]
+    if _orate(conn, ctx['install']):
+        ctx['send'](429, {'error': 'rate'})
         return
     if 'b' in ctx and not SCOPE_RE.match(ctx['b']):
         ctx['send'](400, {'error': 'bad board'})
@@ -1492,7 +1530,9 @@ class Handler(BaseHTTPRequestHandler):
             ctx.update(caps)
             if flags & (AUTH | ORDOP):
                 ctx['install'] = self._auth(conn)
-                if ctx['install'] is None:
+                # ORDOP defers the 401 — the body may carry the
+                # tunneled author's uuid+rtoken instead of a Bearer
+                if ctx['install'] is None and not flags & ORDOP:
                     self._send(401, {'error': 'auth'})
                     return
             if flags & ORDOP:
