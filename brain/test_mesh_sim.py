@@ -24,6 +24,7 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.request
 from http.server import ThreadingHTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -197,6 +198,8 @@ class World:
         self.tmp = tempfile.mkdtemp(prefix='gm-sim-')
         gs.DB_PATH = os.path.join(self.tmp, 'backend.db')
         gs.CFG_PATH = os.path.join(self.tmp, 'goblin_server.json')
+        with open(gs.CFG_PATH, 'w') as fh:
+            json.dump({'admin_key': 'sim-key'}, fh)
         gs.init_db()
         gs.Handler.log_message = lambda *a, **k: None
         self.srv = ThreadingHTTPServer(('127.0.0.1', 0), gs.Handler)
@@ -255,6 +258,7 @@ class World:
             gb._install_uuid()
         ops = gb.process_orders(None, c.root)
         gb.process_relay(None, c.root)
+        gb.process_board_reqs(None, c.root)
         br = gb.process_board_refresh(None, c.root)
         if c.url:
             gb.boards_pull()
@@ -281,10 +285,40 @@ class World:
         try:
             return list(c.execute(
                 'select id,item_id,qty_total,qty_filled,'
-                'price_per_unit,state,poster_uuid,expires '
-                'from orders where board=?', (board,)))
+                'price_per_unit,state,poster_uuid,expires,'
+                'qty_held from orders where board=?', (board,)))
         finally:
             c.close()
+
+    def admin(self, path, body=None):
+        req = urllib.request.Request(
+            self.url_a + path,
+            data=json.dumps(body).encode() if body is not None
+            else None,
+            headers={'X-Admin-Key': 'sim-key',
+                     'Content-Type': 'application/json'},
+            method='POST' if body is not None else 'GET')
+        return json.load(urllib.request.urlopen(req, timeout=10))
+
+    def install_id(self, c):
+        return c.state().get('backend_install_id')
+
+    def stats(self, install_id):
+        c = self.db()
+        try:
+            r = c.execute('select * from install_stats where '
+                          'install_id=?', (install_id,)).fetchone()
+            cols = [d[1] for d in c.execute(
+                'pragma table_info(install_stats)')]
+            return dict(zip(cols, r)) if r else {}
+        finally:
+            c.close()
+
+    def expire_commit(self, cid, secs_ago=10):
+        c = self.db()
+        c.execute('update commits set expires=? where id=?',
+                  (int(time.time()) - secs_ago, cid))
+        c.commit(); c.close()
 
     def commit_rows(self):
         c = self.db()
@@ -588,6 +622,291 @@ def s13_expiry(w):
           not got or all(o.get('state') != 'open' for o in got), got)
 
 
+def s15_commit_ttl(w):
+    """Commit TTL expiry: an un-mailed claim releases back to the
+    pool on the next pull, stat-booked as commits_expired."""
+    a = w.client('Alpha')
+    cr = w.client('Crafty')
+    a.fire_login(); cr.fire_login(); w.pump()
+    a.OR().Post('main', 5518, 10, 500, 86400)
+    w.watcher(a); a.reload()
+    oid = w.order_rows()[0][0]
+    cr.OR().Claim('main', oid, 4)
+    w.watcher(cr)
+    cid = w.commit_rows()[0][0]
+    w.expire_commit(cid)
+    w.watcher(a)                    # pull sweeps expired commits
+    cc = w.commit_rows()
+    check('expired commit released', cc[0][4] == 'released', cc)
+    rows = w.order_rows()
+    check('units back in pool', rows[0][8] == 0, rows)
+    st = w.stats(w.install_id(cr))
+    check('commits_expired booked', st.get('commits_expired') == 1,
+          st)
+
+
+def s16_deny(w):
+    """Poster politely ends a claim - units return, NO stat (deny
+    carries no penalty by design)."""
+    a = w.client('Alpha')
+    cr = w.client('Crafty')
+    a.fire_login(); cr.fire_login(); w.pump()
+    a.OR().Post('main', 5518, 5, 500, 86400)
+    w.watcher(a); a.reload()
+    oid = w.order_rows()[0][0]
+    cr.OR().Claim('main', oid, 3)
+    w.watcher(cr)
+    cid = w.commit_rows()[0][0]
+    a.OR().Deny('main', oid, cid)
+    w.watcher(a)
+    cc = w.commit_rows()
+    check('denied commit released', cc[0][4] == 'released', cc)
+    rows = w.order_rows()
+    check('deny returns units', rows[0][8] == 0, rows)
+    st = w.stats(w.install_id(cr))
+    check('deny books no stat', not st.get('commits_forced'), st)
+
+
+def s17_force(w):
+    """Poster force-frees a claim - units return and the crafter
+    takes a commits_forced rating hit."""
+    a = w.client('Alpha')
+    cr = w.client('Crafty')
+    a.fire_login(); cr.fire_login(); w.pump()
+    a.OR().Post('main', 5518, 5, 500, 86400)
+    w.watcher(a); a.reload()
+    oid = w.order_rows()[0][0]
+    cr.OR().Claim('main', oid, 3)
+    w.watcher(cr)
+    cid = w.commit_rows()[0][0]
+    a.OR().Force('main', oid, cid)
+    w.watcher(a)
+    cc = w.commit_rows()
+    check('forced commit released', cc[0][4] == 'released', cc)
+    st = w.stats(w.install_id(cr))
+    check('force books commits_forced',
+          st.get('commits_forced') == 1, st)
+
+
+def s18_release(w):
+    """Crafter gives up a hold - unfilled units return, stat-free."""
+    a = w.client('Alpha')
+    cr = w.client('Crafty')
+    a.fire_login(); cr.fire_login(); w.pump()
+    a.OR().Post('main', 5518, 5, 500, 86400)
+    w.watcher(a); a.reload()
+    oid = w.order_rows()[0][0]
+    cr.OR().Claim('main', oid, 3)
+    w.watcher(cr)
+    cid = w.commit_rows()[0][0]
+    cr.OR().Release('main', cid, oid)
+    w.watcher(cr)
+    cc = w.commit_rows()
+    check('released commit terminal', cc[0][4] == 'released', cc)
+    rows = w.order_rows()
+    check('release returns units', rows[0][8] == 0, rows)
+
+
+def s19_ignore(w):
+    """Personal ignore: a poster-ignored crafter cannot claim."""
+    a = w.client('Alpha')
+    cr = w.client('Crafty')
+    a.fire_login(); cr.fire_login(); w.pump()
+    w.watcher(cr)                        # Crafty's uuid registered
+    cu = cr.state().get('install_uuid')
+    a.OR().Ignore(cu, True)
+    a.OR().Post('main', 5518, 5, 500, 86400)
+    w.watcher(a); a.reload()
+    oid = w.order_rows()[0][0]
+    cr.OR().Claim('main', oid, 2)
+    w.watcher(cr)
+    res = cr.state().get('order_results', {})
+    last = max(res.values(), key=lambda r: r.get('t') or 0) \
+        if res else {}
+    check('ignored crafter claim 403 ignored',
+          last.get('code') == 403 and last.get('error') == 'ignored',
+          last)
+    check('no commit created', not w.commit_rows(), w.commit_rows())
+
+
+def s20_board_ban(w):
+    """Board-owner ban: a banned uuid cannot write the board."""
+    a = w.client('Alpha')
+    cr = w.client('Crafty')
+    a.fire_login(); cr.fire_login(); w.pump()
+    w.watcher(a); w.watcher(cr)
+    aid = w.install_id(a)
+    w.admin('/v1/admin/boards', {'name': 'vip', 'owner': aid})
+    cu = cr.state().get('install_uuid')
+    a.OR().BoardBan('vip', cu, True)
+    w.watcher(a)
+    cr.OR().Post('vip', 5518, 2, 100, 3600)
+    w.watcher(cr)
+    res = cr.state().get('order_results', {})
+    last = max(res.values(), key=lambda r: r.get('t') or 0) \
+        if res else {}
+    check('banned poster gets 403 board_ban',
+          last.get('code') == 403
+          and last.get('error') == 'board_ban', last)
+    check('no order on vip', not w.order_rows('vip'),
+          w.order_rows('vip'))
+
+
+def s21_host_ban(w):
+    """Host ban: purge kills orders + voids live commits, banned
+    install's ops 401, and the ban survives re-register."""
+    a = w.client('Alpha')
+    cr = w.client('Crafty')
+    a.fire_login(); cr.fire_login(); w.pump()
+    a.OR().Post('main', 5518, 10, 500, 86400)
+    cr.OR().Post('main', 5519, 2, 300, 86400)
+    w.watcher(a); w.watcher(cr)
+    oid = w.order_rows()[0][0]
+    cr.OR().Claim('main', oid, 4)
+    w.watcher(cr)
+    cid = w.install_id(cr)
+    w.admin('/v1/admin/installs/%d' % cid, {'banned': True})
+    check('banned installs own orders purged',
+          all(r[1] != 5519 for r in w.order_rows()), w.order_rows())
+    cc = w.commit_rows()
+    check('banned installs commits voided',
+          not cc or all(c[4] != 'active' for c in cc), cc)
+    rows = w.order_rows()
+    check('pool restored on victim order',
+          rows[0][8] == 0 and rows[0][5] == 'open', rows)
+    rid = cr.OR().Claim('main', oid, 1)
+    w.watcher(cr)
+    res = cr.state().get('order_results', {})
+    check('banned install op rejected',
+          res.get(rid) and res[rid].get('code') == 401,
+          res.get(rid))
+    # ban survives a re-register (same name re-keys, not unbans)
+    gb.API_STATE_PATH = cr.state_path
+    gb.API_BOOK_PATH = cr.book_path
+    gb.FEEDS_PATH = cr.feeds_path
+    st = gb._load_api_state()
+    st.pop('backend_uuid_sent', None)
+    gb._save_api_state(st)
+    gb._backend_register(gb._backend_cfg())
+    rid = cr.OR().Claim('main', oid, 1)
+    w.watcher(cr)
+    res = cr.state().get('order_results', {})
+    check('ban survives re-register',
+          res.get(rid) and res[rid].get('code') == 401,
+          res.get(rid))
+
+
+def s22_contention(w):
+    """Two crafters race a 5-unit pool - over-claim 409s with the
+    true remaining, second claim fills the last unit."""
+    a = w.client('Alpha')
+    c1 = w.client('Crafter1')
+    c2 = w.client('Crafter2')
+    a.fire_login(); c1.fire_login(); c2.fire_login(); w.pump()
+    a.OR().Post('main', 5518, 5, 500, 86400)
+    w.watcher(a); a.reload()
+    oid = w.order_rows()[0][0]
+    c1.OR().Claim('main', oid, 4)
+    w.watcher(c1)
+    rid = c2.OR().Claim('main', oid, 4)
+    w.watcher(c2)
+    res = c2.state().get('order_results', {})
+    check('over-claim 409 with remaining=1',
+          res.get(rid) and res[rid].get('code') == 409
+          and res[rid].get('remaining') == 1, res.get(rid))
+    c2.OR().Claim('main', oid, 1)
+    w.watcher(c2)
+    cc = [r for r in w.commit_rows() if r[4] == 'active']
+    check('two active commits 4+1',
+          len(cc) == 2 and sorted(r[2] for r in cc) == [1, 4], cc)
+    rows = w.order_rows()
+    check('remaining zero',
+          rows[0][2] - rows[0][3] - rows[0][8] == 0, rows)
+    rid = c1.OR().Claim('main', oid, 1)
+    w.watcher(c1)
+    res = c1.state().get('order_results', {})
+    check('exhausted pool 409 remaining=0',
+          res.get(rid) and res[rid].get('code') == 409
+          and res[rid].get('remaining') == 0, res.get(rid))
+
+
+def s23_partial_cancel(w):
+    """Partial cancel shrinks qty_total; live commits keep."""
+    a = w.client('Alpha')
+    cr = w.client('Crafty')
+    a.fire_login(); cr.fire_login(); w.pump()
+    a.OR().Post('main', 5518, 10, 500, 86400)
+    w.watcher(a); a.reload()
+    oid = w.order_rows()[0][0]
+    cr.OR().Claim('main', oid, 4)
+    w.watcher(cr)
+    a.OR().Cancel('main', oid, 3)
+    w.watcher(a)
+    rows = w.order_rows()
+    check('qty_total shrank 10->7', rows[0][2] == 7, rows)
+    cc = w.commit_rows()
+    check('commit survives partial cancel',
+          cc[0][4] == 'active' and cc[0][2] == 4, cc)
+
+
+def s24_join_leave(w):
+    """In-game board join: staged bo- req updates feeds.json, the
+    pull starts covering the board, the addon stops calling it
+    remote."""
+    a = w.client('Alpha')
+    a.fire_login(); w.pump()
+    a.OR().JoinBoard('vip', True)
+    st = a.db().boardReqs
+    check('join staged a bo- record',
+          st is not None and 'bo-' in (st[1] or ''), st and st[1])
+    w.watcher(a)
+    feeds = json.load(open(a.feeds_path))
+    check('feeds.boards gained vip',
+          'vip' in feeds['backend'].get('boards', []),
+          feeds['backend'])
+    a.reload()
+    check('vip no longer remote', not a.OR().IsRemote('vip'),
+          a.OR().IsRemote('vip'))
+    a.OR().JoinBoard('vip', False)
+    w.watcher(a)
+    feeds = json.load(open(a.feeds_path))
+    check('leave drops vip',
+          'vip' not in feeds['backend'].get('boards', []),
+          feeds['backend'])
+
+
+def s25_remote_claim(w):
+    """A tunneled peer claims through the relay - the commit lands
+    on tracker B under the asker's install."""
+    x = w.client('Xavier', tracker='a', boards=['main'])
+    r = w.client('Relay', tracker='b', boards=['gob'])
+    r.fire_login(); w.pump()
+    r.OR().Post('gob', 5518, 8, 700, 86400)
+    w.watcher(r); r.reload()
+    x.fire_login()
+    w.watcher(x); x.reload()
+    x.advance(40); r.advance(40); w.pump()
+    x.OR().RefreshBoard('gob'); w.pump()
+    oid = x.OR().Board('gob').orders[1].id
+    x.OR().Claim('gob', oid, 3)
+    w.pump()                 # R register whisper -> Relay stages
+    r.sv_write()
+    gb.API_STATE_PATH = r.state_path
+    gb.API_BOOK_PATH = r.book_path
+    gb.FEEDS_PATH = r.feeds_path
+    gb.process_relay(None, r.root)     # Relay POSTs the register
+    w.emit(r); r.reload(); r.advance(16); w.pump()  # Y creds back
+    w.pump()                 # deferred claim flushes as R envelope
+    r.sv_write()
+    gb.process_relay(None, r.root)     # Relay POSTs the claim
+    gb.boards_pull(); w.emit(r); r.reload()
+    cc = w.commit_rows()
+    check('remote claim made a commit on tracker B',
+          len(cc) == 1 and cc[0][2] == 3, cc)
+    check('commit under asker install',
+          cc[0][6] == x.state().get('install_uuid'), cc)
+
+
 def tostring_check(v, needle):
     return isinstance(v, str) and needle in v
 
@@ -626,6 +945,17 @@ SCENARIOS = [
     ('duplicate nonce', s09_dup_nonce),
     ('phantom board regression', s10_phantom_reg),
     ('beacon does not hijack local board', s14_beacon_no_hijack),
+    ('commit ttl expiry', s15_commit_ttl),
+    ('deny', s16_deny),
+    ('force', s17_force),
+    ('crafter release', s18_release),
+    ('personal ignore', s19_ignore),
+    ('board ban', s20_board_ban),
+    ('host ban purge', s21_host_ban),
+    ('multi-crafter contention', s22_contention),
+    ('partial cancel', s23_partial_cancel),
+    ('board join/leave', s24_join_leave),
+    ('remote claim via tunnel', s25_remote_claim),
     ('reject releases units', s11_reject_release),
     ('underfunded post', s12_underfunded),
     ('order expiry', s13_expiry),
