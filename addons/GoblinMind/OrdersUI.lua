@@ -567,6 +567,16 @@ end
 -- reachable via the numeric filter). Rebuilt when the emit
 -- changes; names resolve async via ReqOnce and a later refresh
 -- picks them up.
+local function idxSort(a, b)
+	if (a.name ~= nil) ~= (b.name ~= nil) then
+		return a.name ~= nil
+	end
+	if a.name and b.name and a.name ~= b.name then
+		return a.name < b.name
+	end
+	return a.id < b.id
+end
+
 local function BrowseIndex()
 	local gen = OR.Generated()
 	if ui.idxGen == gen and ui.idx then return ui.idx end
@@ -577,17 +587,33 @@ local function BrowseIndex()
 		idx[#idx + 1] = { id = id, name = n,
 			lname = (n or ""):lower() }
 	end
-	table.sort(idx, function(a, b)
-		if (a.name ~= nil) ~= (b.name ~= nil) then
-			return a.name ~= nil
-		end
-		if a.name and b.name and a.name ~= b.name then
-			return a.name < b.name
-		end
-		return a.id < b.id
-	end)
+	table.sort(idx, idxSort)
 	ui.idx, ui.idxGen = idx, gen
 	return idx
+end
+
+-- names land async — the index snapshot freezes lname at build
+-- time, so without this fill a fresh session's text search could
+-- only ever match the client cache's warm subset (the "1 of 7441
+-- match" bug). Walk only unresolved entries on each burst; resort
+-- when any fill so named items float above the unnamed tail.
+if GM.OnItemInfoLoaded then
+	GM.OnItemInfoLoaded(function()
+		if not (ui and ui.idx) then return end
+		local filled = false
+		for _, e in ipairs(ui.idx) do
+			if e.lname == "" then
+				local n = GM.ItemName(e.id)
+				if n then
+					e.name, e.lname = n, n:lower()
+					filled = true
+				end
+			end
+		end
+		if not filled then return end
+		table.sort(ui.idx, idxSort)
+		if ui.frame and ui.frame:IsShown() then OU.Refresh() end
+	end)
 end
 
 local function BrowsePaint()
