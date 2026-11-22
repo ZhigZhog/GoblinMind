@@ -49,6 +49,8 @@ local function Region()
 	function r:SetJustifyH() end
 	function r:SetWordWrap() end
 	function r:SetParent(p) self._parent = p end
+	function r:EnableMouse() end
+	function r:SetScrollChild(c) self._scrollChild = c end
 	function r:CreateTexture(...) local t = Region() return t end
 	function r:CreateFontString(...) local s = Region() return s end
 	return r

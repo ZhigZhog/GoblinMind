@@ -413,30 +413,45 @@ function M.CreatePane(parent, w)
 	pane.pool = { tile = {}, exptile = {}, disc = {}, line = {},
 		icon = {}, lbl = {} }
 
+	-- every drawable lives on a scroll child: a ScrollFrame is the
+	-- only hard clip rect textures get, and edge-anchored icons,
+	-- ring segments, and camp discs would otherwise bleed past the
+	-- pane onto the window chrome (the "overlap")
+	local inner = pane
+	local clip = CreateFrame("ScrollFrame", nil, pane)
+	clip:SetAllPoints()
+	clip:EnableMouse(false)
+	local sc = CreateFrame("Frame", nil, clip)
+	if clip.SetScrollChild then
+		clip:SetScrollChild(sc)
+		inner = sc
+	end
+	pane._inner = inner
+
 	local function put(kind)
 		local t = tremove(pane.pool[kind])
 		if not t then
 			if kind == "lbl" then
-				t = pane:CreateFontString(nil, "OVERLAY",
+				t = inner:CreateFontString(nil, "OVERLAY",
 					"GameFontHighlightSmall")
 			elseif kind == "tile" then
-				t = pane:CreateTexture(nil, "BACKGROUND")
+				t = inner:CreateTexture(nil, "BACKGROUND")
 			elseif kind == "exptile" then
 				-- explored terrain sits over the parchment base,
 				-- under every overlay
-				t = pane:CreateTexture(nil, "ARTWORK", nil, -1)
+				t = inner:CreateTexture(nil, "ARTWORK", nil, -1)
 			elseif kind == "disc" then
-				t = pane:CreateTexture(nil, "OVERLAY")
-				t:SetTexture("Interface\\BUTTONS\\WHITE8X8")
-				pcall(function()
-					t:SetMaskTexture(
-						"Interface\\CharacterFrame\\TempPortraitAlphaMask")
-				end)
+				t = inner:CreateTexture(nil, "OVERLAY")
+				-- vendored soft circle — SetMaskTexture either
+				-- doesn't exist here or silently fails, leaving a
+				-- square halo; the TGA carries its own alpha edge
+				t:SetTexture(
+					"Interface\\AddOns\\GoblinMind\\Media\\disc.tga")
 			elseif kind == "line" then
-				t = pane:CreateTexture(nil, "OVERLAY", nil, 1)
+				t = inner:CreateTexture(nil, "OVERLAY", nil, 1)
 				t:SetTexture("Interface\\BUTTONS\\WHITE8X8")
 			else -- icon
-				t = pane:CreateTexture(nil, "OVERLAY", nil, 2)
+				t = inner:CreateTexture(nil, "OVERLAY", nil, 2)
 			end
 		end
 		t:ClearAllPoints()
@@ -451,7 +466,7 @@ function M.CreatePane(parent, w)
 		if len < 2 then return end
 		local t = put("line")
 		t:SetSize(len, wd or 2)
-		t:SetPoint("CENTER", pane, "TOPLEFT",
+		t:SetPoint("CENTER", inner, "TOPLEFT",
 			(x1 + x2) / 2, -(y1 + y2) / 2)
 		if t.SetRotation then
 			pcall(t.SetRotation, t, atan2(-dy, dx))
@@ -501,6 +516,10 @@ function M.CreatePane(parent, w)
 		if not h or h <= 0 then h = floor(w / aspect + 0.5) end
 		if not self._fixedH then self:SetHeight(h) end
 		self._dw, self._dh = w, floor(h)
+		-- the scroll child carries every drawable at the draw
+		-- rect's size; the clip frame crops anything past it
+		local inner = self._inner or self
+		inner:SetSize(w, h)
 
 		local haveArt = false
 		-- terrain beats parchment: real ground tiles via
@@ -527,7 +546,7 @@ function M.CreatePane(parent, w)
 						(tp - t2.y) / t2.h,
 						(bb - t2.y) / t2.h)
 					t:SetSize((rr - l) * w, (bb - tp) * h)
-					t:SetPoint("TOPLEFT", self, "TOPLEFT",
+					t:SetPoint("TOPLEFT", inner, "TOPLEFT",
 						l * w, -tp * h)
 					haveArt = true
 				else
@@ -564,7 +583,7 @@ function M.CreatePane(parent, w)
 							end
 							if okS and loaded ~= false then
 								t:SetSize(tw, th)
-								t:SetPoint("TOPLEFT", self,
+								t:SetPoint("TOPLEFT", inner,
 									"TOPLEFT",
 									((i - 1) % cols) * tw,
 									-floor((i - 1) / cols)
@@ -674,7 +693,7 @@ function M.CreatePane(parent, w)
 											t:SetSize(tw2 * pw,
 												th2 * ph)
 											t:SetPoint("TOPLEFT",
-												self, "TOPLEFT",
+												inner, "TOPLEFT",
 												(ox + col
 													* lay.tileWidth)
 													* pw,
@@ -731,7 +750,7 @@ function M.CreatePane(parent, w)
 				local px, py = x * w, y * h
 				local d = put("disc")
 				d:SetSize(rPx * 2, rPx * 2)
-				d:SetPoint("CENTER", self, "TOPLEFT", px, -py)
+				d:SetPoint("CENTER", inner, "TOPLEFT", px, -py)
 				d:SetVertexColor(col[1], col[2], col[3],
 					isSel and 0.3 or (match and 0.16 or 0.05))
 				local seg = 24
@@ -762,7 +781,7 @@ function M.CreatePane(parent, w)
 						(match or isSel) and 0.9 or 0.3)
 				end
 				ic:SetSize(isSel and 24 or 18, isSel and 24 or 18)
-				ic:SetPoint("CENTER", self, "TOPLEFT", px, -py)
+				ic:SetPoint("CENTER", inner, "TOPLEFT", px, -py)
 			end
 		end
 
@@ -801,7 +820,7 @@ function M.CreatePane(parent, w)
 					match and 0.95 or 0.3)
 			end
 			ic:SetSize(sz, sz)
-			ic:SetPoint("CENTER", self, "TOPLEFT",
+			ic:SetPoint("CENTER", inner, "TOPLEFT",
 				c.x * w, -c.y * h)
 			if c.n > 1 then
 				local l = put("lbl")
