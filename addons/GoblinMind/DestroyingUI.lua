@@ -75,41 +75,20 @@ local function Build()
 
 	ui.rows = {}
 	for i = 1, VISIBLE do
-		local row = CreateFrame("Button", nil, host)
-		row:SetSize(588, ROW_H - 2)
+		local row = W.ColumnRow(host, {
+			h = ROW_H - 2, w = 588, icon = 18, nameW = 180,
+			cols = {
+				{ key = "qty", x = 208, w = 26 },
+				{ key = "dv", x = 240, color = "accent" },
+				{ key = "proc", x = 310, color = "textDim" },
+				{ key = "mkt", x = 375, color = "textDim" },
+				{ key = "gain", x = 424, w = 58, color = "pos" },
+				{ key = "group", x = 488, w = 56, color = "textDim",
+					size = 9 },
+			},
+		})
 		row:SetPoint("TOPLEFT", 0, -((i - 1) * ROW_H))
-		row.bg = row:CreateTexture(nil, "BACKGROUND")
-		row.bg:SetAllPoints()
-		row.bg:SetColorTexture(GM.RGB(i % 2 == 0 and "contMedium" or "contLowest"))
-		W.HoverTint(row)
-		row.icon = row:CreateTexture(nil, "ARTWORK")
-		row.icon:SetSize(18, 18)
-		row.icon:SetPoint("LEFT", 4, 0)
-		row.name = GM.MakeFontString(row, GM.FONT, 10, "text")
-		row.name:SetPoint("LEFT", 28, 0)
-		row.name:SetWidth(180)
-		row.name:SetJustifyH("LEFT")
-		row.qty = GM.MakeFontString(row, GM.FONT, 10, "text")
-		row.qty:SetPoint("LEFT", 208, 0)
-		row.qty:SetWidth(26)
-		row.qty:SetJustifyH("LEFT")
-		row.qty:SetWordWrap(false)
-		row.dv = GM.MakeFontString(row, GM.FONT, 10, "accent")
-		row.dv:SetPoint("LEFT", 240, 0)
-		row.proc = GM.MakeFontString(row, GM.FONT, 10, "textDim")
-		row.proc:SetPoint("LEFT", 310, 0)
-		row.name:SetWordWrap(false)
-		row.mkt = GM.MakeFontString(row, GM.FONT, 10, "textDim")
-		row.mkt:SetPoint("LEFT", 375, 0)
-		row.gain = GM.MakeFontString(row, GM.FONT, 10, "pos")
-		row.gain:SetPoint("LEFT", 424, 0)
-		row.gain:SetWidth(58)
-		row.gain:SetJustifyH("LEFT")
-		row.gain:SetWordWrap(false)
-		row.group = GM.MakeFontString(row, GM.FONT, 9, "textDim")
-		row.group:SetPoint("LEFT", 488, 0)
-		row.group:SetWidth(56)
-		row.group:SetJustifyH("LEFT")
+		row:SetZebra(i)
 		-- armed destroy: click → ? → click sells one stack
 		local act = CreateFrame("Button", nil, row)
 		act:SetSize(52, 16)
@@ -162,9 +141,7 @@ function DU.Refresh()
 		local r = rows[i + ui.scroll]
 		if r then
 			row:Show()
-			row.icon:SetTexture(GM.ItemIcon(r.id) or 134400)
-			row.name:SetText(GM.ItemName(r.id) or ("item " .. r.id))
-			row.name:SetTextColor(GM.NameColor(r.id))
+			row:SetItem(r.id)
 			row.qty:SetText("×" .. r.qty)
 			-- VENDOR = what the SELL button actually pays per unit
 			row.dv:SetText(r.vendor and GM.Money(r.vendor) or "—")
@@ -207,8 +184,11 @@ function DU.Refresh()
 			end)
 			row:SetScript("OnClick", function()
 				if not r.id then return end
-				if IsModifiedClick() then GM.ModifiedItemClick(r.id)
-				else GM.TargetItem(r.id) end
+				-- the widget's modified-click hook already ran the
+				-- default chain on mousedown — just gate the
+				-- targeting click
+				if IsModifiedClick() then return end
+				GM.TargetItem(r.id)
 			end)
 		else
 			row:Hide()

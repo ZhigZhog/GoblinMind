@@ -155,50 +155,26 @@ local function Build()
 
 	ui.rows = {}
 	for i = 1, VISIBLE do
-		local row = CreateFrame("Button", nil, host)
-		row:SetSize(648, ROW_H - 2)
+		local row = W.ColumnRow(host, {
+			h = ROW_H - 2, w = 648, icon = 18, nameW = 214,
+			cols = {
+				{ key = "qty", x = 252, w = 38 },
+				{ key = "bid", x = 296, w = 64, maxLines = 1 },
+				{ key = "unit", x = 364, w = 64, color = "accent",
+					maxLines = 1 },
+				{ key = "tl", x = 432, w = 36, size = 9,
+					color = "textDim", maxLines = 1 },
+				{ key = "cap", x = 474, w = 60, size = 9,
+					color = "textDim", maxLines = 1 },
+				{ key = "pct", x = 540, w = 44, font = GM.FONT_BOLD,
+					color = "pos", maxLines = 1 },
+				-- flow state marker (… · CONFIRM · BUY/BID)
+				{ key = "state", right = true, x = -22, size = 8,
+					font = GM.FONT_BOLD, color = "accent" },
+			},
+		})
 		row:SetPoint("TOPLEFT", 0, -((i - 1) * ROW_H))
-		row.bg = row:CreateTexture(nil, "BACKGROUND")
-		row.bg:SetAllPoints()
-		row.bg:SetColorTexture(GM.RGB(i % 2 == 0 and "contMedium" or "contLowest"))
-		W.HoverTint(row)
-		row.icon = row:CreateTexture(nil, "ARTWORK")
-		row.icon:SetSize(18, 18)
-		row.icon:SetPoint("LEFT", 4, 0)
-		row.name = GM.MakeFontString(row, GM.FONT, 10, "text")
-		row.name:SetPoint("LEFT", 28, 0)
-		row.name:SetWidth(214)
-		row.name:SetJustifyH("LEFT")
-		row.qty = GM.MakeFontString(row, GM.FONT, 10, "text")
-		row.qty:SetPoint("LEFT", 252, 0)
-		row.qty:SetWidth(38)
-		row.qty:SetJustifyH("LEFT")
-		row.qty:SetWordWrap(false)
-		row.bid = GM.MakeFontString(row, GM.FONT, 10, "text")
-		row.bid:SetPoint("LEFT", 296, 0)
-		row.bid:SetWidth(64)
-		row.name:SetWordWrap(false)
-		row.bid:SetMaxLines(1)
-		row.unit = GM.MakeFontString(row, GM.FONT, 10, "accent")
-		row.unit:SetPoint("LEFT", 364, 0)
-		row.unit:SetWidth(64)
-		row.unit:SetMaxLines(1)
-		row.tl = GM.MakeFontString(row, GM.FONT, 9, "textDim")
-		row.tl:SetPoint("LEFT", 432, 0)
-		row.tl:SetWidth(36)
-		row.tl:SetMaxLines(1)
-		row.cap = GM.MakeFontString(row, GM.FONT, 9, "textDim")
-		row.cap:SetPoint("LEFT", 474, 0)
-		row.cap:SetWidth(60)
-		row.cap:SetMaxLines(1)
-		row.pct = GM.MakeFontString(row, GM.FONT_BOLD, 10, "pos")
-		row.pct:SetPoint("LEFT", 540, 0)
-		row.pct:SetWidth(44)
-		row.pct:SetMaxLines(1)
-		-- state marker replaces the old SCAN/BUY button: shows where
-		-- the hit sits in the flow (… scanning · BUY armed · BID armed)
-		row.state = GM.MakeFontString(row, GM.FONT_BOLD, 8, "accent")
-		row.state:SetPoint("RIGHT", -22, 0)
+		row:SetZebra(i)
 		-- dismiss: drop the hit without buying
 		local x = CreateFrame("Button", nil, row)
 		x:SetSize(14, 14)
@@ -209,14 +185,6 @@ local function Build()
 		x:SetScript("OnEnter", function() x.text:SetTextColor(GM.RGB("err")) end)
 		x:SetScript("OnLeave", function() x.text:SetTextColor(GM.RGB("textDim")) end)
 		row.x = x
-		row:SetScript("OnEnter", function(self)
-			if self.tipID then
-				GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-				GameTooltip:SetItemByID(self.tipID)
-				GameTooltip:Show()
-			end
-		end)
-		row:SetScript("OnLeave", function() GameTooltip:Hide() end)
 		ui.rows[i] = row
 	end
 
@@ -289,8 +257,7 @@ function SU.Refresh()
 		local row, h = ui.rows[i], hits[i + ui.scroll]
 		if h then
 			row:Show()
-			row.tipID = h.itemID
-			row.icon:SetTexture(h.itemID and GM.ItemIcon(h.itemID) or 134400)
+			row:SetItem(h.itemID)
 			local flags = GM.Intel and GM.Intel.FlagsFor(h)
 			row.name:SetText((GM.ItemName(h.itemID) or h.name
 				or ("item " .. (h.itemID or "?")))
@@ -338,12 +305,10 @@ function SU.Refresh()
 					if h.itemID then GM.TargetItem(h.itemID) end
 					return
 				end
-				-- modified click = Blizzard's item action (chat link /
-				-- dress-up / context transfer), never a buy
-				if IsModifiedClick() then
-					if h.itemID then GM.ModifiedItemClick(h.itemID) end
-					return
-				end
+				-- modified click = Blizzard's item action — the
+				-- widget's hook already ran it on mousedown; just
+				-- keep it out of the buy path
+				if IsModifiedClick() then return end
 				local now = GetTime()
 				if row.lastClick and now - row.lastClick < 0.4 then
 					row.lastClick, row.pend = nil, nil

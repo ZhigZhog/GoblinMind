@@ -911,15 +911,20 @@ function W.ItemRow(parent, opts)
 	row.icon:SetPoint("LEFT", 2, 0)
 	row.icon:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
 
-	-- right block, anchored inside-out: ~vel/d · price · pct
+	-- right block, anchored inside-out: ~vel/d · price · rate · pct
 	row.vel = GM.MakeFontString(row, GM.FONT, 9, "textDim")
 	row.vel:SetPoint("RIGHT", -4, 0)
 	row.vel:SetJustifyH("RIGHT")
 	row.price = W.Money(row, { size = 9 })
 	row.price:SetPoint("RIGHT", row.vel, "LEFT", -6, 0)
 	row.price:SetJustifyH("RIGHT")
+	-- expected qty per event ("0.6/k") — the drop RATE alongside
+	-- pct's drop CHANCE
+	row.rate = GM.MakeFontString(row, GM.FONT, 9, "textDim")
+	row.rate:SetPoint("RIGHT", row.price, "LEFT", -6, 0)
+	row.rate:SetJustifyH("RIGHT")
 	row.pct = GM.MakeFontString(row, GM.FONT, 9, "textDim")
-	row.pct:SetPoint("RIGHT", row.price, "LEFT", -6, 0)
+	row.pct:SetPoint("RIGHT", row.rate, "LEFT", -6, 0)
 	row.pct:SetJustifyH("RIGHT")
 
 	row.name = GM.MakeFontString(row, GM.FONT,
@@ -977,6 +982,8 @@ function W.ItemRow(parent, opts)
 		row.vel:SetText(vr and ("· ~" .. vr .. "/d") or "")
 		local pct = type(d) == "table" and d.pct or nil
 		row.pct:SetText(pct and format("%d%%", pct + 0.5) or "")
+		local rate = type(d) == "table" and d.rate or nil
+		row.rate:SetText(rate and format("%.2g/k", rate) or "")
 	end
 	function row:Clear()
 		row.id = nil
@@ -984,8 +991,90 @@ function W.ItemRow(parent, opts)
 			"Interface\\Icons\\INV_Misc_QuestionMark")
 		row.name:SetText("")
 		row.pct:SetText("")
+		row.rate:SetText("")
 		row.price:SetText("")
 		row.vel:SetText("")
+	end
+	return row
+end
+
+-- dense item row: zebra striping, icon, rarity-colored name and
+-- a caller-defined column grid — the shared skeleton behind
+-- Destroying/Sniper-style tables. cols = { {key, x, w, size,
+-- color, align, font, maxLines, right} } → row[key] = the
+-- fontstring (right anchors at offset x instead of LEFT).
+-- Same item contract as W.ItemRow: SetItem(id|{id,name}), hover
+-- tooltip, modified clicks. opts.onClick = plain left click
+-- (modified clicks are consumed by the chain).
+function W.ColumnRow(parent, opts)
+	opts = opts or {}
+	local h = opts.h or 20
+	local iconSz = opts.icon or 16
+	local row = CreateFrame("Button", nil, parent)
+	row:SetHeight(h)
+	if opts.w then row:SetWidth(opts.w) end
+	row.bg = row:CreateTexture(nil, "BACKGROUND")
+	row.bg:SetAllPoints()
+	W.HoverTint(row)
+
+	row.icon = row:CreateTexture(nil, "ARTWORK")
+	row.icon:SetSize(iconSz, iconSz)
+	row.icon:SetPoint("LEFT", 4, 0)
+	row.icon:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
+
+	row.name = GM.MakeFontString(row, GM.FONT,
+		opts.nameSize or 10, "text")
+	row.name:SetPoint("LEFT", iconSz + 10, 0)
+	row.name:SetWidth(opts.nameW or 180)
+	row.name:SetJustifyH("LEFT")
+	row.name:SetWordWrap(false)
+
+	for _, c in ipairs(opts.cols or {}) do
+		local fs = GM.MakeFontString(row, c.font or GM.FONT,
+			c.size or 10, c.color or "text")
+		fs:SetPoint(c.right and "RIGHT" or "LEFT", c.x, 0)
+		if c.w then fs:SetWidth(c.w) end
+		if c.maxLines then fs:SetMaxLines(c.maxLines) end
+		fs:SetJustifyH(c.align or "LEFT")
+		fs:SetWordWrap(false)
+		row[c.key] = fs
+	end
+
+	row:SetScript("OnEnter", function(self)
+		if not self.id then return end
+		GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+		if GameTooltip.SetItemByID then
+			GameTooltip:SetItemByID(self.id)
+		else
+			GameTooltip:SetHyperlink("item:" .. self.id)
+		end
+		GameTooltip:Show()
+	end)
+	row:SetScript("OnLeave", function() GameTooltip:Hide() end)
+	if opts.onClick then
+		row:SetScript("OnClick", function(self)
+			if IsModifiedClick() or not self.id then return end
+			opts.onClick(self, self.id)
+		end)
+	end
+	W.ModifiedClick(row, function() return row.id end)
+
+	function row:SetItem(d)
+		local id = type(d) == "table" and (d.id or d.itemID) or d
+		row.id = id
+		row.icon:SetTexture(
+			id and GM.ItemIcon and GM.ItemIcon(id)
+			or "Interface\\Icons\\INV_Misc_QuestionMark")
+		local nm = type(d) == "table" and d.name or nil
+		row.name:SetText((nm and nm ~= "" and nm)
+			or (id and GM.ItemNameOr(id)) or "")
+		row.name:SetTextColor(id and GM.NameColor(id)
+			or GM.RGB("text"))
+	end
+	-- zebra parity lives on the row so reordered pools repaint right
+	function row:SetZebra(i)
+		row.bg:SetColorTexture(GM.RGB(
+			i % 2 == 0 and "contMedium" or "contLowest"))
 	end
 	return row
 end

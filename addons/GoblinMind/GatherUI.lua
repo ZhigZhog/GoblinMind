@@ -193,11 +193,21 @@ local function Refresh()
 	end
 	if not exIdx then ui.expanded = nil end
 	if exIdx then exLines = DetailLines(rows[exIdx]) end
+	-- the tree only gets the space below the expanded row down to
+	-- the content floor — a longer list truncates with "+N more"
+	-- rather than spilling past the window
+	local exAvail = 0
+	if exIdx then
+		exAvail = (ui._rowTop or -92) - (exIdx - 1) * 20
+			- 19 - (ui._floorY or -526)
+	end
 	-- item rows are taller than header text — sum real heights
 	local extra = 0
 	if exLines then
 		for _, ln in ipairs(exLines) do
-			extra = extra + (ln.item and 16 or 12)
+			local lh = ln.item and 16 or 12
+			if extra + lh > exAvail then break end
+			extra = extra + lh
 		end
 		extra = extra + 6
 	end
@@ -231,7 +241,7 @@ local function Refresh()
 	if ui.tree then
 		ui.tree:Clear()
 		if exIdx then
-			ui.tree:Fill(exLines, ui.rowBtn[exIdx])
+			ui.tree:Fill(exLines, ui.rowBtn[exIdx], exAvail)
 		end
 	end
 	local all = GM.Gather.Leaderboard()
@@ -420,6 +430,9 @@ local function Toggle()
 		ui.rowFs, ui.gpmFs, ui.rowBtn = {}, {}, {}
 		local top = listTop - 16
 		ui._rowTop = top
+		-- expansion floor: the hint line lives at window bottom —
+		-- trees truncate at this y instead of spilling over it
+		ui._floorY = -526
 		for i = 1, ROWS do
 			local rb = CreateFrame("Button", nil, ui)
 			rb:SetPoint("TOPLEFT", 10, top - (i - 1) * 20)
@@ -484,9 +497,32 @@ local function Toggle()
 			for _, f in ipairs(self.fs) do f:Hide() end
 			for _, r in ipairs(self.items) do r:Hide() end
 		end
-		function ui.tree:Fill(lines, anchor)
+		function ui.tree:Fill(lines, anchor, avail)
 			local fi, ri, y = 0, 0, -2
-			for _, ln in ipairs(lines) do
+			local left = avail or 1e6
+			for i, ln in ipairs(lines) do
+				local lh = ln.item and 16 or 12
+				if -y + lh > left then
+					-- truncated: one dim "+N more" line if there's
+					-- room for it, else stop silently
+					if -y + 12 <= left then
+						fi = fi + 1
+						local f = self.fs[fi]
+						if not f then
+							f = GM.MakeFontString(ui,
+								GM.FONT, 9, "text")
+							f:SetJustifyH("LEFT")
+							self.fs[fi] = f
+						end
+						f:ClearAllPoints()
+						f:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT",
+							12, y - 1)
+						f:SetText(GM.CC("textDim") .. "   +"
+							.. (#lines - i + 1) .. " more|r")
+						f:Show()
+					end
+					break
+				end
 				if ln.item then
 					ri = ri + 1
 					local rr = self.items[ri]
@@ -502,6 +538,7 @@ local function Toggle()
 						id = ln.item.id,
 						name = ln.item.name,
 						pct = ln.item.pct,
+						rate = ln.item.rate,
 						price = ln.item.value,
 					})
 					rr:SetAlpha(ln.dim and 0.45 or 1)

@@ -1162,6 +1162,9 @@ local function RecRows(y)
 			name = GM.ItemNameOr and GM.ItemNameOr(id)
 				or ("item " .. id),
 			pct = (y.cnt or 0) > 0 and (h / y.cnt * 100) or nil,
+			-- expected units per event — the drop RATE, vs pct's
+			-- drop chance (2x-a-30%-drop reads 0.6/k)
+			rate = (y.cnt or 0) > 0 and qty / y.cnt or nil,
 			value = v,
 			sort = ev,
 		})
