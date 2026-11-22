@@ -357,10 +357,16 @@ local CONT_NAME = { [1] = "Kalimdor", [2] = "Eastern Kingdoms",
 	[3] = "Outland", [4] = "Northrend" }
 
 local function MapContinent(map)
+	-- records' `c` is UnitPosition's continent; 0 means "the
+	-- client didn't know", not a continent, so it can't be a key
 	local zl = GoblinMindGather.zones and GoblinMindGather.zones[map]
-	if zl and zl[1] and zl[1].c then return zl[1].c end
+	if zl and zl[1] and zl[1].c and zl[1].c ~= 0 then
+		return zl[1].c
+	end
 	local nl = GoblinMindGather.nodes and GoblinMindGather.nodes[map]
-	if nl and nl[1] and nl[1].c then return nl[1].c end
+	if nl and nl[1] and nl[1].c and nl[1].c ~= 0 then
+		return nl[1].c
+	end
 	local GetInfo = C_Map and C_Map.GetMapInfo
 	if not GetInfo then return nil end
 	local cur, prev = map, nil
@@ -383,6 +389,73 @@ local function ContLabel(c)
 	if not c then return "other" end
 	if CONT_NAME[c] then return CONT_NAME[c] end
 	return GM.Gather.ZoneName(c)
+end
+
+-- every zone the client knows, columned by continent (Kalimdor
+-- and Eastern Kingdoms first). Record-carrying maps the walk
+-- misses get appended under whatever continent their records
+-- claim — Forever custom zones can nest oddly
+local function ZoneColumns()
+	local cols, colIx, listed = {}, {}, {}
+	local function colFor(label)
+		local c = colIx[label]
+		if not c then
+			c = { label = label, entries = {},
+				order = label == "Kalimdor" and 1
+					or label == "Eastern Kingdoms" and 2
+					or label == "other" and 99 or 50 }
+			colIx[label] = c
+			cols[#cols + 1] = c
+		end
+		return c
+	end
+	local GI = C_Map and C_Map.GetMapChildrenInfo
+	if GI then
+		local conts = {}
+		local ok, kids = pcall(GI, 947)
+		for _, k in ipairs(ok and kids or {}) do
+			local id = k.mapID or k.uiMapID
+			if id then
+				conts[#conts + 1] = { id = id, name = k.name }
+			end
+		end
+		if #conts == 0 then conts = { { id = 1414 }, { id = 1415 } } end
+		for _, c in ipairs(conts) do
+			local col = colFor(c.name or GM.Gather.ZoneName(c.id))
+			local function walk(pid, depth)
+				if depth > 3 then return end
+				local ok2, zones = pcall(GI, pid)
+				for _, z in ipairs(ok2 and zones or {}) do
+					local zid = z.mapID or z.uiMapID
+					if zid and not listed[zid] then
+						listed[zid] = true
+						-- take every child — a stray dungeon beats
+						-- a missing zone
+						col.entries[#col.entries + 1] = zid
+						walk(zid, depth + 1)
+					end
+				end
+			end
+			walk(c.id, 1)
+		end
+	end
+	-- record-carrying maps the enumeration never produced
+	for _, map in ipairs(KnownMaps()) do
+		if not listed[map] then
+			local col = colFor(ContLabel(MapContinent(map)))
+			col.entries[#col.entries + 1] = map
+		end
+	end
+	table.sort(cols, function(a, b)
+		if a.order ~= b.order then return a.order < b.order end
+		return a.label < b.label
+	end)
+	for _, col in ipairs(cols) do
+		table.sort(col.entries, function(a, b)
+			return GM.Gather.ZoneName(a) < GM.Gather.ZoneName(b)
+		end)
+	end
+	return cols
 end
 
 -- the zone menu: "Azeroth" = the whole world (the old ALL row),
@@ -410,90 +483,87 @@ local function OpenZoneMenu(btn)
 		m.rows, m.heads = {}, {}
 		ui.zmenu = m
 	end
-	-- group known maps into continent columns
-	local cols, colIx = {}, {}
-	for _, map in ipairs(KnownMaps()) do
-		local label = ContLabel(MapContinent(map))
-		local col = colIx[label]
-		if not col then
-			col = { label = label, entries = {},
-				order = label == "Kalimdor" and 1
-					or label == "Eastern Kingdoms" and 2
-					or label == "other" and 99 or 50 }
-			colIx[label] = col
-			cols[#cols + 1] = col
-		end
-		col.entries[#col.entries + 1] = map
-	end
-	table.sort(cols, function(a, b)
-		if a.order ~= b.order then return a.order < b.order end
-		return a.label < b.label
-	end)
-	local COLW, RH = 168, 18
+	local cols = ZoneColumns()
+	local COLW, RH, MAXR = 168, 18, 18
 	local ncols = math.max(#cols, 1)
 	local width = ncols * COLW + 4
-	local rowIx, headIx, maxRows = 0, 0, 0
-	local function Row(x, y, w, label, checked, cb, dim)
-		rowIx = rowIx + 1
-		local b = m.rows[rowIx]
-		if not b then
-			b = CreateFrame("Button", nil, m)
-			b:SetHeight(RH)
-			b.text = GM.MakeFontString(b, GM.FONT, 10, "text")
-			b.text:SetPoint("LEFT", 6, 0)
-			b.text:SetWordWrap(false)
-			b.text:SetJustifyH("LEFT")
-			local hov = b:CreateTexture(nil, "ARTWORK")
-			hov:SetAllPoints()
-			hov:SetColorTexture(GM.RGB("contHigh"))
-			hov:Hide()
-			b:SetScript("OnEnter", function() hov:Show() end)
-			b:SetScript("OnLeave", function() hov:Hide() end)
-			m.rows[rowIx] = b
-		end
-		b.text:SetWidth(w - 12)
-		b:SetWidth(w)
-		b:ClearAllPoints()
-		b:SetPoint("TOPLEFT", x, y)
-		b.text:SetText(label)
-		b.text:SetTextColor(GM.RGB(
-			dim and "textDim" or checked and "accent" or "text"))
-		b:SetScript("OnClick", cb and function()
-			m:Hide()
-			m.catcher:Hide()
-			cb()
-		end or nil)
-		b:Show()
-		return b
-	end
-	-- "Azeroth" spans the whole menu: the world = every zone
-	Row(2, -2, width - 4, "Azeroth",
-		not ui.zoneFilter, function() SetZoneFilter(nil) end)
-	-- continent titles + entries
-	for ci, col in ipairs(cols) do
-		local x = 2 + (ci - 1) * COLW
-		headIx = headIx + 1
-		local fs = m.heads[headIx]
-		if not fs then
-			fs = GM.MakeFontString(m, GM.FONT_BOLD, 9, "textDim")
-			fs:SetJustifyH("LEFT")
-			m.heads[headIx] = fs
-		end
-		fs:ClearAllPoints()
-		fs:SetPoint("TOPLEFT", x + 6, -2 - RH - 3)
-		fs:SetText(col.label)
-		fs:Show()
-		for i, map in ipairs(col.entries) do
-			Row(x, -2 - RH - i * RH, COLW,
-				GM.Gather.ZoneName(map),
-				ui.zoneFilter == map,
-				function() SetZoneFilter(map) end)
-		end
+	local maxRows = 0
+	for _, col in ipairs(cols) do
 		if #col.entries > maxRows then maxRows = #col.entries end
 	end
-	for i = rowIx + 1, #m.rows do m.rows[i]:Hide() end
-	for i = headIx + 1, #m.heads do m.heads[i]:Hide() end
-	m:SetSize(width, 8 + RH * (2 + maxRows))
+	local vis = math.min(maxRows, MAXR)
+	m.off = 0
+	local function Paint()
+		local rowIx, headIx = 0, 0
+		local function Row(x, y, w, label, checked, cb)
+			rowIx = rowIx + 1
+			local b = m.rows[rowIx]
+			if not b then
+				b = CreateFrame("Button", nil, m)
+				b:SetHeight(RH)
+				b.text = GM.MakeFontString(b, GM.FONT, 10, "text")
+				b.text:SetPoint("LEFT", 6, 0)
+				b.text:SetWordWrap(false)
+				b.text:SetJustifyH("LEFT")
+				local hov = b:CreateTexture(nil, "ARTWORK")
+				hov:SetAllPoints()
+				hov:SetColorTexture(GM.RGB("contHigh"))
+				hov:Hide()
+				b:SetScript("OnEnter", function() hov:Show() end)
+				b:SetScript("OnLeave", function() hov:Hide() end)
+				m.rows[rowIx] = b
+			end
+			b.text:SetWidth(w - 12)
+			b:SetWidth(w)
+			b:ClearAllPoints()
+			b:SetPoint("TOPLEFT", x, y)
+			b.text:SetText(label)
+			b.text:SetTextColor(GM.RGB(
+				checked and "accent" or "text"))
+			b:SetScript("OnClick", cb and function()
+				m:Hide()
+				m.catcher:Hide()
+				cb()
+			end or nil)
+			b:Show()
+		end
+		-- "Azeroth" spans the whole menu: the world = every zone
+		Row(2, -2, width - 4, "Azeroth",
+			not ui.zoneFilter, function() SetZoneFilter(nil) end)
+		-- continent titles + paged entries
+		for ci, col in ipairs(cols) do
+			local x = 2 + (ci - 1) * COLW
+			headIx = headIx + 1
+			local fs = m.heads[headIx]
+			if not fs then
+				fs = GM.MakeFontString(m, GM.FONT_BOLD, 9, "textDim")
+				fs:SetJustifyH("LEFT")
+				m.heads[headIx] = fs
+			end
+			fs:ClearAllPoints()
+			fs:SetPoint("TOPLEFT", x + 6, -2 - RH - 3)
+			fs:SetText(col.label)
+			fs:Show()
+			for i = 1, vis do
+				local map = col.entries[m.off + i]
+				if not map then break end
+				Row(x, -2 - RH - i * RH, COLW,
+					GM.Gather.ZoneName(map),
+					ui.zoneFilter == map,
+					function() SetZoneFilter(map) end)
+			end
+		end
+		for i = rowIx + 1, #m.rows do m.rows[i]:Hide() end
+		for i = headIx + 1, #m.heads do m.heads[i]:Hide() end
+		m:SetSize(width, 8 + RH * (2 + vis))
+	end
+	m:EnableMouseWheel(true)
+	m:SetScript("OnMouseWheel", function(_, d)
+		m.off = math.min(math.max(0, maxRows - vis),
+			math.max(0, m.off - d))
+		Paint()
+	end)
+	Paint()
 	m:ClearAllPoints()
 	m:SetPoint("TOPRIGHT", btn, "BOTTOMRIGHT", 0, -2)
 	m:Show()
