@@ -89,7 +89,9 @@ function GM.VelRate(vel)
 	if vel >= 1e6 then return format("%.1fM", vel / 1e6) end
 	if vel >= 1e4 then return format("%.0fk", vel / 1e3) end
 	if vel >= 1e3 then return format("%.1fk", vel / 1e3) end
-	return format("%g", vel)
+	-- at most 2 decimals — %g printed ~6 sig figs of false precision
+	-- ("13.703", "21.1132"); strip the padding zeros it leaves
+	return (format("%.2f", vel):gsub("%.?0+$", ""))
 end
 
 -- compact age/span: "7d" / "14h" / "25m" / "40s" — callers add "ago"
