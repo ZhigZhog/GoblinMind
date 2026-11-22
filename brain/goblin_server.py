@@ -723,8 +723,9 @@ def _orate(conn, install):
 # if-chains per method.
 #
 # flags: OPEN = no bearer required; AUTH = Bearer install token;
-#        ORDOP = AUTH + orate bucket + op-nonce dedup wrapper.
-OPEN, AUTH, ORDOP = 1, 2, 4
+#        ORDOP = AUTH + orate bucket + op-nonce dedup wrapper;
+#        ADMIN = loopback + X-Admin-Key, gated in _handle.
+OPEN, AUTH, ORDOP, ADMIN = 1, 2, 4, 8
 ROUTES = []
 
 
@@ -1363,97 +1364,105 @@ def o_release(conn, ctx):
 # ---- host admin (loopback + X-Admin-Key) ----
 
 
-@_route('*', '/v1/admin/*', 0)
-def admin_op(conn, ctx):
-    if not ctx['is_admin']():
-        ctx['send'](403, {'error': 'admin'})
+# ============ admin surface ============
+# Same registry, different flag — loopback+key gate lives in _handle
+# next to AUTH/ORDOP instead of a wildcard route with a hand-rolled
+# method/path chain inside.
+
+@_route('GET', '/v1/admin/installs', ADMIN)
+def a_installs(conn, ctx):
+    ctx['send'](200, {'installs': [
+        {'id': r[0], 'name': r[1], 'uuid': r[2],
+         'seen': r[3], 'banned': bool(r[4])}
+        for r in conn.execute(
+            'SELECT id,name,uuid,last_seen,banned FROM '
+            'installs ORDER BY id')]})
+
+
+@_route('GET', '/v1/admin/boards', ADMIN)
+def a_boards(conn, ctx):
+    ctx['send'](200, {'boards': [
+        {'name': r[0], 'owner': r[1], 'acl': r[2],
+         'members': json.loads(r[3] or '[]'),
+         'closed': bool(r[4])}
+        for r in conn.execute(
+            'SELECT name,owner_install,post_acl,members,'
+            'closed FROM boards ORDER BY name')]})
+
+
+@_route('POST', '/v1/admin/boards', ADMIN)
+def a_board_new(conn, ctx):
+    body = ctx['body'] or {}
+    name = str(body.get('name') or '')[:64]
+    if not SCOPE_RE.match(name):
+        ctx['send'](400, {'error': 'name'})
         return
-    method, p = ctx['m'], ctx['p'].split('/')
-    if method == 'GET' and ctx['p'] == '/v1/admin/installs':
-        ctx['send'](200, {'installs': [
-            {'id': r[0], 'name': r[1], 'uuid': r[2],
-             'seen': r[3], 'banned': bool(r[4])}
-            for r in conn.execute(
-                'SELECT id,name,uuid,last_seen,banned FROM '
-                'installs ORDER BY id')]})
+    owner = body.get('owner')
+    conn.execute(
+        'INSERT OR IGNORE INTO boards(name,owner_install,'
+        'post_acl,members,closed,created) VALUES(?,?,?,?,0,?)',
+        (name, int(owner) if owner else None, 'open', '[]',
+         ctx['now']))
+    conn.commit()
+    ctx['send'](200, {'ok': True})
+
+
+@_route('POST', '/v1/admin/boards/{b}', ADMIN)
+def a_board_set(conn, ctx):
+    body = ctx['body'] or {}
+    brow = _board_row(conn, ctx['b'])
+    if not brow:
+        ctx['send'](404, {'error': 'board'})
         return
-    if method == 'GET' and ctx['p'] == '/v1/admin/boards':
-        ctx['send'](200, {'boards': [
-            {'name': r[0], 'owner': r[1], 'acl': r[2],
-             'members': json.loads(r[3] or '[]'),
-             'closed': bool(r[4])}
-            for r in conn.execute(
-                'SELECT name,owner_install,post_acl,members,'
-                'closed FROM boards ORDER BY name')]})
-        return
-    if method == 'POST' and len(p) == 4 and p[3] == 'boards':
-        body = ctx['body'] or {}
-        name = str(body.get('name') or '')[:64]
-        if not SCOPE_RE.match(name):
-            ctx['send'](400, {'error': 'name'})
-            return
-        owner = body.get('owner')
-        conn.execute(
-            'INSERT OR IGNORE INTO boards(name,owner_install,'
-            'post_acl,members,closed,created) VALUES(?,?,?,?,0,?)',
-            (name, int(owner) if owner else None, 'open', '[]',
-             ctx['now']))
+    sets, vals = [], []
+    if 'acl' in body and body['acl'] in ('open', 'members'):
+        sets.append('post_acl=?')
+        vals.append(body['acl'])
+    if 'members' in body and isinstance(body['members'], list):
+        sets.append('members=?')
+        vals.append(json.dumps(
+            [str(m)[:64] for m in body['members']][:200]))
+    if 'closed' in body:
+        sets.append('closed=?')
+        vals.append(1 if body['closed'] else 0)
+    if 'owner' in body:
+        sets.append('owner_install=?')
+        vals.append(int(body['owner'])
+                    if body['owner'] else None)
+    if sets:
+        conn.execute('UPDATE boards SET %s WHERE name=?'
+                     % ','.join(sets), vals + [ctx['b']])
         conn.commit()
-        ctx['send'](200, {'ok': True})
+    ctx['send'](200, {'ok': True})
+
+
+@_route('POST', '/v1/admin/installs/{iid}', ADMIN)
+def a_install_set(conn, ctx):
+    body = ctx['body'] or {}
+    try:
+        iid = int(ctx['iid'])
+    except ValueError:
+        ctx['send'](400, {'error': 'id'})
         return
-    if method == 'POST' and len(p) == 5 and p[3] == 'boards':
-        body = ctx['body'] or {}
-        brow = _board_row(conn, p[4])
-        if not brow:
-            ctx['send'](404, {'error': 'board'})
-            return
-        sets, vals = [], []
-        if 'acl' in body and body['acl'] in ('open', 'members'):
-            sets.append('post_acl=?')
-            vals.append(body['acl'])
-        if 'members' in body and isinstance(body['members'], list):
-            sets.append('members=?')
-            vals.append(json.dumps(
-                [str(m)[:64] for m in body['members']][:200]))
-        if 'closed' in body:
-            sets.append('closed=?')
-            vals.append(1 if body['closed'] else 0)
-        if 'owner' in body:
-            sets.append('owner_install=?')
-            vals.append(int(body['owner'])
-                        if body['owner'] else None)
-        if sets:
-            conn.execute('UPDATE boards SET %s WHERE name=?'
-                         % ','.join(sets), vals + [p[4]])
-            conn.commit()
-        ctx['send'](200, {'ok': True})
-        return
-    if method == 'POST' and len(p) == 5 and p[3] == 'installs':
-        body = ctx['body'] or {}
-        try:
-            iid = int(p[4])
-        except ValueError:
-            ctx['send'](400, {'error': 'id'})
-            return
-        if body.get('banned'):
-            conn.execute('UPDATE installs SET banned=1 WHERE id=?',
-                         (iid,))
-            _purge_install(conn, iid)
-        elif 'banned' in body:
-            conn.execute('UPDATE installs SET banned=0 WHERE id=?',
-                         (iid,))
-        conn.commit()
-        ctx['send'](200, {'ok': True})
-        return
-    if method == 'DELETE' and len(p) == 5 and p[3] == 'orders':
-        conn.execute(
-            "UPDATE commits SET state='void' WHERE order_id=? "
-            "AND state='active'", (p[4],))
-        conn.execute('DELETE FROM orders WHERE id=?', (p[4],))
-        conn.commit()
-        ctx['send'](200, {'ok': True})
-        return
-    ctx['send'](404, {'error': 'not found'})
+    if body.get('banned'):
+        conn.execute('UPDATE installs SET banned=1 WHERE id=?',
+                     (iid,))
+        _purge_install(conn, iid)
+    elif 'banned' in body:
+        conn.execute('UPDATE installs SET banned=0 WHERE id=?',
+                     (iid,))
+    conn.commit()
+    ctx['send'](200, {'ok': True})
+
+
+@_route('DELETE', '/v1/admin/orders/{oid}', ADMIN)
+def a_order_del(conn, ctx):
+    conn.execute(
+        "UPDATE commits SET state='void' WHERE order_id=? "
+        "AND state='active'", (ctx['oid'],))
+    conn.execute('DELETE FROM orders WHERE id=?', (ctx['oid'],))
+    conn.commit()
+    ctx['send'](200, {'ok': True})
 
 
 def _purge_install(conn, iid):
@@ -1542,6 +1551,9 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, {'error': 'not found'})
             return
         fn, flags, caps = hit
+        if flags & ADMIN and not self._admin():
+            self._send(403, {'error': 'admin'})
+            return
         conn = db()
         try:
             ctx = {'m': method, 'p': u.path,

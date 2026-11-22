@@ -2694,6 +2694,17 @@ def process_board_refresh(appdata, root=None):
     return True
 
 
+# consumer registries — the poll loop runs these instead of parallel
+# per-consumer if-blocks. OPS_CONSUMERS are the latency-critical path
+# (every iteration; a truthy return accelerates the boards pull+emit);
+# SV_CONSUMERS are fire-and-forget staged requests consumed on the SV
+# mtime tick before the emit that follows. process_bugs stays out —
+# its return value gates the tsm re-emit.
+OPS_CONSUMERS = (process_orders, process_relay, process_board_refresh)
+SV_CONSUMERS = (process_backend_reqs, process_api_reqs,
+                process_board_reqs)
+
+
 def _order_results_emit():
     return (_load_api_state().get('order_results') or {})
 
@@ -2980,27 +2991,17 @@ def cmd_watch(appdata, outs, interval=5, settle=20, feed='tsm',
         # waits behind an emit trigger or a missed stat. The scan is
         # a regex over the SV file — milliseconds, cheap to always run.
         ops_dirty = False
-        if process_orders(appdata, root):
-            ops_dirty = True
-            # ops just hit the server — pull the board this same
-            # pass (the 2-min cadence is for quiet stretches) and let
-            # its emit ignore the 5-min floor, so a /reload right
-            # after shows the row confirmed, not still pending
-            last_boards_poll = 0
-            last_boards_emit = 0
-        if process_relay(appdata, root):
-            # relayed envelopes hit the server too — same fast
-            # confirm path; the requester's next snapshot shows it
-            ops_dirty = True
-            last_boards_poll = 0
-            last_boards_emit = 0
-        if process_board_refresh(appdata, root):
-            # a solo REFRESH staged a pull request — the addon is
-            # already reloaded and counting down to a second one;
-            # pull + emit this pass so it lands on fresh data
-            ops_dirty = True
-            last_boards_poll = 0
-            last_boards_emit = 0
+        for consume in OPS_CONSUMERS:
+            if consume(appdata, root):
+                # ops just hit the server — pull the board this same
+                # pass (the 2-min cadence is for quiet stretches) and
+                # let its emit ignore the 5-min floor, so a /reload
+                # right after shows the row confirmed, not pending.
+                # Relay envelopes and solo REFRESHs take the same
+                # fast confirm path.
+                ops_dirty = True
+                last_boards_poll = 0
+                last_boards_emit = 0
         if mtime != last_mtime:
             LOG.info('AppData touched (mtime=%s size=%s) — settling',
                      time.strftime('%H:%M:%S', time.localtime(mtime))
@@ -3036,9 +3037,8 @@ def cmd_watch(appdata, outs, interval=5, settle=20, feed='tsm',
                     # staged backend-onboarding requests ride the same
                     # file — consume before emitting so this emit's
                     # backend block already shows configured
-                    process_backend_reqs(appdata, root)
-                    process_api_reqs(appdata, root)
-                    process_board_reqs(appdata, root)
+                    for consume in SV_CONSUMERS:
+                        consume(appdata, root)
                     # order ops moved to the every-iteration scan
                     # above — the SV mtime path is for the heavier
                     # consumers (bug reports, board reqs, emits)
@@ -3195,13 +3195,117 @@ def _bare_watch_args():
     return ['watch', 'forever', '-v', '--feed', 'book']
 
 
+# ============ CLI command registry ============
+# `goblin_brain.py <cmd>` — same registry shape as the server's
+# ROUTES: each entry is the handler, declared sets carry the arg
+# contract (FEED_CMDS need appdata, OUT_CMDS need out paths) so
+# main() holds one dispatch, not a per-command if-chain. Handlers
+# take (a, feed); feed = resolve_feed() tuple, None for feeds/api.
+
+
+def _api_realms(cfg):
+    # resolve configured scope names to connected-realm IDs
+    # (the §2 verification probe)
+    realm_map = api_resolve_realms(cfg)
+    for scope, crid in realm_map.items():
+        LOG.info('%s -> connected-realm %d', scope, crid)
+    if not realm_map:
+        LOG.info('no realms resolved — check namespace/realm '
+                 'names in the api block')
+
+
+def _api_realm_index(cfg):
+    # discovery: dump every realm + its connected-realm ID under
+    # the configured namespace — find Forever's real API name
+    idx = _api_get(cfg, '/data/wow/realm/index',
+                   {'namespace': cfg.get('namespace', 'dynamic-us'),
+                    'locale': 'en_US'})
+    realms = idx.get('realms', [])
+    LOG.info('%d realms under namespace %s',
+             len(realms), cfg.get('namespace'))
+    for r in sorted(realms, key=lambda r: str(r.get('name') or '')):
+        href = str((r.get('connected_realm') or {}).get('href') or '')
+        m = re.search(r'/connected-realm/(\d+)', href)
+        LOG.info('  %-28s slug=%-28s cr=%s',
+                 r.get('name'), r.get('slug'),
+                 m.group(1) if m else '?')
+
+
+def _api_poll_dump(cfg):
+    # one-shot: pull the Blizzard AH snapshot into API_BOOK_PATH
+    books = api_poll(cfg)
+    for scope, b in books.items():
+        LOG.info('%s: %d items, %d lots @ %s', scope,
+                 len(b['items']), sum(b['lots'].values()),
+                 time.strftime('%H:%M:%S', time.localtime(b['t'])))
+    LOG.info('snapshot -> %s', API_BOOK_PATH)
+
+
+API_ACTIONS = {'realms': _api_realms, 'realm-index': _api_realm_index,
+               'poll': _api_poll_dump}
+
+
+def _run_feeds(a, _feed):
+    feeds = load_feeds()
+    if not feeds:
+        LOG.info('no feeds configured — create %s', FEEDS_PATH)
+    for name, f in feeds.items():
+        LOG.info('%s: %s', name, f.get('name', ''))
+        LOG.info('  appdata: %s', f.get('appdata'))
+        LOG.info('  root:    %s', f.get('root'))
+        for out in f.get('out', []):
+            LOG.info('  out:     %s', out)
+
+
+def _run_api(a, _feed):
+    cfg = _api_cfg()
+    if not cfg:
+        LOG.info('no "api" block in %s — see feeds.example.json',
+                 FEEDS_PATH)
+        return
+    fn = API_ACTIONS.get(a.appdata or 'realms')
+    if not fn:
+        sys.exit('api action must be one of: %s'
+                 % ', '.join(sorted(API_ACTIONS)))
+    fn(cfg)
+
+
+def _run_watch(a, feed):
+    appdata, outs, feedname, root, realm = feed
+    # anything escaping the loop is a real crash — log the full
+    # traceback, then come back up instead of dying silently
+    while True:
+        try:
+            cmd_watch(appdata, outs, a.interval, a.settle,
+                      feed=a.feed, root=root, feedname=feedname,
+                      realm=realm)
+        except KeyboardInterrupt:
+            LOG.info('stopped by user')
+            return
+        except Exception:
+            LOG.exception('watcher crashed — restarting in 10s')
+            time.sleep(10)
+
+
+COMMANDS = {
+    'feeds': _run_feeds,
+    'api': _run_api,
+    'dump': lambda a, f: cmd_dump(f[0]),
+    'watch': _run_watch,
+    'bugs': lambda a, f: cmd_bugs(f[0], f[1], f[4]),
+    'book': lambda a, f: cmd_book(f[0], f[1], f[3], f[2], f[4]),
+    'emit': lambda a, f: cmd_emit(f[0], f[1][0], f[4]),
+}
+FEED_CMDS = {'dump', 'watch', 'bugs', 'book', 'emit'}
+OUT_CMDS = {'watch', 'bugs', 'book', 'emit'}
+
+
 def main():
     argv = sys.argv[1:]
     if not argv:
         argv = _bare_watch_args()
     ap = argparse.ArgumentParser()
-    ap.add_argument('cmd', choices=['dump', 'emit', 'watch', 'bugs',
-                                    'book', 'feeds', 'api'])
+    ap.add_argument('cmd', choices=sorted(COMMANDS))
     ap.add_argument('appdata', nargs='?',
                     help='feed name from feeds.json, an AppData.lua '
                          'path, or a GoblinMind.lua SV path')
@@ -3220,96 +3324,15 @@ def main():
                          'empty string disables)')
     a = ap.parse_args(argv)
     setup_logging(a.verbose, a.log or None)
-    if a.cmd == 'feeds':
-        feeds = load_feeds()
-        if not feeds:
-            LOG.info('no feeds configured — create %s', FEEDS_PATH)
-        for name, f in feeds.items():
-            LOG.info('%s: %s', name, f.get('name', ''))
-            LOG.info('  appdata: %s', f.get('appdata'))
-            LOG.info('  root:    %s', f.get('root'))
-            for out in f.get('out', []):
-                LOG.info('  out:     %s', out)
-        return
-    if a.cmd == 'api':
-        # api realms — resolve configured scope names to connected-realm
-        # IDs (the §2 verification probe); api poll — one-shot dump pull
-        api_action = a.appdata or 'realms'
-        cfg = _api_cfg()
-        if not cfg:
-            LOG.info('no "api" block in %s — see feeds.example.json',
-                     FEEDS_PATH)
-            return
-        if api_action == 'realms':
-            realm_map = api_resolve_realms(cfg)
-            for scope, crid in realm_map.items():
-                LOG.info('%s -> connected-realm %d', scope, crid)
-            if not realm_map:
-                LOG.info('no realms resolved — check namespace/realm '
-                         'names in the api block')
-        elif api_action == 'realm-index':
-            # discovery: dump every realm + its connected-realm ID under
-            # the configured namespace — find Forever's real API name
-            idx = _api_get(cfg, '/data/wow/realm/index',
-                           {'namespace': cfg.get('namespace',
-                                                 'dynamic-us'),
-                            'locale': 'en_US'})
-            realms = idx.get('realms', [])
-            LOG.info('%d realms under namespace %s',
-                     len(realms), cfg.get('namespace'))
-            for r in sorted(realms,
-                            key=lambda r: str(r.get('name') or '')):
-                href = str((r.get('connected_realm') or {})
-                           .get('href') or '')
-                m = re.search(r'/connected-realm/(\d+)', href)
-                LOG.info('  %-28s slug=%-28s cr=%s',
-                         r.get('name'), r.get('slug'),
-                         m.group(1) if m else '?')
-        elif api_action == 'poll':
-            books = api_poll(cfg)
-            for scope, b in books.items():
-                LOG.info('%s: %d items, %d lots @ %s', scope,
-                         len(b['items']), sum(b['lots'].values()),
-                         time.strftime('%H:%M:%S',
-                                       time.localtime(b['t'])))
-            LOG.info('snapshot -> %s', API_BOOK_PATH)
-        else:
-            ap.error('api takes "realms" or "poll"')
-        return
-    if not a.appdata:
-        ap.error('%s needs a feed name or path' % a.cmd)
-    appdata, outs, feedname, root, realm = \
-        resolve_feed(a.appdata, a.out)
-    if a.cmd == 'dump':
-        cmd_dump(appdata)
-    elif a.cmd == 'watch':
-        if not outs:
-            ap.error('watch needs output paths (CLI or feeds.json)')
-        # anything escaping the loop is a real crash — log the full
-        # traceback, then come back up instead of dying silently
-        while True:
-            try:
-                cmd_watch(appdata, outs, a.interval, a.settle,
-                          feed=a.feed, root=root, feedname=feedname,
-                          realm=realm)
-            except KeyboardInterrupt:
-                LOG.info('stopped by user')
-                return
-            except Exception:
-                LOG.exception('watcher crashed — restarting in 10s')
-                time.sleep(10)
-    elif a.cmd == 'bugs':
-        if not outs:
-            ap.error('bugs needs output paths (CLI or feeds.json)')
-        cmd_bugs(appdata, outs, realm)
-    elif a.cmd == 'book':
-        if not outs:
-            ap.error('book needs output paths (CLI or feeds.json)')
-        cmd_book(appdata, outs, root, feedname, realm)
-    else:
-        if not outs:
-            ap.error('emit needs an output path (CLI or feeds.json)')
-        cmd_emit(appdata, outs[0], realm)
+    feed = None
+    if a.cmd in FEED_CMDS:
+        if not a.appdata:
+            ap.error('%s needs a feed name or path' % a.cmd)
+        feed = resolve_feed(a.appdata, a.out)
+        if a.cmd in OUT_CMDS and not feed[1]:
+            ap.error('%s needs output paths (CLI or feeds.json)'
+                     % a.cmd)
+    COMMANDS[a.cmd](a, feed)
 
 
 if __name__ == '__main__':

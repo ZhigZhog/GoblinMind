@@ -319,6 +319,114 @@ local function Stage(list, cap, rec)
 	while #st > cap do tremove(st, 1) end
 end
 
+-- record-kind registry — one dispatch instead of a per-kind if-chain.
+-- Handlers get (kind, scope, body, sender, t); adding a record kind is
+-- one entry. Orders.lua owns all writ grammars — mesh just delivers.
+local KINDS = {
+	-- market bus (goblinmindx)
+	S = function(_, scope, body, sender, t)
+		for rec in body:gmatch("[^,]+") do
+			local i, u, p, c, l = rec:match(
+				"^(%d+):(%d+):(%d+):(%a):(%d+)$")
+			if i and u and p and tonumber(p) > 0
+				and tonumber(p) < 1e12 then
+				Stage("ev", STAGE_CAP, { t = t, s = scope,
+					i = tonumber(i), u = tonumber(u),
+					p = tonumber(p), l = tonumber(l) or 1,
+					c = c })
+			end
+		end
+	end,
+	M = function(_, scope, body, sender, t)
+		for rec in body:gmatch("[^,]+") do
+			local i, m, s = rec:match("^(%d+):(%d+):(%d+)$")
+			if i and m and tonumber(m) > 0
+				and tonumber(m) < 1e12 then
+				-- supply rides as sup — Stage stamps q with the seq
+				Stage("mb", STAGE_CAP, { t = t, s = scope,
+					i = tonumber(i), m = tonumber(m),
+					sup = tonumber(s) or 0 })
+			end
+		end
+	end,
+	-- writ bus (goblinwritx)
+	T = function(_, _, body, sender) -- relay capability -> peer map
+		if GM.Orders and GM.Orders.RelayPeer then
+			GM.Orders.RelayPeer(body, sender)
+		end
+	end,
+	-- discovery probe — v2: Orders decides whether WE are needed
+	-- (coverage suppression) and answers on jitter. The v1 "every
+	-- client re-beacons" rule was an N-squared storm at scale
+	D = function(_, _, body, sender)
+		if GM.Orders and GM.Orders.MeshProbe then
+			GM.Orders.MeshProbe(body, sender)
+		end
+	end,
+	-- board query — v2: servers answer with small offers (F); the
+	-- asker picks one source (P) which alone streams
+	Q = function(_, _, body, sender)
+		if GM.Orders and GM.Orders.MeshQuery then
+			GM.Orders.MeshQuery(body, sender)
+		end
+	end,
+	F = function(_, _, body, sender)
+		if GM.Orders and GM.Orders.MeshOffer then
+			GM.Orders.MeshOffer(body, sender)
+		end
+	end,
+	P = function(_, _, body, sender)
+		if GM.Orders and GM.Orders.MeshPull then
+			GM.Orders.MeshPull(body, sender)
+		end
+	end,
+	-- stream announcement — binds (board,gen) to a sender + tracker
+	-- tag; ingest only admits pinned streams. Kind is "N" not "S":
+	-- the S entry above owns price-scan records
+	N = function(_, _, body, sender)
+		if GM.Orders and GM.Orders.StreamStart then
+			GM.Orders.StreamStart(body, sender)
+		end
+	end,
+	-- distributed item search — servers answer with 'i' rows
+	I = function(_, _, body, sender)
+		if GM.Orders and GM.Orders.MeshItemQuery then
+			GM.Orders.MeshItemQuery(body, sender)
+		end
+	end,
+	-- item-search responses — rows batch comma-joined
+	i = function(_, _, body, sender)
+		for rec in (body or ""):gmatch("[^,]+") do
+			local f = {}
+			for s in rec:gmatch("[^;]*") do f[#f + 1] = s end
+			if GM.Orders and GM.Orders.ItemIngest then
+				GM.Orders.ItemIngest(f, sender)
+			end
+		end
+	end,
+	-- writ overlay events — volatile; Orders owns confirmation/drop
+	O = function(_, _, body)
+		if GM.Orders and GM.Orders.MeshEvent then
+			for rec in body:gmatch("[^,]+") do
+				GM.Orders.MeshEvent(rec)
+			end
+		end
+	end,
+}
+
+-- snapshot stream rows (W/w/Z) — batched comma-joined; ingest only
+-- admits streams its N pinned. Three letters, one handler.
+local function StreamRows(kind, _, body, sender)
+	for rec in (body or ""):gmatch("[^,]+") do
+		local f = {}
+		for s in rec:gmatch("[^;]*") do f[#f + 1] = s end
+		if GM.Orders and GM.Orders.RelayIngest then
+			GM.Orders.RelayIngest(kind, f, sender)
+		end
+	end
+end
+KINDS.W, KINDS.w, KINDS.Z = StreamRows, StreamRows, StreamRows
+
 local function OnAddon(_, prefix, msg, ctype, sender)
 	if prefix ~= PREFIX then return end
 	-- UnitName is "Unknown Entity" before PLAYER_LOGIN — never cache
@@ -349,98 +457,8 @@ local function OnAddon(_, prefix, msg, ctype, sender)
 	local t = time()
 	M.stats.heard = M.stats.heard + 1
 	M.stats.lastHear = t
-	if kind == "S" then
-		for rec in body:gmatch("[^,]+") do
-			local i, u, p, c, l = rec:match(
-				"^(%d+):(%d+):(%d+):(%a):(%d+)$")
-			if i and u and p and tonumber(p) > 0
-				and tonumber(p) < 1e12 then
-				Stage("ev", STAGE_CAP, { t = t, s = scope,
-					i = tonumber(i), u = tonumber(u),
-					p = tonumber(p), l = tonumber(l) or 1,
-					c = c })
-			end
-		end
-	elseif kind == "M" then
-		for rec in body:gmatch("[^,]+") do
-			local i, m, s = rec:match("^(%d+):(%d+):(%d+)$")
-			if i and m and tonumber(m) > 0
-				and tonumber(m) < 1e12 then
-				-- supply rides as sup — Stage stamps q with the seq
-				Stage("mb", STAGE_CAP, { t = t, s = scope,
-					i = tonumber(i), m = tonumber(m),
-					sup = tonumber(s) or 0 })
-			end
-		end
-	elseif kind == "T" then
-		-- relay capability — Orders.lua maps board -> serving peers
-		if GM.Orders and GM.Orders.RelayPeer then
-			GM.Orders.RelayPeer(body, sender)
-		end
-	elseif kind == "D" then
-		-- discovery probe — v2: Orders decides whether WE are
-		-- needed (coverage suppression) and answers on jitter.
-		-- The v1 "every client re-beacons" rule was an
-		-- N-squared storm at scale
-		if GM.Orders and GM.Orders.MeshProbe then
-			GM.Orders.MeshProbe(body, sender)
-		end
-	elseif kind == "Q" then
-		-- distributed board query — "who serves a fresh pull of
-		-- this board?" v2: servers answer with small offers (F);
-		-- the asker picks one source (P) which alone streams
-		if GM.Orders and GM.Orders.MeshQuery then
-			GM.Orders.MeshQuery(body, sender)
-		end
-	elseif kind == "F" then
-		if GM.Orders and GM.Orders.MeshOffer then
-			GM.Orders.MeshOffer(body, sender)
-		end
-	elseif kind == "P" then
-		if GM.Orders and GM.Orders.MeshPull then
-			GM.Orders.MeshPull(body, sender)
-		end
-	elseif kind == "N" then
-		-- stream announcement — binds (board,gen) to a sender +
-		-- tracker tag; ingest only admits pinned streams. Kind is
-		-- "N" not "S": the S branch above owns price-scan records
-		if GM.Orders and GM.Orders.StreamStart then
-			GM.Orders.StreamStart(body, sender)
-		end
-	elseif kind == "I" then
-		-- distributed item search — "who holds open listings for
-		-- this itemID?" Servers answer with 'i' rows on-channel
-		if GM.Orders and GM.Orders.MeshItemQuery then
-			GM.Orders.MeshItemQuery(body, sender)
-		end
-	elseif kind == "i" then
-		-- item-search responses — rows batch comma-joined
-		for rec in (body or ""):gmatch("[^,]+") do
-			local f = {}
-			for s in rec:gmatch("[^;]*") do f[#f + 1] = s end
-			if GM.Orders and GM.Orders.ItemIngest then
-				GM.Orders.ItemIngest(f, sender)
-			end
-		end
-	elseif kind == "W" or kind == "w" or kind == "Z" then
-		-- snapshot stream rows — records batch comma-joined in one
-		-- message; ingest only admits streams its S pinned
-		for rec in (body or ""):gmatch("[^,]+") do
-			local f = {}
-			for s in rec:gmatch("[^;]*") do f[#f + 1] = s end
-			if GM.Orders and GM.Orders.RelayIngest then
-				GM.Orders.RelayIngest(kind, f, sender)
-			end
-		end
-	elseif kind == "O" then
-		-- writ events are volatile overlays — Orders.lua owns the
-		-- grammar and the confirmation/drop rules; mesh just relays
-		if GM.Orders and GM.Orders.MeshEvent then
-			for rec in body:gmatch("[^,]+") do
-				GM.Orders.MeshEvent(rec)
-			end
-		end
-	end
+	local h = KINDS[kind]
+	if h then h(kind, scope, body, sender, t) end
 end
 
 -- test injector — stages a fake wire sale event + beacon without

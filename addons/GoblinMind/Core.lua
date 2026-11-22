@@ -98,577 +98,525 @@ end
 SLASH_GOBLINMIND1 = "/goblinmind"
 SLASH_GOBLINMIND2 = "/goblin"
 SLASH_GOBLINMIND3 = "/gm"
-SlashCmdList.GOBLINMIND = function(msg)
-	msg = strtrim(msg or "")
-	if msg == "plan" then
-		if not GM.lastTooltipItemID then
-			GM.Print("hover an item first, then /goblin plan")
-			return
+
+-- /goblin command registry — every command is one ordered entry;
+-- declaration order IS the match order (long prefixes before their
+-- shared stems: "bankdebug" before "bank"). Handlers get the full
+-- trimmed msg and parse their own args. Adding a command is one
+-- Cmd() call, never another branch in a 40-deep if-chain.
+local CMDS = {}
+local function Cmd(names, fn, prefix)
+	if type(names) ~= "table" then names = { names } end
+	for _, n in ipairs(names) do
+		CMDS[#CMDS + 1] = { n = n, fn = fn, p = prefix }
+	end
+end
+
+-- dump the raw GetItemInfo fields DisenchantDrops gates on, plus its
+-- result — isolates client return-shape quirks vs table bugs
+local function CmdDeprobe(msg)
+	local id = tonumber(msg:match("(%d+)"))
+	if not id then
+		local _, link = GameTooltip and GameTooltip:GetItem()
+		id = GM.LinkID(link) or GM.lastTooltipItemID
+	end
+	if not id then GM.Print("usage: /goblin deprobe [itemID] (or hover an item)") return end
+	local info = C_Item and C_Item.GetItemInfo or GetItemInfo
+	local n, l, q, il, rl, cl, sc, ms, eq, tx, sp, cid = info and info(id)
+	local cnt = info and select('#', info(id)) or 0
+	local qfn = C_Item and C_Item.GetItemQualityByID
+	local lfn = C_Item and C_Item.GetDetailedItemLevelInfo
+	local tfn = C_Item and C_Item.GetItemInventoryTypeByID
+	local efn = _G.IsEquippableItem
+	GM.Print(format("deprobe %d: name=%s q=%s ilvl=%s equipLoc=%s classID=%s (ret=%d)",
+		id, tostring(n), tostring(q), tostring(il), tostring(eq), tostring(cid), cnt))
+	GM.Print(format("  alt: qByID=%s dlv=%s invType=%s equippable=%s",
+		tostring(qfn and qfn(id)), tostring(lfn and lfn(id)),
+		tostring(tfn and tfn(id)), tostring(efn and efn(id))))
+	for i = 2, min(6, GameTooltip:NumLines() or 0) do
+		local fs = _G["GameTooltipTextLeft" .. i]
+		local s = fs and fs:GetText()
+		if s and s ~= "" and not s:find("Soldier") then
+			GM.Print(format("  tipL%d: %s", i, s:sub(1, 40)))
 		end
-		GM.PlanQueue.SetItem(GM.lastTooltipItemID, GM.lastTooltipLink)
-		GM.PlanQueue.Show()
-		return
 	end
-	if msg == "bug" then
-		if GM.BugReport then GM.BugReport.Show() end
-		return
-	end
-	if msg == "status" then
-		if GM.Mesh and GM.Mesh.Status then GM.Mesh.Status() end
-		return
-	end
-	if msg == "backend" then
-		-- onboarding popup doubles as the reconfigure path — a newer
-		-- staged request overwrites feeds.json (newest wins)
-		if GM.Onboard then GM.Onboard.Show() end
-		return
-	end
-	if msg == "onboard" then
-		-- replay first-run: wipe only the wizard's display flags so
-		-- the next login hits the pristine `not onboarded` branch —
-		-- book/ledger/groups/backend state all untouched
-		if GM.db then
-			GM.db.onboarded = nil
-			GM.db.obDone = nil
-			GM.db.obDismissed = nil
-			GM.db.obDbg = nil
+	local d = GM.Destroying and GM.Destroying.DisenchantDrops
+	local drops = d and d(id)
+	if drops then
+		for _, r in ipairs(drops) do
+			GM.Print(format("  %s x%d-%d ~%d%%", GM.ItemNameOr(r.id),
+				r.lo, r.hi, r.pct))
 		end
-		if GM.Onboard then GM.Onboard.Show() end
-		GM.Print("onboarding reset — pops at every login until DONE")
-		return
+	else
+		GM.Print("  DisenchantDrops = nil")
 	end
-	if msg == "import" then
-		if GM.Onboard then GM.Onboard.Show("import") end
-		return
-	end
-	if msg == "api" then
-		if GM.Onboard then GM.Onboard.Show("api") end
-		return
-	end
-	if msg == "options" then
-		if GM.Onboard then GM.Onboard.Show("options") end
-		return
-	end
-	if msg == "minimap" then
-		GM.db.minimapHide = not GM.db.minimapHide
-		if GM.minimapBtn then GM.minimapBtn:SetShown(not GM.db.minimapHide) end
-		GM.Print("minimap button " .. (GM.db.minimapHide and "hidden" or "shown"))
-		return
-	end
-	if msg:sub(1, 6) == "groups" then
-		GM.GroupsUI.Toggle()
-		return
-	end
-	if msg:sub(1, 3) == "ops" or msg:sub(1, 10) == "operations" then
-		GM.OpsUI.Toggle()
-		return
-	end
-	if msg:sub(1, 6) == "crafts" then
-		GM.CraftingUI.Toggle()
-		return
-	end
-	if msg:sub(1, 10) == "craftdebug" then
-		GM.Crafting.Debug(strtrim(msg:sub(11)))
-		return
-	end
-	if msg:sub(1, 10) == "craftpurge" then
-		local n = GM.Crafting.PurgeProf(strtrim(msg:sub(11)))
-		GM.Print(n > 0 and ("purged " .. n .. " recipes")
-			or "nothing purged — no recipes with that profession")
-		if GM.CraftingUI and GM.CraftingUI.Refresh then GM.CraftingUI.Refresh() end
-		return
-	end
-	if msg:sub(1, 10) == "craftprobe" then
-		GM.Crafting.CraftProbe(strtrim(msg:sub(11)))
-		return
-	end
-	if msg:sub(1, 8) == "codprobe" then
-		GM.MailUI.CodProbe()
-		return
-	end
-	if msg == "orders" or msg == "writs" or msg == "writ" then
-		if GM.OrdersUI then GM.OrdersUI.Toggle() end
-		return
-	end
-	if msg:sub(1, 6) == "board " then
-		local name = strtrim(msg:sub(7))
-		if name ~= "" and GM.Orders then
-			local rid = GM.Orders.JoinBoard(name, true)
-			GM.Print("joining board '" .. name ..
-				"' (" .. rid .. ") — applies after next flush")
-		else
-			GM.Print("usage: /goblin board <name>")
-		end
-		return
-	end
-	if msg:sub(1, 7) == "deprobe" then
-		-- dump the raw GetItemInfo fields DisenchantDrops gates on, plus
-		-- its result — isolates client return-shape quirks vs table bugs
-		local id = tonumber(msg:match("(%d+)"))
-		if not id then
-			local _, link = GameTooltip and GameTooltip:GetItem()
-			id = GM.LinkID(link) or GM.lastTooltipItemID
-		end
-		if not id then GM.Print("usage: /goblin deprobe [itemID] (or hover an item)") return end
-		local info = C_Item and C_Item.GetItemInfo or GetItemInfo
-		local n, l, q, il, rl, cl, sc, ms, eq, tx, sp, cid = info and info(id)
-		local cnt = info and select('#', info(id)) or 0
-		local qfn = C_Item and C_Item.GetItemQualityByID
-		local lfn = C_Item and C_Item.GetDetailedItemLevelInfo
-		local tfn = C_Item and C_Item.GetItemInventoryTypeByID
-		local efn = _G.IsEquippableItem
-		GM.Print(format("deprobe %d: name=%s q=%s ilvl=%s equipLoc=%s classID=%s (ret=%d)",
-			id, tostring(n), tostring(q), tostring(il), tostring(eq), tostring(cid), cnt))
-		GM.Print(format("  alt: qByID=%s dlv=%s invType=%s equippable=%s",
-			tostring(qfn and qfn(id)), tostring(lfn and lfn(id)),
-			tostring(tfn and tfn(id)), tostring(efn and efn(id))))
-		for i = 2, min(6, GameTooltip:NumLines() or 0) do
-			local fs = _G["GameTooltipTextLeft" .. i]
-			local s = fs and fs:GetText()
-			if s and s ~= "" and not s:find("Soldier") then
-				GM.Print(format("  tipL%d: %s", i, s:sub(1, 40)))
-			end
-		end
-		local d = GM.Destroying and GM.Destroying.DisenchantDrops
-		local drops = d and d(id)
-		if drops then
-			for _, r in ipairs(drops) do
-				GM.Print(format("  %s x%d-%d ~%d%%", GM.ItemNameOr(r.id),
-					r.lo, r.hi, r.pct))
-			end
-		else
-			GM.Print("  DisenchantDrops = nil")
-		end
-		return
-	end
-	if msg == "perf" then
-		-- 8s activity sample — every suspect path counters at ~0
-		-- means the degradation lives outside our handlers entirely
-		local dur = 8
-		local c, iw = GM.Crafting, GM.itemWatch
-		local g, inv = GM.Gathering, GM.Inventory
-		local t0 = {
-			scans = c and c._scans or 0,
-			reqs = iw and iw.reqs or 0,
-			bursts = iw and iw.bursts or 0,
-			ievts = iw and iw.evts or 0,
-			ticks = g and g._ticks or 0,
-			shown = g and g._shownTicks or 0,
-			terrs = g and g._tickErrs or 0,
-			cost = g and g._costMs or 0,
-			pqr = GM.PlanQueue and GM.PlanQueue._refreshes or 0,
-			cur = GM.CraftingUI and GM.CraftingUI._refreshes or 0,
-			snaps = inv and inv._snaps or 0,
-			inbox = inv and inv._inboxScans or 0,
-			gb = inv and inv._gbScans or 0,
-			lcalls = c and c._listCalls or 0,
-			lms = c and c._listMs or 0,
-			after = GM._afterCalls or 0,
-			ff = GM._ffRuns or 0,
-			ev = c and c._ev and {} or nil,
-		}
-		if t0.ev then for k, v in pairs(c._ev) do t0.ev[k] = v end end
-		GM.Print("perf — sampling " .. dur .. "s…")
-		GM.After(dur, function()
-			local function rate(n) return format("%.1f/s", (n or 0) / dur) end
-			local fps = GetFramerate and GetFramerate() or -1
-			local tk = (g._ticks or 0) - t0.ticks
-			GM.Print(format(
-				"perf fps=%.0f: tt-ticks %s (shown %s · %.1fms/s · errs %s) · scans %s · item-reqs %s · info-bursts %s",
-				fps,
-				rate(tk),
-				rate((g._shownTicks or 0) - t0.shown),
-				((g._costMs or 0) - t0.cost) / dur,
-				rate((g._tickErrs or 0) - t0.terrs),
-				rate((c._scans or 0) - t0.scans),
-				rate((iw.reqs or 0) - t0.reqs),
-				rate((iw.bursts or 0) - t0.bursts)))
-			GM.Print(format(
-				"  PQ.refresh %s · CU.refresh %s · snaps %s · inbox %s · gbank %s · after %s · fixup %s · C.List %s (%.0fms/s)",
-				rate((GM.PlanQueue._refreshes or 0) - t0.pqr),
-				rate((GM.CraftingUI._refreshes or 0) - t0.cur),
-				rate((inv._snaps or 0) - t0.snaps),
-				rate((inv._inboxScans or 0) - t0.inbox),
-				rate((inv._gbScans or 0) - t0.gb),
-				rate((GM._afterCalls or 0) - t0.after),
-				rate((GM._ffRuns or 0) - t0.ff),
-				rate((c._listCalls or 0) - t0.lcalls),
-				((c._listMs or 0) - t0.lms) / dur))
-			if t0.ev then
-				local rows = {}
-				for k, v in pairs(c._ev or {}) do
-					local d = v - (t0.ev[k] or 0)
-					if d > 0 then rows[#rows + 1] = { n = d, k = k } end
-				end
-				table.sort(rows, function(a, b) return a.n > b.n end)
-				for i = 1, math.min(6, #rows) do
-					GM.Print(format("  ev %s ×%d (%s)",
-						rows[i].k, rows[i].n, rate(rows[i].n)))
-				end
-			end
-			-- frame-tree walk: shown frames carrying an OnUpdate
-			-- script are the only per-frame script cost in the game —
-			-- a stray shown frame (parked, leaked) shows up by name.
-			-- Every per-frame call is pcalled — one oddball frame
-			-- must not silence the whole walk
-			-- frame-tree walk, breadth-first (no depth cap): count
-			-- every live frame, and attribute each SHOWN frame with an
-			-- OnUpdate script to its top-level ancestor — anonymous
-			-- frame leaks still identify their owner by parent name
-			local groups, seen, locked = {}, 0, 0
-			local q, qi = { UIParent }, 1
-			while qi <= #q and seen < 200000 do
-				local fr = q[qi]; qi = qi + 1
-				seen = seen + 1
-				-- the ENTIRE probe must live inside one pcall: this
-				-- client returns SECRET booleans/strings from
-				-- IsShown/GetName on protected frames, and testing
-				-- one outside the pcall throws in tainted context
-				local okP = pcall(function()
-					if not fr:IsShown() then return end
-					if not fr:GetScript("OnUpdate") then return end
-					local top, guard = fr, 0
-					while guard < 12 do
-						guard = guard + 1
-						local p = top:GetParent()
-						if not p or p == UIParent then break end
-						top = p
-					end
-					local nm = top:GetName()
-					if nm == nil then nm = "?" end
-					groups[nm] = (groups[nm] or 0) + 1
-				end)
-				if not okP then locked = locked + 1 end
-				local okK, kids = pcall(function()
-					return { fr:GetChildren() } end)
-				if okK and kids then
-					for _, kid in ipairs(kids) do
-						q[#q + 1] = kid
-					end
-				end
-			end
+end
+
+-- 8s activity sample — every suspect path counters at ~0 means the
+-- degradation lives outside our handlers entirely
+local function CmdPerf()
+	local dur = 8
+	local c, iw = GM.Crafting, GM.itemWatch
+	local g, inv = GM.Gathering, GM.Inventory
+	local t0 = {
+		scans = c and c._scans or 0,
+		reqs = iw and iw.reqs or 0,
+		bursts = iw and iw.bursts or 0,
+		ievts = iw and iw.evts or 0,
+		ticks = g and g._ticks or 0,
+		shown = g and g._shownTicks or 0,
+		terrs = g and g._tickErrs or 0,
+		cost = g and g._costMs or 0,
+		pqr = GM.PlanQueue and GM.PlanQueue._refreshes or 0,
+		cur = GM.CraftingUI and GM.CraftingUI._refreshes or 0,
+		snaps = inv and inv._snaps or 0,
+		inbox = inv and inv._inboxScans or 0,
+		gb = inv and inv._gbScans or 0,
+		lcalls = c and c._listCalls or 0,
+		lms = c and c._listMs or 0,
+		after = GM._afterCalls or 0,
+		ff = GM._ffRuns or 0,
+		ev = c and c._ev and {} or nil,
+	}
+	if t0.ev then for k, v in pairs(c._ev) do t0.ev[k] = v end end
+	GM.Print("perf — sampling " .. dur .. "s…")
+	GM.After(dur, function()
+		local function rate(n) return format("%.1f/s", (n or 0) / dur) end
+		local fps = GetFramerate and GetFramerate() or -1
+		local tk = (g._ticks or 0) - t0.ticks
+		GM.Print(format(
+			"perf fps=%.0f: tt-ticks %s (shown %s · %.1fms/s · errs %s) · scans %s · item-reqs %s · info-bursts %s",
+			fps,
+			rate(tk),
+			rate((g._shownTicks or 0) - t0.shown),
+			((g._costMs or 0) - t0.cost) / dur,
+			rate((g._tickErrs or 0) - t0.terrs),
+			rate((c._scans or 0) - t0.scans),
+			rate((iw.reqs or 0) - t0.reqs),
+			rate((iw.bursts or 0) - t0.bursts)))
+		GM.Print(format(
+			"  PQ.refresh %s · CU.refresh %s · snaps %s · inbox %s · gbank %s · after %s · fixup %s · C.List %s (%.0fms/s)",
+			rate((GM.PlanQueue._refreshes or 0) - t0.pqr),
+			rate((GM.CraftingUI._refreshes or 0) - t0.cur),
+			rate((inv._snaps or 0) - t0.snaps),
+			rate((inv._inboxScans or 0) - t0.inbox),
+			rate((inv._gbScans or 0) - t0.gb),
+			rate((GM._afterCalls or 0) - t0.after),
+			rate((GM._ffRuns or 0) - t0.ff),
+			rate((c._listCalls or 0) - t0.lcalls),
+			((c._listMs or 0) - t0.lms) / dur))
+		if t0.ev then
 			local rows = {}
-			for nm, n in pairs(groups) do
-				rows[#rows + 1] = { n = n, k = nm }
+			for k, v in pairs(c._ev or {}) do
+				local d = v - (t0.ev[k] or 0)
+				if d > 0 then rows[#rows + 1] = { n = d, k = k } end
 			end
 			table.sort(rows, function(a, b) return a.n > b.n end)
-			local nupd = 0
-			for _, r in ipairs(rows) do nupd = nupd + r.n end
-			GM.Print(format("  frames=%d  onupdate-shown=%d  locked=%d:",
-				seen, nupd, locked))
-			for i = 1, math.min(8, #rows) do
-				GM.Print(format("    %s ×%d", rows[i].k, rows[i].n))
+			for i = 1, math.min(6, #rows) do
+				GM.Print(format("  ev %s ×%d (%s)",
+					rows[i].k, rows[i].n, rate(rows[i].n)))
 			end
-			-- GameTooltip fontstring pool: each AddLine pools a
-			-- GameTooltipTextLeftN fontstring forever — a runaway
-			-- pool means the re-inject path has been growing it
-			local tln = 0
-			while _G["GameTooltipTextLeft" .. (tln + 1)] do
-				tln = tln + 1
-				if tln > 20000 then break end
+		end
+		-- frame-tree walk: shown frames carrying an OnUpdate script
+		-- are the only per-frame script cost in the game — a stray
+		-- shown frame (parked, leaked) shows up by name. Every
+		-- per-frame call is pcalled — one oddball frame must not
+		-- silence the whole walk
+		-- frame-tree walk, breadth-first (no depth cap): count every
+		-- live frame, and attribute each SHOWN frame with an OnUpdate
+		-- script to its top-level ancestor — anonymous frame leaks
+		-- still identify their owner by parent name
+		local groups, seen, locked = {}, 0, 0
+		local q, qi = { UIParent }, 1
+		while qi <= #q and seen < 200000 do
+			local fr = q[qi]; qi = qi + 1
+			seen = seen + 1
+			-- the ENTIRE probe must live inside one pcall: this
+			-- client returns SECRET booleans/strings from
+			-- IsShown/GetName on protected frames, and testing one
+			-- outside the pcall throws in tainted context
+			local okP = pcall(function()
+				if not fr:IsShown() then return end
+				if not fr:GetScript("OnUpdate") then return end
+				local top, guard = fr, 0
+				while guard < 12 do
+					guard = guard + 1
+					local p = top:GetParent()
+					if not p or p == UIParent then break end
+					top = p
+				end
+				local nm = top:GetName()
+				if nm == nil then nm = "?" end
+				groups[nm] = (groups[nm] or 0) + 1
+			end)
+			if not okP then locked = locked + 1 end
+			local okK, kids = pcall(function()
+				return { fr:GetChildren() } end)
+			if okK and kids then
+				for _, kid in ipairs(kids) do
+					q[#q + 1] = kid
+				end
 			end
-			local nl = 0
-			pcall(function() nl = GameTooltip:NumLines() end)
-			GM.Print(format("  tooltip-lines pooled=%d current=%d",
-				tln, nl or -1))
-			-- Lua heap + per-addon attribution: GC pressure is the
-			-- other silent fps killer, and 727MB doesn't explain
-			-- itself without knowing whose it is
-			GM.Print(format("  lua-mem %.1fMB",
-				(collectgarbage("count") or 0) / 1024))
-			if GetNumAddOns and GetAddOnInfo
-				and GetAddOnMemoryUsage then
-				pcall(function()
-					if UpdateAddOnMemoryUsage then
-						UpdateAddOnMemoryUsage()
-					end
-					local am = {}
-					for i = 1, GetNumAddOns() do
-						local nm, _, _, en = GetAddOnInfo(i)
-						if en ~= false then
-							local m = GetAddOnMemoryUsage(nm)
-								or 0
-							if m > 0 then
-								am[#am + 1] = { n = m, k = nm }
-							end
+		end
+		local rows = {}
+		for nm, n in pairs(groups) do
+			rows[#rows + 1] = { n = n, k = nm }
+		end
+		table.sort(rows, function(a, b) return a.n > b.n end)
+		local nupd = 0
+		for _, r in ipairs(rows) do nupd = nupd + r.n end
+		GM.Print(format("  frames=%d  onupdate-shown=%d  locked=%d:",
+			seen, nupd, locked))
+		for i = 1, math.min(8, #rows) do
+			GM.Print(format("    %s ×%d", rows[i].k, rows[i].n))
+		end
+		-- GameTooltip fontstring pool: each AddLine pools a
+		-- GameTooltipTextLeftN fontstring forever — a runaway pool
+		-- means the re-inject path has been growing it
+		local tln = 0
+		while _G["GameTooltipTextLeft" .. (tln + 1)] do
+			tln = tln + 1
+			if tln > 20000 then break end
+		end
+		local nl = 0
+		pcall(function() nl = GameTooltip:NumLines() end)
+		GM.Print(format("  tooltip-lines pooled=%d current=%d",
+			tln, nl or -1))
+		-- Lua heap + per-addon attribution: GC pressure is the other
+		-- silent fps killer, and 727MB doesn't explain itself
+		-- without knowing whose it is
+		GM.Print(format("  lua-mem %.1fMB",
+			(collectgarbage("count") or 0) / 1024))
+		if GetNumAddOns and GetAddOnInfo
+			and GetAddOnMemoryUsage then
+			pcall(function()
+				if UpdateAddOnMemoryUsage then
+					UpdateAddOnMemoryUsage()
+				end
+				local am = {}
+				for i = 1, GetNumAddOns() do
+					local nm, _, _, en = GetAddOnInfo(i)
+					if en ~= false then
+						local m = GetAddOnMemoryUsage(nm)
+							or 0
+						if m > 0 then
+							am[#am + 1] = { n = m, k = nm }
 						end
 					end
-					table.sort(am, function(a, b)
-						return a.n > b.n end)
-					for i = 1, math.min(6, #am) do
-						GM.Print(format("    mem %s %.1fMB",
-							am[i].k, am[i].n / 1024))
-					end
-				end)
-			end
-			local pl = GM.FramePark and GM.FramePark.ParkedList
-				and GM.FramePark.ParkedList() or {}
-			GM.Print("  parked: "
-				.. (#pl > 0 and table.concat(pl, ", ") or "none"))
-			GM.Print("  tradeskill line: "
-				.. tostring(c and c.lastProf or "closed"))
-		end)
-		return
-	end
-	if msg == "tsclose" then
-		-- perf probe: force-close the held-open tradeskill session
-		-- (Crafting keeps the line alive for queue crafting). If fps
-		-- recovers immediately after this, the engine is burning
-		-- frames on the open line — not our Lua.
-		if C_TradeSkillUI and C_TradeSkillUI.CloseTradeSkill then
-			local ok, err = pcall(C_TradeSkillUI.CloseTradeSkill)
-			GM.Print("tsclose: " .. tostring(ok and "closed" or err))
-		else
-			GM.Print("tsclose: C_TradeSkillUI.CloseTradeSkill missing")
-		end
-		GM.Print("watch fps now — /goblin perf to re-sample")
-		return
-	end
-	if msg:sub(1, 10) == "crafttrace" then
-		GM.Crafting.trace = not GM.Crafting.trace
-		GM.Print("craft trace " .. (GM.Crafting.trace and "ON" or "OFF"))
-		return
-	end
-	if msg:sub(1, 7) == "owndump" then
-		GM.Inventory.DumpOwned()
-		return
-	end
-	if msg:sub(1, 9) == "fontcheck" then
-		-- font health probe: a dead file reports zero glyph width —
-		-- catches the first-run stall that blanked FONT_MED labels
-		for _, pair in ipairs({
-			{ "FONT", GM.FONT }, { "MED", GM.FONT_MED },
-			{ "BOLD", GM.FONT_BOLD },
-		}) do
-			local fs = UIParent:CreateFontString(nil, "OVERLAY")
-			local ok = fs:SetFont(pair[2], 11, "")
-			fs:SetText("probe")
-			local w = fs.GetStringWidth and fs:GetStringWidth() or -1
-			GM.Print(format("%s set=%s width=%s",
-				pair[1], tostring(ok), tostring(w)))
-		end
-		return
-	end
-	if msg:sub(1, 6) == "market" or msg:sub(1, 4) == "shop" then
-		GM.Shopping.Toggle()
-		return
-	end
-	if msg:sub(1, 9) == "warehouse" then
-		GM.Banking.WarehousingScan()
-		return
-	end
-	if msg:sub(1, 9) == "bankdebug" then
-		GM.Banking.debug = not GM.Banking.debug
-		GM.Print("bank debug " .. (GM.Banking.debug and "ON" or "off"))
-		return
-	end
-	if msg:sub(1, 7) == "destroy" then
-		GM.DestroyingUI.Toggle()
-		return
-	end
-	if msg:sub(1, 4) == "sett" or msg:sub(1, 7) == "options" then
-		GM.Settings.Toggle()
-		return
-	end
-	if msg:sub(1, 6) == "ledger" or msg:sub(1, 8) == "overview" then
-		GM.Overview.Toggle()
-		return
-	end
-	if msg == "ah" then
-		GM.AHUI.Toggle()
-		return
-	end
-	if msg:sub(1, 8) == "auctions" or msg:sub(1, 10) == "myauctions" then
-		GM.MyAuctions.Toggle()
-		return
-	end
-	if msg:sub(1, 4) == "dash" or msg == "home" or msg:sub(1, 6) == "budget" then
-		GM.PlanQueue.SetHome(true)
-		GM.PlanQueue.Show()
-		return
-	end
-	if msg:sub(1, 6) == "vendor" then
-		local sub = strtrim(msg:sub(7))
-		if sub:sub(1, 9) == "blacklist" then
-			local arg = strtrim(sub:sub(10))
-			if arg == "" then
-				local n = 0
-				for id in pairs(GoblinMindSettings
-					and GoblinMindSettings.vendorBlacklist or {}) do
-					n = n + 1
-					GM.Print("  " .. GM.ItemName(id))
 				end
-				if n == 0 then GM.Print("vendor blacklist is empty") end
-			else
-				local pid = ParseItemRef(arg)
-				if pid then GM.Vendoring.BlacklistToggle(pid)
-				else GM.Print("usage: /goblin vendor blacklist [item|i:id|link]") end
-			end
-			return
-		end
-		GM.VendoringUI.Toggle()
-		return
-	end
-	if msg:sub(1, 4) == "bank" then
-		GM.BankUI.Toggle()
-		return
-	end
-	if msg:sub(1, 5) == "gbank" then
-		GM.GBankUI.Toggle()
-		return
-	end
-	if msg:sub(1, 4) == "mail" then
-		GM.MailUI.Toggle()
-		return
-	end
-	if msg:sub(1, 4) == "snip" then
-		GM.SniperUI.Toggle()
-		return
-	end
-	if msg:sub(1, 5) == "intel" then
-		GM.Intel.Dump()
-		return
-	end
-	if msg:sub(1, 5) == "tasks" then
-		GM.TaskListUI.Toggle()
-		return
-	end
-	if msg:sub(1, 6) == "uidump" then
-		local function FrameFor(v)
-			if type(v) == "table" then return v end
-			if type(v) ~= "string" then return nil end
-			if _G[v] then return _G[v] end
-			if GetFrameHandleFrame then
-				local ok, r = pcall(GetFrameHandleFrame, v)
-				if ok and r then return r end
-			end
-		end
-		local bad = 0
-		for i, v in ipairs(UISpecialFrames or {}) do
-			local f = FrameFor(v)
-			local ok, shown = pcall(function() return f and f:IsShown() end)
-			if not (ok and f) then
-				bad = bad + 1
-				GM.Print(GM.CC("err") .. format("UISpecialFrames[%d] = %s -> %s",
-					i, tostring(v), f and "no IsShown" or "NIL") .. "|r")
-			end
-		end
-		for k in pairs(UIPanelWindows or {}) do
-			if not FrameFor(k) then
-				bad = bad + 1
-				GM.Print(GM.CC("err") .. "UIPanelWindows[" .. tostring(k)
-					.. "] -> NIL (no frame)" .. "|r")
-			end
-		end
-		GM.Print(format("uidump: %d special, %d panel entries — %d bad",
-			#(UISpecialFrames or {}), (function()
-				local n = 0 for _ in pairs(UIPanelWindows or {}) do n = n + 1 end
-				return n end)(), bad))
-		if bad == 0 then GM.Print("no broken entries — GoblinMind's are all resolvable") end
-		return
-	end
-	if msg:sub(1, 6) == "ahdump" then
-		local arg = strtrim(msg:sub(7))
-		local pid = tonumber(arg) or ParseItemRef(arg)
-		GM.AH.DumpRows(pid ~= "" and pid or nil)
-		return
-	end
-	if msg:sub(1, 4) == "bags" then
-		-- per-container dump: settles "is there a carried bag past
-		-- the computed range?" — FOREVER QUIRK: bank containers DO
-		-- enumerate items while the bank frame is closed (which is
-		-- exactly why the carried-boundary probe needs equip-slot
-		-- ids, not item presence).
-		if not (C_Container and C_Container.GetContainerNumSlots) then
-			GM.Print("C_Container unavailable on this client")
-			return
-		end
-		local max = GM.CarriedBagMax()
-		GM.Print(format("carriedMax=%d (learned=%s) bankOpen=%s",
-			max, tostring(GoblinMindSettings
-				and GoblinMindSettings.carriedMax),
-			tostring(BankFrame and BankFrame:IsShown())))
-		for bag = -3, max + 8 do
-			local n = C_Container.GetContainerNumSlots(bag) or 0
-			if n > 0 then
-				local items, first = 0
-				for slot = 1, n do
-					local info = C_Container.GetContainerItemInfo(
-						bag, slot)
-					if info and info.itemID then
-						items = items + 1
-						if not first then first = info.itemID end
-					end
+				table.sort(am, function(a, b)
+					return a.n > b.n end)
+				for i = 1, math.min(6, #am) do
+					GM.Print(format("    mem %s %.1fMB",
+						am[i].k, am[i].n / 1024))
 				end
-				local tag = bag <= max and "carried" or "?"
-				if bag < 0 or bag > max then tag = "bank?" end
-				GM.Print(format("  bag %d: %d slots, %d items%s — %s",
-					bag, n, items,
-					first and (" first=i:" .. first) or "", tag))
+			end)
+		end
+		local pl = GM.FramePark and GM.FramePark.ParkedList
+			and GM.FramePark.ParkedList() or {}
+		GM.Print("  parked: "
+			.. (#pl > 0 and table.concat(pl, ", ") or "none"))
+		GM.Print("  tradeskill line: "
+			.. tostring(c and c.lastProf or "closed"))
+	end)
+end
+
+local function CmdUiDump()
+	local function FrameFor(v)
+		if type(v) == "table" then return v end
+		if type(v) ~= "string" then return nil end
+		if _G[v] then return _G[v] end
+		if GetFrameHandleFrame then
+			local ok, r = pcall(GetFrameHandleFrame, v)
+			if ok and r then return r end
+		end
+	end
+	local bad = 0
+	for i, v in ipairs(UISpecialFrames or {}) do
+		local f = FrameFor(v)
+		local ok, shown = pcall(function() return f and f:IsShown() end)
+		if not (ok and f) then
+			bad = bad + 1
+			GM.Print(GM.CC("err") .. format("UISpecialFrames[%d] = %s -> %s",
+				i, tostring(v), f and "no IsShown" or "NIL") .. "|r")
+		end
+	end
+	for k in pairs(UIPanelWindows or {}) do
+		if not FrameFor(k) then
+			bad = bad + 1
+			GM.Print(GM.CC("err") .. "UIPanelWindows[" .. tostring(k)
+				.. "] -> NIL (no frame)" .. "|r")
+		end
+	end
+	GM.Print(format("uidump: %d special, %d panel entries — %d bad",
+		#(UISpecialFrames or {}), (function()
+			local n = 0 for _ in pairs(UIPanelWindows or {}) do n = n + 1 end
+			return n end)(), bad))
+	if bad == 0 then GM.Print("no broken entries — GoblinMind's are all resolvable") end
+end
+
+-- per-container dump: settles "is there a carried bag past the
+-- computed range?" — FOREVER QUIRK: bank containers DO enumerate
+-- items while the bank frame is closed (which is exactly why the
+-- carried-boundary probe needs equip-slot ids, not item presence).
+local function CmdBags()
+	if not (C_Container and C_Container.GetContainerNumSlots) then
+		GM.Print("C_Container unavailable on this client")
+		return
+	end
+	local max = GM.CarriedBagMax()
+	GM.Print(format("carriedMax=%d (learned=%s) bankOpen=%s",
+		max, tostring(GoblinMindSettings
+			and GoblinMindSettings.carriedMax),
+		tostring(BankFrame and BankFrame:IsShown())))
+	for bag = -3, max + 8 do
+		local n = C_Container.GetContainerNumSlots(bag) or 0
+		if n > 0 then
+			local items, first = 0
+			for slot = 1, n do
+				local info = C_Container.GetContainerItemInfo(
+					bag, slot)
+				if info and info.itemID then
+					items = items + 1
+					if not first then first = info.itemID end
+				end
 			end
+			local tag = bag <= max and "carried" or "?"
+			if bag < 0 or bag > max then tag = "bank?" end
+			GM.Print(format("  bag %d: %d slots, %d items%s — %s",
+				bag, n, items,
+				first and (" first=i:" .. first) or "", tag))
 		end
+	end
+end
+
+Cmd("plan", function()
+	if not GM.lastTooltipItemID then
+		GM.Print("hover an item first, then /goblin plan")
 		return
 	end
-	if msg:sub(1, 3) == "inv" then
-		local pid = ParseItemRef(strtrim(msg:sub(4)))
-		if not pid then
-			GM.Print("usage: /goblin inv <item|i:id|[name]|link>")
-			return
-		end
-		GM.Inventory.QueryOwned()
-		local c = GM.Inventory.Count(pid)
-		GM.Print(format("inv %d — bags %d · bank %d · mail %d · gbank %d · posted %d · total %d",
-			pid, c.bags, c.bank, c.mail, c.guild, c.auction, c.total))
-		return
+	GM.PlanQueue.SetItem(GM.lastTooltipItemID, GM.lastTooltipLink)
+	GM.PlanQueue.Show()
+end)
+Cmd("bug", function()
+	if GM.BugReport then GM.BugReport.Show() end
+end)
+Cmd("status", function()
+	if GM.Mesh and GM.Mesh.Status then GM.Mesh.Status() end
+end)
+-- onboarding popup doubles as the reconfigure path — a newer staged
+-- request overwrites feeds.json (newest wins)
+Cmd("backend", function()
+	if GM.Onboard then GM.Onboard.Show() end
+end)
+-- replay first-run: wipe only the wizard's display flags so the next
+-- login hits the pristine `not onboarded` branch — book/ledger/
+-- groups/backend state all untouched
+Cmd("onboard", function()
+	if GM.db then
+		GM.db.onboarded = nil
+		GM.db.obDone = nil
+		GM.db.obDismissed = nil
+		GM.db.obDbg = nil
 	end
-	if msg:sub(1, 6) == "ledger" then
-		local n = tonumber(msg:sub(7)) or 8
-		if not GM.Ledger.db then
-			GM.Print("ledger not initialized")
-			return
-		end
-		local rows = GM.Ledger.Recent(n)
-		if #rows == 0 then
-			GM.Print("ledger empty — buy/post/cancel actions get recorded")
-			return
-		end
-		for _, r in ipairs(rows) do
-			GM.Print(format("%s %s id=%d q=%d u=%s",
-				date("%H:%M", r.t), r.ty, r.i, r.q,
-				r.u and GM.Money(r.u) or "—"))
-		end
-		return
+	if GM.Onboard then GM.Onboard.Show() end
+	GM.Print("onboarding reset — pops at every login until DONE")
+end)
+Cmd("import", function()
+	if GM.Onboard then GM.Onboard.Show("import") end
+end)
+Cmd("api", function()
+	if GM.Onboard then GM.Onboard.Show("api") end
+end)
+Cmd("options", function()
+	if GM.Onboard then GM.Onboard.Show("options") end
+end)
+Cmd("minimap", function()
+	GM.db.minimapHide = not GM.db.minimapHide
+	if GM.minimapBtn then GM.minimapBtn:SetShown(not GM.db.minimapHide) end
+	GM.Print("minimap button " .. (GM.db.minimapHide and "hidden" or "shown"))
+end)
+Cmd("groups", function() GM.GroupsUI.Toggle() end, true)
+Cmd({ "ops", "operations" }, function() GM.OpsUI.Toggle() end, true)
+Cmd("crafts", function() GM.CraftingUI.Toggle() end, true)
+Cmd("craftdebug", function(msg)
+	GM.Crafting.Debug(strtrim(msg:sub(11)))
+end, true)
+Cmd("craftpurge", function(msg)
+	local n = GM.Crafting.PurgeProf(strtrim(msg:sub(11)))
+	GM.Print(n > 0 and ("purged " .. n .. " recipes")
+		or "nothing purged — no recipes with that profession")
+	if GM.CraftingUI and GM.CraftingUI.Refresh then GM.CraftingUI.Refresh() end
+end, true)
+Cmd("craftprobe", function(msg)
+	GM.Crafting.CraftProbe(strtrim(msg:sub(11)))
+end, true)
+Cmd("codprobe", function() GM.MailUI.CodProbe() end, true)
+Cmd({ "orders", "writs", "writ" }, function()
+	if GM.OrdersUI then GM.OrdersUI.Toggle() end
+end)
+Cmd("board ", function(msg)
+	local name = strtrim(msg:sub(7))
+	if name ~= "" and GM.Orders then
+		local rid = GM.Orders.JoinBoard(name, true)
+		GM.Print("joining board '" .. name ..
+			"' (" .. rid .. ") — applies after next flush")
+	else
+		GM.Print("usage: /goblin board <name>")
 	end
-	if msg:sub(1, 5) == "price" then
-		local sub = strtrim(msg:sub(6))
-		local name, expr = sub:match("^set%s+(%S+)%s+(.+)$")
-		if name then
-			GoblinMindPrices.customSources[strlower(name)] = expr
-			GM.Print("custom source '" .. strlower(name) .. "' = " .. expr)
-			return
-		end
-		name = sub:match("^unset%s+(%S+)$")
-		if name then
-			GoblinMindPrices.customSources[strlower(name)] = nil
-			GM.Print("custom source '" .. strlower(name) .. "' removed")
-			return
-		end
-		local pid, xpr = ParseItemRef(sub)
-		if not pid or not xpr or xpr == "" then
-			GM.Print("usage: /goblin price <item|i:id|[name]|link> <expr>")
-			GM.Print("  parsed: id=" .. tostring(pid) .. " expr='" .. tostring(xpr) .. "'")
-			GM.Print("  raw: " .. sub:gsub("|", "¦"):sub(1, 80))
-			return
-		end
-		local v, err = GM.Pricing.Eval(xpr, pid)
-		if v then
-			GM.Print(xpr .. " = " .. GM.Money(v) .. " (" .. floor(v) .. "c)")
+end, true)
+Cmd("deprobe", CmdDeprobe, true)
+Cmd("perf", CmdPerf)
+-- perf probe: force-close the held-open tradeskill session (Crafting
+-- keeps the line alive for queue crafting). If fps recovers
+-- immediately after this, the engine is burning frames on the open
+-- line — not our Lua.
+Cmd("tsclose", function()
+	if C_TradeSkillUI and C_TradeSkillUI.CloseTradeSkill then
+		local ok, err = pcall(C_TradeSkillUI.CloseTradeSkill)
+		GM.Print("tsclose: " .. tostring(ok and "closed" or err))
+	else
+		GM.Print("tsclose: C_TradeSkillUI.CloseTradeSkill missing")
+	end
+	GM.Print("watch fps now — /goblin perf to re-sample")
+end)
+Cmd("crafttrace", function()
+	GM.Crafting.trace = not GM.Crafting.trace
+	GM.Print("craft trace " .. (GM.Crafting.trace and "ON" or "OFF"))
+end, true)
+Cmd("owndump", function() GM.Inventory.DumpOwned() end, true)
+-- font health probe: a dead file reports zero glyph width — catches
+-- the first-run stall that blanked FONT_MED labels
+Cmd("fontcheck", function()
+	for _, pair in ipairs({
+		{ "FONT", GM.FONT }, { "MED", GM.FONT_MED },
+		{ "BOLD", GM.FONT_BOLD },
+	}) do
+		local fs = UIParent:CreateFontString(nil, "OVERLAY")
+		local ok = fs:SetFont(pair[2], 11, "")
+		fs:SetText("probe")
+		local w = fs.GetStringWidth and fs:GetStringWidth() or -1
+		GM.Print(format("%s set=%s width=%s",
+			pair[1], tostring(ok), tostring(w)))
+	end
+end, true)
+Cmd({ "market", "shop" }, function() GM.Shopping.Toggle() end, true)
+Cmd("warehouse", function() GM.Banking.WarehousingScan() end, true)
+Cmd("bankdebug", function()
+	GM.Banking.debug = not GM.Banking.debug
+	GM.Print("bank debug " .. (GM.Banking.debug and "ON" or "off"))
+end, true)
+Cmd("destroy", function() GM.DestroyingUI.Toggle() end, true)
+Cmd({ "sett", "options" }, function() GM.Settings.Toggle() end, true)
+Cmd({ "ledger", "overview" }, function() GM.Overview.Toggle() end, true)
+Cmd("ah", function() GM.AHUI.Toggle() end)
+Cmd({ "auctions", "myauctions" }, function() GM.MyAuctions.Toggle() end, true)
+Cmd({ "dash", "home", "budget" }, function()
+	GM.PlanQueue.SetHome(true)
+	GM.PlanQueue.Show()
+end, true)
+Cmd("vendor", function(msg)
+	local sub = strtrim(msg:sub(7))
+	if sub:sub(1, 9) == "blacklist" then
+		local arg = strtrim(sub:sub(10))
+		if arg == "" then
+			local n = 0
+			for id in pairs(GoblinMindSettings
+				and GoblinMindSettings.vendorBlacklist or {}) do
+				n = n + 1
+				GM.Print("  " .. GM.ItemName(id))
+			end
+			if n == 0 then GM.Print("vendor blacklist is empty") end
 		else
-			GM.Print(GM.CC("err") .. "no value" .. (err and (" — " .. err) or "") .. "|r")
-			GM.Print("  parsed: id=" .. pid .. " expr='" .. xpr .. "'")
-			GM.Print("  raw: " .. sub:gsub("|", "¦"):sub(1, 80))
+			local pid = ParseItemRef(arg)
+			if pid then GM.Vendoring.BlacklistToggle(pid)
+			else GM.Print("usage: /goblin vendor blacklist [item|i:id|link]") end
 		end
 		return
+	end
+	GM.VendoringUI.Toggle()
+end, true)
+Cmd("bank", function() GM.BankUI.Toggle() end, true)
+Cmd("gbank", function() GM.GBankUI.Toggle() end, true)
+Cmd("mail", function() GM.MailUI.Toggle() end, true)
+Cmd("snip", function() GM.SniperUI.Toggle() end, true)
+Cmd("intel", function() GM.Intel.Dump() end, true)
+Cmd("tasks", function() GM.TaskListUI.Toggle() end, true)
+Cmd("uidump", CmdUiDump, true)
+Cmd("ahdump", function(msg)
+	local arg = strtrim(msg:sub(7))
+	local pid = tonumber(arg) or ParseItemRef(arg)
+	GM.AH.DumpRows(pid ~= "" and pid or nil)
+end, true)
+Cmd("bags", CmdBags, true)
+Cmd("inv", function(msg)
+	local pid = ParseItemRef(strtrim(msg:sub(4)))
+	if not pid then
+		GM.Print("usage: /goblin inv <item|i:id|[name]|link>")
+		return
+	end
+	GM.Inventory.QueryOwned()
+	local c = GM.Inventory.Count(pid)
+	GM.Print(format("inv %d — bags %d · bank %d · mail %d · gbank %d · posted %d · total %d",
+		pid, c.bags, c.bank, c.mail, c.guild, c.auction, c.total))
+end, true)
+-- trailing space makes this "ledger <n>" — bare "ledger" opens the
+-- Overview window above (the old flat-prefix version was dead code)
+Cmd("ledger ", function(msg)
+	local n = tonumber(msg:sub(8)) or 8
+	if not GM.Ledger.db then
+		GM.Print("ledger not initialized")
+		return
+	end
+	local rows = GM.Ledger.Recent(n)
+	if #rows == 0 then
+		GM.Print("ledger empty — buy/post/cancel actions get recorded")
+		return
+	end
+	for _, r in ipairs(rows) do
+		GM.Print(format("%s %s id=%d q=%d u=%s",
+			date("%H:%M", r.t), r.ty, r.i, r.q,
+			r.u and GM.Money(r.u) or "—"))
+	end
+end, true)
+Cmd("price", function(msg)
+	local sub = strtrim(msg:sub(6))
+	local name, expr = sub:match("^set%s+(%S+)%s+(.+)$")
+	if name then
+		GoblinMindPrices.customSources[strlower(name)] = expr
+		GM.Print("custom source '" .. strlower(name) .. "' = " .. expr)
+		return
+	end
+	name = sub:match("^unset%s+(%S+)$")
+	if name then
+		GoblinMindPrices.customSources[strlower(name)] = nil
+		GM.Print("custom source '" .. strlower(name) .. "' removed")
+		return
+	end
+	local pid, xpr = ParseItemRef(sub)
+	if not pid or not xpr or xpr == "" then
+		GM.Print("usage: /goblin price <item|i:id|[name]|link> <expr>")
+		GM.Print("  parsed: id=" .. tostring(pid) .. " expr='" .. tostring(xpr) .. "'")
+		GM.Print("  raw: " .. sub:gsub("|", "¦"):sub(1, 80))
+		return
+	end
+	local v, err = GM.Pricing.Eval(xpr, pid)
+	if v then
+		GM.Print(xpr .. " = " .. GM.Money(v) .. " (" .. floor(v) .. "c)")
+	else
+		GM.Print(GM.CC("err") .. "no value" .. (err and (" — " .. err) or "") .. "|r")
+		GM.Print("  parsed: id=" .. pid .. " expr='" .. xpr .. "'")
+		GM.Print("  raw: " .. sub:gsub("|", "¦"):sub(1, 80))
+	end
+end, true)
+
+SlashCmdList.GOBLINMIND = function(msg)
+	msg = strtrim(msg or "")
+	for _, c in ipairs(CMDS) do
+		if (c.p and msg:sub(1, #c.n) == c.n)
+			or (not c.p and msg == c.n) then
+			return c.fn(msg)
+		end
 	end
 	local id = GM.LinkID(msg) or tonumber(msg)
 	if id then
