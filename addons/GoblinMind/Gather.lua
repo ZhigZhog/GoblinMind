@@ -261,33 +261,129 @@ local function ZoneEvent(zn, now, items, money)
 	zn.vTot = (zn.vTot or 0) + hi[#hi].v
 end
 
+-- a kill joins a zone when it lands within merge range of the
+-- centroid OR any recorded pocket — a sprawling camp (a murloc
+-- beach, a raptor ridge) accumulates pockets in a chain instead
+-- of splitting into two "camps" at an arbitrary centroid radius
+local function ZoneMergeable(zn, p)
+	local d = DistYd(zn, p)
+	if d and d <= max(ZONE_MERGE_YD, (zn.r or 0)) then
+		return true
+	end
+	for _, pk in ipairs(zn.pockets or {}) do
+		local pd = DistYd(pk, p)
+		if pd and pd <= ZONE_MERGE_YD then return true end
+	end
+	return false
+end
+
+-- do two zones' farm areas interpenetrate? used by the coalesce
+-- pass that heals splits already recorded under centroid merging
+local function ZonesNear(a, b)
+	local d = DistYd(a, b)
+	if d and d <= max(ZONE_MERGE_YD, a.r or 0) then return true end
+	for _, pk in ipairs(a.pockets or {}) do
+		local pd = DistYd(pk, b)
+		if pd and pd <= ZONE_MERGE_YD then return true end
+		for _, qk in ipairs(b.pockets or {}) do
+			local dd = DistYd(pk, qk)
+			if dd and dd <= ZONE_MERGE_YD then return true end
+		end
+	end
+	return false
+end
+
+-- fold src into dst: counts, loot tables, mob credits, pockets,
+-- and the timestamped event log all combine; respawn keeps the
+-- tightest learned bound
+local function FoldZone(dst, src)
+	dst.kills = (dst.kills or 0) + (src.kills or 0)
+	dst.activeT = (dst.activeT or 0) + (src.activeT or 0)
+	dst.cnt = (dst.cnt or 0) + (src.cnt or 0)
+	dst.vTot = (dst.vTot or 0) + (src.vTot or 0)
+	dst.lastGT = max(dst.lastGT or 0, src.lastGT or 0)
+	dst.resp = min(dst.resp or 9e9, src.resp or 9e9)
+	dst.r = floor(max(dst.r or 0, src.r or 0,
+		(DistYd(dst, src) or 0) + (src.r or 0)))
+	for mob, k in pairs(src.mobs or {}) do
+		dst.mobs = dst.mobs or {}
+		dst.mobs[mob] = (dst.mobs[mob] or 0) + k
+	end
+	for id, q in pairs(src.items or {}) do
+		dst.items[id] = (dst.items[id] or 0) + q
+	end
+	for id, h in pairs(src.hits or {}) do
+		dst.hits[id] = (dst.hits[id] or 0) + h
+	end
+	for _, pk in ipairs(src.pockets or {}) do
+		local dup
+		for _, dpk in ipairs(dst.pockets or {}) do
+			local d = DistYd(dpk, pk)
+			if d and d <= POCKET_YD then
+				-- keep the older 'last' — a longer gap can only
+				-- under-tighten the respawn bound, never inflate it
+				if pk.last and (not dpk.last or pk.last < dpk.last)
+					then dpk.last = pk.last end
+				dup = true break
+			end
+		end
+		if not dup then tinsert(dst.pockets, pk) end
+	end
+	if src.hist then
+		dst.hist = dst.hist or {}
+		for _, e in ipairs(src.hist) do tinsert(dst.hist, e) end
+		table.sort(dst.hist, function(a, b) return a.t < b.t end)
+		while #dst.hist > HIST_MAX do tremove(dst.hist, 1) end
+	end
+end
+
+-- heal split camps: fold same-map same-kind zones whose recorded
+-- areas interpenetrate. Idempotent — converges over repeated calls
+local function CoalesceZones(map)
+	local list = db.zones and db.zones[map]
+	if not list then return end
+	local again = true
+	while again do
+		again = false
+		for i = #list, 1, -1 do
+			for j = i - 1, 1, -1 do
+				if list[i].kind == list[j].kind
+					and ZonesNear(list[j], list[i]) then
+					FoldZone(list[j], list[i])
+					tremove(list, i)
+					again = true
+					break
+				end
+			end
+			if again then break end
+		end
+	end
+end
+
 local function MergeZone(p, kind, items, mob, mobMoney)
 	local list = ZoneList(p.map)
 	if not list then return nil end
 	local now = GetTime()
 	for _, zn in ipairs(list) do
-		if zn.kind == kind then
-			local d = DistYd(zn, p)
-			if d and d <= max(ZONE_MERGE_YD, (zn.r or 0)) then
-				-- kills < ACTIVE_GAP apart = one farming session —
-				-- the zone's rate is kills per active second, so
-				-- breaks don't dilute it
-				if zn.lastGT and now - zn.lastGT < ACTIVE_GAP then
-					zn.activeT = (zn.activeT or 0)
-						+ (now - zn.lastGT)
-				end
-				zn.lastGT = now
-				zn.kills = (zn.kills or 0) + 1
-				if mob then
-					zn.mobs = zn.mobs or {}
-					zn.mobs[mob] = (zn.mobs[mob] or 0) + 1
-				end
-				UpdateYield(zn, items)
-				ZoneEvent(zn, now, items, mobMoney)
-				MergePocket(zn, p)
-				if d > (zn.r or 0) then zn.r = floor(d + 25) end
-				return zn
+		if zn.kind == kind and ZoneMergeable(zn, p) then
+			-- kills < ACTIVE_GAP apart = one farming session —
+			-- the zone's rate is kills per active second, so
+			-- breaks don't dilute it
+			if zn.lastGT and now - zn.lastGT < ACTIVE_GAP then
+				zn.activeT = (zn.activeT or 0) + (now - zn.lastGT)
 			end
+			zn.lastGT = now
+			zn.kills = (zn.kills or 0) + 1
+			if mob then
+				zn.mobs = zn.mobs or {}
+				zn.mobs[mob] = (zn.mobs[mob] or 0) + 1
+			end
+			UpdateYield(zn, items)
+			ZoneEvent(zn, now, items, mobMoney)
+			MergePocket(zn, p)
+			local d = DistYd(zn, p)
+			if d and d > (zn.r or 0) then zn.r = floor(d + 25) end
+			return zn
 		end
 	end
 	local zn = {
@@ -479,6 +575,17 @@ function G.ZoneMobs(zn)
 	return s
 end
 -- repeatable per-kill EV — drops the one-shot lottery items
+-- gear/recipes are LOTTERY income, not farm income — the GoldScout
+-- rule: "gear, recipes and gems are rare world drops" excluded from
+-- the rate. A 1-in-18 BoE ring still counts in 'earned' (you did
+-- loot it) but never in the repeatable projection
+local LOTTERY_TYPE = { Weapon = true, Armor = true, Recipe = true }
+local function ItemLottery(id)
+	if not GetInfo then return false end
+	local ok, t = pcall(function() return select(6, GetInfo(id)) end)
+	return ok and LOTTERY_TYPE[t] or false
+end
+
 -- repeatable per-kill EV at the Wilson lower bound: each item's
 -- contribution is (95%-cautious drop chance) x (avg stack when it
 -- drops) x value — a 2-in-17 lucky drop earns almost nothing
@@ -486,10 +593,12 @@ function G.ZoneSusEV(zn)
 	if not zn.cnt or zn.cnt == 0 then return 0 end
 	local ev = 0
 	for id, qty in pairs(zn.items or {}) do
-		local h = (zn.hits and zn.hits[id]) or min(qty, zn.cnt)
-		if h > 0 then
-			ev = ev + WilsonLow(h, zn.cnt) * (qty / h)
-				* (ItemVal(id) or 0)
+		if not ItemLottery(id) then
+			local h = (zn.hits and zn.hits[id]) or min(qty, zn.cnt)
+			if h > 0 then
+				ev = ev + WilsonLow(h, zn.cnt) * (qty / h)
+					* (ItemVal(id) or 0)
+			end
 		end
 	end
 	return ev
@@ -503,8 +612,12 @@ local KIND_ICON_ITEM = {
 local function BestYieldItem(items)
 	local best, bv
 	for id, qty in pairs(items or {}) do
-		local v = (ItemVal(id) or 0) * qty
-		if not bv or v > bv then best, bv = id, v end
+		-- icon = best FARM drop; a one-off epic ring shouldn't
+		-- brand the camp as a gear farm
+		if not ItemLottery(id) then
+			local v = (ItemVal(id) or 0) * qty
+			if not bv or v > bv then best, bv = id, v end
+		end
 	end
 	return best
 end
@@ -1033,6 +1146,7 @@ function G.Leaderboard()
 		end
 	end
 	for map, list in pairs(db.zones or {}) do
+		CoalesceZones(map)
 		for _, zn in ipairs(list) do
 			local rate = ZoneRate(zn)
 			local ev = ZoneEV(zn)

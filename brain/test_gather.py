@@ -381,6 +381,28 @@ check('node observed block', any('observed' in l for l in lines))
 check('unknown name = no lines',
       len(list(G.DropLines('Some Unfarmed Mob').values())) == 0)
 
+print('== lottery exclusion: gear is not farm income ==')
+# a 5-in-7 BoE ring at 50g would dominate EV without the
+# gear-type exclusion — ZoneSusEV must ignore it entirely
+lua.execute('''
+-- id 7777 unused elsewhere; type=Armor is what matters — a sell
+-- price would trip the vendor floor and poison ItemVal for the
+-- solver tests below (they share ITEM_DB)
+ITEM_DB[7777] = { name = "BoE Ring", link = "|Hitem:7777|h[BoE Ring]|h",
+    type = "Armor" }
+local zn = GoblinMindGather.zones[1419][1]
+zn.items[7777] = 5
+zn.hits[7777] = 5
+''')
+ev0 = G.ZoneSusEV(zn)
+lua.execute('''
+local zn = GoblinMindGather.zones[1419][1]
+zn.items[7777] = nil
+zn.hits[7777] = nil
+''')
+ev1 = G.ZoneSusEV(zn)
+check('EV same with and without ring', abs(ev0 - ev1) < 0.01)
+
 print('== vendor floor + money ==')
 # grays are vendor trash (sell only); others floor at vendor sell
 lua.execute('''
@@ -411,6 +433,34 @@ check('event v = gray-sell + floor + money',
       zn3 is not None
       and list(zn3.hist.values())[-1].v == 150 + 20000 + 500)
 lua.execute('GetLootMoney = nil')
+
+print('== split-camp coalesce ==')
+# two hunt zones whose pockets sit 120yd apart (< 150 merge) —
+# a sprawl split that coalescing must fold into one
+lua.execute('''
+GoblinMindGather.zones[9999] = {
+  { map = 9999, kind = "hunt", kills = 5, cnt = 5,
+    items = { [1] = 5 }, hits = { [1] = 5 },
+    mobs = { A = 5 }, n = 0, w = 0, c = 0, r = 60, lastGT = 1,
+    pockets = { { map = 9999, n = 0, w = 0, c = 0 } },
+    activeT = 60, vTot = 100, hist = { { t = 1, v = 100 } } },
+  { map = 9999, kind = "hunt", kills = 3, cnt = 3,
+    items = { [2] = 3 }, hits = { [2] = 3 },
+    mobs = { B = 3 }, n = 120, w = 0, c = 0, r = 60, lastGT = 2,
+    pockets = { { map = 9999, n = 120, w = 0, c = 0 } },
+    activeT = 30, vTot = 200, hist = { { t = 2, v = 200 } } },
+}
+''')
+G.Leaderboard()
+zl = g.GoblinMindGather.zones[9999]
+check('split zones folded to one', len(list(zl.values())) == 1)
+zm = list(zl.values())[0]
+check('kills combined', zm.kills == 8 and zm.cnt == 8)
+check('mobs combined', zm.mobs['A'] == 5 and zm.mobs['B'] == 3)
+check('items combined', zm['items'][1] == 5 and zm['items'][2] == 3)
+check('pockets kept separate', len(list(zm.pockets.values())) == 2)
+check('hist merged', len(list(zm.hist.values())) == 2
+      and zm.vTot == 300)
 
 print('== target-relative EV ==')
 # 4 flesh over 7 kills x 1g
