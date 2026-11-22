@@ -1,18 +1,7 @@
 local _, GM = ...
 
-local function SM(v)
-	if not v then return "—" end
-	local g = v / 10000
-	if g >= 1000 then
-		local s = format("%.0fkg", g / 1000)
-		return s
-	elseif g >= 1 then
-		return format("%dg %ds", floor(g), floor(v % 10000 / 100))
-	elseif v >= 100 then
-		return format("%ds", floor(v / 100))
-	end
-	return format("%dc", floor(v))
-end
+-- coin-colored short money — the shared formatter
+local SM = GM.MoneyShort
 local W = GM.Widgets
 
 local function TlStr(s)

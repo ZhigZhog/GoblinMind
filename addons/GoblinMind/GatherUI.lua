@@ -99,14 +99,14 @@ local function Refresh()
 	end
 	ui.rows = rows
 	for i = 1, ROWS do
-		local r, fs, rb = rows[i], ui.rowFs[i], ui.rowBtn[i]
+		local r, fs, rb, gpm =
+			rows[i], ui.rowFs[i], ui.rowBtn[i], ui.gpmFs[i]
 		if r then
 			fs:SetText(RowText(r))
 			rb._row = r
-			ui.gpmFs[i]:SetText(
-				((r.conf == "low" or r.conf == "fair") and "~" or "")
-				.. GM.MoneyShort(floor((r.gpm or 0) * 10000))
-				.. "/min")
+			gpm._prefix = (r.conf == "low" or r.conf == "fair")
+				and "~" or ""
+			gpm:SetCopperShort(floor((r.gpm or 0) * 10000))
 			rb:Show()
 		else
 			fs:SetText("")
@@ -304,7 +304,10 @@ local function Toggle()
 			local rb = CreateFrame("Button", nil, ui)
 			rb:SetPoint("TOPLEFT", 10, top - (i - 1) * 20)
 			rb:SetSize(560, 19)
-			local gpm = GM.MakeFontString(rb, GM.FONT_BOLD, 10, "accent")
+			local gpm = W.Money(rb, {
+				font = GM.FONT_BOLD, size = 10, color = "accent",
+				suffix = "/min",
+			})
 			gpm:SetPoint("RIGHT", -6, 0)
 			gpm:SetJustifyH("RIGHT")
 			local fs = GM.MakeFontString(rb, GM.FONT, 10, "text")

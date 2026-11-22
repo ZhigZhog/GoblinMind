@@ -887,3 +887,28 @@ function W.ItemSlot(parent, opts)
 	f:Clear()
 	return f
 end
+
+-- currency text — a fontstring that formats copper through the
+-- coin-colored GM.Money/MoneyShort/Signed formatters, so every
+-- money field gets g/s/c metal colors for free. opts.suffix
+-- appends after every set ("/min" on rate columns); fs._prefix
+-- prepends before the value (a "~" estimate marker).
+function W.Money(parent, opts)
+	opts = opts or {}
+	local fs = GM.MakeFontString(parent, opts.font or GM.FONT,
+		opts.size or 10, opts.color or "text")
+	fs.SetCopper = function(self, c)
+		self:SetText((self._prefix or "") .. GM.Money(c)
+			.. (opts.suffix or ""))
+	end
+	fs.SetCopperShort = function(self, c)
+		self:SetText((self._prefix or "") .. GM.MoneyShort(c)
+			.. (opts.suffix or ""))
+	end
+	fs.SetSigned = function(self, c)
+		self:SetText((self._prefix or "") .. GM.Signed(c)
+			.. (opts.suffix or ""))
+	end
+	if opts.copper then fs:SetCopper(opts.copper) end
+	return fs
+end

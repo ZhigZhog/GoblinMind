@@ -43,7 +43,12 @@ function GM.CC(key)
 	return "|cff" .. (GM.C[key] or GM.C.text)
 end
 
--- TSM-style money: gold accented, silver/copper dim. "12g 34s 56c"
+-- WoW coin colors — each denomination takes its metal color, the
+-- client convention everyone knows: gold/silver/copper
+GM.COIN_G, GM.COIN_S, GM.COIN_C =
+	"|cffffd700", "|cffc7c7cf", "|cffeda55f"
+
+-- full money: "12g 34s 56c" with each unit in its coin color
 function GM.Money(copper)
 	if not copper then return GM.CC("textDim") .. "—|r" end
 	copper = floor(copper + 0.5)
@@ -51,31 +56,34 @@ function GM.Money(copper)
 	local s = floor(copper % 10000 / 100)
 	local c = copper % 100
 	local parts = {}
-	if g > 0 then tinsert(parts, GM.CC("accent") .. g .. "g|r") end
-	if s > 0 or g > 0 then tinsert(parts, GM.CC("textDim") .. s .. "s|r") end
-	tinsert(parts, GM.CC("textDim") .. c .. "c|r")
+	if g > 0 then tinsert(parts, GM.COIN_G .. g .. "g|r") end
+	if s > 0 or g > 0 then tinsert(parts, GM.COIN_S .. s .. "s|r") end
+	tinsert(parts, GM.COIN_C .. c .. "c|r")
 	return table.concat(parts, " ")
 end
 
 -- two-unit money for tight columns: "10g 85s" / "85s 20c" / "34c" —
--- same color split as Money, truncated to the top two units
+-- same coin colors, truncated to the top two units
 function GM.MoneyShort(copper)
 	if not copper then return GM.CC("textDim") .. "—|r" end
 	copper = floor(copper + 0.5)
 	local g = floor(copper / 10000)
 	local s = floor(copper % 10000 / 100)
 	if g > 0 then
-		return GM.CC("accent") .. g .. "g|r"
-			.. (s > 0 and (" " .. GM.CC("textDim") .. s .. "s|r") or "")
+		return GM.COIN_G .. g .. "g|r"
+			.. (s > 0 and (" " .. GM.COIN_S .. s .. "s|r") or "")
 	end
 	if s > 0 then
-		return GM.CC("textDim") .. s .. "s|r"
+		return GM.COIN_S .. s .. "s|r"
 			.. (copper % 100 > 0
-				and (" " .. GM.CC("textDim") .. copper % 100 .. "c|r") or "")
+				and (" " .. GM.COIN_C .. copper % 100 .. "c|r") or "")
 	end
-	return GM.CC("textDim") .. copper .. "c|r"
+	return GM.COIN_C .. copper .. "c|r"
 end
 
+-- signed money for profit columns: "+1g 2s" / "-3s 4c" — the sign
+-- takes pos/err color, the magnitude stays in coin colors so both
+-- signals survive
 function GM.Signed(copper)
 	copper = copper or 0
 	local key = copper >= 0 and "pos" or "err"
