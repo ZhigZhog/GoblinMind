@@ -575,70 +575,120 @@ function M.CreatePane(parent, w)
 				end
 			end
 		end
-		-- explored-art overlay: detailed art where the player has
-		-- actually been — only needed on the parchment base;
-		-- terrain tiles already are the full-detailed look.
-		-- Retail path first (MapExploration pin source — offsets
-		-- are canvas pixel units), then the classic overlay API
-		-- Forever inherits from 1.12
-		local drewExp = terrain ~= nil
-		if not drewExp and C_MapExplorationInfo
-			and C_MapExplorationInfo.GetExploredMapTextures then
-			local okE, exps = pcall(
-				C_MapExplorationInfo.GetExploredMapTextures, mapID)
-			if okE and exps and exps[1] then
-				local pw = w / exps[1].textureWidth
-				local ph = h / exps[1].textureHeight
-				for _, e in ipairs(exps) do
-					local t = put("exptile")
-					local okS, loaded = pcall(t.SetTexture, t,
-						e.fileDataID, "CLAMP", "CLAMP",
-						"TRILINEAR")
-					if not okS then
-						okS, loaded = pcall(t.SetTexture, t,
-							e.fileDataID)
+		-- explored-art overlay over the parchment: the client's
+		-- own overlay tiles via the vendored Leatrix dataset
+		-- (MapRevealData[artID]["w:h:ox:oy"] -> tile fileIDs).
+		-- Gated by GetExploredMapTextures rects when the API
+		-- answers — exact current-state like the default map UI;
+		-- an absent/empty explored list is a custom-zone data gap,
+		-- so the full set draws rather than a bare parchment.
+		if not terrain then
+			local artID = C_Map and C_Map.GetMapArtID
+				and C_Map.GetMapArtID(mapID)
+			local records = artID and GM.MapRevealData
+				and GM.MapRevealData[artID]
+			local okL2, lay2 = pcall(C_Map.GetMapArtLayers, mapID)
+			local lay = okL2 and lay2 and lay2[1]
+			if records and lay and lay.tileWidth
+				and lay.tileWidth > 0 then
+				local explored
+				if C_MapExplorationInfo
+					and C_MapExplorationInfo
+						.GetExploredMapTextures then
+					local okE, exps = pcall(
+						C_MapExplorationInfo
+							.GetExploredMapTextures, mapID)
+					if okE and exps and exps[1] then
+						explored = {}
+						for _, e in ipairs(exps) do
+							explored[format(
+								"%d:%d:%d:%d",
+								e.textureWidth or 0,
+								e.textureHeight or 0,
+								e.offsetX or 0,
+								e.offsetY or 0)] = true
+						end
 					end
-					if okS and loaded ~= false then
-						t:SetSize(e.fileWidth * pw,
-							e.fileHeight * ph)
-						t:SetTexCoord(0, 1, 0, 1)
-						t:SetPoint("TOPLEFT", self, "TOPLEFT",
-							e.offsetX * pw,
-							-e.offsetY * ph)
-						haveArt, drewExp = true, true
-					else
-						t:Hide()
+				end
+				local pw = w / (lay.layerWidth or 1002)
+				local ph = h / (lay.layerHeight or 668)
+				-- partial edge tiles live in power-of-two
+				-- textures (min 16) — GatherLite's fileSize
+				local function fsize(px, ts)
+					if px == ts then return ts end
+					local s = 16
+					while s < px do s = s * 2 end
+					return s
+				end
+				local keys = {}
+				for key in pairs(records) do keys[#keys + 1] = key end
+				table.sort(keys)
+				for _, key in ipairs(keys) do
+					if not explored or explored[key] then
+						local rw, rh, ox, oy = key:match(
+							"^(%d+):(%d+):(%d+):(%d+)$")
+						rw, rh, ox, oy = tonumber(rw), tonumber(rh),
+							tonumber(ox), tonumber(oy)
+						if rw and rw > 0 then
+							local files = {}
+							for id in records[key]:gmatch("%d+") do
+								files[#files + 1] = tonumber(id)
+							end
+							local cols = math.ceil(rw / lay.tileWidth)
+							local rows = math.ceil(rh / lay.tileHeight)
+							for row = 0, rows - 1 do
+								for col = 0, cols - 1 do
+									local fid = files[
+										row * cols + col + 1]
+									if fid then
+										local tw2 = min(
+											lay.tileWidth,
+											rw - col
+												* lay.tileWidth)
+										local th2 = min(
+											lay.tileHeight,
+											rh - row
+												* lay.tileHeight)
+										local t = put("exptile")
+										local okS, loaded =
+											pcall(t.SetTexture, t,
+												fid, "CLAMP",
+												"CLAMP",
+												"TRILINEAR")
+										if not okS then
+											okS, loaded = pcall(
+												t.SetTexture, t, fid)
+										end
+										if okS and loaded ~= false then
+											t:SetTexCoord(0,
+												tw2 / fsize(
+													tw2,
+													lay.tileWidth),
+												0,
+												th2 / fsize(
+													th2,
+													lay.tileHeight))
+											t:SetSize(tw2 * pw,
+												th2 * ph)
+											t:SetPoint("TOPLEFT",
+												self, "TOPLEFT",
+												(ox + col
+													* lay.tileWidth)
+													* pw,
+												-(oy + row
+													* lay.tileHeight)
+													* ph)
+											haveArt = true
+										else
+											t:Hide()
+										end
+									end
+								end
+							end
+						end
 					end
 				end
 			end
-		end
-		-- classic path: explored chunks live on the world-map
-		-- state — select our map, read its overlays, restore
-		if not drewExp and GetNumMapOverlays and GetMapOverlayInfo then
-			if SetMapByID then pcall(SetMapByID, mapID) end
-			local cur = GetCurrentMapAreaID
-				and GetCurrentMapAreaID()
-			if not cur or cur == mapID then
-				-- overlay offsets are pixels on the 1002x668
-				-- detail frame — scale to the pane
-				local pw, ph = w / 1002, h / 668
-				local nOv = GetNumMapOverlays() or 0
-				for i = 1, nOv do
-					local tex, tw, th, ox, oy =
-						GetMapOverlayInfo(i)
-					if tex then
-						local t = put("exptile")
-						t:SetTexture(tex)
-						t:SetSize(tw * pw, th * ph)
-						t:SetPoint("TOPLEFT", self, "TOPLEFT",
-							ox * pw, -oy * ph)
-						haveArt = true
-					else
-						t:Hide()
-					end
-				end
-			end
-			if SetMapToCurrentZone then pcall(SetMapToCurrentZone) end
 		end
 		if not haveArt then
 			local t = put("tile")

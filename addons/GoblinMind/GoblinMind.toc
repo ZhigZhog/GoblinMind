@@ -48,6 +48,7 @@ GBankUI.lua
 SniperUI.lua
 OrdersUI.lua
 GatherUI.lua
+MapRevealData.lua
 GatherMap.lua
 Settings.lua
 ItemInput.lua
