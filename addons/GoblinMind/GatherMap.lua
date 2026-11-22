@@ -11,8 +11,11 @@ GM.GatherMap = {}
 local M = GM.GatherMap
 local G -- GM.Gather, resolved lazily (file order)
 
-local floor, sqrt, atan2, cos, sin = math.floor, math.sqrt,
-	math.atan2, math.cos, math.sin
+local floor, sqrt, cos, sin = math.floor, math.sqrt,
+	math.cos, math.sin
+-- atan2 exists on WoW's Lua 5.1-derived runtime; newer hosts (the
+-- harness) only have two-arg atan
+local atan2 = math.atan2 or function(y, x) return math.atan(y, x) end
 
 -- canvas lookup: retail keeps a ScrollContainer.Child; older/odd
 -- map frames get probed for a canvas-ish child, else the frame
@@ -233,6 +236,296 @@ function M.Refresh()
 				0.4, 0.85, 1.0, 1)
 		end
 	end
+end
+
+-- ======================== window pane ========================
+-- self-contained zone map for the GATHER window: map-art tiles when
+-- the client exposes them (dark fill otherwise), hunt-zone discs
+-- with a centered drop icon, node spawn icons clustered by proximity
+-- (size ∝ group size) with the route polyline through them. Own
+-- pools — the world-map pass above must not reclaim our textures.
+
+local abs = math.abs
+
+local function ItemIcon(id)
+	if not id then return nil end
+	if C_Item and C_Item.GetItemIconByID then
+		local ok, ic = pcall(C_Item.GetItemIconByID, id)
+		if ok and ic then return ic end
+	end
+	if GetItemIcon then
+		local ok, ic = pcall(GetItemIcon, id)
+		if ok and ic then return ic end
+	end
+end
+
+-- normalized map coords for a record; projects world->map for
+-- records captured before the map projection resolved (harness
+-- data, early-login casts)
+local function MapXY(p, mapID)
+	if p.x and p.y then return p.x, p.y end
+	if p.n and p.w and C_Map and C_Map.GetMapPosFromWorldPos
+		and CreateVector2D then
+		local ok, _, mp = pcall(C_Map.GetMapPosFromWorldPos,
+			p.c or 0, CreateVector2D(p.n, p.w), mapID)
+		if ok and mp and mp.x and mp.x >= 0 and mp.x <= 1 then
+			p.x, p.y = mp.x, mp.y
+			return mp.x, mp.y
+		end
+	end
+end
+
+-- map-units per yard near (n,w): project two points a known world
+-- distance apart and measure. Fallback matches the world map's
+-- 1500yd-per-map-width assumption
+local function UnitsPerYard(mapID, p)
+	if p and p.n and p.w and C_Map
+		and C_Map.GetMapPosFromWorldPos and CreateVector2D then
+		local okA, _, a = pcall(C_Map.GetMapPosFromWorldPos,
+			p.c or 0, CreateVector2D(p.n, p.w), mapID)
+		local okB, _, b = pcall(C_Map.GetMapPosFromWorldPos,
+			p.c or 0, CreateVector2D(p.n + 100, p.w), mapID)
+		if okA and okB and a and b then
+			local d = sqrt((b.x - a.x) ^ 2 + (b.y - a.y) ^ 2)
+			if d and d > 1e-6 then return d / 100 end
+		end
+	end
+	return 1 / 1500
+end
+
+-- greedy proximity merge in map units — display-only; the data
+-- layer's tighter merge already ran, this just thins pin spam
+local function Cluster(nodes, mapID, thresh)
+	local out = {}
+	for _, nd in ipairs(nodes) do
+		local x, y = MapXY(nd, mapID)
+		if x then
+			local hit
+			for _, c in ipairs(out) do
+				local dx, dy = x - c.x, y - c.y
+				if dx * dx + dy * dy < thresh * thresh then
+					hit = c break
+				end
+			end
+			if hit then
+				hit.x = (hit.x * hit.n + x) / (hit.n + 1)
+				hit.y = (hit.y * hit.n + y) / (hit.n + 1)
+				hit.n = hit.n + 1
+				hit.nodes[#hit.nodes + 1] = nd
+			else
+				out[#out + 1] = { x = x, y = y, n = 1, nodes = { nd } }
+			end
+		end
+	end
+	return out
+end
+
+function M.CreatePane(parent, w)
+	local pane = CreateFrame("Frame", nil, parent)
+	pane:SetWidth(w)
+	pane.live = {}
+	pane.pool = { tile = {}, disc = {}, line = {}, icon = {}, lbl = {} }
+
+	local function put(kind)
+		local t = tremove(pane.pool[kind])
+		if not t then
+			if kind == "lbl" then
+				t = pane:CreateFontString(nil, "OVERLAY",
+					"GameFontHighlightSmall")
+			elseif kind == "tile" then
+				t = pane:CreateTexture(nil, "BACKGROUND")
+			elseif kind == "disc" then
+				t = pane:CreateTexture(nil, "OVERLAY")
+				t:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+				pcall(function()
+					t:SetMaskTexture(
+						"Interface\\CharacterFrame\\TempPortraitAlphaMask")
+				end)
+			elseif kind == "line" then
+				t = pane:CreateTexture(nil, "OVERLAY", nil, 1)
+				t:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+			else -- icon
+				t = pane:CreateTexture(nil, "OVERLAY", nil, 2)
+			end
+		end
+		t:ClearAllPoints()
+		t:Show()
+		pane.live[#pane.live + 1] = { kind, t }
+		return t
+	end
+
+	local function line(x1, y1, x2, y2, r, g, b, a)
+		local dx, dy = x2 - x1, y2 - y1
+		local len = sqrt(dx * dx + dy * dy)
+		if len < 2 then return end
+		local t = put("line")
+		t:SetSize(len, 2)
+		t:SetPoint("CENTER", pane, "TOPLEFT",
+			(x1 + x2) / 2, -(y1 + y2) / 2)
+		if t.SetRotation then
+			pcall(t.SetRotation, t, atan2(-dy, dx))
+		end
+		t:SetVertexColor(r, g, b, a or 0.9)
+	end
+
+	local function clear()
+		for _, e in ipairs(pane.live) do
+			e[2]:Hide()
+			pane.pool[e[1]][#pane.pool[e[1]] + 1] = e[2]
+		end
+		wipe(pane.live)
+	end
+	pane.Clear = clear
+
+	-- art tiles cover a TOPLEFT-anchored rect sized to the art's own
+	-- aspect (letterboxed into the pane); overlays map 0-1 coords
+	-- onto the same rect
+	function pane:SetData(mapID, route)
+		clear()
+		local G = GM.Gather
+		local w = self:GetWidth()
+		if not (mapID and w and w > 0) then return end
+
+		local aspect = 1.5 -- fallback when the art API is missing
+		if C_Map and C_Map.GetMapArtLayers then
+			local okL, layers = pcall(C_Map.GetMapArtLayers, mapID)
+			local lay = okL and layers and layers[1]
+			if lay and lay.layerWidth and lay.layerHeight
+				and lay.layerHeight > 0 then
+				aspect = lay.layerWidth / lay.layerHeight
+			end
+		end
+		local h = floor(w / aspect + 0.5)
+		self:SetHeight(h)
+
+		local haveArt = false
+		if C_Map and C_Map.GetMapArtLayers
+			and C_Map.GetMapArtLayerTextures then
+			local okL, layers = pcall(C_Map.GetMapArtLayers, mapID)
+			if okL and layers then
+				for li, lay in ipairs(layers) do
+					local okT, texs = pcall(
+						C_Map.GetMapArtLayerTextures, mapID, li)
+					local cols = max(1, floor(
+						(lay.layerWidth or 1002)
+						/ max(1, lay.tileWidth or 256) + 0.5))
+					local rows = max(1, floor(
+						(lay.layerHeight or 668)
+						/ max(1, lay.tileHeight or 256) + 0.5))
+					if okT and texs then
+						local tw, th = w / cols, h / rows
+						for i, fileID in ipairs(texs) do
+							local t = put("tile")
+							t:SetTexture(fileID)
+							t:SetSize(tw, th)
+							t:SetPoint("TOPLEFT", self, "TOPLEFT",
+								((i - 1) % cols) * tw,
+								-floor((i - 1) / cols) * th)
+							haveArt = true
+						end
+					end
+				end
+			end
+		end
+		if not haveArt then
+			local t = put("tile")
+			t:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+			t:SetVertexColor(0.04, 0.06, 0.05, 1)
+			t:SetAllPoints()
+		end
+		if not G then return end
+
+		local zones = G.ZoneList(mapID) or {}
+		local nodes = G.NodeList(mapID) or {}
+		local ref = nodes[1] or zones[1]
+		local upy = UnitsPerYard(mapID, ref)
+
+		-- hunt zones under everything: disc + drop icon at center
+		for _, zn in ipairs(zones) do
+			local x, y = MapXY(zn, mapID)
+			if x then
+				local col = G.KIND_COLOR[zn.kind] or { 1, 1, 1 }
+				local rPx = max(10, (zn.r or 60) * upy * w)
+				local px, py = x * w, y * h
+				local d = put("disc")
+				d:SetSize(rPx * 2, rPx * 2)
+				d:SetPoint("CENTER", self, "TOPLEFT", px, -py)
+				d:SetVertexColor(col[1], col[2], col[3], 0.16)
+				local seg = 24
+				for i = 1, seg do
+					local a0 = (i - 1) / seg * 6.2831853
+					local a1 = i / seg * 6.2831853
+					line(px + cos(a0) * rPx, py + sin(a0) * rPx,
+						px + cos(a1) * rPx, py + sin(a1) * rPx,
+						col[1], col[2], col[3], 0.5)
+				end
+				local ic = put("icon")
+				local fid = ItemIcon(G.ZoneIconID(zn))
+				if fid then
+					ic:SetTexture(fid)
+				else
+					ic:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+					ic:SetVertexColor(col[1], col[2], col[3], 0.9)
+				end
+				ic:SetSize(18, 18)
+				ic:SetPoint("CENTER", self, "TOPLEFT", px, -py)
+			end
+		end
+
+		-- node clusters; icon = best drop, size ∝ group size
+		local clusters = Cluster(nodes, mapID, 70 * upy)
+		for _, c in ipairs(clusters) do
+			local rep = c.nodes[1]
+			local col = G.KIND_COLOR[rep.kind] or { 1, 1, 1 }
+			local best, bv
+			for _, nd in ipairs(c.nodes) do
+				local id = G.NodeIconID(nd)
+				if id then best = id break end
+			end
+			local sz = math.min(30, 12 + 5 * sqrt(c.n))
+			local ic = put("icon")
+			local fid = ItemIcon(best)
+			if fid then
+				ic:SetTexture(fid)
+				ic:SetVertexColor(1, 1, 1, 1)
+			else
+				ic:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+				ic:SetVertexColor(col[1], col[2], col[3], 0.95)
+			end
+			ic:SetSize(sz, sz)
+			ic:SetPoint("CENTER", self, "TOPLEFT",
+				c.x * w, -c.y * h)
+			if c.n > 1 then
+				local l = put("lbl")
+				l:SetPoint("TOP", ic, "BOTTOM", 0, -1)
+				l:SetText(tostring(c.n))
+				l:SetTextColor(col[1], col[2], col[3])
+			end
+		end
+
+		-- route polyline through its stops
+		local run = G.Route and G.Route()
+		local r = route
+			or (run and run.route and run.route.map == mapID
+				and run.route)
+			or M.RouteFor(mapID)
+		local stops = (run and run.route and run.route.map == mapID
+				and run.stops)
+			or (r and r.stops)
+		if stops and #stops > 1 then
+			for i = 1, #stops do
+				local a, b = stops[i], stops[i % #stops + 1]
+				local ax, ay = MapXY(a, mapID)
+				local bx, by = MapXY(b, mapID)
+				if ax and bx then
+					line(ax * w, ay * h, bx * w, by * h,
+						0.4, 0.85, 1.0, 0.85)
+				end
+			end
+		end
+	end
+
+	return pane
 end
 
 -- refresh on map show + a slow ticker while it's open (depleted

@@ -2,9 +2,10 @@ local _, GM = ...
 
 -- GATHER window — the leaderboard over every farmable we've learned:
 -- node loops (herb/mine, solver-built) and hunt zones (skin/cloth,
--- kill-rate modeled). Rows sort by gold/min. Controls rebuild the
--- current map's loop, start/stop the waypoint run, and pick the
--- transport speed the model assumes.
+-- kill-rate modeled). Rows sort by gold/min; the right pane renders
+-- the selected zone's map with node icons + the route polyline (or
+-- a hunt-zone disc). Controls rebuild the current map's loop,
+-- start/stop the waypoint run, and pick the transport speed.
 
 GM.GatherUI = {}
 local UI = GM.GatherUI
@@ -12,7 +13,7 @@ local W = GM.Widgets
 local Btn = W.Btn
 
 local ui
-local ROWS = 14
+local ROWS = 15
 
 local function KindLabel(k)
 	return ({ herb = "HERB", mine = "MINE",
@@ -41,6 +42,33 @@ local function RowText(r)
 		r.stops and #r.stops or 0,
 		GM.Gather.SecondsText(r.lapObs or r.lapSec),
 		GM.MoneyShort(floor((r.evLoop or 0) * 10000)))
+end
+
+-- the pane shows the selected row's map; default = wherever the
+-- player stands, else whichever map has any data
+local function PaneMap()
+	if ui and ui.mapSel then return ui.mapSel end
+	local m = GM.Gather.CurrentMap()
+	if m then return m end
+	for k in pairs(GoblinMindGather.nodes or {}) do return k end
+	for k in pairs(GoblinMindGather.zones or {}) do return k end
+end
+
+local function DrawPane()
+	if not ui or not ui.pane then return end
+	local map = PaneMap()
+	ui.mapTitle:SetText(map and GM.Gather.ZoneName(map)
+		or "zone map")
+	local r = ui.mapRow and not ui.mapRow.area and ui.mapRow
+	ui.pane:SetData(map, r)
+	if map then
+		ui.mapLegend:SetText(
+			"icons = best drop · size = spawns grouped · "
+			.. "blue loop = route · discs = hunt zones")
+	else
+		ui.mapLegend:SetText(
+			"no farm data yet — gather nodes or kill mobs to seed")
+	end
 end
 
 local function Refresh()
@@ -80,6 +108,7 @@ local function Refresh()
 	end
 	local sp = GM.Gather.SPEEDS[GM.Gather.SpeedIx()]
 	ui.speedBtn:SetText("speed: " .. sp.name)
+	DrawPane()
 end
 
 local function Build()
@@ -99,6 +128,7 @@ local function Build()
 	if r then
 		r.zoneName = GM.Gather.ZoneName(p)
 		if GM.GatherMap then GM.GatherMap.NoteRoute(r) end
+		ui.mapSel = p
 		GM.Print(GM.CC("accent") .. "route: " .. r.zoneName .. "|r  "
 			.. #r.stops .. " stops, "
 			.. GM.Gather.SecondsText(r.lapSec) .. "/lap, ~"
@@ -115,11 +145,8 @@ local function Toggle()
 		ui = W.Window({
 			name = "GoblinMindGatherUI",
 			title = "GATHER",
-			w = 620, h = 380, tab = "gather",
+			w = 1020, h = 540, tab = "gather",
 		})
-
-		ui.count = GM.MakeFontString(ui, GM.FONT, 9, "textDim")
-		ui.count:SetPoint("TOPRIGHT", -12, -14)
 
 		ui.detail = GM.MakeFontString(ui, GM.FONT, 10, "text")
 		ui.detail:SetPoint("TOPLEFT", 14, -32)
@@ -129,7 +156,7 @@ local function Toggle()
 		ui.build = Btn(ui, 80, "BUILD", Build)
 		ui.build:SetPoint("TOPLEFT", 14, y)
 		ui.start = Btn(ui, 80, "START", function()
-			local p = GM.Gather.CurrentMap()
+			local p = ui.mapSel or GM.Gather.CurrentMap()
 			local r = p and GM.GatherMap and GM.GatherMap.RouteFor(p)
 			if r then
 				GM.Gather.StartRoute(r)
@@ -152,13 +179,18 @@ local function Toggle()
 		end)
 		ui.speedBtn:SetPoint("LEFT", ui.stop, "RIGHT", 6, 0)
 
-		-- leaderboard rows
+		-- leaderboard: left column
+		local listTop = y - 26
+		ui.count = GM.MakeFontString(ui, GM.FONT, 9, "textDim")
+		ui.count:SetPoint("TOPLEFT", 14, listTop)
+		ui.count:SetJustifyH("LEFT")
+
 		ui.rowFs, ui.gpmFs, ui.rowBtn = {}, {}, {}
-		local top = y - 24
+		local top = listTop - 16
 		for i = 1, ROWS do
 			local rb = CreateFrame("Button", nil, ui)
 			rb:SetPoint("TOPLEFT", 10, top - (i - 1) * 20)
-			rb:SetSize(600, 19)
+			rb:SetSize(560, 19)
 			local fs = GM.MakeFontString(rb, GM.FONT, 10, "text")
 			fs:SetPoint("LEFT", 4, 0)
 			fs:SetJustifyH("LEFT")
@@ -168,6 +200,9 @@ local function Toggle()
 			rb:SetScript("OnClick", function(s)
 				local r = s._row
 				if not r then return end
+				-- pane follows the pick either way
+				ui.mapSel = r.map
+				ui.mapRow = r
 				if r.area then
 					-- hunt zones: waypoint to the centroid
 					GM.Gather.PointAt(r.zone)
@@ -183,6 +218,20 @@ local function Toggle()
 			W.HoverTint(rb)
 			ui.rowFs[i], ui.gpmFs[i], ui.rowBtn[i] = fs, gpm, rb
 		end
+
+		-- right column: the zone map pane
+		local mp, mt = W.TitledPanel(ui, "zone map")
+		mp:SetPoint("TOPLEFT", 590, listTop)
+		mp:SetSize(416, 420)
+		ui.mapTitle = mt
+		ui.pane = GM.GatherMap
+			and GM.GatherMap.CreatePane(mp, 404)
+		if ui.pane then
+			ui.pane:SetPoint("TOPLEFT", 6, -20)
+		end
+		ui.mapLegend = GM.MakeFontString(mp, GM.FONT, 9, "textDim")
+		ui.mapLegend:SetPoint("BOTTOMLEFT", 8, 6)
+		ui.mapLegend:SetJustifyH("LEFT")
 
 		ui.hint = GM.MakeFontString(ui, GM.FONT, 9, "textDim")
 		ui.hint:SetPoint("BOTTOMLEFT", 12, 10)

@@ -282,6 +282,28 @@ end
 G.ZoneRate = ZoneRate
 G.ZoneEV = ZoneEV
 
+-- display item for a node/zone: the most valuable thing it drops.
+-- itemIDs picked for guaranteed presence on this client
+local KIND_ICON_ITEM = {
+	herb = 765, mine = 2770, skin = 2318, cloth = 2589,
+}
+local function BestYieldItem(items)
+	local best, bv
+	for id, qty in pairs(items or {}) do
+		local v = (Price(id) or 0) * qty
+		if not bv or v > bv then best, bv = id, v end
+	end
+	return best
+end
+function G.NodeIconID(nd)
+	local y = db.yields and db.yields[nd.name or nd.kind]
+	return (y and BestYieldItem(y.items))
+		or KIND_ICON_ITEM[nd.kind]
+end
+function G.ZoneIconID(zn)
+	return BestYieldItem(zn.items) or KIND_ICON_ITEM[zn.kind]
+end
+
 function G.ZoneName(map)
 	if C_Map and C_Map.GetMapInfo then
 		local ok, info = pcall(C_Map.GetMapInfo, map)

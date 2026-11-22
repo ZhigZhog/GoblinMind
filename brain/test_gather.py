@@ -23,14 +23,42 @@ lua.execute(open('brain/sim/wow_stub.lua', encoding='utf-8').read())
 
 # ---- gather-specific stubs on top of the shared sim shim ----
 lua.execute(r'''
--- the shared shim's frames lack visibility methods Gather needs
+-- the shared shim's frames lack visibility + region methods Gather
+-- and the map pane need — give every frame the full widget surface
 local _CreateFrame = CreateFrame
+local function Region()
+	local r = { _shown = true, _pts = {}, _w = 0, _h = 0 }
+	function r:Show() self._shown = true end
+	function r:Hide() self._shown = false end
+	function r:IsShown() return self._shown end
+	function r:SetPoint(...) self._pts[#self._pts + 1] = { ... } end
+	function r:ClearAllPoints() self._pts = {} end
+	function r:SetAllPoints() end
+	function r:SetSize(w, h) self._w, self._h = w, h end
+	function r:SetWidth(w) self._w = w end
+	function r:SetHeight(h) self._h = h end
+	function r:GetWidth() return self._w or 0 end
+	function r:GetHeight() return self._h or 0 end
+	function r:SetTexture(t) self._tex = t end
+	function r:SetVertexColor(...) self._col = { ... } end
+	function r:SetRotation(a) self._rot = a end
+	function r:SetMaskTexture(m) self._mask = m end
+	function r:SetText(s) self._text = s end
+	function r:GetText() return self._text end
+	function r:SetTextColor() end
+	function r:SetJustifyH() end
+	function r:SetParent(p) self._parent = p end
+	function r:CreateTexture(...) local t = Region() return t end
+	function r:CreateFontString(...) local s = Region() return s end
+	return r
+end
 function CreateFrame(kind, name, parent)
 	local f = _CreateFrame(kind, name, parent)
+	for k, v in pairs(Region()) do
+		if type(v) == "function" then f[k] = v end
+	end
+	f._pts, f._w, f._h = {}, 0, 0
 	f._shown = true
-	function f:Show() self._shown = true end
-	function f:Hide() self._shown = false end
-	function f:IsShown() return self._shown end
 	function f:SetScript(k, fn) self._scripts[k] = fn end
 	return f
 end
@@ -88,9 +116,28 @@ GM.ItemName = function(id)
 end
 ''')
 
+# map art + item icons for the window pane
+lua.execute(r'''
+C_Map.GetMapArtLayers = function(m)
+	return { { layerWidth = 1002, layerHeight = 668,
+	           tileWidth = 256, tileHeight = 256 } }
+end
+C_Map.GetMapArtLayerTextures = function(m, li)
+	if li ~= 1 then return nil end
+	return { 1001, 1002, 1003, 1004, 1005, 1006,
+	         1007, 1008, 1009, 1010, 1011, 1012 }
+end
+function GetItemIcon(id) return 40000 + id end
+''')
+
 # load Gather.lua with the addon vararg contract
 src = open('addons/GoblinMind/Gather.lua', encoding='utf-8').read()
 chunk = g.load(src, '@Gather.lua')
+chunk('GoblinMind', g.GM)
+
+# GatherMap for the window-pane checks
+src = open('addons/GoblinMind/GatherMap.lua', encoding='utf-8').read()
+chunk = g.load(src, '@GatherMap.lua')
 chunk('GoblinMind', g.GM)
 
 G = g.GM.Gather
@@ -260,6 +307,42 @@ check('sorted by gpm', all(
     for i in range(1, len(rows))))
 row0 = lua.table_from(rows)[1]
 check('best row first has gpm', row0.gpm > 0)
+
+print('== window pane: art + clustered icons + route ==')
+M = g.GM.GatherMap
+parent = g.CreateFrame('Frame')
+pane = M.CreatePane(parent, 400)
+pane.SetData(pane, 1420, r)
+kinds = [e[1] for e in pane.live.values()]
+check('map art tiled', kinds.count('tile') == 12)
+check('pane sized to art aspect',
+      abs(pane.GetHeight(pane) - 267) <= 1)
+icons = [e[2] for e in pane.live.values() if e[1] == 'icon']
+check('clusters drawn as icons', len(icons) == 5)
+# icon texture = GetItemIcon(best yield item): rich cluster -> 9999
+texs = set(ic._tex for ic in icons)
+check('item icon on clustered node', 49999 in texs)
+check('poor vein icon too', 48888 in texs)
+# size scales with group: find the big one
+szs = sorted(ic._w for ic in icons)
+check('group size scales icon', szs[-1] > szs[0])
+# exactly one cluster carries a count badge of 4
+lbls = [e[2] for e in pane.live.values() if e[1] == 'lbl']
+check('group badge shows count',
+      any(l._text == '4' for l in lbls))
+check('route polyline drawn',
+      kinds.count('line') == 4)
+
+print('== window pane: hunt-zone disc + icon ==')
+pane.SetData(pane, 1419, None)
+kinds = [e[1] for e in pane.live.values()]
+check('zone discs drawn', kinds.count('disc') == 2)
+icons = [e[2] for e in pane.live.values() if e[1] == 'icon']
+texs = set(ic._tex for ic in icons)
+check('cloth icon at zone center', 42589 in texs)
+check('skin icon at zone center', 42318 in texs)
+check('nodes still drawn on same map',
+      kinds.count('icon') >= 4)
 
 print()
 fails = [n for n, ok in CHECKS if not ok]
