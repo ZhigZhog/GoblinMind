@@ -13,7 +13,7 @@ local W = GM.Widgets
 local Btn = W.Btn
 
 local ui
-local ROWS = 20
+local ROWS = 24              -- row-button pool; ~21 show at once
 local KIND_ORDER = { "herb", "mine", "skin", "hunt", "cloth", "cook" }
 
 local function KindLabel(k)
@@ -253,72 +253,72 @@ local function Refresh()
 		end
 	end
 	ui.rows = rows
-	-- scroll window over the filtered rows (mousewheel on ui)
-	ui.scroll = math.min(ui.scroll or 0,
-		math.max(0, #rows - ROWS))
-	-- expansion state: the clicked row keeps full alpha, every
-	-- other row fades, and rows BELOW it physically drop to make
-	-- room for the drop tree — a real expansion, not an overlay.
-	-- Scrolled out of view, the tree hides but the state survives
-	-- so scrolling back restores it
-	local exIdx, exLines
+	-- content model: every row 20px; the expanded row adds its
+	-- tree's full height right below it. Rows + tree live on the
+	-- scroll child's content plane — ui.scroll is a PIXEL offset
+	-- and the clip culls the edges, so truncated content is always
+	-- reachable by wheel
+	local exIdx, exLines, extra = nil, nil, 0
 	for i, r in ipairs(rows) do
 		if RowID(r) == ui.expanded then exIdx = i break end
 	end
 	if not exIdx then ui.expanded = nil end
-	if exIdx then exLines = DetailLines(rows[exIdx]) end
-	local exVis = exIdx and (exIdx - ui.scroll)
-	local exShown = exVis and exVis >= 1 and exVis <= ROWS
-	-- the tree only gets the space below the expanded row down to
-	-- the content floor — a longer list truncates with "+N more"
-	-- rather than spilling past the window
-	local exAvail = 0
-	if exShown then
-		exAvail = (ui._rowTop or -112) - (exVis - 1) * 20
-			- 19 - (ui._floorY or -526)
-	end
-	-- item rows are taller than header text — sum real heights
-	local extra = 0
-	if exLines and exShown then
+	if exIdx then
+		exLines = DetailLines(rows[exIdx])
 		for _, ln in ipairs(exLines) do
-			local lh = ln.item and 16 or 12
-			if extra + lh > exAvail then break end
-			extra = extra + lh
+			extra = extra + (ln.item and 16 or 12)
 		end
 		extra = extra + 6
 	end
-	-- rows pushed past the window bottom hide instead of
-	-- overrunning the hint line (content floor ≈ -530 of 560)
-	local maxOff = (ui._rowTop or -112) + 511
-	for vi = 1, ROWS do
-		local i = vi + ui.scroll
-		local r, fs, rb, gpm =
-			rows[i], ui.rowFs[vi], ui.rowBtn[vi], ui.gpmFs[vi]
-		local off = (vi - 1) * 20
-			+ (exShown and i > exIdx and extra or 0)
-		if r and off <= maxOff then
-			rb:ClearAllPoints()
-			rb:SetPoint("TOPLEFT", 10, (ui._rowTop or -112) - off)
-			fs:SetText(RowText(r))
-			rb._row = r
-			gpm._prefix = (r.conf == "low" or r.conf == "fair")
-				and "~" or ""
-			gpm:SetCopperShort(floor((r.gpm or 0)),
-				r.unitSuffix)
-			rb:SetAlpha(ui.expanded
-				and RowID(r) ~= ui.expanded and 0.3 or 1)
-			rb:Show()
-		else
-			fs:SetText("")
-			rb._row = nil
-			ui.gpmFs[vi]:SetText("")
-			rb:Hide()
+	local viewH = ui.clip and ui.clip:GetHeight() or 0
+	if viewH <= 0 then viewH = 400 end   -- anchors unresolved yet
+	local contentH = #rows * 20 + extra
+	ui._contentH = contentH
+	ui.scroll = math.min(math.max(0, ui.scroll or 0),
+		math.max(0, contentH - viewH))
+	if ui.clip then ui.clip:SetVerticalScroll(ui.scroll) end
+	if ui.inner then
+		ui.inner:SetHeight(math.max(1, contentH))
+	end
+	-- pool buttons only render rows intersecting the viewport
+	local y, vi, firstVis, lastVis = 0, 0, nil, nil
+	for i, r in ipairs(rows) do
+		local topY = y
+		y = y + 20
+		if i == exIdx then y = y + extra end
+		if topY + 20 > ui.scroll and topY < ui.scroll + viewH then
+			vi = vi + 1
+			local rb, fs, gpm =
+				ui.rowBtn[vi], ui.rowFs[vi], ui.gpmFs[vi]
+			if rb then
+				firstVis = firstVis or i
+				lastVis = i
+				rb:ClearAllPoints()
+				rb:SetPoint("TOPLEFT", 0, -topY)
+				fs:SetText(RowText(r))
+				rb._row = r
+				gpm._prefix = (r.conf == "low" or r.conf == "fair")
+					and "~" or ""
+				gpm:SetCopperShort(floor((r.gpm or 0)),
+					r.unitSuffix)
+				rb:SetAlpha(ui.expanded
+					and RowID(r) ~= ui.expanded and 0.3 or 1)
+				rb:Show()
+			end
 		end
+	end
+	for b = vi + 1, #ui.rowBtn do
+		ui.rowFs[b]:SetText("")
+		ui.gpmFs[b]:SetText("")
+		ui.rowBtn[b]._row = nil
+		ui.rowBtn[b]:Hide()
 	end
 	if ui.tree then
 		ui.tree:Clear()
-		if exShown then
-			ui.tree:Fill(exLines, ui.rowBtn[exVis], exAvail)
+		if exIdx and exLines then
+			-- tree top = expanded row's bottom on the content
+			-- plane (rows before it are all 20px)
+			ui.tree:Fill(exLines, exIdx * 20)
 		end
 	end
 	local all = GM.Gather.Leaderboard()
@@ -329,7 +329,8 @@ local function Refresh()
 		or (filtered and (#rows .. " of " .. #all .. " shown"))
 		or (#rows > 0 and (#rows .. " routes + zones")
 			or "no data yet — gather nodes or farm mobs to seed"))
-	W.ScrollText(ui.scrollFs, ui.scroll, ROWS, #rows)
+	W.ScrollText(ui.scrollFs, (firstVis or 1) - 1,
+		math.max(0, (lastVis or 0) - (firstVis or 1) + 1), #rows)
 	-- detail line for the selected/current-map route
 	local run = GM.Gather.Route()
 	if run then
@@ -802,28 +803,39 @@ local function Toggle()
 		ui.scrollFs:SetPoint("TOPRIGHT", -598, listTop)
 		ui.scrollFs:SetJustifyH("RIGHT")
 
-		-- wheel anywhere in the window pages the list — the row
-		-- buttons don't claim the wheel, so it lands here
-		ui:EnableMouseWheel(true)
-		ui:SetScript("OnMouseWheel", function(_, d)
-			local mx = math.max(0, #(ui.rows or {}) - ROWS)
+		-- list region is a clipped ScrollFrame: row buttons and
+		-- expansion trees live on the scroll child at content-y;
+		-- ui.scroll is a pixel offset applied via SetVerticalScroll
+		ui.clip = CreateFrame("ScrollFrame", nil, ui)
+		ui.clip:SetPoint("TOPLEFT", 10, listTop - 16)
+		ui.clip:SetPoint("BOTTOMRIGHT", -598, 30)
+		ui.inner = CreateFrame("Frame", nil, ui.clip)
+		ui.inner:SetSize(560, 1)
+		ui.clip:SetScrollChild(ui.inner)
+
+		local function Wheel(_, d)
+			local vh = ui.clip:GetHeight() or 0
+			if vh <= 0 then vh = 400 end
+			local mx = math.max(0, (ui._contentH or 0) - vh)
 			local ns = math.min(mx,
-				math.max(0, (ui.scroll or 0) - d * 3))
+				math.max(0, (ui.scroll or 0) - d * 40))
 			if ns ~= (ui.scroll or 0) then
 				ui.scroll = ns
+				ui.clip:SetVerticalScroll(ns)
 				Refresh()
 			end
-		end)
+		end
+		ui:EnableMouseWheel(true)
+		ui:SetScript("OnMouseWheel", Wheel)
+		-- the clip covers the list — it needs the handler too, or
+		-- wheeling over rows would eat the event
+		ui.clip:EnableMouseWheel(true)
+		ui.clip:SetScript("OnMouseWheel", Wheel)
 
 		ui.rowFs, ui.gpmFs, ui.rowBtn = {}, {}, {}
-		local top = listTop - 16
-		ui._rowTop = top
-		-- expansion floor: the hint line lives at window bottom —
-		-- trees truncate at this y instead of spilling over it
-		ui._floorY = -526
 		for i = 1, ROWS do
-			local rb = CreateFrame("Button", nil, ui)
-			rb:SetPoint("TOPLEFT", 10, top - (i - 1) * 20)
+			local rb = CreateFrame("Button", nil, ui.inner)
+			rb:SetPoint("TOPLEFT", 0, -(i - 1) * 20)
 			rb:SetSize(560, 19)
 			local gpm = W.Money(rb, {
 				font = GM.FONT_BOLD, size = 10, color = "accent",
@@ -841,12 +853,13 @@ local function Toggle()
 			rb:SetScript("OnClick", function(s)
 				local r = s._row
 				if not r then return end
-				-- toggle the drop-tree expansion under this row
+				-- toggle the drop-tree expansion under this row —
+				-- collapsing it also drops the map highlight
 				local id = RowID(r)
-				ui.expanded = (ui.expanded == id) and nil or id
-				-- pane follows the pick either way
+				local opening = ui.expanded ~= id
+				ui.expanded = opening and id or nil
 				ui.mapSel = r.map
-				ui.mapRow = r
+				ui.mapRow = opening and r or nil
 				if r.mob then
 					-- mob rows navigate to the mob's best zone
 					if r.zone then
@@ -883,51 +896,26 @@ local function Toggle()
 			ui.rowFs[i], ui.gpmFs[i], ui.rowBtn[i] = fs, gpm, rb
 		end
 
-		-- expansion pool: headers fontstrings + item rows, all
-		-- parented to `ui` itself — the same surface the status
-		-- line uses, which provably renders here (a wrapper
-		-- frame's draw level can lose to the row buttons'
-		-- auto-assigned levels)
+		-- expansion pool on the scroll child — same surface the
+		-- row buttons use, so its draw level can't lose. The clip
+		-- culls overflow; every line draws at its content-y
 		ui.tree = { fs = {}, items = {} }
 		function ui.tree:Clear()
 			for _, f in ipairs(self.fs) do f:Hide() end
 			for _, r in ipairs(self.items) do r:Hide() end
 		end
-		function ui.tree:Fill(lines, anchor, avail)
-			local fi, ri, y = 0, 0, -2
-			local left = avail or 1e6
-			for i, ln in ipairs(lines) do
-				local lh = ln.item and 16 or 12
-				if -y + lh > left then
-					-- truncated: one dim "+N more" line if there's
-					-- room for it, else stop silently
-					if -y + 12 <= left then
-						fi = fi + 1
-						local f = self.fs[fi]
-						if not f then
-							f = GM.MakeFontString(ui,
-								GM.FONT, 9, "text")
-							f:SetJustifyH("LEFT")
-							self.fs[fi] = f
-						end
-						f:ClearAllPoints()
-						f:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT",
-							12, y - 1)
-						f:SetText(GM.CC("textDim") .. "   +"
-							.. (#lines - i + 1) .. " more|r")
-						f:Show()
-					end
-					break
-				end
+		function ui.tree:Fill(lines, topY)
+			local fi, ri, y = 0, 0, -(topY or 0) - 2
+			for _, ln in ipairs(lines) do
 				if ln.item then
 					ri = ri + 1
 					local rr = self.items[ri]
 					if not rr then
-						rr = W.ItemRow(ui, { h = 16, icon = 13 })
+						rr = W.ItemRow(ui.inner, { h = 16, icon = 13 })
 						self.items[ri] = rr
 					end
 					rr:ClearAllPoints()
-					rr:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT",
+					rr:SetPoint("TOPLEFT", ui.inner, "TOPLEFT",
 						10, y)
 					rr:SetWidth(548)
 					rr:SetItem({
@@ -944,12 +932,13 @@ local function Toggle()
 					fi = fi + 1
 					local f = self.fs[fi]
 					if not f then
-						f = GM.MakeFontString(ui, GM.FONT, 9, "text")
+						f = GM.MakeFontString(ui.inner,
+							GM.FONT, 9, "text")
 						f:SetJustifyH("LEFT")
 						self.fs[fi] = f
 					end
 					f:ClearAllPoints()
-					f:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT",
+					f:SetPoint("TOPLEFT", ui.inner, "TOPLEFT",
 						12, y - 1)
 					f:SetText(ln.h)
 					f:Show()
