@@ -783,3 +783,107 @@ function W.GoldEdit(parent, w)
 	function h:SetFocus() h.g:SetFocus() end
 	return h
 end
+
+-- W.ItemSlot(parent, opts) — the shared item-target strip lifted
+-- from the planner header: bordered icon slot (real item tooltip
+-- on hover) + name + meta sub-line, accepting drag/drop,
+-- click-with-item-on-cursor, and modified-click passthrough.
+-- opts: w, h, icon, hint, nameSize, subSize, onItem(id, link).
+-- Fields: .icon .iconBtn .name .sub · .itemID .itemLink
+-- Methods: :SetItem(id, link) paints it; :Clear() back to hint.
+function W.ItemSlot(parent, opts)
+	opts = opts or {}
+	local h = opts.h or 56
+	local iconSz = opts.icon or (h - 12)
+	local f = CreateFrame("Button", nil, parent)
+	f:SetHeight(h)
+	if opts.w then f:SetWidth(opts.w) end
+	GM.Panel(f, "contMedium")
+	if GM.ChromePanel then GM.ChromePanel(f) end
+	f:SetScript("OnEnter", function() GM.Panel(f, "contHigh") end)
+	f:SetScript("OnLeave", function() GM.Panel(f, "contMedium") end)
+
+	local iconBox = CreateFrame("Frame", nil, f)
+	iconBox:SetSize(iconSz, iconSz)
+	iconBox:SetPoint("LEFT", 6, 0)
+	GM.Panel(iconBox, "contHighest", "outlineVar")
+	if GM.ChromePanel then GM.ChromePanel(iconBox) end
+	f.icon = iconBox:CreateTexture(nil, "ARTWORK")
+	f.icon:SetSize(iconSz - 4, iconSz - 4)
+	f.icon:SetPoint("CENTER")
+	-- hover → real item tooltip (textures can't take scripts)
+	f.iconBtn = CreateFrame("Button", nil, iconBox)
+	f.iconBtn:SetAllPoints()
+	f.iconBtn:SetScript("OnEnter", function(s)
+		if not s.itemID then return end
+		GameTooltip:SetOwner(s, "ANCHOR_RIGHT")
+		if GameTooltip.SetItemByID then
+			GameTooltip:SetItemByID(s.itemID)
+		else
+			GameTooltip:SetHyperlink("item:" .. s.itemID)
+		end
+		GameTooltip:Show()
+	end)
+	f.iconBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
+	f.name = GM.MakeFontString(f, GM.FONT_MED,
+		opts.nameSize or 12, "text")
+	f.name:SetPoint("TOPLEFT", iconBox, "TOPRIGHT", 10, -4)
+	f.name:SetPoint("RIGHT", f, "RIGHT", -8, 0)
+	f.name:SetJustifyH("LEFT")
+	f.name:SetWordWrap(false)
+	f.sub = GM.MakeFontString(f, GM.FONT, opts.subSize or 10, "textDim")
+	f.sub:SetPoint("TOPLEFT", f.name, "BOTTOMLEFT", 0, -4)
+	f.sub:SetPoint("RIGHT", f, "RIGHT", -8, 0)
+	f.sub:SetJustifyH("LEFT")
+
+	local function Drop()
+		local infoType, itemID, link = GetCursorInfo()
+		if infoType ~= "item" then return end
+		ClearCursor()
+		if opts.onItem then opts.onItem(itemID, link) end
+	end
+	local function Click()
+		if IsModifiedClick() then
+			GM.ModifiedItemClick(f.iconBtn.itemID)
+		elseif CursorHasItem() then
+			Drop()
+		end
+	end
+	f:EnableMouse(true)
+	f:SetScript("OnReceiveDrag", Drop)
+	f:SetScript("OnClick", Click)
+	-- the icon button sits on top — mirror handlers or its clicks die
+	f.iconBtn:SetScript("OnReceiveDrag", Drop)
+	f.iconBtn:SetScript("OnClick", Click)
+
+	function f:SetItem(id, link)
+		f.itemID, f.itemLink = id, link
+		f.iconBtn.itemID = id
+		local name = (link and link:find("%[") and link)
+			or (id and GM.ItemName and GM.ItemName(id))
+			or (id and ("item " .. id))
+		f.name:SetText(name or "")
+		if id and GM.NameColor then
+			f.name:SetTextColor(GM.NameColor(id))
+		end
+		local icon = id and ((C_Item and C_Item.GetItemIconByID
+			and C_Item.GetItemIconByID(id))
+			or (C_Item and C_Item.GetItemInfo
+				and select(10, C_Item.GetItemInfo(id))))
+		if icon then f.icon:SetTexture(icon) f.icon:Show()
+		else f.icon:Hide() end
+		f.sub:SetText(id and ("id " .. id) or "")
+	end
+	function f:Clear()
+		f.itemID, f.itemLink = nil, nil
+		f.iconBtn.itemID = nil
+		f.icon:Hide()
+		f.name:SetText(GM.CC("textDim")
+			.. (opts.hint or "drop item here · shift-click one")
+			.. "|r")
+		f.sub:SetText("")
+	end
+	f:Clear()
+	return f
+end

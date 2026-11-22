@@ -102,66 +102,21 @@ local function Build()
 	local post = Panel(f, 10, -54, 700, 84, "POST BUY ORDER")
 	ui.post = post
 
-	-- the planner's item-target strip — drop retargets the shared
-	-- item channel (planner stats show the market price)
-	local strip = CreateFrame("Button", nil, post)
+	-- shared slot widget — drop retargets the shared item channel
+	-- (planner stats show the market price) and this order
+	local strip = GM.Widgets.ItemSlot(post, {
+		w = 684, h = 36, icon = 32,
+		nameSize = 11, subSize = 9,
+		hint = "drop an item — or FIND ITEM below to browse",
+		onItem = function(id, link)
+			GM.PlanQueue.SetItem(id, link)
+			OU.SetItem(id)
+		end,
+	})
 	strip:SetPoint("TOPLEFT", 8, -14)
-	strip:SetSize(684, 36)
-	GM.Panel(strip, "contHigh")
-	local iconBox = CreateFrame("Frame", nil, strip)
-	iconBox:SetPoint("LEFT", 4, 0)
-	iconBox:SetSize(32, 32)
-	GM.Panel(iconBox, "contLowest")
-	ui.icon = iconBox:CreateTexture(nil, "ARTWORK")
-	ui.icon:SetSize(30, 30)
-	ui.icon:SetPoint("CENTER")
-	ui.iconBtn = CreateFrame("Button", nil, iconBox)
-	ui.iconBtn:SetAllPoints()
-	ui.iconBtn:SetScript("OnEnter", function(s)
-		if not s.itemID then return end
-		GameTooltip:SetOwner(s, "ANCHOR_RIGHT")
-		if GameTooltip.SetItemByID then
-			GameTooltip:SetItemByID(s.itemID)
-		else
-			GameTooltip:SetHyperlink("item:" .. s.itemID)
-		end
-		GameTooltip:Show()
-	end)
-	ui.iconBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
-	ui.itemName = GM.MakeFontString(strip, GM.FONT_MED, 11, "text")
-	ui.itemName:SetPoint("TOPLEFT", iconBox, "TOPRIGHT", 8, -3)
-	ui.itemName:SetWidth(400)
-	ui.itemName:SetWordWrap(false)
-	ui.itemName:SetJustifyH("LEFT")
-	ui.itemSub = GM.MakeFontString(strip, GM.FONT, 9, "textDim")
-	ui.itemSub:SetPoint("TOPLEFT", ui.itemName, "BOTTOMLEFT", 0, -3)
-	ui.itemSub:SetJustifyH("LEFT")
-	local function DropItem()
-		local infoType, itemID, link = GetCursorInfo()
-		if infoType ~= "item" then return end
-		ClearCursor()
-		-- shared target channel — planner stays in sync (its stats
-		-- pane shows the market price) but isn't force-popped over us
-		GM.PlanQueue.SetItem(itemID, link)
-		OU.SetItem(itemID)
-	end
-	strip:EnableMouse(true)
-	strip:SetScript("OnReceiveDrag", DropItem)
-	strip:SetScript("OnClick", function()
-		if IsModifiedClick() then
-			GM.ModifiedItemClick(ui.iconBtn.itemID)
-		elseif CursorHasItem() then
-			DropItem()
-		end
-	end)
-	ui.iconBtn:SetScript("OnReceiveDrag", DropItem)
-	ui.iconBtn:SetScript("OnClick", function()
-		if IsModifiedClick() then
-			GM.ModifiedItemClick(ui.iconBtn.itemID)
-		elseif CursorHasItem() then
-			DropItem()
-		end
-	end)
+	-- the paint path in OU.SetItem writes these fields directly
+	ui.icon, ui.iconBtn = strip.icon, strip.iconBtn
+	ui.itemName, ui.itemSub = strip.name, strip.sub
 
 	-- input row below the strip
 	ui.qtyE = MkEdit(post, 60, "qty")

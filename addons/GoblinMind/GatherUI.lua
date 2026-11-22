@@ -131,9 +131,8 @@ local function Refresh()
 	ui.speedBtn:SetText("speed: " .. sp.name)
 	ui.contBtn:SetText("crowd: "
 		.. GM.Gather.CONTS[GM.Gather.ContIx()].name)
-	ui.targetLbl:SetText(tid
-		and (GM.CC("accent") .. "target: " .. TargetName(tid) .. "|r")
-		or (GM.CC("textDim") .. "target: none — type a name, paste a link, or drop an item|r"))
+	if tid then ui.targetSlot:SetItem(tid)
+	else ui.targetSlot:Clear() end
 	DrawPane()
 end
 
@@ -277,9 +276,14 @@ local function Toggle()
 		end)
 		ui.targetClear:SetPoint("LEFT", ui.target, "RIGHT", 6, 0)
 
-		ui.targetLbl = GM.MakeFontString(ui, GM.FONT, 9, "textDim")
-		ui.targetLbl:SetPoint("LEFT", ui.targetClear, "RIGHT", 8, 0)
-		ui.targetLbl:SetJustifyH("LEFT")
+		-- shared slot: drop a target item onto it; shows icon+name+id
+		ui.targetSlot = W.ItemSlot(ui, {
+			w = 240, h = 30, icon = 26,
+			nameSize = 10, subSize = 8,
+			hint = "or drop an item on me",
+			onItem = function(id) SetTarget(id) end,
+		})
+		ui.targetSlot:SetPoint("LEFT", ui.targetClear, "RIGHT", 8, 0)
 
 		-- leaderboard: left column
 		local listTop = y - 26

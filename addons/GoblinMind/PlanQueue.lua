@@ -253,77 +253,15 @@ local function Build()
 
 	-- ===== left column =====
 
-	-- Item header: bordered icon slot + name + meta
-	ui.item = CreateFrame("Button", nil, frame)
+	-- Item header: the shared slot widget — RefreshItemText owns
+	-- name/sub content (scan state, step display, soulbound flags)
+	ui.item = GM.Widgets.ItemSlot(frame, {
+		icon = 44, w = LEFT_W,
+		hint = "drop item here · shift-click one · /goblin [link]",
+		onItem = function(id, link) GM.TargetItem(id, link) end,
+	})
 	ui.item:SetPoint("TOPLEFT", PAD, -64)
-	ui.item:SetWidth(LEFT_W)
-	ui.item:SetHeight(56)
-	GM.Panel(ui.item, "contMedium")
-	if GM.ChromePanel then GM.ChromePanel(ui.item) end
-	ui.item:SetScript("OnEnter", function() GM.Panel(ui.item, "contHigh") end)
-	ui.item:SetScript("OnLeave", function() GM.Panel(ui.item, "contMedium") end)
-
-	local iconBox = CreateFrame("Frame", nil, ui.item)
-	iconBox:SetSize(44, 44)
-	iconBox:SetPoint("LEFT", 6, 0)
-	GM.Panel(iconBox, "contHighest", "outlineVar")
-	if GM.ChromePanel then GM.ChromePanel(iconBox) end
-	ui.icon = iconBox:CreateTexture(nil, "ARTWORK")
-	ui.icon:SetSize(40, 40)
-	ui.icon:SetPoint("CENTER")
-	-- hover → real item tooltip (textures can't take scripts)
-	ui.iconBtn = CreateFrame("Button", nil, iconBox)
-	ui.iconBtn:SetAllPoints()
-	ui.iconBtn:SetScript("OnEnter", function(self)
-		if not self.itemID then return end
-		GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-		if GameTooltip.SetItemByID then
-			GameTooltip:SetItemByID(self.itemID)
-		else
-			GameTooltip:SetHyperlink("item:" .. self.itemID)
-		end
-		GameTooltip:Show()
-	end)
-	ui.iconBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
-
-	ui.item.name = GM.MakeFontString(ui.item, GM.FONT_MED, 12, "text")
-	ui.item.name:SetPoint("TOPLEFT", iconBox, "TOPRIGHT", 10, -4)
-	ui.item.name:SetPoint("RIGHT", ui.item, "RIGHT", -8, 0)
-	ui.item.name:SetJustifyH("LEFT")
-	ui.item.sub = GM.MakeFontString(ui.item, GM.FONT, 10, "textDim")
-	ui.item.sub:SetPoint("TOPLEFT", ui.item.name, "BOTTOMLEFT", 0, -5)
-	ui.item.name:SetWidth(190)
-	ui.item.name:SetJustifyH("LEFT")
-	ui.item.name:SetWordWrap(false)
-	ui.item.sub:SetPoint("RIGHT", ui.item, "RIGHT", -8, 0)
-	ui.item.sub:SetJustifyH("LEFT")
-
-	-- item drop target
-	ui.item:EnableMouse(true)
-	local function DropItem()
-		local infoType, itemID, link = GetCursorInfo()
-		if infoType ~= "item" then return end
-		ClearCursor()
-		GM.TargetItem(itemID, link)
-	end
-	ui.item:SetScript("OnReceiveDrag", DropItem)
-	ui.item:SetScript("OnClick", function()
-		if IsModifiedClick() then
-			GM.ModifiedItemClick(ui.iconBtn and ui.iconBtn.itemID)
-		elseif CursorHasItem() then
-			DropItem()
-		end
-	end)
-	-- the icon button sits on top of the item box — mirror the same
-	-- click/drop handling or clicks landing on the icon are dead
-	ui.iconBtn:SetScript("OnReceiveDrag", DropItem)
-	ui.iconBtn:SetScript("OnClick", function()
-		if IsModifiedClick() then
-			GM.ModifiedItemClick(ui.iconBtn.itemID)
-		elseif CursorHasItem() then
-			DropItem()
-		end
-	end)
+	ui.icon, ui.iconBtn = ui.item.icon, ui.item.iconBtn
 
 	-- Trend chart region
 	ui.chart = CreateFrame("Frame", nil, frame)
