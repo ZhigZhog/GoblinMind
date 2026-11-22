@@ -1,11 +1,11 @@
 # GoblinMind
 
 A standalone auction-house intelligence addon for **World of Warcraft:
-Forever** (interface `16001`). Price model, execution planner, crafting
-planner, ledger, group/operation system, session takeovers — TSM-styled
-dark UI, **no TSM required**.
+Forever** (interface `16001`). Price model, execution planner, player
+buy-order boards, crafting planner, ledger, group/operation system,
+session takeovers — TSM-styled dark UI, **no TSM required**.
 
-**0.1.2-beta** — live on
+**0.1.3-beta** — live on
 [CurseForge](https://www.curseforge.com/wow/addons/goblinmind) and
 [Releases](https://github.com/ZhigZhog/GoblinMind/releases).
 Expect rough edges; bug reports file themselves to the issue
@@ -106,6 +106,21 @@ your active listings with undercut flags (sorted undercut-first), plus
 a BAGS page that previews the post decision for every bag item using
 the shared book — no scan needed. POST SCAN walks checked items.
 
+### Buy-order boards (`/goblin writs`)
+
+Standing buy orders for anything — including items you don't own.
+Post a unit price and total quantity on a realm board; crafters
+reserve part or all of it and mail their fill **C.O.D.** Partial
+fills, delivery windows, partial or full cancel, and per-crafter
+reliability ratings are built in. **FIND ITEM** searches the whole
+catalogue to post an order; **MY BUY ORDERS** tracks yours.
+
+Boards live on the server when you're connected — and keep working
+when you're not: orders **relay peer-to-peer over the mesh** through
+installs that can reach it, and live board updates stream from a
+nearby peer over a second dedicated channel (`goblinwritx`, separate
+from market diffs so heavy boards never starve your prices).
+
 ### Sniper (`/goblin snipe`)
 
 One-click AH-tail snapshots. Hits are ranked by %-of-market; click a
@@ -186,10 +201,12 @@ a realm book — fresher prices, longer history, cross-character and
 cross-install coverage. `/goblin backend` opens the onboarding dialog
 (server URL, callsign, key if the host uses one); CONNECT stages a
 request through SavedVariables and the watcher applies it — no restart.
-`/goblin status` prints feed health, install count, and last
-upload/pull. Self-host: `install.py --host` on the server machine,
-then hand the printed URL + key to your installs. Everything works
-without the backend — your own scans and the mesh are sufficient.
+`/goblin status` prints feed health, install count, both mesh
+channels, board/peer state, and last upload/pull. Self-host:
+`install.py --host` on the server machine, then hand the printed
+URL + key to your installs. Everything works without the backend —
+your own scans and the mesh are sufficient; even writ boards relay
+over the mesh when the backend is unreachable.
 
 ## Command reference
 
@@ -202,6 +219,7 @@ without the backend — your own scans and the mesh are sufficient.
 | `/goblin plan` | plan from the hovered item |
 | `/goblin dash` / `home` / `budget` | dashboard home |
 | `/goblin market` / `shop` | shopping + my auctions |
+| `/goblin writs` / `orders` | buy-order boards + your orders |
 | `/goblin snipe` | sniper |
 | `/goblin crafts` | crafting planner |
 | `/goblin groups` | group tree |
