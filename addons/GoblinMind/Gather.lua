@@ -61,6 +61,8 @@ local GATHER_SEC = 2.5      -- gather cast + loot time per stop
 local RESPAWN_PRIOR = 900   -- node respawn prior (learned bound wins)
 local ARRIVE_YD = 20        -- waypoint advance radius
 local ACTIVE_GAP = 90       -- kills this close = same farm session
+local SESSION_GAP = 600     -- gaps past this = a break, not dead time
+local HIST_MAX = 150        -- per-zone event log bound
 local POCKET_YD = 30        -- kills within this = same mob spawn
 local MOB_RESPAWN_PRIOR = 180 -- classic open-world respawn guess
 local RESPAWN_OBS_MIN = 45  -- rekill gaps under this carry no info
@@ -214,6 +216,10 @@ local function YieldRec(key)
 	return y
 end
 
+-- forward decls — MergeZone records value at loot time, which
+-- needs the price fns defined further down
+local Price, LootValue
+
 -- each kill lands in a "pocket" — a cluster ~1 mob spawn. Pocket
 -- count caps a camp's sustainable kill rate (can't kill more mobs
 -- than exist), and re-killing a pocket after a gap bounds respawn:
@@ -241,6 +247,18 @@ local function MergePocket(zn, p)
 	best.last = now
 end
 
+-- every kill appends {t, v} — value priced at loot time — to a
+-- bounded log. The diff between consecutive events IS the cycle:
+-- travel, kill time, respawn waits, losing spawns to competition.
+-- The 90s activeT mean erases all of it; the log keeps it.
+local function ZoneEvent(zn, now, items)
+	zn.hist = zn.hist or {}
+	local hi = zn.hist
+	hi[#hi + 1] = { t = now, v = LootValue(items) or 0 }
+	if #hi > HIST_MAX then tremove(hi, 1) end
+	zn.vTot = (zn.vTot or 0) + hi[#hi].v
+end
+
 local function MergeZone(p, kind, items, mob)
 	local list = ZoneList(p.map)
 	if not list then return nil end
@@ -263,6 +281,7 @@ local function MergeZone(p, kind, items, mob)
 					zn.mobs[mob] = (zn.mobs[mob] or 0) + 1
 				end
 				UpdateYield(zn, items)
+				ZoneEvent(zn, now, items)
 				MergePocket(zn, p)
 				if d > (zn.r or 0) then zn.r = floor(d + 25) end
 				return zn
@@ -278,6 +297,7 @@ local function MergeZone(p, kind, items, mob)
 	}
 	if mob then zn.mobs = { [mob] = 1 } end
 	UpdateYield(zn, items)
+	ZoneEvent(zn, now, items)
 	MergePocket(zn, p)
 	tinsert(list, zn)
 	return zn
@@ -290,12 +310,22 @@ end
 -- items nobody lists (mkt said 14g, a feed mb said ~140g for
 -- raptor flesh while the book has it at 3s). min() means the EV
 -- can never be more optimistic than the most pessimistic source.
-local function Price(id)
+Price = function(id)
 	if not GM.Price then return nil end
 	local a = GM.Price("dbminbuyout", id)
 	local b = GM.Price("dbmarket", id)
 	if a and b then return min(a, b) end
 	return a or b
+end
+
+-- copper value of one loot window at record time — empty corpses
+-- and money-only corpses correctly price at zero
+LootValue = function(items)
+	local v = 0
+	for id, q in pairs(items or {}) do
+		v = v + (Price(id) or 0) * q
+	end
+	return v
 end
 
 -- EV of one event from a running-mean record: total qty seen over
@@ -369,6 +399,40 @@ end
 
 G.ZoneRate = ZoneRate
 G.ZoneEV = ZoneEV
+
+-- wall-clock truth: total looted value over the session gaps.
+-- Gaps past SESSION_GAP are a real break (not respawn/competition
+-- dead time) and don't count toward the session. This is the
+-- "earned" figure — what the ground actually paid per minute.
+function G.ZoneWall(zn)
+	local hi = zn.hist
+	if not hi or #hi < 2 then return nil end
+	local span, v = 0, hi[1].v
+	for i = 2, #hi do
+		local g = hi[i].t - hi[i - 1].t
+		if g <= SESSION_GAP then span = span + g end
+		v = v + hi[i].v
+	end
+	if span < 60 then return nil end
+	return { span = span, v = v, gpm = v / span * 60 }
+end
+
+-- typical per-kill cycle from the event log: median of the
+-- consecutive deltas, session gaps included — a camp whose
+-- respawns stall the loop shows it here
+function G.ZoneCycle(zn)
+	local hi = zn.hist
+	if not hi or #hi < 2 then return nil end
+	local gaps = {}
+	for i = 2, #hi do
+		local g = hi[i].t - hi[i - 1].t
+		if g <= SESSION_GAP then gaps[#gaps + 1] = g end
+	end
+	if #gaps == 0 then return nil end
+	table.sort(gaps)
+	return gaps[floor(#gaps / 2) + 1]
+end
+
 -- mob label for a zone: "Screecher ×5", "Screecher ×3 · Lashtail ×2",
 -- "+N" tail when a camp mixes more than two mobs
 function G.ZoneMobs(zn)
@@ -811,15 +875,19 @@ function G.Leaderboard()
 					* (zn.items[tid] or 0) / zn.cnt
 			end
 			local evS, evR = evT or evSus, evT or ev
+			-- the time-diff row needs: headline = sustained
+			-- projection, "earned" = wall-clock receipt over the
+			-- A1..An sequence (falls back to the old projection
+			-- until the zone has a two-event log)
+			local wall = G.ZoneWall(zn)
 			tinsert(rows, {
 				area = true, map = map, zone = zn,
 				kind = zn.kind, zoneName = G.ZoneName(map),
-				-- headline = sustained; raw = what the session
-				-- actually produced (lottery drops + full rate)
 				gpm = evS * sus,
-				gpmRaw = evR * rate,
+				gpmRaw = (wall and wall.gpm) or (evR * rate),
 				evLoop = evS, evRaw = evR,
-				lapSec = rate > 0 and (60 / rate) or 0,
+				lapSec = G.ZoneCycle(zn)
+					or (rate > 0 and (60 / rate) or 0),
 				kills = zn.kills,
 				spawns = #(zn.pockets or {}),
 			})

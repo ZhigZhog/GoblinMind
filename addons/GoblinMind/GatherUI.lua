@@ -32,7 +32,7 @@ local function RowText(r)
 		-- zone row: kind · kills · spawns · sec/kill · EV/kill
 		-- (+ raw measured GPM when the lottery delta is big)
 		local raw = (r.gpmRaw or 0) > (r.gpm or 0) * 1.15
-			and (GM.CC("textDim") .. "  raw "
+			and (GM.CC("textDim") .. "  earned "
 				.. GM.MoneyShort(floor(r.gpmRaw * 10000))
 				.. "/min|r") or ""
 		-- mob names first — "what" distinguishes two camps in the

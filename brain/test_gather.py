@@ -307,9 +307,31 @@ check('zone tracks mob names',
 check('mob label sorts by kills',
       G.ZoneMobs(zn) == 'Young Raptor ×4 · Peacebloom ×2')
 
+print('== event log: wall-clock earned ==')
+# hist: v = 30k, 30k, 10k, 10k, 10k, 0 at gaps 30,0,30,200,5 —
+# all inside one session (<=600s) so span = 265s, v = 90k copper
+w = G.ZoneWall(zn)
+check('wall span = session gaps', w is not None
+      and abs(w.span - 265) < 0.5)
+check('wall value = loot receipts', w.v == 90000)
+check('wall gpm = value/span', abs(w.gpm - 90000 / 265 * 60) < 1)
+check('median cycle = 30s', abs(G.ZoneCycle(zn) - 30) < 0.01)
+
+# a >10min gap = a real break: excluded from span, value still
+# counts toward the receipt
+lua.execute('_NOW.t = _NOW.t + 800; _POS.n, _POS.w = 1000, 1500')
+lua.execute('''
+SetLoot({ { name = "Raptor Flesh", qty = 1,
+            link = "|Hitem:12184::::::::|h[Raptor Flesh]|h" } })
+''')
+ev('LOOT_OPENED')
+zn = g.GoblinMindGather.zones[1419][1]
+w2 = G.ZoneWall(zn)
+check('break gap excluded from span', abs(w2.span - 265) < 0.5)
+check('post-break value still counted', w2.v == 100000)
+
 print('== target-relative EV ==')
-# with raptor flesh targeted the row shows flesh-per-kill, not the
-# whole loot table: 3 drops over 6 kills x 1g = 0.5g/kill
+# 4 flesh over 7 kills x 1g
 G.SetTarget(12184)
 row = None
 for r in G.Leaderboard().values():
@@ -317,9 +339,9 @@ for r in G.Leaderboard().values():
             and r.kills == zn.kills:
         row = r
 check('target EV = qty/cnt x price', row is not None
-      and abs(row.evLoop - 5000) < 1)
+      and abs(row.evLoop - 10000 * 4 / 7) < 1)
 check('target gpm = ev x sustained', row is not None
-      and abs(row.gpm - 3000) < 1)
+      and abs(row.gpm - 10000 * 4 / 7 * 0.6) < 1)
 G.SetTarget(None)
 
 print('== skinning -> skin zone ==')
