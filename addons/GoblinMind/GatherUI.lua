@@ -17,7 +17,7 @@ local ROWS = 15
 
 local function KindLabel(k)
 	return ({ herb = "HERB", mine = "MINE", hunt = "HUNT",
-		skin = "SKIN", cloth = "CLOTH" })[k] or k
+		skin = "SKIN", cloth = "CLOTH", cook = "COOK" })[k] or k
 end
 
 local function KindColor(k)

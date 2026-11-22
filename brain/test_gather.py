@@ -118,6 +118,15 @@ end
 -- command API lives in Core.lua, which this harness doesn't load
 GM.CMDS = {}
 GM.Cmd = function() end
+
+-- Gathering.lua isn't loaded here — stub just the item->family
+-- classifier the loot attribution uses
+GM.Gathering = GM.Gathering or {}
+local _CAT = { [765]="herb", [2447]="herb", [2770]="ore",
+	[2772]="ore", [2838]="ore", [774]="ore", [2318]="leather",
+	[5784]="leather", [5785]="leather", [2589]="cloth",
+	[12184]="flesh" }
+GM.Gathering.ItemCat = function(id) return _CAT[id] end
 ''')
 
 # map art + item icons for the window pane
@@ -817,21 +826,94 @@ ev('LOOT_OPENED')
 lua.execute('_NAME = "Other Mob"; _NOW.t = _NOW.t + 2')
 ev('LOOT_OPENED')
 zs3 = g.GoblinMindGather.zones[1419]
-zb = [z for z in zs3.values() if z.n == 2500]
+zb = [z for z in zs3.values() if z.n == 2500 and z.kind == 'hunt']
 check('burst zone created', len(zb) == 1)
 if zb:
     check('tail folded, kills=3 not 4', zb[0].kills == 3)
     check('hist has 3 events not 4', len(zb[0].hist) == 3)
-    check('tail loot folded into event value',
-          zb[0].hist[1].v == 20000)
-    check('zone items include tail loot',
-          zb[0]['items'][730] == 3 and zb[0]['items'][5784] == 1)
-    check('tail did not bump hits',
-          (zb[0]['hits'][5784] or 0) == 0)
+    # the scale tail is leather-family: the item classifier now
+    # routes it to a SKIN event (same corpse's skin loot), so the
+    # hunt event keeps only the eye's value
+    check('kill event keeps only its own loot',
+          zb[0].hist[1].v == 10000)
+    check('zone items count eyes across kills',
+          zb[0]['items'][730] == 3)
     # kill1 event anchors at its first window; kill2 lands +21.5s
-    # later through the tail — the burst gap (1.5s) never enters
+    # later — the burst gap (1.5s) never enters
     check('cycle median = real cadence not burst gap',
           G.ZoneCycle(zb[0]) == 21.5)
+# and the leather window became a skin event at the same spot
+zb2 = [z for z in zs3.values() if z.n == 2500 and z.kind == 'skin']
+check('leather tail became a skin event', len(zb2) == 1
+      and zb2[0]['items'][5784] == 1)
+
+print('== item-verdict windows: unarmed gathers ==')
+# Forever's gather is instant — no spellcast arm. A vein looted
+# beside a targeted corpse must become a NODE, not a kill.
+lua.execute(r'''
+	_POS.n, _POS.w = 5000, 5000
+	_POS.x, _POS.y = nil, nil
+	_NAME = "Dead Beast"
+	_NOW.t = _NOW.t + 60
+	SetLoot({ { name = "Iron Ore", qty = 2,
+	            link = "|Hitem:2772::::::::|h[Iron Ore]|h" },
+	          { name = "Heavy Stone", qty = 1,
+	            link = "|Hitem:2838::::::::|h[Heavy Stone]|h" } })
+''')
+n0 = len(g.GoblinMindGather.nodes[1419] or {})
+ev('LOOT_OPENED')
+nds = g.GoblinMindGather.nodes[1419]
+new_nd = nds[n0 + 1]
+check('unarmed ore window made a mine node',
+      len(nds) == n0 + 1 and new_nd.kind == 'mine')
+check('ore yield recorded under mine key',
+      g.GoblinMindGather.yields['mine']['items'][2772] == 2)
+zn4 = [z for z in g.GoblinMindGather.zones[1419].values()
+       if z.n == 5000]
+check('no kill zone from the vein', len(zn4) == 0)
+
+# a second ore window at the same spot merges + bumps hits
+lua.execute('_NOW.t = _NOW.t + 900')
+ev('LOOT_OPENED')
+check('re-tap merged into the same node',
+      len(nds) == n0 + 1 and new_nd.hits == 2)
+
+# a leather window with NO recent kill = dropped leather, corpse
+# loot — stays a kill, not a skin event
+lua.execute(r'''
+	_POS.n, _POS.w = 5200, 5200
+	_NAME = "Scalebeast"
+	_NOW.t = _NOW.t + 60
+	SetLoot({ { name = "Thick Murloc Scale", qty = 1,
+	            link = "|Hitem:5785::::::::|h[Scale]|h" } })
+''')
+ev('LOOT_OPENED')
+zn5 = [z for z in g.GoblinMindGather.zones[1419].values()
+       if z.n == 5200]
+check('lone leather window = corpse kill', len(zn5) == 1
+      and zn5[0].kind == 'hunt' and zn5[0]['items'][5785] == 1)
+ys = g.GoblinMindGather.yields['skin:Scalebeast']
+check('dropped leather not recorded as skin',
+      ys is None or ys.cnt is None)
+
+# armed mine cast but the window is corpse loot + a corpse: the
+# corpse wins, the arm is dropped
+lua.execute(r'''
+	_POS.n, _POS.w = 5400, 5400
+	_NAME = "Corpse Mob"
+	_NOW.t = _NOW.t + 60
+	SetLoot({ { name = "Eye", qty = 1,
+	            link = "|Hitem:730::::::::|h[Eye]|h" } })
+''')
+ev('UNIT_SPELLCAST_SUCCEEDED', 'player', 'c9', 2580)
+ev('LOOT_OPENED')
+zn6 = [z for z in g.GoblinMindGather.zones[1419].values()
+       if z.n == 5400]
+check('corpse loot beats a stale mine arm', len(zn6) == 1
+      and zn6[0].kind == 'hunt' and zn6[0].kills == 1)
+check('no mine node from the corpse window',
+      all(nd.kind != 'mine' or nd.n != 5400
+          for nd in (g.GoblinMindGather.nodes[1419] or {}).values()))
 
 print()
 fails = [n for n, ok in CHECKS if not ok]

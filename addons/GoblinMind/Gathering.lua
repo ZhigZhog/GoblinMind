@@ -677,3 +677,62 @@ if GameTooltip then
 		tt._gmInjectTag = nil
 	end)
 end
+
+-- itemID -> gather-source family: "ore" | "herb" | "leather" |
+-- "cloth" | "flesh". Used by the loot recorder to tell a
+-- node/skin window from a corpse window (Forever gathers
+-- instantly — no spellcast arm survives to attribute the loot),
+-- and by camp rows to label what a zone actually produces.
+-- Static ids cover the classic mats; the item-subtype fallback
+-- catches Forever customs and edge drops.
+local CAT_ID = {}
+for _, id in ipairs({
+	774, 818, 11370, 11382, 1206, 1210, 1529, 1705, 2770, 2771,
+	2772, 2775, 2776, 2835, 2836, 2838, 3340, 3858, 3864, 7909,
+	7910, 7911, 7912, 10620, 12361, 12364, 12365, 12799, 12800,
+}) do CAT_ID[id] = "ore" end
+for id in pairs(HERB_ITEMS) do CAT_ID[id] = "herb" end
+for _, id in ipairs({
+	783, 2318, 2319, 2934, 4232, 4234, 4235, 4304, 4461, 5784,
+	5785, 6470, 6471, 8154, 8165, 8167, 8169, 8170, 8171, 15412,
+	15414, 15415, 15416, 15417, 15467, 17012,
+}) do CAT_ID[id] = "leather" end
+for _, id in ipairs({
+	2589, 2592, 4306, 4338, 14047, 14256, 14342, 2996, 2997,
+	4305, 4339, 14048,
+}) do CAT_ID[id] = "cloth" end
+for _, id in ipairs({
+	2672, 2673, 2674, 3173, 3685, 5503, 5504, 6303, 6308, 6317,
+	6358, 6359, 6361, 6362, 6522, 6889, 8365, 12037, 12184,
+	12202, 12203, 12204, 12205, 12206, 12207, 12208, 12223,
+	13422, 13754, 13755, 13756, 13757, 13758, 13759, 13760,
+	13888, 13889, 13893, 19807, 21024, 21071, 21153,
+}) do CAT_ID[id] = "flesh" end
+
+local SUB_CAT = {
+	["Metal & Stone"] = "ore",
+	["Herb"] = "herb",
+	["Leather"] = "leather",
+	["Cloth"] = "cloth",
+	["Cooking"] = "flesh",
+	["Meat"] = "flesh",
+}
+
+local catCache = {}
+function G.ItemCat(id)
+	local c = catCache[id]
+	if c ~= nil then return c or nil end
+	c = CAT_ID[id]
+	if not c and GetItemInfo then
+		-- itemSubType is index 7 on both classic and modern
+		-- GetItemInfo shapes
+		local ok, sub = pcall(function()
+			return select(7, GetItemInfo(id))
+		end)
+		if ok and type(sub) == "string" then
+			c = SUB_CAT[sub]
+		end
+	end
+	catCache[id] = c or false
+	return c
+end

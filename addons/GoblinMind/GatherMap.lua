@@ -191,7 +191,9 @@ function M.Refresh()
 	-- hunt zones first (under the pins): translucent disc + stats
 	for _, zn in ipairs(G.ZoneList(map) or {}) do
 		if zn.x and zn.y then
-			local col = G.KIND_COLOR[zn.kind] or { 1, 1, 1 }
+			local col = G.KIND_COLOR[
+				G.ZoneCat and G.ZoneCat(zn) or zn.kind]
+				or { 1, 1, 1 }
 			local gpm = G.ZoneEV(zn) * G.ZoneRate(zn)
 			DrawZone(canvas, zn.x * w, zn.y * h,
 				YdToPx(canvas, zn.r or 60),
@@ -719,7 +721,9 @@ function M.CreatePane(parent, w)
 				-- the selected row's camp pops: brighter fill/ring
 				-- plus an outer accent outline
 				local isSel = sel and sel.zone == zn
-				local col = G.KIND_COLOR[zn.kind] or { 1, 1, 1 }
+				local col = G.KIND_COLOR[
+					G.ZoneCat and G.ZoneCat(zn) or zn.kind]
+					or { 1, 1, 1 }
 				local rPx = max(10, (zn.r or 60) * upy * w)
 				local px, py = x * w, y * h
 				local d = put("disc")

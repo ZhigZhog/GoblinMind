@@ -22,7 +22,7 @@ local db = GoblinMindGather
 -- (pockets, per-item hits, failed-loot counting). Bump = wipe the
 -- derived records so pre-change loot doesn't poison the model.
 -- Nodes keep — positions are still valid; re-import is one click.
-local REC_V = 4
+local REC_V = 5
 if db.v ~= REC_V then
 	db.zones, db.yields, db.resp, db.journal = {}, {}, {}, {}
 	db.v = REC_V
@@ -46,6 +46,7 @@ G.KIND_COLOR = {
 	herb = { 0.2, 0.9, 0.3 }, mine = { 0.95, 0.7, 0.2 },
 	skin = { 0.7, 0.45, 0.25 }, hunt = { 0.9, 0.4, 0.2 },
 	cloth = { 0.85, 0.85, 0.95 }, -- legacy zone rows
+	cook = { 0.95, 0.55, 0.55 },
 }
 G.KINDS = { "herb", "mine", "skin", "hunt", "cloth" }
 -- node kinds build routes; area kinds build zones
@@ -1184,12 +1185,14 @@ function G.ZoneDetail(zn)
 		mobs[#mobs + 1] = { name, n }
 	end
 	table.sort(mobs, function(a, b) return a[2] > b[2] end)
+	-- skin zones record mob tables under skin:<mob>
+	local pfx = zn.kind == "skin" and "skin:" or "hunt:"
 	for i = 1, min(3, #mobs) do
 		local name = mobs[i][1]
 		sec[#sec + 1] = {
 			head = name .. " ×" .. mobs[i][2],
 			cnt = mobs[i][2],
-			rows = G.DropRows("hunt:" .. name),
+			rows = G.DropRows(pfx .. name),
 		}
 	end
 	sec[#sec + 1] = {
@@ -1255,6 +1258,32 @@ function G.DropLines(name)
 	return lines
 end
 
+-- a camp's display category = the gather family that dominates
+-- its recorded drops by qty — "cloth camp" vs "meat camp" vs a
+-- generic hunt. The zone's record kind stays the merge key;
+-- this is presentational (row label, disc tint)
+function G.ZoneCat(zn)
+	if zn.kind == "skin" then return "skin" end
+	local IC = GM.Gathering and GM.Gathering.ItemCat
+	if not IC then return zn.kind end
+	local tot
+	for id, q in pairs(zn.items or {}) do
+		local c = IC(id)
+		if c then
+			tot = tot or {}
+			tot[c] = (tot[c] or 0) + (tonumber(q) or 0)
+		end
+	end
+	if not tot then return zn.kind end
+	local best, bq
+	for c, q in pairs(tot) do
+		if q > (bq or 0) then best, bq = c, q end
+	end
+	return best == "flesh" and "cook"
+		or best == "leather" and "skin"
+		or best or zn.kind
+end
+
 function G.Leaderboard()
 	local rows = {}
 	for map, list in pairs(db.nodes or {}) do
@@ -1294,7 +1323,8 @@ function G.Leaderboard()
 			local wall = G.ZoneWall(zn)
 			tinsert(rows, {
 				area = true, map = map, zone = zn,
-				kind = zn.kind, zoneName = zn.area or G.ZoneName(map),
+				kind = G.ZoneCat(zn),
+				zoneName = zn.area or G.ZoneName(map),
 				gpm = evS * sus,
 				gpmRaw = (wall and wall.gpm) or (evR * rate),
 				evLoop = evS, evRaw = evR,
@@ -1496,6 +1526,65 @@ local function Journal(what, e)
 	if #j > JOURNAL_MAX then tremove(j, 1) end
 end
 
+-- item-derived source verdict: a window whose contents are ALL
+-- one gather-material family is a node/skin tap even with no
+-- cast arm — Forever gathers instantly (right-click, no
+-- UNIT_SPELLCAST_SUCCEEDED), so the arm is usually nil and a
+-- vein looted beside a fresh corpse would otherwise read as a
+-- kill. Cloth/flesh are corpse loot, not gathers — mixed or
+-- corpse-family windows return nil and stay on the kill path.
+-- Leather is the ambiguous family: a corpse's own window can
+-- carry dropped scales/leather, so it only counts as a skin
+-- event when it trails a recent kill on the same mob (the
+-- skin-loot pattern) — a leather-bearing first window is corpse
+-- loot.
+local lastKill -- { t, mob } — anchors the skin-tail check
+local SKIN_TAIL_S = 4
+local function WindowKind(items, mob)
+	local IC = GM.Gathering and GM.Gathering.ItemCat
+	if not (IC and items) then return nil end
+	local cat
+	for id in pairs(items) do
+		local c = IC(id)
+		if c == "cloth" or c == "flesh" then c = nil end
+		if not c or (cat and c ~= cat) then return nil end
+		cat = c
+	end
+	if not cat then return nil end
+	if cat == "leather" then
+		if lastKill and (not mob or mob == lastKill.mob)
+			and GetTime() - lastKill.t <= SKIN_TAIL_S then
+			return "skin"
+		end
+		return nil
+	end
+	return cat == "ore" and "mine" or cat
+end
+
+-- name an unarmed gather tap by its contents: a window of Iron
+-- Ore + Heavy Stone IS an Iron Deposit — the unit API can't name
+-- objects on this client, but the loot identifies the node type
+local function NodeNameFor(items)
+	local N = GM.Gathering and GM.Gathering.nodes
+	if not (N and items) then return nil end
+	local best, bs
+	for name, drops in pairs(N) do
+		local hit, miss = 0, 0
+		for id in pairs(items) do
+			local has
+			for _, d in ipairs(drops) do
+				if d.id == id then has = true break end
+			end
+			if has then hit = hit + 1 else miss = miss + 1 end
+		end
+		local score = hit - miss
+		if hit > 0 and score > (bs or 0) then
+			best, bs = name, score
+		end
+	end
+	return best
+end
+
 local function ItemStr(items)
 	if not items then return "-" end
 	local p = {}
@@ -1529,23 +1618,93 @@ local function OnLoot()
 	end
 	lastLootSig, lastLootT = sig, t
 
-	-- loot source name — the loot window's target, same surface
-	-- Drops.lua uses
-	local srcName
+	-- the window's own target — node objects can report names on
+	-- some clients; the corpse scan below may reassign srcName to
+	-- the dead unit's name instead
+	local winName
 	for _, unit in ipairs({ "target", "mouseover" }) do
 		local nm = UnitName and UnitName(unit)
-		if nm then srcName = nm break end
+		if nm then winName = nm break end
 	end
 
-	if arm and t <= arm.until_ then
-		-- inside a gather-cast window: this loot IS the gather
-		local kind, pos = arm.kind, arm.pos or PosNow()
-		arm = nil
+	-- corpse scan FIRST: it gates both the gather-vs-kill
+	-- disambiguation and the hunt attribution. A live NPC's name
+	-- or a stale target must not fabricate kills; only a dead
+	-- unit or an unresolvable-API name passes. The corpse must
+	-- also have been ATTACKABLE — a permanently-dead questgiver
+	-- is not a kill. UnitCanAttack doesn't exist on some
+	-- 1.12-API clients; UnitIsFriend/UnitReaction are the
+	-- classic-era belts for the same check
+	local srcName = winName
+	local deadFn = UnitIsDeadOrGhost or UnitIsDead
+	local srcDead = srcName ~= nil
+	if deadFn then
+		srcDead, srcName = false, nil
+		for _, u in ipairs({ "target", "mouseover" }) do
+			local okD, dead = pcall(deadFn, u)
+			-- only an explicit "can't attack"/"is friendly"
+			-- disqualifies — a nil or absent API can't disprove the
+			-- corpse was killable
+			local atk = true
+			if UnitCanAttack then
+				local okA, a = pcall(UnitCanAttack, "player", u)
+				if okA and a == false then atk = false end
+			end
+			if atk and UnitIsFriend then
+				local okF, fr = pcall(UnitIsFriend, "player", u)
+				if okF and fr then atk = false end
+			end
+			if atk and UnitReaction then
+				local okR, rx = pcall(UnitReaction, "player", u)
+				if okR and rx and rx >= 5 then atk = false end
+			end
+			if okD and dead and atk then
+				srcDead = true
+				local nm = UnitName and UnitName(u)
+				if nm then srcName = nm break end
+			end
+		end
+		if not srcName then srcName = winName end
+	end
+
+	-- disposition: an armed cast wins; the item verdict overrides
+	-- when they disagree (instant gather arrives unarmed on
+	-- Forever — a vein beside a corpse is a NODE, not a kill);
+	-- an arm with corpse-looking loot + a confirmed corpse means
+	-- the corpse window won the race, so the arm is dropped.
+	-- skin keeps its arm — a skinnable's own window legitimately
+	-- holds flesh/cloth loot
+	local wkind = WindowKind(items, srcName)
+	local armValid = arm and t <= arm.until_ and true or false
+	local gKind
+	if armValid then
+		gKind = arm.kind
+		if wkind and wkind ~= gKind then
+			gKind = wkind
+		elseif not wkind and srcDead and next(items)
+			and gKind ~= "skin" then
+			gKind = nil
+		end
+	else
+		gKind = wkind
+	end
+	local gPos = arm and arm.pos or nil
+	arm = nil
+
+	if gKind then
+		local pos = gPos or PosNow()
 		if not pos then return end
-		if G.NODE_KINDS[kind] then
-			MergeNode(pos, kind, srcName)
-			UpdateYield(YieldRec(srcName or kind), items)
-			Journal("node", { kind = kind, mob = srcName,
+		if G.NODE_KINDS[gKind] then
+			-- name the node: contents first (ore+stone IS the
+			-- vein type), then the window target — trusted when a
+			-- cast armed this loot or no corpse could be
+			-- impersonating the node
+			local nm = NodeNameFor(items)
+				or ((armValid or not srcDead) and winName)
+			local nd = MergeNode(pos, gKind, nm)
+			UpdateYield(YieldRec(
+				nd and nd.name or gKind), items)
+			Journal("node", { kind = gKind, mob = nm or winName,
 				items = ItemStr(items) })
 		else
 			-- skinning: a skinned corpse is a kill event — zone it,
@@ -1570,59 +1729,12 @@ local function OnLoot()
 		return
 	end
 
-	-- no gather window: a kill loot = a hunt kill. Any item at all
+	-- no gather verdict: a kill loot = a hunt kill. Any item at all
 	-- seeds the zone — the per-item yield map is what lets target
 	-- mode answer "where does raptor flesh drop" for drops we never
 	-- modeled. An EMPTY window still counts when the source is a
 	-- confirmed corpse: a kill with no drops is a failed farm and
 	-- must dilute the mean, or per-kill EV only ever sees winners.
-	-- The gate is a CONFIRMED CORPSE — a live NPC's name (a quest
-	-- giver standing at the camp) or a stale target must not
-	-- fabricate kills; only a dead unit or an unresolvable-API
-	-- name passes.
-	local deadFn = UnitIsDeadOrGhost or UnitIsDead
-	local srcDead = srcName ~= nil
-	if deadFn then
-		srcDead = false
-		-- prefer the DEAD unit's name: a live "Paige Armstrong"
-		-- selected while a dead crawler is under the mouse should
-		-- credit the crawler. The corpse must have been ATTACKABLE —
-		-- a permanently-dead questgiver/set-piece corpse (also
-		-- "Paige Armstrong") is not a kill
-		srcName = nil
-		for _, u in ipairs({ "target", "mouseover" }) do
-			local okD, dead = pcall(deadFn, u)
-			-- only an explicit "can't attack"/"is friendly"
-			-- disqualifies — a nil or absent API can't disprove the
-			-- corpse was killable. UnitCanAttack doesn't exist on
-			-- some 1.12-API clients; UnitIsFriend/UnitReaction are
-			-- the classic-era belts for the same check
-			local atk = true
-			if UnitCanAttack then
-				local okA, a = pcall(UnitCanAttack, "player", u)
-				if okA and a == false then atk = false end
-			end
-			if atk and UnitIsFriend then
-				local okF, fr = pcall(UnitIsFriend, "player", u)
-				if okF and fr then atk = false end
-			end
-			if atk and UnitReaction then
-				local okR, rx = pcall(UnitReaction, "player", u)
-				if okR and rx and rx >= 5 then atk = false end
-			end
-			if okD and dead and atk then
-				srcDead = true
-				local nm = UnitName and UnitName(u)
-				if nm then srcName = nm break end
-			end
-		end
-		if not srcName then
-			for _, u in ipairs({ "target", "mouseover" }) do
-				local nm = UnitName and UnitName(u)
-				if nm then srcName = nm break end
-			end
-		end
-	end
 	if srcDead then
 		local pos = PosNow()
 		if pos then
@@ -1631,6 +1743,10 @@ local function OnLoot()
 			local rawM = (GetLootMoney and GetLootMoney()) or 0
 			local money = min(rawM, 50000)
 			local zn, tail = MergeZone(pos, "hunt", items, srcName, money)
+			-- every hunt event re-anchors the skin-tail window:
+			-- leather looting this corpse in the next seconds is
+			-- its skin, not a second kill
+			lastKill = { t = t, mob = srcName }
 			UpdateYield(YieldRec("hunt"), items, tail)
 			-- per-mob drop table: "hunt:Ravasaur" -> flesh/leather —
 			-- the seed of a real mob-drop model
