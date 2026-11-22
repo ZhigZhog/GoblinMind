@@ -280,13 +280,17 @@ end
 
 -- ======================== EV model ========================
 
--- farm EV prices at what it SELLS for: current min buyout first —
--- the emitted market model (mkt) carries fantasy prices on items
--- nobody lists (raptor flesh at ~14g while mb sits at 3s)
+-- farm EV prices at what it SELLS for: the LOWER of min buyout
+-- and market — every price source can carry fantasy values on
+-- items nobody lists (mkt said 14g, a feed mb said ~140g for
+-- raptor flesh while the book has it at 3s). min() means the EV
+-- can never be more optimistic than the most pessimistic source.
 local function Price(id)
 	if not GM.Price then return nil end
-	return GM.Price("dbminbuyout", id)
-		or GM.Price("dbmarket", id)
+	local a = GM.Price("dbminbuyout", id)
+	local b = GM.Price("dbmarket", id)
+	if a and b then return min(a, b) end
+	return a or b
 end
 
 -- EV of one event from a running-mean record: total qty seen over

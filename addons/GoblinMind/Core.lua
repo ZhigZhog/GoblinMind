@@ -452,7 +452,7 @@ Cmd("craftprobe", function(msg)
 	GM.Crafting.CraftProbe(strtrim(msg:sub(11)))
 end, true)
 Cmd("codprobe", function() GM.MailUI.CodProbe() end, true)
-Cmd({ "gather", "farm" }, function() GM.GatherUI.Toggle() end, true)
+-- reset/import MUST precede gather/farm — prefix match is ordered
 Cmd({ "gatherreset", "farmreset" }, function()
 	local g = GoblinMindGather
 	g.zones, g.yields, g.resp, g.nodes = {}, {}, {}, {}
@@ -470,6 +470,7 @@ Cmd({ "gatherimport", "glimport" }, function()
 		GM.Print(err or "no GatherLite data found")
 	end
 end, true)
+Cmd({ "gather", "farm" }, function() GM.GatherUI.Toggle() end, true)
 Cmd({ "orders", "writs", "writ" }, function()
 	if GM.OrdersUI then GM.OrdersUI.Toggle() end
 end)
