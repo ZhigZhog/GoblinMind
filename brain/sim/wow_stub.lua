@@ -53,7 +53,11 @@ function GetMoney()
 end
 function GetItemInfo(id)
 	local e = ITEM_DB[id]
-	if e then return e.name, e.link end
+	if e then
+		-- signature index 3 = quality, index 11 = sellPrice
+		return e.name, e.link, e.quality, e.level, e.minLevel,
+			e.type, e.subType, e.stack, e.equipLoc, e.icon, e.sell
+	end
 end
 function ReloadUI() _RELOADS = _RELOADS + 1 end
 function IsModifiedClick() return false end

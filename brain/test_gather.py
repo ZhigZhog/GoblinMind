@@ -330,6 +330,37 @@ w2 = G.ZoneWall(zn)
 check('break gap excluded from span', abs(w2.span - 265) < 0.5)
 check('post-break value still counted', w2.v == 100000)
 
+print('== vendor floor + money ==')
+# grays are vendor trash (sell only); others floor at vendor sell
+lua.execute('''
+ITEM_DB[8888] = { name = "Faded Trash", link = "|Hitem:8888|h[Faded Trash]|h",
+                  quality = 0, sell = 150 }
+ITEM_DB[8889] = { name = "Vendor Ore", link = "|Hitem:8889|h[Vendor Ore]|h",
+                  sell = 20000 }
+PRICES[8888] = 90000
+PRICES[8889] = 10000
+''')
+# 8888: gray -> sell=150 not 90000; 8889: max(10000, 20000) = 20000
+# +500 copper looted = money counts as farm value
+lua.execute('_NOW.t = _NOW.t + 30; _POS.n, _POS.w = 3000, 3000')
+lua.execute('GetLootMoney = function() return 500 end')
+lua.execute('''
+SetLoot({ { name = "Faded Trash", qty = 1,
+            link = "|Hitem:8888|h[Faded Trash]|h" },
+          { name = "Vendor Ore", qty = 1,
+            link = "|Hitem:8889|h[Vendor Ore]|h" } })
+''')
+ev('LOOT_OPENED')
+zn3 = None
+for z in g.GoblinMindGather.zones[1419].values():
+    if z.kills == 1 and z['items'] and z['items'][8888]:
+        zn3 = z
+check('vendor-floor zone recorded', zn3 is not None)
+check('event v = gray-sell + floor + money',
+      zn3 is not None
+      and list(zn3.hist.values())[-1].v == 150 + 20000 + 500)
+lua.execute('GetLootMoney = nil')
+
 print('== target-relative EV ==')
 # 4 flesh over 7 kills x 1g
 G.SetTarget(12184)
@@ -338,10 +369,11 @@ for r in G.Leaderboard().values():
     if r.area and r.zoneName == G.ZoneName(1419) \
             and r.kills == zn.kills:
         row = r
-check('target EV = qty/cnt x price', row is not None
-      and abs(row.evLoop - 10000 * 4 / 7) < 1)
+check('target EV = WilsonLow(4/7) x price', row is not None
+      and abs(row.evLoop - 2504.5) < 5)
 check('target gpm = ev x sustained', row is not None
-      and abs(row.gpm - 10000 * 4 / 7 * 0.6) < 1)
+      and abs(row.gpm - 2504.5 * 0.6) < 5)
+check('row confidence: 7 kills = fair', row.conf == 'fair')
 G.SetTarget(None)
 
 print('== skinning -> skin zone ==')

@@ -218,7 +218,8 @@ end
 
 -- forward decls — MergeZone records value at loot time, which
 -- needs the price fns defined further down
-local Price, LootValue
+local ItemVal, LootValue
+local GetInfo = C_Item and C_Item.GetItemInfo or GetItemInfo
 
 -- each kill lands in a "pocket" — a cluster ~1 mob spawn. Pocket
 -- count caps a camp's sustainable kill rate (can't kill more mobs
@@ -251,15 +252,16 @@ end
 -- bounded log. The diff between consecutive events IS the cycle:
 -- travel, kill time, respawn waits, losing spawns to competition.
 -- The 90s activeT mean erases all of it; the log keeps it.
-local function ZoneEvent(zn, now, items)
+local function ZoneEvent(zn, now, items, money)
 	zn.hist = zn.hist or {}
 	local hi = zn.hist
-	hi[#hi + 1] = { t = now, v = LootValue(items) or 0 }
+	hi[#hi + 1] = { t = now,
+		v = (LootValue(items) or 0) + (money or 0) }
 	if #hi > HIST_MAX then tremove(hi, 1) end
 	zn.vTot = (zn.vTot or 0) + hi[#hi].v
 end
 
-local function MergeZone(p, kind, items, mob)
+local function MergeZone(p, kind, items, mob, mobMoney)
 	local list = ZoneList(p.map)
 	if not list then return nil end
 	local now = GetTime()
@@ -281,7 +283,7 @@ local function MergeZone(p, kind, items, mob)
 					zn.mobs[mob] = (zn.mobs[mob] or 0) + 1
 				end
 				UpdateYield(zn, items)
-				ZoneEvent(zn, now, items)
+				ZoneEvent(zn, now, items, mobMoney)
 				MergePocket(zn, p)
 				if d > (zn.r or 0) then zn.r = floor(d + 25) end
 				return zn
@@ -297,7 +299,7 @@ local function MergeZone(p, kind, items, mob)
 	}
 	if mob then zn.mobs = { [mob] = 1 } end
 	UpdateYield(zn, items)
-	ZoneEvent(zn, now, items)
+	ZoneEvent(zn, now, items, mobMoney)
 	MergePocket(zn, p)
 	tinsert(list, zn)
 	return zn
@@ -310,12 +312,25 @@ end
 -- items nobody lists (mkt said 14g, a feed mb said ~140g for
 -- raptor flesh while the book has it at 3s). min() means the EV
 -- can never be more optimistic than the most pessimistic source.
-Price = function(id)
-	if not GM.Price then return nil end
-	local a = GM.Price("dbminbuyout", id)
-	local b = GM.Price("dbmarket", id)
-	if a and b then return min(a, b) end
-	return a or b
+-- what one unit of an item is worth to a farmer, the GoldScout
+-- way: grays are vendor trash — sell price only, never an auction
+-- quote. Everything else takes the LOWER of min-buyout and market
+-- floored at vendor sell — a fantasy listing can never beat the
+-- guaranteed price a vendor always pays.
+ItemVal = function(id)
+	local quality, sell
+	if GetInfo then
+		local ok, q, sp = pcall(function()
+			return select(3, GetInfo(id)), select(11, GetInfo(id))
+		end)
+		if ok then quality, sell = q, sp end
+	end
+	if quality == 0 then return sell end
+	local a = GM.Price and GM.Price("dbminbuyout", id)
+	local b = GM.Price and GM.Price("dbmarket", id)
+	local best = a and b and min(a, b) or (a or b)
+	if sell and sell > (best or 0) then return sell end
+	return best or sell
 end
 
 -- copper value of one loot window at record time — empty corpses
@@ -323,9 +338,23 @@ end
 LootValue = function(items)
 	local v = 0
 	for id, q in pairs(items or {}) do
-		v = v + (Price(id) or 0) * q
+		v = v + (ItemVal(id) or 0) * q
 	end
 	return v
+end
+
+-- Wilson score lower bound (~95%) on a drop chance — the GoldScout
+-- ranking rule: the cautious end of the confidence interval, so a
+-- lucky streak earns nothing against a steady farm. h events out
+-- of n samples.
+local WILSON_Z2 = 3.8416
+local function WilsonLow(h, n)
+	if not h or h <= 0 or not n or n <= 0 then return 0 end
+	local p = h / n
+	local den = 1 + WILSON_Z2 / n
+	return max(0, (p + WILSON_Z2 / (2 * n)
+		- 1.96 * sqrt(p * (1 - p) / n + WILSON_Z2 / (4 * n * n)))
+		/ den)
 end
 
 -- EV of one event from a running-mean record: total qty seen over
@@ -340,7 +369,7 @@ local function ItemsEV(rec, common)
 		-- qty>=2 on records that predate per-item hit tracking)
 		local h = rec.hits and rec.hits[id]
 		if not common or (h and h >= 2) or (not h and qty >= 2) then
-			ev = ev + (Price(id) or 0) * (qty / rec.cnt)
+			ev = ev + (ItemVal(id) or 0) * (qty / rec.cnt)
 		end
 	end
 	return ev
@@ -358,7 +387,7 @@ local function NodeEV(nd)
 	if stat then
 		local t = 0
 		for _, d in ipairs(stat) do
-			t = t + (Price(d.id) or 0) * (d.lo + d.hi) / 2
+			t = t + (ItemVal(d.id) or 0) * (d.lo + d.hi) / 2
 				* d.pct / 100
 		end
 		return t
@@ -450,8 +479,20 @@ function G.ZoneMobs(zn)
 	return s
 end
 -- repeatable per-kill EV — drops the one-shot lottery items
+-- repeatable per-kill EV at the Wilson lower bound: each item's
+-- contribution is (95%-cautious drop chance) x (avg stack when it
+-- drops) x value — a 2-in-17 lucky drop earns almost nothing
 function G.ZoneSusEV(zn)
-	return ItemsEV(zn, true) or 0
+	if not zn.cnt or zn.cnt == 0 then return 0 end
+	local ev = 0
+	for id, qty in pairs(zn.items or {}) do
+		local h = (zn.hits and zn.hits[id]) or min(qty, zn.cnt)
+		if h > 0 then
+			ev = ev + WilsonLow(h, zn.cnt) * (qty / h)
+				* (ItemVal(id) or 0)
+		end
+	end
+	return ev
 end
 
 -- display item for a node/zone: the most valuable thing it drops.
@@ -462,7 +503,7 @@ local KIND_ICON_ITEM = {
 local function BestYieldItem(items)
 	local best, bv
 	for id, qty in pairs(items or {}) do
-		local v = (Price(id) or 0) * qty
+		local v = (ItemVal(id) or 0) * qty
 		if not bv or v > bv then best, bv = id, v end
 	end
 	return best
@@ -870,9 +911,13 @@ function G.Leaderboard()
 			-- cnt) x price, not the mob's whole loot table
 			local tid = db.target
 			local evT
-			if tid and zn.cnt and zn.cnt > 0 then
-				evT = (Price(tid) or 0)
-					* (zn.items[tid] or 0) / zn.cnt
+			if tid and zn.cnt and zn.cnt > 0
+				and (zn.items[tid] or 0) > 0 then
+				local h = (zn.hits and zn.hits[tid])
+					or min(zn.items[tid], zn.cnt)
+				evT = WilsonLow(h, zn.cnt)
+					* (zn.items[tid] / h)
+					* (ItemVal(tid) or 0)
 			end
 			local evS, evR = evT or evSus, evT or ev
 			-- the time-diff row needs: headline = sustained
@@ -890,6 +935,11 @@ function G.Leaderboard()
 					or (rate > 0 and (60 / rate) or 0),
 				kills = zn.kills,
 				spawns = #(zn.pockets or {}),
+				-- GoldScout confidence tiers — small samples are
+				-- estimates, flagged on the row
+				conf = zn.kills < 5 and "low"
+					or zn.kills < 15 and "fair"
+					or zn.kills < 50 and "good" or "high",
 			})
 		end
 	end
@@ -1099,7 +1149,8 @@ local function OnLoot()
 			-- skinning: a skinned corpse is a kill event — zone it,
 			-- and record yields under both the generic key and the
 			-- mob name
-			MergeZone(pos, "skin", items, srcName)
+			local money = GetLootMoney and GetLootMoney() or 0
+			MergeZone(pos, "skin", items, srcName, money)
 			UpdateYield(YieldRec("skin"), items)
 			if srcName then
 				UpdateYield(YieldRec("skin:" .. srcName), items)
@@ -1127,7 +1178,11 @@ local function OnLoot()
 	if next(items) or srcDead then
 		local pos = PosNow()
 		if pos then
-			MergeZone(pos, "hunt", items, srcName)
+			-- coins in the window count too — money is farm value
+			-- (LoneBit tracks it per mob); GetLootMoney reads the
+			-- open window's copper
+			local money = GetLootMoney and GetLootMoney() or 0
+			MergeZone(pos, "hunt", items, srcName, money)
 			UpdateYield(YieldRec("hunt"), items)
 			-- per-mob drop table: "hunt:Ravasaur" -> flesh/leather —
 			-- the seed of a real mob-drop model

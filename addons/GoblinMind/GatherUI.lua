@@ -104,7 +104,9 @@ local function Refresh()
 			fs:SetText(RowText(r))
 			rb._row = r
 			ui.gpmFs[i]:SetText(
-				GM.MoneyShort(floor((r.gpm or 0) * 10000)) .. "/min")
+				((r.conf == "low" or r.conf == "fair") and "~" or "")
+				.. GM.MoneyShort(floor((r.gpm or 0) * 10000))
+				.. "/min")
 			rb:Show()
 		else
 			fs:SetText("")
