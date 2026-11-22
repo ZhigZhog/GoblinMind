@@ -263,16 +263,26 @@ end
 -- records captured before the map projection resolved (harness
 -- data, early-login casts)
 local function MapXY(p, mapID)
-	if p.x and p.y then return p.x, p.y end
+	-- cached x,y is only valid in the map frame it was projected
+	-- for — a record merged from a different mapID must reproject
+	-- its world coords instead (cross-map zone merging)
+	if p.x and p.y and (not p.map or p.map == mapID) then
+		return p.x, p.y
+	end
 	if p.n and p.w and C_Map and C_Map.GetMapPosFromWorldPos
 		and CreateVector2D then
 		local ok, _, mp = pcall(C_Map.GetMapPosFromWorldPos,
 			p.c or 0, CreateVector2D(p.n, p.w), mapID)
 		if ok and mp and mp.x and mp.x >= 0 and mp.x <= 1 then
-			p.x, p.y = mp.x, mp.y
+			if not p.map or p.map == mapID then
+				p.x, p.y = mp.x, mp.y
+			end
 			return mp.x, mp.y
 		end
 	end
+	-- fall back to the raw stored coords only when the frame can't
+	-- be proven foreign
+	if p.x and p.y then return p.x, p.y end
 end
 
 -- map-units per yard near (n,w): project two points a known world

@@ -22,7 +22,7 @@ local db = GoblinMindGather
 -- (pockets, per-item hits, failed-loot counting). Bump = wipe the
 -- derived records so pre-change loot doesn't poison the model.
 -- Nodes keep — positions are still valid; re-import is one click.
-local REC_V = 1
+local REC_V = 2
 if db.v ~= REC_V then
 	db.zones, db.yields, db.resp = {}, {}, {}
 	db.v = REC_V
@@ -339,18 +339,35 @@ end
 
 -- heal split camps: fold same-map same-kind zones whose recorded
 -- areas interpenetrate. Idempotent — converges over repeated calls
-local function CoalesceZones(map)
-	local list = db.zones and db.zones[map]
-	if not list then return end
+-- global pass: the same physical camp can be recorded under
+-- different mapIDs when the client's map resolution jitters, so
+-- candidates come from every map's list; the continent frame is
+-- what makes ZonesNear distance real
+local function CoalesceZones()
+	if not db.zones then return end
+	local flat = {}
+	for _, list in pairs(db.zones) do
+		for _, zn in ipairs(list) do
+			flat[#flat + 1] = zn
+		end
+	end
 	local again = true
 	while again do
 		again = false
-		for i = #list, 1, -1 do
+		for i = #flat, 1, -1 do
 			for j = i - 1, 1, -1 do
-				if list[i].kind == list[j].kind
-					and ZonesNear(list[j], list[i]) then
-					FoldZone(list[j], list[i])
-					tremove(list, i)
+				if flat[i].kind == flat[j].kind
+					and ZonesNear(flat[j], flat[i]) then
+					FoldZone(flat[j], flat[i])
+					local dead = tremove(flat, i)
+					for _, list in pairs(db.zones) do
+						for k = #list, 1, -1 do
+							if list[k] == dead then
+								tremove(list, k)
+								break
+							end
+						end
+					end
 					again = true
 					break
 				end
@@ -364,8 +381,14 @@ local function MergeZone(p, kind, items, mob, mobMoney)
 	local list = ZoneList(p.map)
 	if not list then return nil end
 	local now = GetTime()
-	for _, zn in ipairs(list) do
-		if zn.kind == kind and ZoneMergeable(zn, p) then
+	-- a farm is a PLACE, not a map file: Forever resolves the same
+	-- spot to different mapIDs (a Riverglades beach reporting as
+	-- Tanaris), so merge candidates come from EVERY map's list —
+	-- the shared continent world frame is what makes distance real
+	for _, zl in pairs(db.zones) do
+		for _, zn in ipairs(zl) do
+		if zn.kind == kind and zn.c == p.c
+			and ZoneMergeable(zn, p) then
 			-- kills < ACTIVE_GAP apart = one farming session —
 			-- the zone's rate is kills per active second, so
 			-- breaks don't dilute it
@@ -385,6 +408,7 @@ local function MergeZone(p, kind, items, mob, mobMoney)
 			if d and d > (zn.r or 0) then zn.r = floor(d + 25) end
 			return zn
 		end
+		end
 	end
 	local zn = {
 		map = p.map, x = p.x, y = p.y,
@@ -392,6 +416,14 @@ local function MergeZone(p, kind, items, mob, mobMoney)
 		kind = kind, r = 60, kills = 1,
 		activeT = 0, lastGT = now, items = {}, cnt = 0,
 		pockets = {},
+		-- the area name the PLAYER sees (Riverglades) — map names
+		-- can lie on custom-zone clients that reuse classic mapIDs
+		area = (function()
+			local fn = GetRealZoneText or GetZoneText
+			local ok, t
+			if fn then ok, t = pcall(fn) end
+			return ok and t or nil
+		end)(),
 	}
 	if mob then zn.mobs = { [mob] = 1 } end
 	UpdateYield(zn, items)
@@ -424,7 +456,14 @@ ItemVal = function(id)
 	if quality == 0 then return sell end
 	local a = GM.Price and GM.Price("dbminbuyout", id)
 	local b = GM.Price and GM.Price("dbmarket", id)
-	local best = a and b and min(a, b) or (a or b)
+	-- a lone min-buyout with NO market history is an asking price,
+	-- not a price — one dreamer listing a custom item at 3000g is
+	-- not a farm value. Corroborated quotes use the lower bound;
+	-- unvalidated mb caps at 50g
+	local best
+	if a and b then best = min(a, b)
+	elseif a then best = min(a, 500000)
+	else best = b end
 	if sell and sell > (best or 0) then return sell end
 	return best or sell
 end
@@ -1032,7 +1071,8 @@ function G.MobRows(id)
 			tinsert(rows, {
 				mob = true, kind = "hunt", mobName = mob,
 				map = bestMap, zone = bestZn,
-				zoneName = bestMap and G.ZoneName(bestMap) or nil,
+				zoneName = bestZn and bestZn.area
+					or (bestMap and G.ZoneName(bestMap) or nil),
 				kills = cnt,
 				chance = cnt > 0 and (h / cnt) or 0,
 				stack = stack,
@@ -1145,8 +1185,8 @@ function G.Leaderboard()
 			end
 		end
 	end
+	CoalesceZones()
 	for map, list in pairs(db.zones or {}) do
-		CoalesceZones(map)
 		for _, zn in ipairs(list) do
 			local rate = ZoneRate(zn)
 			local ev = ZoneEV(zn)
@@ -1173,7 +1213,7 @@ function G.Leaderboard()
 			local wall = G.ZoneWall(zn)
 			tinsert(rows, {
 				area = true, map = map, zone = zn,
-				kind = zn.kind, zoneName = G.ZoneName(map),
+				kind = zn.kind, zoneName = zn.area or G.ZoneName(map),
 				gpm = evS * sus,
 				gpmRaw = (wall and wall.gpm) or (evR * rate),
 				evLoop = evS, evRaw = evR,
@@ -1395,7 +1435,10 @@ local function OnLoot()
 			-- skinning: a skinned corpse is a kill event — zone it,
 			-- and record yields under both the generic key and the
 			-- mob name
-			local money = GetLootMoney and GetLootMoney() or 0
+			-- money cap: no mob corpse legitimately carries 5g+
+			-- of loot cash; an over-large return is a broken API
+			-- reading the purse, not the window
+			local money = min((GetLootMoney and GetLootMoney()) or 0, 50000)
 			MergeZone(pos, "skin", items, srcName, money)
 			UpdateYield(YieldRec("skin"), items)
 			if srcName then
@@ -1425,9 +1468,8 @@ local function OnLoot()
 		local pos = PosNow()
 		if pos then
 			-- coins in the window count too — money is farm value
-			-- (LoneBit tracks it per mob); GetLootMoney reads the
-			-- open window's copper
-			local money = GetLootMoney and GetLootMoney() or 0
+			-- (LoneBit tracks it per mob); capped like the skin path
+			local money = min((GetLootMoney and GetLootMoney()) or 0, 50000)
 			MergeZone(pos, "hunt", items, srcName, money)
 			UpdateYield(YieldRec("hunt"), items)
 			-- per-mob drop table: "hunt:Ravasaur" -> flesh/leather —

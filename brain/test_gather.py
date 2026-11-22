@@ -702,6 +702,89 @@ check('count stable after re-import',
 y = g.GoblinMindGather.yields['Copper Vein']
 check('yield mean unchanged', y['items'][2770] / y.cnt == 2)
 
+print('== cross-map merge + area name ==')
+# Forever resolves one physical spot to different mapIDs (a
+# Riverglades beach reporting as Tanaris). Same world coords under
+# two mapIDs must merge into ONE zone, named by the area the
+# player sees — not the map file's name.
+lua.execute(r'''
+	GetRealZoneText = function() return "Riverglades" end
+	_POS.n, _POS.w, _POS.c = 700, 700, 0
+	_POS.map = 1419
+	_POS.x, _POS.y = nil, nil
+	_NAME = "Sand Crawler"
+	SetLoot({ { name = "Eye", qty = 1, link = "|Hitem:730::::::::|h[Murloc Eye]|h" } })
+	_NOW.t = _NOW.t + 30
+''')
+ev('LOOT_OPENED')
+lua.execute('_POS.map = 2548; _NOW.t = _NOW.t + 30')  # client now claims Tanaris
+ev('LOOT_OPENED')
+lua.execute('_NOW.t = _NOW.t + 30')
+ev('LOOT_OPENED')
+zs1419 = g.GoblinMindGather.zones[1419]
+zs2548 = g.GoblinMindGather.zones[2548]
+xm = [z for z in zs1419.values()
+      if z.kind == 'hunt' and z.kills == 3]
+check('cross-map kills merged into one zone', len(xm) == 1)
+check('foreign map list stays empty',
+      zs2548 is None or len(zs2548) == 0)
+if xm:
+    check('area name recorded', xm[0].area == 'Riverglades')
+    rows = list(G.Leaderboard().values())
+    crow = [r for r in rows
+            if r.area and r.kills == 3]
+    check('row shows area name, not map name',
+          crow and all(r.zoneName == 'Riverglades' for r in crow))
+    # and the coalesce pass doesn't split it back apart
+    check('coalesce keeps cross-map zone merged',
+          len(crow) == 1)
+lua.execute('_POS.map = 1419')
+
+print('== money cap + lone-mb price sanity ==')
+# a corpse can't hold 5g+ of loot cash — a purse-scale return is
+# a broken API, cap it
+lua.execute(r'''
+	GetLootMoney = function() return 5000000 end
+	_POS.n, _POS.w = 4000, 4000
+	_POS.x, _POS.y = nil, nil
+	SetLoot({ { name = "Eye", qty = 1, link = "|Hitem:730::::::::|h[Murloc Eye]|h" } })
+	_NOW.t = _NOW.t + 30
+''')
+ev('LOOT_OPENED')
+zs2 = g.GoblinMindGather.zones[1419]
+zc = [z for z in zs2.values() if z.n == 4000]
+check('money zone created', len(zc) == 1)
+if zc:
+    v = sum(h.v for h in zc[0].hist.values())
+    check('money capped at 5g per event', v == 10000 + 50000)
+lua.execute('GetLootMoney = nil')
+
+# a lone min-buyout with no market history caps at 50g — one
+# dreamer listing can't set a farm's value
+lua.execute(r'''
+	GM.Price = function(key, id)
+		if id == 9998 then
+			return key == "dbminbuyout" and 3000000 or nil
+		end
+		return PRICES[id] or 10000
+	end
+''')
+dr = list(G.DropRows('hunt:Sand Crawler').values())
+check('drop rows resolve', len(dr) > 0)
+# seed a yield record directly for the fantasy-priced item
+y9998 = lua.execute(r'''
+	local db = GoblinMindGather
+	db.yields["test:fantasy"] = { items = { [9998] = 2 },
+		hits = { [9998] = 1 }, cnt = 1 }
+	return true
+''')
+dr2 = [r for r in G.DropRows('test:fantasy').values() if r.id == 9998]
+check('lone mb capped at 50g',
+      len(dr2) == 1 and dr2[0].value == 500000)
+lua.execute(r'''
+	GM.Price = function(_, id) return PRICES[id] or 10000 end
+''')
+
 print()
 fails = [n for n, ok in CHECKS if not ok]
 if fails:
