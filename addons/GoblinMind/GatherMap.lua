@@ -330,6 +330,80 @@ local function Cluster(nodes, mapID, thresh)
 	return out
 end
 
+-- MapWise terrain path: MapWiseAPI exposes the addon's whole
+-- table — TerrainIndex holds world-terrain tile fileIDs
+-- (map%02d_%02d on a 533.33yd grid) plus per-zone world bounding
+-- boxes. We draw the real ground tiles instead of the parchment
+-- art whenever the index is present, calibrated to the map's
+-- world corners the same way their Geometry does so map-coord
+-- overlays stay aligned. Nil when MapWise isn't installed or has
+-- no index for this map.
+local function TerrainTiles(mapID)
+	local A = MapWiseAPI
+	local TI = A and A.TerrainIndex
+	if not (TI and TI.files and TI.boxes
+		and TI.valid and TI.maps) then return end
+	local rel = TI.maps[mapID]
+	local set, b
+	if rel then
+		set = rel[1]
+		b = TI.boxes[set] and TI.boxes[set][rel[2]]
+	elseif mapID == 1414 then
+		set = "Kalimdor"
+		b = TI.boxes.Kalimdor and TI.boxes.Kalimdor[0]
+	elseif mapID == 1415 then
+		set = "Azeroth"
+		b = TI.boxes.Azeroth and TI.boxes.Azeroth[0]
+	end
+	local files, valid = TI.files[set], TI.valid[set]
+	if not (files and valid and b) then return end
+	-- prefer the map's own world corners (their Geometry C_Map
+	-- path): the tile frame must equal the map's 0..1 space or
+	-- node/zone overlays won't sit on the terrain they belong to
+	local wid = ({ Azeroth = 0, Kalimdor = 1, ["2991"] = 2991 })[set]
+	if C_Map and C_Map.GetWorldPosFromMapPos and CreateVector2D then
+		local ok0, w0, v0 = pcall(C_Map.GetWorldPosFromMapPos,
+			mapID, CreateVector2D(0, 0))
+		local ok1, w1, v1 = pcall(C_Map.GetWorldPosFromMapPos,
+			mapID, CreateVector2D(1, 1))
+		if ok0 and ok1 and w0 and w0 == w1
+			and (not wid or w0 == wid)
+			and v0 and v1 and v0.x and v1.x
+			and v0.x ~= v1.x and v0.y ~= v1.y then
+			b = { v0.y, v1.y, v0.x, v1.x }
+		end
+	end
+	-- their BuildTerrain math: world->tile grid, clipped to 0..1
+	local cell = 1600 / 3
+	local c0 = max(0, floor(32 - max(b[1], b[2]) / cell) - 1)
+	local c1 = min(63, floor(32 - min(b[1], b[2]) / cell) + 1)
+	local r0 = max(0, floor(32 - max(b[3], b[4]) / cell) - 1)
+	local r1 = min(63, floor(32 - min(b[3], b[4]) / cell) + 1)
+	local out = {}
+	for row = r0, r1 do
+		for col = c0, c1 do
+			local file = files[format("map%02d_%02d", col, row)]
+			if file and file > 0 and valid[col .. "x" .. row] then
+				local x = ((32 - col) * cell - b[1])
+					/ (b[2] - b[1])
+				local y = ((32 - row) * cell - b[3])
+					/ (b[4] - b[3])
+				local tw, th = -cell / (b[2] - b[1]),
+					-cell / (b[4] - b[3])
+				if tw > 0 and th > 0
+					and x < 1 and x + tw > 0
+					and y < 1 and y + th > 0 then
+					out[#out + 1] = {
+						file = file, x = x, y = y,
+						w = tw, h = th,
+					}
+				end
+			end
+		end
+	end
+	return #out > 0 and out or nil
+end
+
 function M.CreatePane(parent, w)
 	local pane = CreateFrame("Frame", nil, parent)
 	pane:SetWidth(w)
@@ -426,7 +500,39 @@ function M.CreatePane(parent, w)
 		self._dw, self._dh = w, floor(h)
 
 		local haveArt = false
-		if C_Map and C_Map.GetMapArtLayers
+		-- terrain beats parchment: real ground tiles via
+		-- MapWise's index when the addon is present — same look
+		-- as their map
+		local terrain = TerrainTiles(mapID)
+		if terrain then
+			for _, t2 in ipairs(terrain) do
+				-- edge tiles bleed past the box — crop them with
+				-- texcoords like MapWise's Texture() does
+				local l = max(0, t2.x)
+				local tp = max(0, t2.y)
+				local rr = min(1, t2.x + t2.w)
+				local bb = min(1, t2.y + t2.h)
+				local t = put("tile")
+				local okS, loaded = pcall(t.SetTexture, t,
+					t2.file, "CLAMP", "CLAMP", "TRILINEAR")
+				if not okS then
+					okS, loaded = pcall(t.SetTexture, t, t2.file)
+				end
+				if okS and loaded ~= false then
+					t:SetTexCoord((l - t2.x) / t2.w,
+						(rr - t2.x) / t2.w,
+						(tp - t2.y) / t2.h,
+						(bb - t2.y) / t2.h)
+					t:SetSize((rr - l) * w, (bb - tp) * h)
+					t:SetPoint("TOPLEFT", self, "TOPLEFT",
+						l * w, -tp * h)
+					haveArt = true
+				else
+					t:Hide()
+				end
+			end
+		end
+		if not terrain and C_Map and C_Map.GetMapArtLayers
 			and C_Map.GetMapArtLayerTextures then
 			local okL, layers = pcall(C_Map.GetMapArtLayers, mapID)
 			if okL and layers then
@@ -469,13 +575,14 @@ function M.CreatePane(parent, w)
 				end
 			end
 		end
-		-- explored-art overlay: detailed terrain where the player
-		-- has actually been. Retail path first
-		-- (MapExploration pin source — offsets/sizes are canvas
-		-- pixel units), then the classic overlay API Forever
-		-- inherits from 1.12
-		local drewExp = false
-		if C_MapExplorationInfo
+		-- explored-art overlay: detailed art where the player has
+		-- actually been — only needed on the parchment base;
+		-- terrain tiles already are the full-detailed look.
+		-- Retail path first (MapExploration pin source — offsets
+		-- are canvas pixel units), then the classic overlay API
+		-- Forever inherits from 1.12
+		local drewExp = terrain ~= nil
+		if not drewExp and C_MapExplorationInfo
 			and C_MapExplorationInfo.GetExploredMapTextures then
 			local okE, exps = pcall(
 				C_MapExplorationInfo.GetExploredMapTextures, mapID)

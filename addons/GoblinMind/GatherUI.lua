@@ -215,9 +215,7 @@ local function Refresh()
 	if ui.tree then
 		ui.tree:Clear()
 		if exIdx then
-			ui.tree:SetPoint("TOPLEFT", ui.rowBtn[exIdx],
-				"BOTTOMLEFT", 12, -2)
-			ui.tree:Fill(exLines)
+			ui.tree:Fill(exLines, ui.rowBtn[exIdx])
 		end
 	end
 	local all = GM.Gather.Leaderboard()
@@ -460,26 +458,25 @@ local function Toggle()
 			ui.rowFs[i], ui.gpmFs[i], ui.rowBtn[i] = fs, gpm, rb
 		end
 
-		-- expansion frame: pooled lines drawn above the faded rows,
-		-- anchored under whichever row is expanded
-		ui.tree = CreateFrame("Frame", nil, ui)
-		ui.tree:SetFrameLevel(ui:GetFrameLevel() + 10)
-		ui.tree.fs = {}
+		-- expansion pool: fontstrings parented to `ui` itself —
+		-- the same surface the status line uses, which provably
+		-- renders here (a wrapper frame's draw level can lose to
+		-- the row buttons' auto-assigned levels)
+		ui.tree = { fs = {} }
 		function ui.tree:Clear()
-			for _, f in ipairs(self.fs) do
-				f:SetText("") f:Hide()
-			end
+			for _, f in ipairs(self.fs) do f:Hide() end
 		end
-		function ui.tree:Fill(lines)
+		function ui.tree:Fill(lines, anchor)
 			for i, s in ipairs(lines) do
 				local f = self.fs[i]
 				if not f then
-					f = GM.MakeFontString(self, GM.FONT, 9, "text")
+					f = GM.MakeFontString(ui, GM.FONT, 9, "text")
 					f:SetJustifyH("LEFT")
 					self.fs[i] = f
 				end
 				f:ClearAllPoints()
-				f:SetPoint("TOPLEFT", 0, -(i - 1) * 12)
+				f:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT",
+					12, -2 - (i - 1) * 12)
 				f:SetText(s)
 				f:Show()
 			end
