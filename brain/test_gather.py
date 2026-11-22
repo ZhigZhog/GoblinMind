@@ -288,6 +288,33 @@ check('zone row has spawns', row is not None and row.spawns == 2)
 check('row gpm is sustained', row is not None
       and row.gpm < row.gpmRaw)
 
+print('== failed farm: empty corpse counts ==')
+# a money-only / empty loot window on a dead target is a kill that
+# dropped nothing — must dilute cnt or EV only sees winners
+k0 = zn.kills
+lua.execute('_NOW.t = _NOW.t + 5; _POS.n, _POS.w = 1100, 1505')
+lua.execute('_NAME = "Young Raptor"; SetLoot({})')
+ev('LOOT_OPENED')
+zn = g.GoblinMindGather.zones[1419][1]
+check('empty corpse counted as kill', zn.kills == k0 + 1)
+check('items unchanged by empty loot',
+      zn['items'][12184] == 3 and zn.cnt == k0 + 1)
+
+print('== target-relative EV ==')
+# with raptor flesh targeted the row shows flesh-per-kill, not the
+# whole loot table: 3 drops over 6 kills x 1g = 0.5g/kill
+G.SetTarget(12184)
+row = None
+for r in G.Leaderboard().values():
+    if r.area and r.zoneName == G.ZoneName(1419) \
+            and r.kills == zn.kills:
+        row = r
+check('target EV = qty/cnt x price', row is not None
+      and abs(row.evLoop - 5000) < 1)
+check('target gpm = ev x sustained', row is not None
+      and abs(row.gpm - 3000) < 1)
+G.SetTarget(None)
+
 print('== skinning -> skin zone ==')
 lua.execute('_POS.n, _POS.w = 500, 500')
 lua.execute('''

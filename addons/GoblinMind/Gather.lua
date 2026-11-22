@@ -761,14 +761,24 @@ function G.Leaderboard()
 			local ev = ZoneEV(zn)
 			local sus = G.ZoneSusRate(zn)
 			local evSus = G.ZoneSusEV(zn)
+			-- targeted: the row answers "what does FARMING THE
+			-- TARGET pay" — target qty/kill (misses dilute via
+			-- cnt) x price, not the mob's whole loot table
+			local tid = db.target
+			local evT
+			if tid and zn.cnt and zn.cnt > 0 then
+				evT = (Price(tid) or 0)
+					* (zn.items[tid] or 0) / zn.cnt
+			end
+			local evS, evR = evT or evSus, evT or ev
 			tinsert(rows, {
 				area = true, map = map, zone = zn,
 				kind = zn.kind, zoneName = G.ZoneName(map),
 				-- headline = sustained; raw = what the session
 				-- actually produced (lottery drops + full rate)
-				gpm = evSus * sus,
-				gpmRaw = ev * rate,
-				evLoop = evSus, evRaw = ev,
+				gpm = evS * sus,
+				gpmRaw = evR * rate,
+				evLoop = evS, evRaw = evR,
 				lapSec = rate > 0 and (60 / rate) or 0,
 				kills = zn.kills,
 				spawns = #(zn.pockets or {}),
@@ -948,7 +958,12 @@ local lastLootSig, lastLootT
 local function OnLoot()
 	if not (GetNumLootItems and GetLootSlotInfo) then return end
 	local items, first = LootItems()
-	if not items then return end
+	if not items then
+		-- an open window with zero item slots = money-only or
+		-- truly empty — still a kill event for hunt zones
+		if GetNumLootItems() ~= 0 then return end
+		items = {}
+	end
 	local t = GetTime()
 	local sig = tostring(first) .. ":" .. tostring(GetNumLootItems())
 	if lastLootSig == sig and t - (lastLootT or 0) < 0.5 then
@@ -989,8 +1004,19 @@ local function OnLoot()
 	-- no gather window: a kill loot = a hunt kill. Any item at all
 	-- seeds the zone — the per-item yield map is what lets target
 	-- mode answer "where does raptor flesh drop" for drops we never
-	-- modeled. Money-only windows (empty items) don't count.
-	if next(items) then
+	-- modeled. An EMPTY window still counts when the source is a
+	-- confirmed corpse: a kill with no drops is a failed farm and
+	-- must dilute the mean, or per-kill EV only ever sees winners.
+	local deadFn = UnitIsDeadOrGhost or UnitIsDead
+	local srcDead = srcName ~= nil
+	if deadFn then
+		srcDead = false
+		for _, u in ipairs({ "target", "mouseover" }) do
+			local okD, dead = pcall(deadFn, u)
+			if okD and dead then srcDead = true break end
+		end
+	end
+	if next(items) or srcDead then
 		local pos = PosNow()
 		if pos then
 			MergeZone(pos, "hunt", items)
