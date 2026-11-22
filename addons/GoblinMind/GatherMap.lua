@@ -199,7 +199,7 @@ function M.Refresh()
 				format("%s · %s kills · %s/min",
 					zn.kind, zn.kills or 0,
 					GM.MoneyShort
-						and GM.MoneyShort(floor(gpm * 10000))
+						and GM.MoneyShort(floor(gpm))
 						or tostring(floor(gpm))))
 		end
 	end

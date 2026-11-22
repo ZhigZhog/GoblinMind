@@ -488,6 +488,12 @@ ItemVal = function(id)
 		end)
 		if ok then quality, sell = q, sp end
 	end
+	-- index 11 is sellPrice on standard clients — on Forever it
+	-- sometimes returns an unrelated field (appearance/spell ids
+	-- land in the millions). Nothing a farm mob drops legitimately
+	-- vendors above 5g, so the floor caps there — a garbage field
+	-- can never price a drop again
+	if sell and sell > 50000 then sell = nil end
 	if quality == 0 then return sell end
 	local a = GM.Price and GM.Price("dbminbuyout", id)
 	local b = GM.Price and GM.Price("dbmarket", id)
@@ -1454,7 +1460,10 @@ local function ItemStr(items)
 	if not items then return "-" end
 	local p = {}
 	for id, q in pairs(items) do
+		-- per-item attributed value — the phantom-price smoking gun:
+		-- whichever id carries the giant number IS the culprit
 		p[#p + 1] = id .. (q > 1 and ("x" .. q) or "")
+			.. "@" .. tostring(ItemVal(id) or "?")
 	end
 	table.sort(p)
 	return #p > 0 and table.concat(p, "·") or "none"
@@ -1537,11 +1546,20 @@ local function OnLoot()
 		srcDead = false
 		-- prefer the DEAD unit's name: a live "Paige Armstrong"
 		-- selected while a dead crawler is under the mouse should
-		-- credit the crawler
+		-- credit the crawler. The corpse must have been ATTACKABLE —
+		-- a permanently-dead questgiver/set-piece corpse (also
+		-- "Paige Armstrong") is not a kill
 		srcName = nil
 		for _, u in ipairs({ "target", "mouseover" }) do
 			local okD, dead = pcall(deadFn, u)
-			if okD and dead then
+			-- only an explicit "can't attack" disqualifies — a nil
+			-- or absent API can't disprove the corpse was killable
+			local atk = true
+			if UnitCanAttack then
+				local okA, a = pcall(UnitCanAttack, "player", u)
+				if okA and a == false then atk = false end
+			end
+			if okD and dead and atk then
 				srcDead = true
 				local nm = UnitName and UnitName(u)
 				if nm then srcName = nm break end

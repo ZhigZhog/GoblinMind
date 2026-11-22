@@ -36,14 +36,14 @@ local function RowText(r)
 			col, "MOB", r.mobName, r.zoneName or "?",
 			r.kills or 0, r.targetName or "?",
 			(r.chance or 0) * 100,
-			GM.MoneyShort(floor((r.evLoop or 0) * 10000)))
+			GM.MoneyShort(floor((r.evLoop or 0))))
 	end
 	if r.area then
 		-- zone row: kind · kills · spawns · sec/kill · EV/kill
 		-- (+ raw measured GPM when the lottery delta is big)
 		local raw = (r.gpmRaw or 0) > (r.gpm or 0) * 1.15
 			and (GM.CC("textDim") .. "  earned "
-				.. GM.MoneyShort(floor(r.gpmRaw * 10000))
+				.. GM.MoneyShort(floor(r.gpmRaw))
 				.. "/min|r") or ""
 		-- mob names first — "what" distinguishes two camps in the
 		-- same zone better than the map name does
@@ -55,14 +55,14 @@ local function RowText(r)
 			col, KindLabel(r.kind), where,
 			r.kills or 0, r.spawns or 0,
 			format("%.0f", r.lapSec),
-			GM.MoneyShort(floor((r.evLoop or 0) * 10000)), raw)
+			GM.MoneyShort(floor((r.evLoop or 0))), raw)
 	end
 	-- route row: kind · stops · lap time · EV/lap
 	return format("%s%-5s|r  %s  ·  %d stops  ·  %s/lap  ·  %s/lap",
 		col, KindLabel(r.kind), r.zoneName,
 		r.stops and #r.stops or 0,
 		GM.Gather.SecondsText(r.lapObs or r.lapSec),
-		GM.MoneyShort(floor((r.evLoop or 0) * 10000)))
+		GM.MoneyShort(floor((r.evLoop or 0))))
 end
 
 -- the pane shows the selected row's map; default = wherever the
@@ -139,7 +139,7 @@ local function Refresh()
 			rb._row = r
 			gpm._prefix = (r.conf == "low" or r.conf == "fair")
 				and "~" or ""
-			gpm:SetCopperShort(floor((r.gpm or 0) * 10000),
+			gpm:SetCopperShort(floor((r.gpm or 0)),
 				r.unitSuffix)
 			rb:Show()
 		else
@@ -222,7 +222,7 @@ local function Build()
 		GM.Print(GM.CC("accent") .. "route: " .. r.zoneName .. "|r  "
 			.. #r.stops .. " stops, "
 			.. GM.Gather.SecondsText(r.lapSec) .. "/lap, ~"
-			.. GM.MoneyShort(floor(r.gpm * 10000)) .. "/min")
+			.. GM.MoneyShort(floor(r.gpm)) .. "/min")
 	else
 		GM.Print(GM.CC("textDim")
 			.. "not enough nodes here yet (need 3+)|r")
