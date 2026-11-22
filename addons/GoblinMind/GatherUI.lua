@@ -107,6 +107,51 @@ local function RowID(r)
 	return "route:" .. tostring(r.map) .. ":" .. tostring(r.kind)
 end
 
+-- continent grouping for the zone picker and continent-scope
+-- filtering: the records' own `c` (UnitPosition's continent —
+-- data-driven, works even when the client's map hierarchy is
+-- thin), else a parentMapID walk up to the ancestor directly
+-- under a world/cosmic map
+local CONT_NAME = { [1] = "Kalimdor", [2] = "Eastern Kingdoms",
+	[3] = "Outland", [4] = "Northrend" }
+
+local function MapContinent(map)
+	-- records' `c` is UnitPosition's continent; 0 means "the
+	-- client didn't know", not a continent, so it can't be a key
+	local zl = map and GoblinMindGather.zones
+		and GoblinMindGather.zones[map]
+	if zl and zl[1] and zl[1].c and zl[1].c ~= 0 then
+		return zl[1].c
+	end
+	local nl = map and GoblinMindGather.nodes
+		and GoblinMindGather.nodes[map]
+	if nl and nl[1] and nl[1].c and nl[1].c ~= 0 then
+		return nl[1].c
+	end
+	local GetInfo = C_Map and C_Map.GetMapInfo
+	if not (map and GetInfo) then return nil end
+	local cur, prev = map, nil
+	for _ = 1, 8 do
+		local ok, info = pcall(GetInfo, cur)
+		if not (ok and info) then return prev end
+		local p = info.parentMapID
+		if not p or p == 0 or p == cur then return prev end
+		local ok2, pi = pcall(GetInfo, p)
+		if ok2 and pi and pi.mapType and pi.mapType <= 1 then
+			return cur -- cur's parent is a world/cosmic map
+		end
+		prev, cur = cur, p
+	end
+end
+
+-- label the continent key — small ints are UnitPosition
+-- continents, big numbers resolve as mapIDs
+local function ContLabel(c)
+	if not c then return "other" end
+	if CONT_NAME[c] then return CONT_NAME[c] end
+	return GM.Gather.ZoneName(c)
+end
+
 -- a mob row's category is its best camp's, not its recording
 -- disposition — a cook camp's mob belongs under COOK
 local function RowKind(r)
@@ -118,6 +163,12 @@ end
 
 local function RowKeep(r)
 	if ui.zoneFilter and r.map ~= ui.zoneFilter then return false end
+	-- a continent scope matches every map inside it plus any
+	-- records stored on the continent mapID itself
+	if ui.contFilter and r.map ~= ui.contFilter.id
+		and ContLabel(MapContinent(r.map)) ~= ui.contFilter.label then
+		return false
+	end
 	if ui.kindFilter and RowKind(r) ~= ui.kindFilter then
 		return false
 	end
@@ -296,7 +347,8 @@ local function Refresh()
 	ui.speedBtn:SetText("speed: " .. sp.name)
 	ui.contBtn:SetText("crowd: "
 		.. GM.Gather.CONTS[GM.Gather.ContIx()].name)
-	ui.zoneBtn.text:SetText("zone: " .. (ui.zoneFilter
+	ui.zoneBtn.text:SetText("zone: " .. (ui.contFilter
+		and ui.contFilter.label or ui.zoneFilter
 		and GM.Gather.ZoneName(ui.zoneFilter) or "all"))
 	ui.filterBtn.text:SetText("filter: " .. (ui.kindFilter
 		and string.lower(KindLabel(ui.kindFilter)) or "all"))
@@ -344,59 +396,31 @@ end
 
 local function SetZoneFilter(m)
 	ui.zoneFilter = m
+	ui.contFilter = nil
 	if m then ui.mapSel = m end
 	ui.scroll = 0
 	Refresh()
 end
 
--- continent grouping for the zone picker: the records' own `c`
--- (UnitPosition's continent — data-driven, works even when the
--- client's map hierarchy is thin), else a parentMapID walk up to
--- the ancestor directly under a world/cosmic map
-local CONT_NAME = { [1] = "Kalimdor", [2] = "Eastern Kingdoms",
-	[3] = "Outland", [4] = "Northrend" }
-
-local function MapContinent(map)
-	-- records' `c` is UnitPosition's continent; 0 means "the
-	-- client didn't know", not a continent, so it can't be a key
-	local zl = GoblinMindGather.zones and GoblinMindGather.zones[map]
-	if zl and zl[1] and zl[1].c and zl[1].c ~= 0 then
-		return zl[1].c
-	end
-	local nl = GoblinMindGather.nodes and GoblinMindGather.nodes[map]
-	if nl and nl[1] and nl[1].c and nl[1].c ~= 0 then
-		return nl[1].c
-	end
-	local GetInfo = C_Map and C_Map.GetMapInfo
-	if not GetInfo then return nil end
-	local cur, prev = map, nil
-	for _ = 1, 8 do
-		local ok, info = pcall(GetInfo, cur)
-		if not (ok and info) then return prev end
-		local p = info.parentMapID
-		if not p or p == 0 or p == cur then return prev end
-		local ok2, pi = pcall(GetInfo, p)
-		if ok2 and pi and pi.mapType and pi.mapType <= 1 then
-			return cur -- cur's parent is a world/cosmic map
-		end
-		prev, cur = cur, p
-	end
-end
-
--- label the continent key — small ints are UnitPosition
--- continents, big numbers resolve as mapIDs
-local function ContLabel(c)
-	if not c then return "other" end
-	if CONT_NAME[c] then return CONT_NAME[c] end
-	return GM.Gather.ZoneName(c)
+-- continent scope: every map under this continent counts, plus
+-- records stored on the continent mapID itself
+local function SetContFilter(cid, label)
+	ui.contFilter = { id = cid, label = label }
+	ui.zoneFilter = nil
+	ui.mapSel = cid -- the pane gets the whole continent
+	ui.scroll = 0
+	Refresh()
 end
 
 -- every zone the client knows, columned by continent (Kalimdor
--- and Eastern Kingdoms first). Record-carrying maps the walk
+-- and Eastern Kingdoms first). Continent/world mapIDs never
+-- appear as entries — they're the clickable column headers, and
+-- the world is the "Azeroth" row. Record-carrying maps the walk
 -- misses get appended under whatever continent their records
 -- claim — Forever custom zones can nest oddly
 local function ZoneColumns()
 	local cols, colIx, listed = {}, {}, {}
+	local contIds = {}
 	local function colFor(label)
 		local c = colIx[label]
 		if not c then
@@ -417,11 +441,16 @@ local function ZoneColumns()
 			local id = k.mapID or k.uiMapID
 			if id then
 				conts[#conts + 1] = { id = id, name = k.name }
+				contIds[id] = true
 			end
 		end
-		if #conts == 0 then conts = { { id = 1414 }, { id = 1415 } } end
+		if #conts == 0 then
+			conts = { { id = 1414 }, { id = 1415 } }
+			contIds[1414], contIds[1415] = true, true
+		end
 		for _, c in ipairs(conts) do
 			local col = colFor(c.name or GM.Gather.ZoneName(c.id))
+			col.id = c.id -- the header's clickable scope
 			local function walk(pid, depth)
 				if depth > 3 then return end
 				local ok2, zones = pcall(GI, pid)
@@ -439,9 +468,10 @@ local function ZoneColumns()
 			walk(c.id, 1)
 		end
 	end
-	-- record-carrying maps the enumeration never produced
+	-- record-carrying maps the enumeration never produced —
+	-- but never a world/continent map (those are the headers)
 	for _, map in ipairs(KnownMaps()) do
-		if not listed[map] then
+		if not listed[map] and not contIds[map] and map ~= 947 then
 			local col = colFor(ContLabel(MapContinent(map)))
 			col.entries[#col.entries + 1] = map
 		end
@@ -480,7 +510,7 @@ local function OpenZoneMenu(btn)
 		m:SetFrameLevel(ui:GetFrameLevel() + 40)
 		GM.Panel(m, "contLow", "outline")
 		m.catcher = catcher
-		m.rows, m.heads = {}, {}
+		m.rows = {}
 		ui.zmenu = m
 	end
 	local cols = ZoneColumns()
@@ -494,8 +524,8 @@ local function OpenZoneMenu(btn)
 	local vis = math.min(maxRows, MAXR)
 	m.off = 0
 	local function Paint()
-		local rowIx, headIx = 0, 0
-		local function Row(x, y, w, label, checked, cb)
+		local rowIx = 0
+		local function Row(x, y, w, label, checked, cb, head)
 			rowIx = rowIx + 1
 			local b = m.rows[rowIx]
 			if not b then
@@ -519,7 +549,7 @@ local function OpenZoneMenu(btn)
 			b:SetPoint("TOPLEFT", x, y)
 			b.text:SetText(label)
 			b.text:SetTextColor(GM.RGB(
-				checked and "accent" or "text"))
+				checked and "accent" or head and "textDim" or "text"))
 			b:SetScript("OnClick", cb and function()
 				m:Hide()
 				m.catcher:Hide()
@@ -529,21 +559,17 @@ local function OpenZoneMenu(btn)
 		end
 		-- "Azeroth" spans the whole menu: the world = every zone
 		Row(2, -2, width - 4, "Azeroth",
-			not ui.zoneFilter, function() SetZoneFilter(nil) end)
-		-- continent titles + paged entries
+			not ui.zoneFilter and not ui.contFilter,
+			function() SetZoneFilter(nil) end)
+		-- continent headers are clickable — selecting one scopes
+		-- the rows to the whole continent — then paged entries
 		for ci, col in ipairs(cols) do
 			local x = 2 + (ci - 1) * COLW
-			headIx = headIx + 1
-			local fs = m.heads[headIx]
-			if not fs then
-				fs = GM.MakeFontString(m, GM.FONT_BOLD, 9, "textDim")
-				fs:SetJustifyH("LEFT")
-				m.heads[headIx] = fs
-			end
-			fs:ClearAllPoints()
-			fs:SetPoint("TOPLEFT", x + 6, -2 - RH - 3)
-			fs:SetText(col.label)
-			fs:Show()
+			Row(x, -2 - RH, COLW, col.label,
+				ui.contFilter and ui.contFilter.id == col.id,
+				col.id and function()
+					SetContFilter(col.id, col.label)
+				end, true)
 			for i = 1, vis do
 				local map = col.entries[m.off + i]
 				if not map then break end
@@ -554,7 +580,6 @@ local function OpenZoneMenu(btn)
 			end
 		end
 		for i = rowIx + 1, #m.rows do m.rows[i]:Hide() end
-		for i = headIx + 1, #m.heads do m.heads[i]:Hide() end
 		m:SetSize(width, 8 + RH * (2 + vis))
 	end
 	m:EnableMouseWheel(true)
