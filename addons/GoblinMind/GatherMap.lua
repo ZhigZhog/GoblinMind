@@ -174,6 +174,9 @@ end
 function M.RouteFor(map)
 	return lastRoutes[map]
 end
+function M.ClearRoute(map)
+	lastRoutes[map] = nil
+end
 
 function M.Refresh()
 	G = G or GM.Gather

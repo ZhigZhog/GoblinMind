@@ -343,20 +343,10 @@ local function Refresh()
 			.. "BUILD solves the best loop for your current zone — "
 			.. "a tight pocket of rich nodes can beat the whole map.|r")
 	end
-	local sp = GM.Gather.SPEEDS[GM.Gather.SpeedIx()]
-	-- "~" = assumed from riding skill; plain = manual override
-	ui.speedBtn:SetText("speed: "
-		.. (GoblinMindGather.speedIx and "" or "~") .. sp.name)
-	ui.contBtn:SetText("crowd: "
-		.. GM.Gather.CONTS[GM.Gather.ContIx()].name)
 	-- routes only exist for HERB/MINE — grey out otherwise
 	local routeable = ui.kindFilter == "herb" or ui.kindFilter == "mine"
 	ui.build:SetEnabled(routeable)
 	ui.build:SetAlpha(routeable and 1 or 0.4)
-	if ui._armed then
-		ui._armed = nil
-		ui.clear.text:SetText("CLEAR")
-	end
 	ui.zoneBtn.text:SetText("zone: " .. (ui.contFilter
 		and ui.contFilter.label or ui.zoneFilter
 		and GM.Gather.ZoneName(ui.zoneFilter) or "all"))
@@ -721,40 +711,24 @@ local function Toggle()
 			Refresh()
 		end)
 		ui.load:SetPoint("LEFT", ui.save, "RIGHT", 6, 0)
-		-- wipe the whole gather book — two-step arm so a stray
-		-- click can't erase hours of node/zone data
+		-- drop the route on the viewed map: saved loop, overlay,
+		-- and a running instance — node/zone data is untouched
 		ui.clear = Btn(ui, 70, "CLEAR", function()
-			if not ui._armed then
-				ui._armed = true
-				ui.clear.text:SetText("SURE?")
-				return
+			local p = ui.mapSel or ui.zoneFilter or GM.Gather.CurrentMap()
+			if p and GM.Gather.ClearRoute(p) then
+				GM.Print(GM.CC("accent") .. "route cleared|r")
+			else
+				GM.Print(GM.CC("textDim")
+					.. "no route here to clear|r")
 			end
-			GM.Gather.ClearData()
-			ui.expanded, ui.scroll, ui._armed = nil, 0, nil
-			GM.Print(GM.CC("accent") .. "gather data cleared|r")
 			Refresh()
 		end)
 		ui.clear:SetPoint("LEFT", ui.load, "RIGHT", 6, 0)
-		-- speed: riding skill by default, click to pin a manual
-		-- override (cycles run -> +40% -> +100% -> back to auto)
-		ui.speedBtn = Btn(ui, 140, "speed:", function()
-			local ix = (GoblinMindGather.speedIx or 0) + 1
-			if ix > #GM.Gather.SPEEDS then ix = nil end
-			GoblinMindGather.speedIx = ix
-			Refresh()
-		end)
-		ui.speedBtn:SetPoint("LEFT", ui.clear, "RIGHT", 12, 0)
-		ui.contBtn = Btn(ui, 100, "crowd:", function()
-			GoblinMindGather.contIx =
-				(GM.Gather.ContIx() % #GM.Gather.CONTS) + 1
-			Refresh()
-		end)
-		ui.contBtn:SetPoint("LEFT", ui.speedBtn, "RIGHT", 6, 0)
 
 		-- controls row 2: the target pick — name/link/id text box
 		-- that also takes drops
 		ui.target = W.EditBox(ui, 190, "target item...")
-		ui.target:SetPoint("TOPLEFT", 14, y - 24)
+		ui.target:SetPoint("TOPLEFT", 14, y - 26)
 		ui.target:SetScript("OnEnterPressed", function(s)
 			local id = ResolveTarget(s:GetText())
 			if id then
@@ -781,16 +755,18 @@ local function Toggle()
 		ui.targetClear:SetPoint("LEFT", ui.target, "RIGHT", 6, 0)
 
 		-- shared slot: drop a target item onto it; shows icon+name+id
+		-- h=26 fits the row pitch — the old 30px slot poked a
+		-- pixel into the button row and sat on the count line
 		ui.targetSlot = W.ItemSlot(ui, {
-			w = 240, h = 30, icon = 26,
+			w = 240, h = 26, icon = 22,
 			nameSize = 10, subSize = 8,
 			hint = "or drop an item on me",
 			onItem = function(id) SetTarget(id) end,
 		})
 		ui.targetSlot:SetPoint("LEFT", ui.targetClear, "RIGHT", 8, 0)
 
-		-- leaderboard: left column
-		local listTop = y - 50
+		-- leaderboard: left column (under the 26px target slot)
+		local listTop = y - 56
 		ui.count = GM.MakeFontString(ui, GM.FONT, 9, "textDim")
 		ui.count:SetPoint("TOPLEFT", 14, listTop)
 		ui.count:SetJustifyH("LEFT")

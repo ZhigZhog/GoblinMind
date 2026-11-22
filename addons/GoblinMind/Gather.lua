@@ -929,10 +929,10 @@ function G.RidingIx()
 	return 1
 end
 
--- transport-mode index the solver assumes: riding skill unless
--- the UI pinned a manual override
+-- transport-mode index the solver assumes: always the riding
+-- skill — the UI no longer offers an override
 function G.SpeedIx()
-	return db.speedIx or G.RidingIx()
+	return G.RidingIx()
 end
 
 -- contention: the share of a camp's spawns you actually get when
@@ -944,6 +944,8 @@ G.CONTS = {
 	{ name = "contested", f = 0.4 },
 	{ name = "packed", f = 0.25 },
 }
+-- crowd factor: solo by default — no UI control anymore, but the
+-- model stays (db.contIx remains the programmatic override)
 function G.ContIx()
 	return db.contIx or 1
 end
@@ -1534,6 +1536,31 @@ function G.LoadRoute(map, kind)
 	return best
 end
 
+-- drop a map's route: the saved loop, the noted overlay, and a
+-- running instance — the data (nodes/zones) stays
+function G.ClearRoute(map)
+	if not map then return nil end
+	local touched
+	if db.saved then
+		for k in pairs(db.saved) do
+			if tonumber(k:match("^(%d+):")) == map then
+				db.saved[k] = nil
+				touched = true
+			end
+		end
+	end
+	if run and run.route and run.route.map == map then
+		G.StopRoute()
+		touched = true
+	end
+	if GM.GatherMap and GM.GatherMap.RouteFor(map) then
+		GM.GatherMap.ClearRoute(map)
+		touched = true
+	end
+	return touched
+end
+
+-- full wipe: nodes/zones/yields/respawns/journal/saved routes
 function G.ClearData()
 	wipe(db.nodes)
 	wipe(db.zones)
