@@ -470,9 +470,11 @@ function M.CreatePane(parent, w)
 			end
 		end
 		-- explored-art overlay: detailed terrain where the player
-		-- has actually been. Same source as Blizzard's
-		-- MapExploration pin — offsets/sizes are in canvas pixel
-		-- units scaled to our pane
+		-- has actually been. Retail path first
+		-- (MapExploration pin source — offsets/sizes are canvas
+		-- pixel units), then the classic overlay API Forever
+		-- inherits from 1.12
+		local drewExp = false
 		if C_MapExplorationInfo
 			and C_MapExplorationInfo.GetExploredMapTextures then
 			local okE, exps = pcall(
@@ -496,12 +498,40 @@ function M.CreatePane(parent, w)
 						t:SetPoint("TOPLEFT", self, "TOPLEFT",
 							e.offsetX * pw,
 							-e.offsetY * ph)
+						haveArt, drewExp = true, true
+					else
+						t:Hide()
+					end
+				end
+			end
+		end
+		-- classic path: explored chunks live on the world-map
+		-- state — select our map, read its overlays, restore
+		if not drewExp and GetNumMapOverlays and GetMapOverlayInfo then
+			if SetMapByID then pcall(SetMapByID, mapID) end
+			local cur = GetCurrentMapAreaID
+				and GetCurrentMapAreaID()
+			if not cur or cur == mapID then
+				-- overlay offsets are pixels on the 1002x668
+				-- detail frame — scale to the pane
+				local pw, ph = w / 1002, h / 668
+				local nOv = GetNumMapOverlays() or 0
+				for i = 1, nOv do
+					local tex, tw, th, ox, oy =
+						GetMapOverlayInfo(i)
+					if tex then
+						local t = put("exptile")
+						t:SetTexture(tex)
+						t:SetSize(tw * pw, th * ph)
+						t:SetPoint("TOPLEFT", self, "TOPLEFT",
+							ox * pw, -oy * ph)
 						haveArt = true
 					else
 						t:Hide()
 					end
 				end
 			end
+			if SetMapToCurrentZone then pcall(SetMapToCurrentZone) end
 		end
 		if not haveArt then
 			local t = put("tile")

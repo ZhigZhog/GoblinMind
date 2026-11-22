@@ -175,17 +175,27 @@ local function Refresh()
 		end
 	end
 	ui.rows = rows
-	-- expansion state: the clicked row keeps full alpha and drops
-	-- a tree below it; every other row fades
-	local exIdx
+	-- expansion state: the clicked row keeps full alpha, every
+	-- other row fades, and rows BELOW it physically drop to make
+	-- room for the drop tree — a real expansion, not an overlay
+	local exIdx, exLines
 	for i, r in ipairs(rows) do
 		if RowID(r) == ui.expanded then exIdx = i break end
 	end
 	if not exIdx then ui.expanded = nil end
+	if exIdx then exLines = DetailLines(rows[exIdx]) end
+	local extra = exLines and (#exLines * 12 + 6) or 0
+	-- rows pushed past the window bottom hide instead of
+	-- overrunning the hint line (content floor ≈ -530 of 560)
+	local maxOff = (ui._rowTop or -92) + 511
 	for i = 1, ROWS do
 		local r, fs, rb, gpm =
 			rows[i], ui.rowFs[i], ui.rowBtn[i], ui.gpmFs[i]
-		if r then
+		local off = (i - 1) * 20
+			+ (exIdx and i > exIdx and extra or 0)
+		if r and off <= maxOff then
+			rb:ClearAllPoints()
+			rb:SetPoint("TOPLEFT", 10, (ui._rowTop or -92) - off)
 			fs:SetText(RowText(r))
 			rb._row = r
 			gpm._prefix = (r.conf == "low" or r.conf == "fair")
@@ -207,7 +217,7 @@ local function Refresh()
 		if exIdx then
 			ui.tree:SetPoint("TOPLEFT", ui.rowBtn[exIdx],
 				"BOTTOMLEFT", 12, -2)
-			ui.tree:Fill(DetailLines(rows[exIdx]))
+			ui.tree:Fill(exLines)
 		end
 	end
 	local all = GM.Gather.Leaderboard()
@@ -395,6 +405,7 @@ local function Toggle()
 
 		ui.rowFs, ui.gpmFs, ui.rowBtn = {}, {}, {}
 		local top = listTop - 16
+		ui._rowTop = top
 		for i = 1, ROWS do
 			local rb = CreateFrame("Button", nil, ui)
 			rb:SetPoint("TOPLEFT", 10, top - (i - 1) * 20)

@@ -22,7 +22,7 @@ local db = GoblinMindGather
 -- (pockets, per-item hits, failed-loot counting). Bump = wipe the
 -- derived records so pre-change loot doesn't poison the model.
 -- Nodes keep — positions are still valid; re-import is one click.
-local REC_V = 3
+local REC_V = 4
 if db.v ~= REC_V then
 	db.zones, db.yields, db.resp, db.journal = {}, {}, {}, {}
 	db.v = REC_V
@@ -1592,12 +1592,23 @@ local function OnLoot()
 		srcName = nil
 		for _, u in ipairs({ "target", "mouseover" }) do
 			local okD, dead = pcall(deadFn, u)
-			-- only an explicit "can't attack" disqualifies — a nil
-			-- or absent API can't disprove the corpse was killable
+			-- only an explicit "can't attack"/"is friendly"
+			-- disqualifies — a nil or absent API can't disprove the
+			-- corpse was killable. UnitCanAttack doesn't exist on
+			-- some 1.12-API clients; UnitIsFriend/UnitReaction are
+			-- the classic-era belts for the same check
 			local atk = true
 			if UnitCanAttack then
 				local okA, a = pcall(UnitCanAttack, "player", u)
 				if okA and a == false then atk = false end
+			end
+			if atk and UnitIsFriend then
+				local okF, fr = pcall(UnitIsFriend, "player", u)
+				if okF and fr then atk = false end
+			end
+			if atk and UnitReaction then
+				local okR, rx = pcall(UnitReaction, "player", u)
+				if okR and rx and rx >= 5 then atk = false end
 			end
 			if okD and dead and atk then
 				srcDead = true
