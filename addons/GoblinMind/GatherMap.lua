@@ -391,10 +391,15 @@ function M.CreatePane(parent, w)
 	-- aspect (letterboxed into the pane); overlays map 0-1 coords
 	-- onto the same rect
 	function pane:SetData(mapID, route)
+		self._mapID, self._route = mapID, route
+		if self._drawing then return end
+		self._drawing = true
 		clear()
 		local G = GM.Gather
 		local w = self:GetWidth()
-		if not (mapID and w and w > 0) then return end
+		if not (mapID and w and w > 0) then
+			self._drawing = nil return
+		end
 
 		local aspect = 1.5 -- fallback when the art API is missing
 		if C_Map and C_Map.GetMapArtLayers then
@@ -407,10 +412,13 @@ function M.CreatePane(parent, w)
 		end
 		-- when the host frame pins the height (flush-bottom map
 		-- pane) the tiles stretch into it; otherwise the map keeps
-		-- its true aspect
-		local h = self._fixedH and self:GetHeight()
-			or floor(w / aspect + 0.5)
+		-- its true aspect. GetHeight can read 0 before the anchored
+		-- layout resolves — fall back to the aspect height and let
+		-- OnSizeChanged redraw once the real size settles
+		local h = self._fixedH and self:GetHeight() or nil
+		if not h or h <= 0 then h = floor(w / aspect + 0.5) end
 		if not self._fixedH then self:SetHeight(h) end
+		self._dw, self._dh = w, floor(h)
 
 		local haveArt = false
 		if C_Map and C_Map.GetMapArtLayers
@@ -430,12 +438,27 @@ function M.CreatePane(parent, w)
 						local tw, th = w / cols, h / rows
 						for i, fileID in ipairs(texs) do
 							local t = put("tile")
-							t:SetTexture(fileID)
-							t:SetSize(tw, th)
-							t:SetPoint("TOPLEFT", self, "TOPLEFT",
-								((i - 1) % cols) * tw,
-								-floor((i - 1) / cols) * th)
-							haveArt = true
+							-- MapWise load pattern: checked
+							-- SetTexture with clamp+filter, plain
+							-- retry, hide on genuine failure
+							local okS, loaded = pcall(t.SetTexture, t,
+								fileID, "CLAMP", "CLAMP",
+								"TRILINEAR")
+							if not okS then
+								okS, loaded = pcall(t.SetTexture,
+									t, fileID)
+							end
+							if okS and loaded ~= false then
+								t:SetSize(tw, th)
+								t:SetPoint("TOPLEFT", self,
+									"TOPLEFT",
+									((i - 1) % cols) * tw,
+									-floor((i - 1) / cols)
+										* th)
+								haveArt = true
+							else
+								t:Hide()
+							end
 						end
 					end
 				end
@@ -447,7 +470,9 @@ function M.CreatePane(parent, w)
 			t:SetVertexColor(0.04, 0.06, 0.05, 1)
 			t:SetAllPoints()
 		end
-		if not G then return end
+		if not G then
+			self._drawing = nil return
+		end
 
 		local zones = G.ZoneList(mapID) or {}
 		local nodes = G.NodeList(mapID) or {}
@@ -562,7 +587,18 @@ function M.CreatePane(parent, w)
 				end
 			end
 		end
+		self._drawing = nil
 	end
+
+	-- anchored (_fixedH) panes resolve their real size after the
+	-- first SetData — redraw into it once it settles, and on any
+	-- later resize
+	pane:SetScript("OnSizeChanged", function(self, w, h)
+		if self._mapID and w and h and w > 0 and h > 0
+			and (self._dw ~= w or self._dh ~= floor(h)) then
+			self:SetData(self._mapID, self._route)
+		end
+	end)
 
 	return pane
 end

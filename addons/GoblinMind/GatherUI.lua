@@ -98,6 +98,14 @@ local function TargetName(id)
 	return (n and n ~= "") and n or ("item " .. tostring(id))
 end
 
+-- stable row identity — Leaderboard rebuilds row tables every
+-- Refresh, so expansion must key on data, not object identity
+local function RowID(r)
+	if r.mob then return "mob:" .. tostring(r.mobName) end
+	if r.area then return "zone:" .. tostring(r.zone) end
+	return "route:" .. tostring(r.map) .. ":" .. tostring(r.kind)
+end
+
 -- the expansion tree: headers per mob + the camp total, each
 -- with observed drop rows (name · drop% · value)
 local function DetailLines(r)
@@ -171,7 +179,7 @@ local function Refresh()
 	-- a tree below it; every other row fades
 	local exIdx
 	for i, r in ipairs(rows) do
-		if r == ui.expanded then exIdx = i break end
+		if RowID(r) == ui.expanded then exIdx = i break end
 	end
 	if not exIdx then ui.expanded = nil end
 	for i = 1, ROWS do
@@ -184,8 +192,8 @@ local function Refresh()
 				and "~" or ""
 			gpm:SetCopperShort(floor((r.gpm or 0)),
 				r.unitSuffix)
-			rb:SetAlpha(ui.expanded and r ~= ui.expanded
-				and 0.3 or 1)
+			rb:SetAlpha(ui.expanded
+				and RowID(r) ~= ui.expanded and 0.3 or 1)
 			rb:Show()
 		else
 			fs:SetText("")
@@ -194,12 +202,12 @@ local function Refresh()
 			rb:Hide()
 		end
 	end
-	if ui.detail then
-		ui.detail:Clear()
+	if ui.tree then
+		ui.tree:Clear()
 		if exIdx then
-			ui.detail:SetPoint("TOPLEFT", ui.rowBtn[exIdx],
+			ui.tree:SetPoint("TOPLEFT", ui.rowBtn[exIdx],
 				"BOTTOMLEFT", 12, -2)
-			ui.detail:Fill(DetailLines(ui.expanded))
+			ui.tree:Fill(DetailLines(rows[exIdx]))
 		end
 	end
 	local all = GM.Gather.Leaderboard()
@@ -408,7 +416,8 @@ local function Toggle()
 				local r = s._row
 				if not r then return end
 				-- toggle the drop-tree expansion under this row
-				ui.expanded = (ui.expanded == r) and nil or r
+				local id = RowID(r)
+				ui.expanded = (ui.expanded == id) and nil or id
 				-- pane follows the pick either way
 				ui.mapSel = r.map
 				ui.mapRow = r
@@ -442,15 +451,15 @@ local function Toggle()
 
 		-- expansion frame: pooled lines drawn above the faded rows,
 		-- anchored under whichever row is expanded
-		ui.detail = CreateFrame("Frame", nil, ui)
-		ui.detail:SetFrameLevel(ui:GetFrameLevel() + 10)
-		ui.detail.fs = {}
-		function ui.detail:Clear()
+		ui.tree = CreateFrame("Frame", nil, ui)
+		ui.tree:SetFrameLevel(ui:GetFrameLevel() + 10)
+		ui.tree.fs = {}
+		function ui.tree:Clear()
 			for _, f in ipairs(self.fs) do
 				f:SetText("") f:Hide()
 			end
 		end
-		function ui.detail:Fill(lines)
+		function ui.tree:Fill(lines)
 			for i, s in ipairs(lines) do
 				local f = self.fs[i]
 				if not f then
