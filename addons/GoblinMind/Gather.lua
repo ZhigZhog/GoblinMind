@@ -18,6 +18,16 @@ local G = GM.Gather
 GoblinMindGather = GoblinMindGather or {}
 local db = GoblinMindGather
 
+-- record schema version: zone/yield math changed under early data
+-- (pockets, per-item hits, failed-loot counting). Bump = wipe the
+-- derived records so pre-change loot doesn't poison the model.
+-- Nodes keep — positions are still valid; re-import is one click.
+local REC_V = 1
+if db.v ~= REC_V then
+	db.zones, db.yields, db.resp = {}, {}, {}
+	db.v = REC_V
+end
+
 -- ======================== constants ========================
 
 -- cast spellIDs verified on Forever per the proposal (GatherLite);
@@ -270,8 +280,13 @@ end
 
 -- ======================== EV model ========================
 
+-- farm EV prices at what it SELLS for: current min buyout first —
+-- the emitted market model (mkt) carries fantasy prices on items
+-- nobody lists (raptor flesh at ~14g while mb sits at 3s)
 local function Price(id)
-	return GM.Price and GM.Price("dbmarket", id)
+	if not GM.Price then return nil end
+	return GM.Price("dbminbuyout", id)
+		or GM.Price("dbmarket", id)
 end
 
 -- EV of one event from a running-mean record: total qty seen over

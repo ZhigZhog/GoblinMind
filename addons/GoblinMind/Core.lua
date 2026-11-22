@@ -453,6 +453,13 @@ Cmd("craftprobe", function(msg)
 end, true)
 Cmd("codprobe", function() GM.MailUI.CodProbe() end, true)
 Cmd({ "gather", "farm" }, function() GM.GatherUI.Toggle() end, true)
+Cmd({ "gatherreset", "farmreset" }, function()
+	local g = GoblinMindGather
+	g.zones, g.yields, g.resp, g.nodes = {}, {}, {}, {}
+	g.target = nil
+	if GM.GatherMap then GM.GatherMap.Refresh() end
+	GM.Print("gather data wiped — IMPORT to reload GatherLite nodes")
+end, true)
 Cmd({ "gatherimport", "glimport" }, function()
 	local st, err = GM.Gather.ImportGatherLite()
 	if st then
