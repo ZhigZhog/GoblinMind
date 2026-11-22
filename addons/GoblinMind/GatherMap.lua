@@ -439,58 +439,69 @@ function M.CreatePane(parent, w)
 		local nodes = G.NodeList(mapID) or {}
 		local ref = nodes[1] or zones[1]
 		local upy = UnitsPerYard(mapID, ref)
+		local tid = G.TargetID and G.TargetID()
 
-		-- hunt zones under everything: disc + drop icon at center
+		-- hunt zones under everything: disc + drop icon at center.
+		-- With a target set, non-producers recede to a faint trace
 		for _, zn in ipairs(zones) do
 			local x, y = MapXY(zn, mapID)
 			if x then
+				local match = not tid or G.ZoneTargets(zn, tid)
 				local col = G.KIND_COLOR[zn.kind] or { 1, 1, 1 }
 				local rPx = max(10, (zn.r or 60) * upy * w)
 				local px, py = x * w, y * h
 				local d = put("disc")
 				d:SetSize(rPx * 2, rPx * 2)
 				d:SetPoint("CENTER", self, "TOPLEFT", px, -py)
-				d:SetVertexColor(col[1], col[2], col[3], 0.16)
+				d:SetVertexColor(col[1], col[2], col[3],
+					match and 0.16 or 0.05)
 				local seg = 24
 				for i = 1, seg do
 					local a0 = (i - 1) / seg * 6.2831853
 					local a1 = i / seg * 6.2831853
 					line(px + cos(a0) * rPx, py + sin(a0) * rPx,
 						px + cos(a1) * rPx, py + sin(a1) * rPx,
-						col[1], col[2], col[3], 0.5)
+						col[1], col[2], col[3], match and 0.5 or 0.15)
 				end
 				local ic = put("icon")
 				local fid = ItemIcon(G.ZoneIconID(zn))
 				if fid then
 					ic:SetTexture(fid)
+					ic:SetVertexColor(1, 1, 1, match and 1 or 0.3)
 				else
 					ic:SetTexture("Interface\\BUTTONS\\WHITE8X8")
-					ic:SetVertexColor(col[1], col[2], col[3], 0.9)
+					ic:SetVertexColor(col[1], col[2], col[3],
+						match and 0.9 or 0.3)
 				end
 				ic:SetSize(18, 18)
 				ic:SetPoint("CENTER", self, "TOPLEFT", px, -py)
 			end
 		end
 
-		-- node clusters; icon = best drop, size ∝ group size
+		-- node clusters; icon = best drop (target's own icon when
+		-- it's among them), size ∝ group size, non-producers dim
 		local clusters = Cluster(nodes, mapID, 70 * upy)
 		for _, c in ipairs(clusters) do
 			local rep = c.nodes[1]
 			local col = G.KIND_COLOR[rep.kind] or { 1, 1, 1 }
-			local best, bv
+			local best, tHit
 			for _, nd in ipairs(c.nodes) do
-				local id = G.NodeIconID(nd)
-				if id then best = id break end
+				if tid and G.NodeTargets(nd, tid) then tHit = true end
+				best = best or G.NodeIconID(nd)
 			end
+			local match = not tid or tHit
+			if tHit then best = tid end
 			local sz = math.min(30, 12 + 5 * sqrt(c.n))
+			if not match then sz = math.min(sz, 10) end
 			local ic = put("icon")
 			local fid = ItemIcon(best)
 			if fid then
 				ic:SetTexture(fid)
-				ic:SetVertexColor(1, 1, 1, 1)
+				ic:SetVertexColor(1, 1, 1, match and 1 or 0.25)
 			else
 				ic:SetTexture("Interface\\BUTTONS\\WHITE8X8")
-				ic:SetVertexColor(col[1], col[2], col[3], 0.95)
+				ic:SetVertexColor(col[1], col[2], col[3],
+					match and 0.95 or 0.3)
 			end
 			ic:SetSize(sz, sz)
 			ic:SetPoint("CENTER", self, "TOPLEFT",

@@ -344,6 +344,43 @@ check('skin icon at zone center', 42318 in texs)
 check('nodes still drawn on same map',
       kinds.count('icon') >= 4)
 
+print('== target filter: producers stay bright ==')
+G.SetTarget(9999)   # the ore only Rich Veins yield
+check('target stored', G.TargetID() == 9999)
+nodes1420 = g.GoblinMindGather.nodes[1420]
+check('rich node produces target', G.NodeTargets(nodes1420[1]))
+check('poor node does not', not G.NodeTargets(nodes1420[5]))
+zn1419 = g.GoblinMindGather.zones[1419]
+cloth = next(z for z in zn1419.values() if z.kind == 'cloth')
+skin = next(z for z in zn1419.values() if z.kind == 'skin')
+check('cloth zone does not produce', not G.ZoneTargets(cloth))
+check('skin zone does not produce', not G.ZoneTargets(skin))
+# row targeting: a zone row only passes if the zone produces
+check('row filter honors target',
+      not G.RowTargets(lua.table_from({'area': True, 'zone': cloth})))
+G.SetTarget(2318)   # light leather: the skin zone's drop
+check('skin zone produces leather', G.ZoneTargets(skin))
+check('skin row passes',
+      G.RowTargets(lua.table_from({'area': True, 'zone': skin})))
+
+# pane dimming: target back on the ore
+G.SetTarget(9999)
+pane.SetData(pane, 1420, r)
+icons = [e[2] for e in pane.live.values() if e[1] == 'icon']
+bright = [ic for ic in icons if ic._col and ic._col[4] >= 1]
+dim = [ic for ic in icons if ic._col and ic._col[4] < 1]
+check('producer cluster stays bright',
+      len(bright) == 1 and bright[0]._tex == 49999)
+check('non-producers dimmed', len(dim) == 4)
+check('non-producers shrunk',
+      all(ic._w <= 10 for ic in dim))
+# hunt-zone dimming: no zone produces ore on 1419
+pane.SetData(pane, 1419, None)
+discs = [e[2] for e in pane.live.values() if e[1] == 'disc']
+check('non-producing zone discs faint',
+      all(d._col[4] <= 0.06 for d in discs))
+G.SetTarget(None)
+
 print()
 fails = [n for n, ok in CHECKS if not ok]
 if fails:

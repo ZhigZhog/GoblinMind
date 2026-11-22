@@ -304,6 +304,56 @@ function G.ZoneIconID(zn)
 	return BestYieldItem(zn.items) or KIND_ICON_ITEM[zn.kind]
 end
 
+-- ======================== target ========================
+-- one farmable at a time: an itemID the player is after (raptor
+-- flesh, copper, linen). Producers stay bright, everything else
+-- dims — pane + leaderboard both read this.
+function G.SetTarget(id)
+	db.target = id
+end
+function G.TargetID()
+	return db.target
+end
+
+local function Produces(items, id)
+	return id and items and (items[id] or 0) > 0
+end
+
+-- does this node yield the target? observed yields first, then the
+-- static loot table (Gathering.lua) as the never-farmed fallback
+function G.NodeTargets(nd, id)
+	id = id or db.target
+	if not id then return true end
+	local y = db.yields and db.yields[nd.name or nd.kind]
+	if Produces(y and y.items, id) then return true end
+	local stat = GM.Gathering and GM.Gathering.nodes
+		and GM.Gathering.nodes[nd.name or nd.kind]
+	if stat then
+		for _, d in ipairs(stat) do
+			if d.id == id then return true end
+		end
+	end
+	return false
+end
+
+function G.ZoneTargets(zn, id)
+	id = id or db.target
+	if not id then return true end
+	return Produces(zn.items, id)
+end
+
+-- does a leaderboard row produce the target? rows carry either
+-- .stops (routes — any stop counts) or .zone (hunt zones)
+function G.RowTargets(r, id)
+	id = id or db.target
+	if not id then return true end
+	if r.area then return G.ZoneTargets(r.zone, id) end
+	for _, s in ipairs(r.stops or {}) do
+		if G.NodeTargets(s, id) then return true end
+	end
+	return false
+end
+
 function G.ZoneName(map)
 	if C_Map and C_Map.GetMapInfo then
 		local ok, info = pcall(C_Map.GetMapInfo, map)

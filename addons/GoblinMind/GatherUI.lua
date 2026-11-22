@@ -71,9 +71,21 @@ local function DrawPane()
 	end
 end
 
+local function TargetName(id)
+	if not id then return nil end
+	local n = GM.ItemNameOr and GM.ItemNameOr(id)
+	return (n and n ~= "") and n or ("item " .. tostring(id))
+end
+
 local function Refresh()
 	if not ui or not ui:IsShown() then return end
-	local rows = GM.Gather.Leaderboard()
+	local tid = GM.Gather.TargetID()
+	local rows = {}
+	for _, r in ipairs(GM.Gather.Leaderboard()) do
+		if GM.Gather.RowTargets(r, tid) then
+			rows[#rows + 1] = r
+		end
+	end
 	ui.rows = rows
 	for i = 1, ROWS do
 		local r, fs, rb = rows[i], ui.rowFs[i], ui.rowBtn[i]
@@ -90,9 +102,12 @@ local function Refresh()
 			rb:Hide()
 		end
 	end
-	ui.count:SetText(#rows > 0
-		and (#rows .. " routes + zones")
-		or "no data yet — gather nodes or farm mobs to seed")
+	local all = GM.Gather.Leaderboard()
+	ui.count:SetText(tid
+		and (#rows .. " producers of " .. TargetName(tid)
+			.. "  (" .. #all .. " hidden)")
+		or (#rows > 0 and (#rows .. " routes + zones")
+			or "no data yet — gather nodes or farm mobs to seed"))
 	-- detail line for the selected/current-map route
 	local run = GM.Gather.Route()
 	if run then
@@ -108,7 +123,34 @@ local function Refresh()
 	end
 	local sp = GM.Gather.SPEEDS[GM.Gather.SpeedIx()]
 	ui.speedBtn:SetText("speed: " .. sp.name)
+	ui.targetLbl:SetText(tid
+		and (GM.CC("accent") .. "target: " .. TargetName(tid) .. "|r")
+		or (GM.CC("textDim") .. "target: none — type a name, paste a link, or drop an item|r"))
 	DrawPane()
+end
+
+-- item name / link / raw id -> itemID, using the client's own item
+-- cache for names (it's been in your bags, it's cached)
+local function ResolveTarget(text)
+	if not text or text == "" then return nil end
+	local id = tonumber(text) or GM.LinkID(text)
+	if id then return id end
+	local GetInfo = C_Item and C_Item.GetItemInfo or GetItemInfo
+	if GetInfo and #text > 2 then
+		local _, link = GetInfo(text)
+		if link then return GM.LinkID(link) end
+	end
+end
+
+local function SetTarget(id)
+	GM.Gather.SetTarget(id)
+	if id then
+		GM.Print(GM.CC("accent") .. "gather target: "
+			.. TargetName(id) .. "|r")
+	else
+		GM.Print(GM.CC("textDim") .. "gather target cleared|r")
+	end
+	Refresh()
 end
 
 local function Build()
@@ -145,7 +187,7 @@ local function Toggle()
 		ui = W.Window({
 			name = "GoblinMindGatherUI",
 			title = "GATHER",
-			w = 1020, h = 540, tab = "gather",
+			w = 1180, h = 560, tab = "gather",
 		})
 
 		ui.detail = GM.MakeFontString(ui, GM.FONT, 10, "text")
@@ -178,6 +220,38 @@ local function Toggle()
 			Refresh()
 		end)
 		ui.speedBtn:SetPoint("LEFT", ui.stop, "RIGHT", 6, 0)
+
+		-- target pick: name/link/id text box that also takes drops
+		ui.target = W.EditBox(ui, 190, "target item...")
+		ui.target:SetPoint("LEFT", ui.speedBtn, "RIGHT", 10, 0)
+		ui.target:SetScript("OnEnterPressed", function(s)
+			local id = ResolveTarget(s:GetText())
+			if id then
+				SetTarget(id)
+			else
+				GM.Print(GM.CC("textDim")
+					.. "no item matched — try the link or id|r")
+			end
+			s:ClearFocus()
+		end)
+		ui.target:EnableMouse(true)
+		ui.target:SetScript("OnReceiveDrag", function(s)
+			local t, id = GetCursorInfo()
+			if t == "item" and id then
+				ClearCursor()
+				SetTarget(id)
+				s:SetText(TargetName(id) or "")
+			end
+		end)
+		ui.targetClear = Btn(ui, 60, "CLEAR", function()
+			SetTarget(nil)
+			ui.target:SetText("")
+		end)
+		ui.targetClear:SetPoint("LEFT", ui.target, "RIGHT", 6, 0)
+
+		ui.targetLbl = GM.MakeFontString(ui, GM.FONT, 9, "textDim")
+		ui.targetLbl:SetPoint("LEFT", ui.targetClear, "RIGHT", 8, 0)
+		ui.targetLbl:SetJustifyH("LEFT")
 
 		-- leaderboard: left column
 		local listTop = y - 26
@@ -222,10 +296,10 @@ local function Toggle()
 		-- right column: the zone map pane
 		local mp, mt = W.TitledPanel(ui, "zone map")
 		mp:SetPoint("TOPLEFT", 590, listTop)
-		mp:SetSize(416, 420)
+		mp:SetSize(576, 470)
 		ui.mapTitle = mt
 		ui.pane = GM.GatherMap
-			and GM.GatherMap.CreatePane(mp, 404)
+			and GM.GatherMap.CreatePane(mp, 562)
 		if ui.pane then
 			ui.pane:SetPoint("TOPLEFT", 6, -20)
 		end
