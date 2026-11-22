@@ -334,7 +334,8 @@ function M.CreatePane(parent, w)
 	local pane = CreateFrame("Frame", nil, parent)
 	pane:SetWidth(w)
 	pane.live = {}
-	pane.pool = { tile = {}, disc = {}, line = {}, icon = {}, lbl = {} }
+	pane.pool = { tile = {}, exptile = {}, disc = {}, line = {},
+		icon = {}, lbl = {} }
 
 	local function put(kind)
 		local t = tremove(pane.pool[kind])
@@ -344,6 +345,10 @@ function M.CreatePane(parent, w)
 					"GameFontHighlightSmall")
 			elseif kind == "tile" then
 				t = pane:CreateTexture(nil, "BACKGROUND")
+			elseif kind == "exptile" then
+				-- explored terrain sits over the parchment base,
+				-- under every overlay
+				t = pane:CreateTexture(nil, "ARTWORK", nil, -1)
 			elseif kind == "disc" then
 				t = pane:CreateTexture(nil, "OVERLAY")
 				t:SetTexture("Interface\\BUTTONS\\WHITE8X8")
@@ -460,6 +465,40 @@ function M.CreatePane(parent, w)
 								t:Hide()
 							end
 						end
+					end
+				end
+			end
+		end
+		-- explored-art overlay: detailed terrain where the player
+		-- has actually been. Same source as Blizzard's
+		-- MapExploration pin — offsets/sizes are in canvas pixel
+		-- units scaled to our pane
+		if C_MapExplorationInfo
+			and C_MapExplorationInfo.GetExploredMapTextures then
+			local okE, exps = pcall(
+				C_MapExplorationInfo.GetExploredMapTextures, mapID)
+			if okE and exps and exps[1] then
+				local pw = w / exps[1].textureWidth
+				local ph = h / exps[1].textureHeight
+				for _, e in ipairs(exps) do
+					local t = put("exptile")
+					local okS, loaded = pcall(t.SetTexture, t,
+						e.fileDataID, "CLAMP", "CLAMP",
+						"TRILINEAR")
+					if not okS then
+						okS, loaded = pcall(t.SetTexture, t,
+							e.fileDataID)
+					end
+					if okS and loaded ~= false then
+						t:SetSize(e.fileWidth * pw,
+							e.fileHeight * ph)
+						t:SetTexCoord(0, 1, 0, 1)
+						t:SetPoint("TOPLEFT", self, "TOPLEFT",
+							e.offsetX * pw,
+							-e.offsetY * ph)
+						haveArt = true
+					else
+						t:Hide()
 					end
 				end
 			end
