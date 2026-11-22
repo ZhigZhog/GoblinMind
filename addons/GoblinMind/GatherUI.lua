@@ -29,12 +29,18 @@ end
 local function RowText(r)
 	local col = KindColor(r.kind)
 	if r.area then
-		-- zone row: kind · kills · sec/kill · EV/kill
-		return format("%s%-5s|r  %s  ·  %d kills  ·  %ss/kill  ·  %s/kill",
+		-- zone row: kind · kills · spawns · sec/kill · EV/kill
+		-- (+ raw measured GPM when the lottery delta is big)
+		local raw = (r.gpmRaw or 0) > (r.gpm or 0) * 1.15
+			and (GM.CC("textDim") .. "  raw "
+				.. GM.MoneyShort(floor(r.gpmRaw * 10000))
+				.. "/min|r") or ""
+		return format(
+			"%s%-5s|r  %s  ·  %d kills  ·  %d spawns  ·  %ss/kill  ·  %s/kill%s",
 			col, KindLabel(r.kind), r.zoneName,
-			r.kills or 0,
+			r.kills or 0, r.spawns or 0,
 			format("%.0f", r.lapSec),
-			GM.MoneyShort(floor((r.evLoop or 0) * 10000)))
+			GM.MoneyShort(floor((r.evLoop or 0) * 10000)), raw)
 	end
 	-- route row: kind · stops · lap time · EV/lap
 	return format("%s%-5s|r  %s  ·  %d stops  ·  %s/lap  ·  %s/lap",
@@ -123,6 +129,8 @@ local function Refresh()
 	end
 	local sp = GM.Gather.SPEEDS[GM.Gather.SpeedIx()]
 	ui.speedBtn:SetText("speed: " .. sp.name)
+	ui.contBtn:SetText("crowd: "
+		.. GM.Gather.CONTS[GM.Gather.ContIx()].name)
 	ui.targetLbl:SetText(tid
 		and (GM.CC("accent") .. "target: " .. TargetName(tid) .. "|r")
 		or (GM.CC("textDim") .. "target: none — type a name, paste a link, or drop an item|r"))
@@ -234,6 +242,12 @@ local function Toggle()
 			Refresh()
 		end)
 		ui.speedBtn:SetPoint("LEFT", ui.import, "RIGHT", 6, 0)
+		ui.contBtn = Btn(ui, 110, "crowd:", function()
+			GoblinMindGather.contIx =
+				(GM.Gather.ContIx() % #GM.Gather.CONTS) + 1
+			Refresh()
+		end)
+		ui.contBtn:SetPoint("LEFT", ui.speedBtn, "RIGHT", 6, 0)
 
 		-- target pick: name/link/id text box that also takes drops
 		ui.target = W.EditBox(ui, 190, "target item...")

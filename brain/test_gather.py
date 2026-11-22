@@ -234,6 +234,59 @@ check('flesh on zone yield', zn['items'][12184] == 1)
 yh = g.GoblinMindGather.yields['hunt:Young Raptor']
 check('per-mob hunt record', yh is not None and yh['items'][12184] == 1)
 
+print('== spawn pockets / capacity / contention ==')
+# a second kill 100yd away = a new mob spawn pocket
+lua.execute('_NOW.t = _NOW.t + 30; _POS.n, _POS.w = 1100, 1500')
+lua.execute('''
+_NAME = "Young Raptor"
+SetLoot({ { name = "Raptor Flesh", qty = 1,
+            link = "|Hitem:12184::::::::|h[Raptor Flesh]|h" } })
+''')
+ev('LOOT_OPENED')
+zn = g.GoblinMindGather.zones[1419][1]
+check('second pocket created',
+      zn.pockets is not None and len(zn.pockets) == 2)
+
+# re-kill the same pocket 200s later — mob was back, so respawn
+# is bounded at <=200s (gap > ACTIVE_GAP so no activeT accrual)
+lua.execute('_NOW.t = _NOW.t + 200; _POS.n, _POS.w = 1100, 1505')
+lua.execute('''
+SetLoot({ { name = "Raptor Flesh", qty = 1,
+            link = "|Hitem:12184::::::::|h[Raptor Flesh]|h" } })
+''')
+ev('LOOT_OPENED')
+zn = g.GoblinMindGather.zones[1419][1]
+check('respawn learned from rekill', zn.resp == 200)
+
+# capacity = 2 pockets * 60s/200s = 0.6 kills/min — far under the
+# measured ~3.3/min grinding rate, so sustained uses the cap
+cap = G.ZoneCapacity(zn)
+check('capacity = 0.6/min', cap is not None
+      and abs(cap - 0.6) < 0.01)
+sus = G.ZoneSusRate(zn)
+check('sustained rate = capacity', abs(sus - 0.6) < 0.01)
+
+# sustained EV drops one-shot items (malachite: 1 hit of 1 qty)
+ev_sus = G.ZoneSusEV(zn)
+ev_raw = G.ZoneEV(zn)
+check('common EV < raw EV', ev_sus < ev_raw)
+
+# contention selector derates the cap, not the measured rate
+lua.execute('GoblinMindGather.contIx = 2')
+sus2 = G.ZoneSusRate(zn)
+check('shared contention = 60%', abs(sus2 - 0.36) < 0.01)
+lua.execute('GoblinMindGather.contIx = 1')
+
+# leaderboard rows carry the diff: gpm (sustained) vs gpmRaw
+row = None
+for r in G.Leaderboard().values():
+    if r.area and r.zoneName == G.ZoneName(1419) \
+            and r.kills == zn.kills:
+        row = r
+check('zone row has spawns', row is not None and row.spawns == 2)
+check('row gpm is sustained', row is not None
+      and row.gpm < row.gpmRaw)
+
 print('== skinning -> skin zone ==')
 lua.execute('_POS.n, _POS.w = 500, 500')
 lua.execute('''

@@ -51,6 +51,9 @@ local GATHER_SEC = 2.5      -- gather cast + loot time per stop
 local RESPAWN_PRIOR = 900   -- node respawn prior (learned bound wins)
 local ARRIVE_YD = 20        -- waypoint advance radius
 local ACTIVE_GAP = 90       -- kills this close = same farm session
+local POCKET_YD = 30        -- kills within this = same mob spawn
+local MOB_RESPAWN_PRIOR = 180 -- classic open-world respawn guess
+local RESPAWN_OBS_MIN = 45  -- rekill gaps under this carry no info
 local KILL_RATE_PRIOR = 3   -- kills/min before a zone has data
 
 -- transport modes (yards/sec) — the GPM model's travel cost;
@@ -184,8 +187,12 @@ end
 -- position record
 local function UpdateYield(rec, items)
 	rec.items = rec.items or {}
+	rec.hits = rec.hits or {}
 	for id, qty in pairs(items) do
 		rec.items[id] = (rec.items[id] or 0) + qty
+		-- events containing the item (vs qty) — one-off drops get
+		-- hits=1 so sustained EV can exclude lottery income
+		rec.hits[id] = (rec.hits[id] or 0) + 1
 	end
 	rec.cnt = (rec.cnt or 0) + 1
 end
@@ -195,6 +202,33 @@ local function YieldRec(key)
 	local y = db.yields[key]
 	if not y then y = { items = {}, cnt = 0 } db.yields[key] = y end
 	return y
+end
+
+-- each kill lands in a "pocket" — a cluster ~1 mob spawn. Pocket
+-- count caps a camp's sustainable kill rate (can't kill more mobs
+-- than exist), and re-killing a pocket after a gap bounds respawn:
+-- the mob was back, so respawn <= the observed gap.
+local function MergePocket(zn, p)
+	if not (p.x or p.n) then return end
+	zn.pockets = zn.pockets or {}
+	local best, bd
+	for _, pk in ipairs(zn.pockets) do
+		local d = DistYd(p, pk)
+		if d and d <= (bd or POCKET_YD) then best, bd = pk, d end
+	end
+	if not best then
+		best = { map = zn.map,
+			x = p.x, y = p.y, n = p.n, w = p.w, c = p.c }
+		tinsert(zn.pockets, best)
+	end
+	local now = GetTime()
+	if best.last then
+		local gap = now - best.last
+		if gap >= RESPAWN_OBS_MIN then
+			zn.resp = min(zn.resp or 9e9, gap)
+		end
+	end
+	best.last = now
 end
 
 local function MergeZone(p, kind, items)
@@ -215,6 +249,7 @@ local function MergeZone(p, kind, items)
 				zn.lastGT = now
 				zn.kills = (zn.kills or 0) + 1
 				UpdateYield(zn, items)
+				MergePocket(zn, p)
 				if d > (zn.r or 0) then zn.r = floor(d + 25) end
 				return zn
 			end
@@ -225,8 +260,10 @@ local function MergeZone(p, kind, items)
 		n = p.n, w = p.w, z = p.z, c = p.c,
 		kind = kind, r = 60, kills = 1,
 		activeT = 0, lastGT = now, items = {}, cnt = 0,
+		pockets = {},
 	}
 	UpdateYield(zn, items)
+	MergePocket(zn, p)
 	tinsert(list, zn)
 	return zn
 end
@@ -239,13 +276,18 @@ end
 
 -- EV of one event from a running-mean record: total qty seen over
 -- events counted. Unpriced items contribute zero — never a guess.
-local function ItemsEV(rec)
+local function ItemsEV(rec, common)
 	if not rec or not rec.items or not rec.cnt or rec.cnt == 0 then
 		return nil
 	end
 	local ev = 0
 	for id, qty in pairs(rec.items) do
-		ev = ev + (Price(id) or 0) * (qty / rec.cnt)
+		-- common = repeatable income: seen in 2+ kill events (or
+		-- qty>=2 on records that predate per-item hit tracking)
+		local h = rec.hits and rec.hits[id]
+		if not common or (h and h >= 2) or (not h and qty >= 2) then
+			ev = ev + (Price(id) or 0) * (qty / rec.cnt)
+		end
 	end
 	return ev
 end
@@ -283,8 +325,30 @@ local function ZoneRate(zn)
 	end
 	return KILL_RATE_PRIOR
 end
+
+-- the camp's physical ceiling: pockets / respawn. nil until we've
+-- seen multiple spawn pockets (can't cap a rate we can't bound)
+function G.ZoneCapacity(zn)
+	local np = #(zn.pockets or {})
+	if np < 2 then return nil end
+	return np * 60 / (zn.resp or MOB_RESPAWN_PRIOR)
+end
+
+-- what a farmer actually sustains here: grinding rate capped by
+-- spawn capacity, then derated for competition
+function G.ZoneSusRate(zn)
+	local rate = ZoneRate(zn)
+	local cap = G.ZoneCapacity(zn)
+	if cap then rate = min(rate, cap) end
+	return rate * G.ContF()
+end
+
 G.ZoneRate = ZoneRate
 G.ZoneEV = ZoneEV
+-- repeatable per-kill EV — drops the one-shot lottery items
+function G.ZoneSusEV(zn)
+	return ItemsEV(zn, true) or 0
+end
 
 -- display item for a node/zone: the most valuable thing it drops.
 -- itemIDs picked for guaranteed presence on this client
@@ -483,6 +547,22 @@ function G.SpeedIx()
 	return db.speedIx or 2
 end
 
+-- contention: the share of a camp's spawns you actually get when
+-- other players farm the same ground. Manual — the client can't
+-- see other farmers' kills — and it derates every GPM uniformly
+G.CONTS = {
+	{ name = "solo", f = 1.0 },
+	{ name = "shared", f = 0.6 },
+	{ name = "contested", f = 0.4 },
+	{ name = "packed", f = 0.25 },
+}
+function G.ContIx()
+	return db.contIx or 1
+end
+function G.ContF()
+	return G.CONTS[G.ContIx()].f
+end
+
 -- ======================== route solver ========================
 
 -- loop stats under the respawn-saturation model: when a lap runs
@@ -655,6 +735,8 @@ function G.SolveRoute(map, kind)
 	best.map = map
 	best.speed = ctx.speed
 	best.respawn = ctx.respawn
+	-- contention derates every route the same — ordering unaffected
+	best.gpm = best.gpm * G.ContF()
 	return best
 end
 
@@ -677,13 +759,19 @@ function G.Leaderboard()
 		for _, zn in ipairs(list) do
 			local rate = ZoneRate(zn)
 			local ev = ZoneEV(zn)
+			local sus = G.ZoneSusRate(zn)
+			local evSus = G.ZoneSusEV(zn)
 			tinsert(rows, {
 				area = true, map = map, zone = zn,
 				kind = zn.kind, zoneName = G.ZoneName(map),
-				gpm = ev * rate,
-				evLoop = ev,
+				-- headline = sustained; raw = what the session
+				-- actually produced (lottery drops + full rate)
+				gpm = evSus * sus,
+				gpmRaw = ev * rate,
+				evLoop = evSus, evRaw = ev,
 				lapSec = rate > 0 and (60 / rate) or 0,
 				kills = zn.kills,
+				spawns = #(zn.pockets or {}),
 			})
 		end
 	end
