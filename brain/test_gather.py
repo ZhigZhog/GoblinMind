@@ -330,6 +330,23 @@ w2 = G.ZoneWall(zn)
 check('break gap excluded from span', abs(w2.span - 265) < 0.5)
 check('post-break value still counted', w2.v == 100000)
 
+print('== mob rows: which mobs drop it ==')
+# hunt:Young Raptor yield = 5 events, 4 with flesh -> one mob row
+# attributed to the 1419 zone through zn.mobs
+mr = list(G.MobRows(12184).values())
+check('one mob produces flesh', len(mr) == 1)
+mrow = mr[0]
+check('mob row = Young Raptor', mrow.mobName == 'Young Raptor')
+check('mob row attributed to 1419 zone',
+      mrow.zone is not None and mrow.map == 1419)
+check('mob row chance 4/5', mrow.kills == 5
+      and abs(mrow.chance - 0.8) < 0.01)
+check('zone has mob drop attribution',
+      G.ZoneHasMobDrop(zn, 12184)
+      and not G.ZoneHasMobDrop(zn, 9999))
+check('no mob rows without target',
+      len(list(G.MobRows(None).values())) == 0)
+
 print('== vendor floor + money ==')
 # grays are vendor trash (sell only); others floor at vendor sell
 lua.execute('''

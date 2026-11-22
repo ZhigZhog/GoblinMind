@@ -897,17 +897,17 @@ function W.Money(parent, opts)
 	opts = opts or {}
 	local fs = GM.MakeFontString(parent, opts.font or GM.FONT,
 		opts.size or 10, opts.color or "text")
-	fs.SetCopper = function(self, c)
+	fs.SetCopper = function(self, c, suffix)
 		self:SetText((self._prefix or "") .. GM.Money(c)
-			.. (opts.suffix or ""))
+			.. (suffix or opts.suffix or ""))
 	end
-	fs.SetCopperShort = function(self, c)
+	fs.SetCopperShort = function(self, c, suffix)
 		self:SetText((self._prefix or "") .. GM.MoneyShort(c)
-			.. (opts.suffix or ""))
+			.. (suffix or opts.suffix or ""))
 	end
-	fs.SetSigned = function(self, c)
+	fs.SetSigned = function(self, c, suffix)
 		self:SetText((self._prefix or "") .. GM.Signed(c)
-			.. (opts.suffix or ""))
+			.. (suffix or opts.suffix or ""))
 	end
 	if opts.copper then fs:SetCopper(opts.copper) end
 	return fs

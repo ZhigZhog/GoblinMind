@@ -28,6 +28,16 @@ end
 
 local function RowText(r)
 	local col = KindColor(r.kind)
+	if r.mob then
+		-- mob row (target search): name · zone · kills · drop %
+		-- · target EV/kill — "the mobs that drop that item"
+		return format(
+			"%s%-5s|r  %s — %s  ·  %d kills  ·  %s %.0f%%  ·  %s/kill",
+			col, "MOB", r.mobName, r.zoneName or "?",
+			r.kills or 0, r.targetName or "?",
+			(r.chance or 0) * 100,
+			GM.MoneyShort(floor((r.evLoop or 0) * 10000)))
+	end
 	if r.area then
 		-- zone row: kind · kills · spawns · sec/kill · EV/kill
 		-- (+ raw measured GPM when the lottery delta is big)
@@ -70,7 +80,7 @@ local function DrawPane()
 	local map = PaneMap()
 	ui.mapTitle:SetText(map and GM.Gather.ZoneName(map)
 		or "zone map")
-	local r = ui.mapRow and not ui.mapRow.area and ui.mapRow
+	local r = ui.mapRow and ui.mapRow.stops and ui.mapRow
 	ui.pane:SetData(map, r)
 	if map then
 		ui.mapLegend:SetText(
@@ -92,8 +102,31 @@ local function Refresh()
 	if not ui or not ui:IsShown() then return end
 	local tid = GM.Gather.TargetID()
 	local rows = {}
-	for _, r in ipairs(GM.Gather.Leaderboard()) do
-		if GM.Gather.RowTargets(r, tid) then
+	if tid then
+		-- target search answers "which mobs drop this" — mob rows
+		-- from per-mob drop tables + producing routes. Zones show
+		-- only when the drop isn't mob-attributed (records older
+		-- than mob tracking have no hunt:<mob> yield)
+		local tn = TargetName(tid)
+		for _, r in ipairs(GM.Gather.Leaderboard()) do
+			local keep
+			if not r.area then
+				keep = GM.Gather.RowTargets(r, tid)
+			else
+				keep = GM.Gather.RowTargets(r, tid)
+					and not GM.Gather.ZoneHasMobDrop(r.zone, tid)
+			end
+			if keep then rows[#rows + 1] = r end
+		end
+		for _, r in ipairs(GM.Gather.MobRows(tid)) do
+			r.targetName = tn
+			rows[#rows + 1] = r
+		end
+		table.sort(rows, function(a, b)
+			return (a.gpm or 0) > (b.gpm or 0)
+		end)
+	else
+		for _, r in ipairs(GM.Gather.Leaderboard()) do
 			rows[#rows + 1] = r
 		end
 	end
@@ -106,7 +139,8 @@ local function Refresh()
 			rb._row = r
 			gpm._prefix = (r.conf == "low" or r.conf == "fair")
 				and "~" or ""
-			gpm:SetCopperShort(floor((r.gpm or 0) * 10000))
+			gpm:SetCopperShort(floor((r.gpm or 0) * 10000),
+				r.unitSuffix)
 			rb:Show()
 		else
 			fs:SetText("")
@@ -323,7 +357,19 @@ local function Toggle()
 				-- pane follows the pick either way
 				ui.mapSel = r.map
 				ui.mapRow = r
-				if r.area then
+				if r.mob then
+					-- mob rows navigate to the mob's best zone
+					if r.zone then
+						GM.Gather.PointAt(r.zone)
+						GM.Print(GM.CC("accent")
+							.. "waypoint: " .. r.mobName .. " — "
+							.. (r.zoneName or "?") .. "|r")
+					else
+						GM.Print(GM.CC("textDim")
+							.. "no farm spot recorded for "
+							.. r.mobName .. " yet|r")
+					end
+				elseif r.area then
 					-- hunt zones: waypoint to the centroid
 					GM.Gather.PointAt(r.zone)
 					GM.Print(GM.CC("accent")

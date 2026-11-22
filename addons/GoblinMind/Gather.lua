@@ -889,6 +889,63 @@ end
 
 -- every scoreable row: node loops AND hunt zones, one shape the UI
 -- sorts by gpm
+-- mob-level producer rows for a target item: every hunt:<mob>
+-- yield that ever contained it, with observed chance, cautious EV
+-- per kill, and the best-known zone to go farm it. Rows navigate
+-- through .map/.zone like area rows.
+function G.MobRows(id)
+	if not id then return {} end
+	local rows = {}
+	for key, rec in pairs(db.yields or {}) do
+		local mob = key:match("^hunt:(.+)$")
+		if mob and rec.items and (rec.items[id] or 0) > 0 then
+			local cnt = rec.cnt or 0
+			local h = (rec.hits and rec.hits[id])
+				or min(rec.items[id], cnt)
+			local stack = h > 0 and (rec.items[id] / h) or 0
+			local evK = cnt > 0
+				and WilsonLow(h, cnt) * stack * (ItemVal(id) or 0)
+				or 0
+			-- best zone = where this mob has died the most
+			local bestMap, bestZn, bestK
+			for map, zl in pairs(db.zones or {}) do
+				for _, zn in ipairs(zl) do
+					local mk = zn.mobs and zn.mobs[mob]
+					if mk and (not bestK or mk > bestK) then
+						bestMap, bestZn, bestK = map, zn, mk
+					end
+				end
+			end
+			tinsert(rows, {
+				mob = true, kind = "hunt", mobName = mob,
+				map = bestMap, zone = bestZn,
+				zoneName = bestMap and G.ZoneName(bestMap) or nil,
+				kills = cnt,
+				chance = cnt > 0 and (h / cnt) or 0,
+				stack = stack,
+				evLoop = evK, gpm = evK,
+				conf = cnt < 5 and "low" or cnt < 15 and "fair"
+					or cnt < 50 and "good" or "high",
+				unitSuffix = "/kill",
+			})
+		end
+	end
+	table.sort(rows, function(a, b) return a.evLoop > b.evLoop end)
+	return rows
+end
+
+-- does any mob recorded in this zone drop the item? distinguishes
+-- mob-attributed production from unattributed legacy data
+function G.ZoneHasMobDrop(zn, id)
+	for mob in pairs(zn.mobs or {}) do
+		local y = db.yields and db.yields["hunt:" .. mob]
+		if y and y.items and (y.items[id] or 0) > 0 then
+			return true
+		end
+	end
+	return false
+end
+
 function G.Leaderboard()
 	local rows = {}
 	for map, list in pairs(db.nodes or {}) do
