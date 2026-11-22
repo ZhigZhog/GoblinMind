@@ -453,6 +453,16 @@ Cmd("craftprobe", function(msg)
 end, true)
 Cmd("codprobe", function() GM.MailUI.CodProbe() end, true)
 Cmd({ "gather", "farm" }, function() GM.GatherUI.Toggle() end, true)
+Cmd({ "gatherimport", "glimport" }, function()
+	local st, err = GM.Gather.ImportGatherLite()
+	if st then
+		GM.Print("gather import: " .. st.new .. " new, "
+			.. st.merged .. " merged" .. (st.skipped > 0
+				and (", " .. st.skipped .. " skipped") or ""))
+	else
+		GM.Print(err or "no GatherLite data found")
+	end
+end, true)
 Cmd({ "orders", "writs", "writ" }, function()
 	if GM.OrdersUI then GM.OrdersUI.Toggle() end
 end)

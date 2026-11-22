@@ -146,19 +146,23 @@ function G.RespawnSec(map, kind)
 		or RESPAWN_PRIOR
 end
 
-local function MergeNode(p, kind, name)
+local function MergeNode(p, kind, name, opt)
 	local list = NodeList(p.map)
 	if not list then return nil end
 	local now = time()
+	local mergeYd = opt and opt.mergeYd or NODE_MERGE_YD
+	-- stamp=false marks imports: they don't touch `last` (respawn
+	-- dimming + learn bounds come from real hits only)
+	local stamp = not opt or opt.stamp ~= false
 	for _, nd in ipairs(list) do
 		if nd.kind == kind then
 			local d = DistYd(nd, p)
-			if d and d <= NODE_MERGE_YD then
-				if nd.last then
+			if d and d <= mergeYd then
+				if nd.last and stamp then
 					LearnRespawn(p.map, kind, now - nd.last)
 				end
 				nd.hits = (nd.hits or 0) + 1
-				nd.last = now
+				if stamp then nd.last = now end
 				if name then nd.name = name end
 				return nd
 			end
@@ -167,8 +171,9 @@ local function MergeNode(p, kind, name)
 	local nd = {
 		map = p.map, x = p.x, y = p.y,
 		n = p.n, w = p.w, z = p.z, c = p.c,
-		kind = kind, name = name, hits = 1, last = now,
+		kind = kind, name = name, hits = 1,
 	}
+	if stamp then nd.last = now end
 	tinsert(list, nd)
 	return nd
 end
@@ -351,6 +356,112 @@ function G.RowTargets(r, id)
 		if G.NodeTargets(s, id) then return true end
 	end
 	return false
+end
+
+-- ======================== GatherLite import ========================
+
+local GL_KIND = { mining = "mine", herbalism = "herb" }
+local GL_MERGE_YD = 8   -- import dedup: tighter than live-merge so
+                        -- legit adjacent spawn points stay separate
+
+-- display name for an imported node: object->locale name via
+-- GatherLite's own tables (matches our static loot keys), else the
+-- first observed loot item's name, else the kind
+local function GLNodeName(e)
+	if GatherLite and e.object then
+		local ok, obj = pcall(
+			GatherLite.GetNodeObject, GatherLite, e.object)
+		if ok and obj and obj.name
+			and GatherLite.translate then
+			local okT, nm = pcall(GatherLite.translate,
+				GatherLite, "node." .. obj.name)
+			if okT and nm and nm ~= "node." .. obj.name then
+				return nm
+			end
+		end
+	end
+	local l = e.loot and e.loot[1]
+	return l and l.name
+end
+
+local function GLImportOne(e, kind)
+	if type(e) ~= "table" or not e.mapID or not e.posX
+		or not e.posY or e.posX < 0 or e.posX > 1 then
+		return "skip"
+	end
+	-- map coords only — GatherLite's worldX/Y come from a different
+	-- frame than our UnitPosition n,w; mixing them corrupts DistYd
+	local before = #(db.nodes[e.mapID] or {})
+	local nd = MergeNode({ map = e.mapID, x = e.posX, y = e.posY },
+		kind, GLNodeName(e), { mergeYd = GL_MERGE_YD, stamp = false })
+	if not nd then return "skip" end
+	nd.src = nd.src or "gl"
+	-- observed loot seeds the yield record under the node's name
+	local items
+	for _, l in ipairs(e.loot or {}) do
+		local id = l.link and tonumber((l.link or ""):match("item:(%d+)"))
+		if id then
+			items = items or {}
+			items[id] = (items[id] or 0) + (l.count or 1)
+		end
+	end
+	if items then UpdateYield(YieldRec(nd.name or kind), items) end
+	return #(db.nodes[e.mapID] or {}) > before and "new" or "merged"
+end
+
+-- personal history from GatherLiteSettings (SV — survives even if
+-- GatherLite is off) + whatever it has loaded at runtime (the
+-- predefined spawn DB when its tracking enables it). Previous
+-- imports are stripped first so re-running picks up DB changes;
+-- src="gl" is the marker. Returns counts for reporting.
+function G.ImportGatherLite()
+	local stats = { new = 0, merged = 0, skipped = 0, wiped = 0 }
+	local sv = GatherLiteSettings
+		and GatherLiteSettings.global
+		and GatherLiteSettings.global.nodes
+	local rt = GatherLite and GatherLite.GetNodes
+	if not sv and not rt then
+		return nil, "no GatherLite data found"
+	end
+	-- strip prior imports (hits>1 nodes keep their learned data —
+	-- they get re-merged anyway on repeat import)
+	for map, list in pairs(db.nodes or {}) do
+		for i = #list, 1, -1 do
+			if list[i].src == "gl" and (list[i].hits or 0) <= 1 then
+				tremove(list, i)
+				stats.wiped = stats.wiped + 1
+			end
+		end
+	end
+	if sv then
+		for cat, list in pairs(sv) do
+			local kind = GL_KIND[cat]
+			if kind and type(list) == "table" then
+				for _, e in ipairs(list) do
+					local r = GLImportOne(e, kind)
+					if r == "new" then stats.new = stats.new + 1
+					elseif r == "merged" then stats.merged = stats.merged + 1
+					else stats.skipped = stats.skipped + 1 end
+				end
+			end
+		end
+	end
+	if rt then
+		local ok, list = pcall(GatherLite.GetNodes, GatherLite)
+		if ok and type(list) == "table" then
+			for _, e in ipairs(list) do
+				local kind = GL_KIND[e.type]
+				if kind then
+					local r = GLImportOne(e, kind)
+					if r == "new" then stats.new = stats.new + 1
+					elseif r == "merged" then stats.merged = stats.merged + 1
+					else stats.skipped = stats.skipped + 1 end
+				end
+			end
+		end
+	end
+	if GM.GatherMap then GM.GatherMap.Refresh() end
+	return stats
 end
 
 function G.ZoneName(map)

@@ -397,6 +397,68 @@ check('non-producing zone discs faint',
       all(d._col[4] <= 0.06 for d in discs))
 G.SetTarget(None)
 
+print('== GatherLite import ==')
+# stub the SV + the runtime API. Two personal mining points ~21yd
+# apart (tighter than the 40yd live-merge, wider than the 8yd
+# import dedup) must stay separate; a runtime predefined point and
+# an exact-position dup exercise new/merged paths.
+lua.execute('''
+GatherLiteSettings = { global = { nodes = {
+	mining = {
+		{ type="mining", mapID=1421, posX=0.40, posY=0.60,
+		  object=1731, loot={ { name="Copper Ore", count=2,
+		    link="|Hitem:2770::::::::|h[Copper Ore]|h" } } },
+		{ type="mining", mapID=1421, posX=0.41, posY=0.61,
+		  object=1731, loot={ { name="Copper Ore", count=2,
+		    link="|Hitem:2770::::::::|h[Copper Ore]|h" } } },
+	},
+	containers = {
+		{ type="containers", mapID=1421, posX=0.5, posY=0.5,
+		  object=106319 },
+	},
+} } }
+GatherLite = {
+	GetNodeObject = function(self, id)
+		return ({ [1731] = { name = "copper_vein" },
+		          [1735] = { name = "iron_deposit" } })[id]
+	end,
+	translate = function(self, key)
+		return ({ ["node.copper_vein"] = "Copper Vein",
+		          ["node.iron_deposit"] = "Iron Deposit" })[key]
+			or key
+	end,
+	GetNodes = function(self) return {
+		{ type="mining", mapID=1421, posX=0.80, posY=0.80,
+		  object=1735, predefined=true },
+		{ type="mining", mapID=1421, posX=0.40, posY=0.60,
+		  object=1731 },
+	} end,
+}
+''')
+st = G.ImportGatherLite()
+check('import returns stats', st is not None)
+nodes1421 = g.GoblinMindGather.nodes[1421]
+check('imported 3 nodes', nodes1421 is not None
+      and len(nodes1421) == 3)
+check('close spawns kept separate', len(nodes1421) == 3)
+check('runtime dup merged', st.merged >= 1)
+check('new count = 3', st.new == 3)
+names = set(n.name for n in nodes1421.values())
+check('locale names resolved',
+      names == {'Copper Vein', 'Iron Deposit'})
+check('import flag set', all(n.src == 'gl'
+      for n in nodes1421.values()))
+y = g.GoblinMindGather.yields['Copper Vein']
+check('loot seeded yield',
+      y is not None and y['items'][2770] == 4 and y.cnt == 2)
+# re-import: prior imports wiped and rebuilt — count + mean stable
+st2 = G.ImportGatherLite()
+check('re-import wiped old', st2.wiped >= 2)
+check('count stable after re-import',
+      len(g.GoblinMindGather.nodes[1421]) == 3)
+y = g.GoblinMindGather.yields['Copper Vein']
+check('yield mean unchanged', y['items'][2770] / y.cnt == 2)
+
 print()
 fails = [n for n, ok in CHECKS if not ok]
 if fails:

@@ -214,12 +214,26 @@ local function Toggle()
 			Refresh()
 		end)
 		ui.stop:SetPoint("LEFT", ui.start, "RIGHT", 6, 0)
+		ui.import = Btn(ui, 80, "IMPORT", function()
+			local st, err = GM.Gather.ImportGatherLite()
+			if st then
+				GM.Print(GM.CC("accent") .. "gather import:|r "
+					.. st.new .. " new, " .. st.merged
+					.. " merged" .. (st.skipped > 0
+						and (", " .. st.skipped .. " skipped") or ""))
+			else
+				GM.Print(GM.CC("textDim") .. (err
+					or "no GatherLite data found") .. "|r")
+			end
+			Refresh()
+		end)
+		ui.import:SetPoint("LEFT", ui.stop, "RIGHT", 6, 0)
 		ui.speedBtn = Btn(ui, 150, "speed:", function()
 			GoblinMindGather.speedIx =
 				(GM.Gather.SpeedIx() % #GM.Gather.SPEEDS) + 1
 			Refresh()
 		end)
-		ui.speedBtn:SetPoint("LEFT", ui.stop, "RIGHT", 6, 0)
+		ui.speedBtn:SetPoint("LEFT", ui.import, "RIGHT", 6, 0)
 
 		-- target pick: name/link/id text box that also takes drops
 		ui.target = W.EditBox(ui, 190, "target item...")
