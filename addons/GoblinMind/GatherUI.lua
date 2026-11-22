@@ -251,7 +251,7 @@ local function Toggle()
 
 		-- target pick: name/link/id text box that also takes drops
 		ui.target = W.EditBox(ui, 190, "target item...")
-		ui.target:SetPoint("LEFT", ui.speedBtn, "RIGHT", 10, 0)
+		ui.target:SetPoint("LEFT", ui.contBtn, "RIGHT", 10, 0)
 		ui.target:SetScript("OnEnterPressed", function(s)
 			local id = ResolveTarget(s:GetText())
 			if id then
@@ -293,12 +293,16 @@ local function Toggle()
 			local rb = CreateFrame("Button", nil, ui)
 			rb:SetPoint("TOPLEFT", 10, top - (i - 1) * 20)
 			rb:SetSize(560, 19)
-			local fs = GM.MakeFontString(rb, GM.FONT, 10, "text")
-			fs:SetPoint("LEFT", 4, 0)
-			fs:SetJustifyH("LEFT")
 			local gpm = GM.MakeFontString(rb, GM.FONT_BOLD, 10, "accent")
 			gpm:SetPoint("RIGHT", -6, 0)
 			gpm:SetJustifyH("RIGHT")
+			local fs = GM.MakeFontString(rb, GM.FONT, 10, "text")
+			fs:SetPoint("LEFT", 4, 0)
+			-- clip before the gpm column — the AGENTS.md pattern:
+			-- width cap + no wrap, long text truncates
+			fs:SetPoint("RIGHT", gpm, "LEFT", -8, 0)
+			fs:SetJustifyH("LEFT")
+			fs:SetWordWrap(false)
 			rb:SetScript("OnClick", function(s)
 				local r = s._row
 				if not r then return end

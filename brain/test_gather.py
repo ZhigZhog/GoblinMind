@@ -47,6 +47,7 @@ local function Region()
 	function r:GetText() return self._text end
 	function r:SetTextColor() end
 	function r:SetJustifyH() end
+	function r:SetWordWrap() end
 	function r:SetParent(p) self._parent = p end
 	function r:CreateTexture(...) local t = Region() return t end
 	function r:CreateFontString(...) local s = Region() return s end
