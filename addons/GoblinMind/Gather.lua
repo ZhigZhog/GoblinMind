@@ -28,6 +28,17 @@ if db.v ~= REC_V then
 	db.v = REC_V
 end
 
+-- node-record version: pre-v2 records were merged under a 40yd
+-- radius — every tap within it folded onto the first sighting's
+-- position, so a "node" was a group centroid a route can't
+-- actually gather at. Bump = reset only the spatial records;
+-- zones/yields/journal keep (kills were never group-merged).
+local NODE_V = 2
+if (db.nodeV or 0) < NODE_V then
+	db.nodes, db.resp = {}, {}
+	db.nodeV = NODE_V
+end
+
 -- ======================== constants ========================
 
 -- cast spellIDs verified on Forever per the proposal (GatherLite);
@@ -54,7 +65,10 @@ G.NODE_KINDS = { herb = true, mine = true }
 G.AREA_KINDS = { skin = true, hunt = true, cloth = true }
 
 local WINDOW_SEC = 3        -- gather cast -> loot attribution window
-local NODE_MERGE_YD = 40    -- same spawn point within this radius
+local NODE_MERGE_YD = 14    -- one record ≈ one spawn point: routes
+                            -- need exact stand-spots, not group
+                            -- centroids (gather range ≈10yd, so one
+                            -- physical node still folds approaches)
 local ZONE_MERGE_YD = 150   -- kills this close join one farm zone
 local LINK_YD = 250         -- route-solver component link distance
 local DEFAULT_YPU = 1500    -- yards per normalized map unit (fallback)
