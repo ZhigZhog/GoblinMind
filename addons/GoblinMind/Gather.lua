@@ -27,21 +27,20 @@ local CAST_NAME = {
 	herb = "herb gathering", mine = "mining", skin = "skinning",
 }
 
--- cloth = the mob-farm kind — no cast; a kill is recorded when a
--- non-gather loot window contains raw cloth
-local CLOTH_ITEMS = {
-	[2589] = true, [2592] = true, [4306] = true, [4338] = true,
-	[14047] = true, [14256] = true, [14342] = true,
-}
-
+-- hunt = the mob-farm kind — no cast; every non-gather loot window
+-- is a kill event. Meat, cloth, greens, quest drops: all yield data
+-- lands on the zone so targeting can find producers of anything.
+-- (Was cloth-only at first — a camp dropping cloth AND meat split
+-- into two overlapping zones until the kind unified.)
 G.KIND_COLOR = {
 	herb = { 0.2, 0.9, 0.3 }, mine = { 0.95, 0.7, 0.2 },
-	skin = { 0.7, 0.45, 0.25 }, cloth = { 0.85, 0.85, 0.95 },
+	skin = { 0.7, 0.45, 0.25 }, hunt = { 0.9, 0.4, 0.2 },
+	cloth = { 0.85, 0.85, 0.95 }, -- legacy zone rows
 }
-G.KINDS = { "herb", "mine", "skin", "cloth" }
+G.KINDS = { "herb", "mine", "skin", "hunt", "cloth" }
 -- node kinds build routes; area kinds build zones
 G.NODE_KINDS = { herb = true, mine = true }
-G.AREA_KINDS = { skin = true, cloth = true }
+G.AREA_KINDS = { skin = true, hunt = true, cloth = true }
 
 local WINDOW_SEC = 3        -- gather cast -> loot attribution window
 local NODE_MERGE_YD = 40    -- same spawn point within this radius
@@ -788,17 +787,24 @@ local function OnLoot()
 		return
 	end
 
-	-- no gather window: cloth in a kill loot = a cloth-farm kill.
-	-- Other loot (chests, quest boxes) is ignored — a zone only
-	-- forms where cloth actually drops.
-	for id in pairs(items) do
-		if CLOTH_ITEMS[id] then
-			local pos = PosNow()
-			if pos then MergeZone(pos, "cloth", items) end
-			if GM.GatherMap then GM.GatherMap.Refresh() end
-			return
+	-- no gather window: a kill loot = a hunt kill. Any item at all
+	-- seeds the zone — the per-item yield map is what lets target
+	-- mode answer "where does raptor flesh drop" for drops we never
+	-- modeled. Money-only windows (empty items) don't count.
+	if next(items) then
+		local pos = PosNow()
+		if pos then
+			MergeZone(pos, "hunt", items)
+			UpdateYield(YieldRec("hunt"), items)
+			-- per-mob drop table: "hunt:Ravasaur" -> flesh/leather —
+			-- the seed of a real mob-drop model
+			if srcName then
+				UpdateYield(YieldRec("hunt:" .. srcName), items)
+			end
 		end
+		if GM.GatherMap then GM.GatherMap.Refresh() end
 	end
+	return
 end
 
 -- ======================== events ========================

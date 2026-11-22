@@ -442,10 +442,14 @@ function M.CreatePane(parent, w)
 		local tid = G.TargetID and G.TargetID()
 
 		-- hunt zones under everything: disc + drop icon at center.
-		-- With a target set, non-producers recede to a faint trace
+		-- With a target set, non-producers recede to a faint trace.
+		-- Out-of-bounds projections (bad world->map for records with
+		-- no stored x,y) get skipped — a px<0 disc bleeds outside the
+		-- pane into the list column
 		for _, zn in ipairs(zones) do
 			local x, y = MapXY(zn, mapID)
-			if x then
+			if x and x > -0.02 and x < 1.02
+				and y > -0.02 and y < 1.02 then
 				local match = not tid or G.ZoneTargets(zn, tid)
 				local col = G.KIND_COLOR[zn.kind] or { 1, 1, 1 }
 				local rPx = max(10, (zn.r or 60) * upy * w)
@@ -480,7 +484,15 @@ function M.CreatePane(parent, w)
 
 		-- node clusters; icon = best drop (target's own icon when
 		-- it's among them), size ∝ group size, non-producers dim
-		local clusters = Cluster(nodes, mapID, 70 * upy)
+		local drawable = {}
+		for _, nd in ipairs(nodes) do
+			local x, y = MapXY(nd, mapID)
+			if x and x > -0.02 and x < 1.02
+				and y > -0.02 and y < 1.02 then
+				drawable[#drawable + 1] = nd
+			end
+		end
+		local clusters = Cluster(drawable, mapID, 70 * upy)
 		for _, c in ipairs(clusters) do
 			local rep = c.nodes[1]
 			local col = G.KIND_COLOR[rep.kind] or { 1, 1, 1 }
@@ -528,7 +540,9 @@ function M.CreatePane(parent, w)
 				local a, b = stops[i], stops[i % #stops + 1]
 				local ax, ay = MapXY(a, mapID)
 				local bx, by = MapXY(b, mapID)
-				if ax and bx then
+				if ax and bx
+					and ax > -0.02 and ax < 1.02
+					and bx > -0.02 and bx < 1.02 then
 					line(ax * w, ay * h, bx * w, by * h,
 						0.4, 0.85, 1.0, 0.85)
 				end

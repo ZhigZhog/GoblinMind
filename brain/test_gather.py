@@ -190,7 +190,7 @@ ev('LOOT_OPENED')
 check('second node recorded', len(g.GoblinMindGather.nodes[1419]) == 2)
 
 print('== cloth kill zones ==')
-lua.execute('_POS.n, _POS.w = 1000, 3000')
+lua.execute('_POS.n, _POS.w = 1000, 1500')
 lua.execute('''
 SetLoot({ { name = "Linen Cloth", qty = 2,
             link = "|Hitem:2589::::::::|h[Linen Cloth]|h" },
@@ -201,12 +201,12 @@ ev('LOOT_OPENED')
 zs = g.GoblinMindGather.zones and g.GoblinMindGather.zones[1419]
 check('cloth zone created', zs is not None and len(zs) == 1)
 zn = zs[1]
-check('zone kind=cloth', zn.kind == 'cloth')
+check('zone kind=hunt', zn.kind == 'hunt')
 check('zone kills=1', zn.kills == 1)
 check('zone yield has cloth', zn['items'][2589] == 2)
 
 # second cloth kill nearby within ACTIVE_GAP merges + accrues time
-lua.execute('_NOW.t = _NOW.t + 30; _POS.n, _POS.w = 1010, 3010')
+lua.execute('_NOW.t = _NOW.t + 30; _POS.n, _POS.w = 1010, 1510')
 lua.execute('''
 SetLoot({ { name = "Linen Cloth", qty = 3,
             link = "|Hitem:2589::::::::|h[Linen Cloth]|h" } })
@@ -217,6 +217,22 @@ zn = g.GoblinMindGather.zones[1419][1]
 check('kills=2', zn.kills == 2)
 check('activeT accrued', (zn.activeT or 0) >= 30)
 check('cloth qty summed (2+3)', zn['items'][2589] == 5)
+
+# meat kill: any non-gather loot builds the hunt zone + a per-mob
+# yield record — raptor flesh is a cooking drop, not cloth
+lua.execute('_POS.n, _POS.w = 1020, 1520')
+lua.execute('''
+_NAME = "Young Raptor"
+SetLoot({ { name = "Raptor Flesh", qty = 1,
+            link = "|Hitem:12184::::::::|h[Raptor Flesh]|h" } })
+''')
+ev('LOOT_OPENED')
+check('meat kill merged into same zone',
+      len(g.GoblinMindGather.zones[1419]) == 1)
+zn = g.GoblinMindGather.zones[1419][1]
+check('flesh on zone yield', zn['items'][12184] == 1)
+yh = g.GoblinMindGather.yields['hunt:Young Raptor']
+check('per-mob hunt record', yh is not None and yh['items'][12184] == 1)
 
 print('== skinning -> skin zone ==')
 lua.execute('_POS.n, _POS.w = 500, 500')
@@ -351,7 +367,7 @@ nodes1420 = g.GoblinMindGather.nodes[1420]
 check('rich node produces target', G.NodeTargets(nodes1420[1]))
 check('poor node does not', not G.NodeTargets(nodes1420[5]))
 zn1419 = g.GoblinMindGather.zones[1419]
-cloth = next(z for z in zn1419.values() if z.kind == 'cloth')
+cloth = next(z for z in zn1419.values() if z.kind == 'hunt')
 skin = next(z for z in zn1419.values() if z.kind == 'skin')
 check('cloth zone does not produce', not G.ZoneTargets(cloth))
 check('skin zone does not produce', not G.ZoneTargets(skin))
