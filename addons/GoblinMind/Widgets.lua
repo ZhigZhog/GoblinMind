@@ -912,3 +912,31 @@ function W.Money(parent, opts)
 	if opts.copper then fs:SetCopper(opts.copper) end
 	return fs
 end
+
+-- drop-table rows for tooltips — returns STRINGS (not written to
+-- a frame) because Gathering.lua's tooltip injector caches and
+-- re-AddLines them on client redraws. Each row renders
+-- "name  pct%  coin-value"; when opts.target names a hunted item
+-- the matching row stays accent-bright with a > marker and every
+-- other row fades to textDim. rows: {id, name, pct, value}
+function W.DropLines(rows, opts)
+	opts = opts or {}
+	local tid = opts.target
+	local out, shown = {}, 0
+	for _, r in ipairs(rows or {}) do
+		if shown >= (opts.max or 8) then
+			out[#out + 1] = GM.CC("textDim") .. "   +"
+				.. (#rows - shown) .. " more|r"
+			break
+		end
+		local hit = tid ~= nil and r.id == tid
+		local c = hit and "accent" or (tid and "textDim" or "text")
+		local pct = r.pct
+			and format(" %d%%", floor(r.pct + 0.5)) or ""
+		out[#out + 1] = format("%s%s %s%s|r%s",
+			GM.CC(c), hit and ">" or "·", r.name, pct,
+			r.value and ("  " .. GM.MoneyShort(r.value)) or "")
+		shown = shown + 1
+	end
+	return out
+end

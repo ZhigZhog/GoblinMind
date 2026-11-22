@@ -347,6 +347,40 @@ check('zone has mob drop attribution',
 check('no mob rows without target',
       len(list(G.MobRows(None).values())) == 0)
 
+print('== tooltip drop tables ==')
+# stub the widget (Widgets.lua isn't loaded in this harness) —
+# mirrors W.DropLines' shape: > marks the target, % per row
+lua.execute('''GM.Widgets = { DropLines = function(rows, opts)
+    local out = {}
+    for _, r in ipairs(rows or {}) do
+        out[#out + 1] = ((opts and opts.target
+            and r.id == opts.target) and ">" or "-")
+            .. " " .. r.name
+            .. (r.pct and (" " .. math.floor(r.pct + 0.5) .. "%") or "")
+    end
+    return out end }
+ITEM_DB[12184] = { name = "Raptor Flesh",
+    link = "|Hitem:12184|h[Raptor Flesh]|h" }
+''')
+lines = list(G.DropLines('Young Raptor').values())
+check('drops block emitted', any('drops' in l for l in lines))
+check('flesh row with observed pct',
+      any('Raptor Flesh 80%' in l for l in lines))
+check('EV marker present', any('EV' in l for l in lines))
+G.SetTarget(12184)
+lines = list(G.DropLines('Young Raptor').values())
+check('target row marked >', any(l.startswith('>') for l in lines))
+check('non-target rows plain',
+      all(l.startswith('>') or l.startswith('-')
+          or 'drops' in l for l in lines))
+G.SetTarget(None)
+# node name -> observed taps block (Silverleaf yield from node taps)
+lines = list(G.DropLines('Silverleaf').values())
+check('node observed block', any('observed' in l for l in lines))
+# no data anywhere -> empty, callers keep their static fallback
+check('unknown name = no lines',
+      len(list(G.DropLines('Some Unfarmed Mob').values())) == 0)
+
 print('== vendor floor + money ==')
 # grays are vendor trash (sell only); others floor at vendor sell
 lua.execute('''

@@ -589,6 +589,20 @@ if GameTooltip then
 			if tt._gmInjectTag ~= tag and not BlockPresent(tt) then
 				local lines = NodeLines(text)
 				if lines then
+					-- fresh array — NodeLines returns the CACHED
+					-- table; appending observed lines to it would
+					-- corrupt nodeCache
+					local out = {}
+					for _, s in ipairs(lines) do
+						out[#out + 1] = s
+					end
+					if GM.Gather and GM.Gather.DropLines then
+						for _, s in ipairs(
+							GM.Gather.DropLines(text)) do
+							out[#out + 1] = s
+						end
+					end
+					lines = out
 					for _, s in ipairs(lines) do tt:AddLine(s) end
 					tt:Show()
 					tt._gmInject, tt._gmInjectTag = lines, tag
@@ -596,26 +610,42 @@ if GameTooltip then
 				end
 			end
 		else
-			-- not a node — check for a skinnable corpse (unit tooltip)
+			-- unit/corpse tooltip — observed drop tables from the
+			-- gather yields (kill + skinning records) ahead of the
+			-- static skinnable estimate when it applies
 			local skin, shortSkill = Skinnable(tt)
+			-- GetUnit/UnitLevel can hand back secrets under
+			-- taint — keep the whole read inside one pcall
+			local okU, name, lvl = pcall(function()
+				local n, u = tt:GetUnit()
+				return n, u and UnitLevel(u)
+			end)
+			local lines = {}
+			if okU and name and GM.Gather
+				and GM.Gather.DropLines then
+				for _, s in ipairs(GM.Gather.DropLines(name)) do
+					lines[#lines + 1] = s
+				end
+			end
 			if skin then
-				-- GetUnit/UnitLevel can hand back secrets under
-				-- taint — keep the whole read inside one pcall
-				local okU, name, lvl = pcall(function()
-					local n, u = tt:GetUnit()
-					return n, u and UnitLevel(u)
-				end)
-				local tag = "skin:" .. tostring(okU and name)
-					.. ":" .. tostring(lvl)
+				for _, s in ipairs(
+					SkinLines(lvl, okU and name, shortSkill)
+						or {}) do
+					lines[#lines + 1] = s
+				end
+			end
+			local tag = "unit:" .. tostring(okU and name)
+				.. ":" .. tostring(lvl) .. ":" .. tostring(skin)
+			if #lines > 0 then
 				if tt._gmInjectTag ~= tag and not BlockPresent(tt) then
-					local lines = SkinLines(lvl, okU and name, shortSkill)
 					for _, s in ipairs(lines) do tt:AddLine(s) end
 					tt:Show()
 					tt._gmInject, tt._gmInjectTag = lines, tag
 					tt._gmInjectN = tt:NumLines()
 				end
 			else
-				tt._gmInject, tt._gmInjectN, tt._gmInjectTag = nil, nil, nil
+				tt._gmInject, tt._gmInjectN, tt._gmInjectTag =
+					nil, nil, nil
 			end
 		end
 	end

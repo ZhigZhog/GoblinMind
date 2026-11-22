@@ -946,6 +946,81 @@ function G.ZoneHasMobDrop(zn, id)
 	return false
 end
 
+-- display rows for a yield record's drop table: observed % per
+-- item, market value, sorted by expected value contribution.
+-- Node names also fall back to the static loot table when the
+-- node was never tapped (pct = the static estimate)
+function G.DropRows(key)
+	local rows = {}
+	local y = db.yields and db.yields[key]
+	if y and y.items then
+		for id, qty in pairs(y.items) do
+			local h = (y.hits and y.hits[id])
+				or min(qty, y.cnt or 0)
+			local v = ItemVal(id)
+			local stack = h > 0 and qty / h or qty
+			local ev = (y.cnt or 0) > 0
+				and (h / y.cnt) * stack * (v or 0) or 0
+			tinsert(rows, {
+				id = id,
+				name = GM.ItemNameOr and GM.ItemNameOr(id)
+					or ("item " .. id),
+				pct = (y.cnt or 0) > 0 and (h / y.cnt * 100) or nil,
+				value = v,
+				sort = ev,
+			})
+		end
+	elseif GM.Gathering and GM.Gathering.nodes
+		and GM.Gathering.nodes[key] then
+		for _, d in ipairs(GM.Gathering.nodes[key]) do
+			local v = ItemVal(d.id)
+			tinsert(rows, {
+				id = d.id,
+				name = GM.ItemNameOr and GM.ItemNameOr(d.id)
+					or ("item " .. d.id),
+				pct = d.pct,
+				value = v,
+				sort = (d.pct or 0) / 100
+					* ((d.lo + d.hi) / 2) * (v or 0),
+			})
+		end
+	end
+	table.sort(rows, function(a, b) return a.sort > b.sort end)
+	return rows
+end
+
+-- tooltip drop-table blocks for a mob/node name, built from what
+-- we OBSERVED: "drops" (hunt yields), "skinning" (skin yields),
+-- or "observed" (node taps). Each block's header carries EV/event
+-- and the "EV ≈" marker Gathering.lua's dedupe scans for. No data
+-- = empty table — callers keep their own static fallbacks.
+function G.DropLines(name)
+	if not name or not GM.Widgets then return {} end
+	local tid = db.target
+	local lines = {}
+	for _, b in ipairs({
+		{ key = "hunt:" .. name, label = "drops", unit = "kills" },
+		{ key = "skin:" .. name, label = "skinning", unit = "skins" },
+		{ key = name, label = "observed", unit = "taps" },
+	}) do
+		local y = db.yields and db.yields[b.key]
+		if y and y.items and next(y.items) then
+			local rows = G.DropRows(b.key)
+			local ev = 0
+			for _, r in ipairs(rows) do ev = ev + r.sort end
+			lines[#lines + 1] = GM.CC("secondary")
+				.. format("%s — %d %s · EV ≈ %s|r",
+					b.label, y.cnt or 0, b.unit,
+					GM.MoneyShort(ev))
+			for _, s in ipairs(GM.Widgets.DropLines(rows,
+				{ target = tid })) do
+				lines[#lines + 1] = s
+			end
+		end
+	end
+	return lines
+end
+
 function G.Leaderboard()
 	local rows = {}
 	for map, list in pairs(db.nodes or {}) do
