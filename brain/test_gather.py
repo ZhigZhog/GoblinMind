@@ -785,6 +785,54 @@ lua.execute(r'''
 	GM.Price = function(_, id) return PRICES[id] or 10000 end
 ''')
 
+print('== loot-burst folding: one kill, several windows ==')
+# a corpse fires multiple windows (items, money tail, re-opens
+# while the dead mob stays targeted). Windows inside COALESCE_S
+# with the same/unresolvable mob fold into the kill's event — a
+# DIFFERENT named mob this fast is a real second kill.
+lua.execute(r'''
+	_POS.n, _POS.w = 2500, 2500
+	_POS.x, _POS.y = nil, nil
+	_NAME = "Burst Mob"
+	SetLoot({ { name = "Eye", qty = 1,
+	            link = "|Hitem:730::::::::|h[Murloc Eye]|h" } })
+	_NOW.t = _NOW.t + 60
+''')
+ev('LOOT_OPENED')
+# tail window 1.5s later: same corpse, more loot — one kill
+lua.execute(r'''
+	SetLoot({ { name = "Scale", qty = 1,
+	            link = "|Hitem:5784::::::::|h[Scale]|h" } })
+	_NOW.t = _NOW.t + 1.5
+''')
+ev('LOOT_OPENED')
+# 20s later: a real second kill, same mob
+lua.execute(r'''
+	SetLoot({ { name = "Eye", qty = 1,
+	            link = "|Hitem:730::::::::|h[Murloc Eye]|h" } })
+	_NOW.t = _NOW.t + 20
+''')
+ev('LOOT_OPENED')
+# 2s later but a DIFFERENT named mob: real kill, not a tail
+lua.execute('_NAME = "Other Mob"; _NOW.t = _NOW.t + 2')
+ev('LOOT_OPENED')
+zs3 = g.GoblinMindGather.zones[1419]
+zb = [z for z in zs3.values() if z.n == 2500]
+check('burst zone created', len(zb) == 1)
+if zb:
+    check('tail folded, kills=3 not 4', zb[0].kills == 3)
+    check('hist has 3 events not 4', len(zb[0].hist) == 3)
+    check('tail loot folded into event value',
+          zb[0].hist[1].v == 20000)
+    check('zone items include tail loot',
+          zb[0]['items'][730] == 3 and zb[0]['items'][5784] == 1)
+    check('tail did not bump hits',
+          (zb[0]['hits'][5784] or 0) == 0)
+    # kill1 event anchors at its first window; kill2 lands +21.5s
+    # later through the tail — the burst gap (1.5s) never enters
+    check('cycle median = real cadence not burst gap',
+          G.ZoneCycle(zb[0]) == 21.5)
+
 print()
 fails = [n for n, ok in CHECKS if not ok]
 if fails:

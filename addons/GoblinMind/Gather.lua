@@ -67,6 +67,7 @@ local POCKET_YD = 30        -- kills within this = same mob spawn
 local MOB_RESPAWN_PRIOR = 180 -- classic open-world respawn guess
 local RESPAWN_OBS_MIN = 45  -- rekill gaps under this carry no info
 local KILL_RATE_PRIOR = 3   -- kills/min before a zone has data
+local COALESCE_S = 4        -- loot windows this close = one kill
 
 -- transport modes (yards/sec) — the GPM model's travel cost;
 -- db.speedIx picks which the solver assumes
@@ -197,16 +198,23 @@ end
 -- gets .items/.cnt (yield record or zone record). The counter is
 -- `cnt`, NOT `n` — `n` is already the north-coord field on every
 -- position record
-local function UpdateYield(rec, items)
+local function UpdateYield(rec, items, tail)
 	rec.items = rec.items or {}
 	rec.hits = rec.hits or {}
 	for id, qty in pairs(items) do
 		rec.items[id] = (rec.items[id] or 0) + qty
 		-- events containing the item (vs qty) — one-off drops get
-		-- hits=1 so sustained EV can exclude lottery income
-		rec.hits[id] = (rec.hits[id] or 0) + 1
+		-- hits=1 so sustained EV can exclude lottery income.
+		-- tail windows skip hits: a second window of the SAME kill
+		-- can't be a separate drop occurrence
+		if not tail then
+			rec.hits[id] = (rec.hits[id] or 0) + 1
+		end
 	end
-	rec.cnt = (rec.cnt or 0) + 1
+	-- tail = folded window of an already-counted kill: its loot is
+	-- real, but the event count must stay one-kill-one-event or
+	-- drop chances halve
+	if not tail then rec.cnt = (rec.cnt or 0) + 1 end
 end
 
 local function YieldRec(key)
@@ -259,6 +267,18 @@ local function ZoneEvent(zn, now, items, money)
 		v = (LootValue(items) or 0) + (money or 0) }
 	if #hi > HIST_MAX then tremove(hi, 1) end
 	zn.vTot = (zn.vTot or 0) + hi[#hi].v
+end
+
+-- a burst tail: the kill's event already exists — its timestamp
+-- IS the kill time. Fold the tail's value into it so consecutive
+-- deltas still mean kill-to-kill, not window-to-window
+local function ZoneEventFold(zn, now, items, money)
+	local v = (LootValue(items) or 0) + (money or 0)
+	local hi = zn.hist
+	if hi and #hi > 0 then
+		hi[#hi].v = hi[#hi].v + v
+	end
+	zn.vTot = (zn.vTot or 0) + v
 end
 
 -- a kill joins a zone when it lands within merge range of the
@@ -389,6 +409,20 @@ local function MergeZone(p, kind, items, mob, mobMoney)
 		for _, zn in ipairs(zl) do
 		if zn.kind == kind and zn.c == p.c
 			and ZoneMergeable(zn, p) then
+			-- one kill fires SEVERAL loot windows (the item window,
+			-- the money tail, a re-open while the corpse is still
+			-- targeted). Fold a burst into the last event — same or
+			-- unresolvable mob within COALESCE_S is that kill's
+			-- tail, not a new kill. A DIFFERENT named mob this fast
+			-- is a real second kill.
+			local last = zn.hist and zn.hist[#zn.hist]
+			if last and (now - last.t) <= COALESCE_S
+				and (not mob or not zn.lastMob or mob == zn.lastMob) then
+				UpdateYield(zn, items, true)
+				ZoneEventFold(zn, now, items, mobMoney)
+				MergePocket(zn, p)
+				return zn, true
+			end
 			-- kills < ACTIVE_GAP apart = one farming session —
 			-- the zone's rate is kills per active second, so
 			-- breaks don't dilute it
@@ -400,6 +434,7 @@ local function MergeZone(p, kind, items, mob, mobMoney)
 			if mob then
 				zn.mobs = zn.mobs or {}
 				zn.mobs[mob] = (zn.mobs[mob] or 0) + 1
+				zn.lastMob = mob
 			end
 			UpdateYield(zn, items)
 			ZoneEvent(zn, now, items, mobMoney)
@@ -425,7 +460,7 @@ local function MergeZone(p, kind, items, mob, mobMoney)
 			return ok and t or nil
 		end)(),
 	}
-	if mob then zn.mobs = { [mob] = 1 } end
+	if mob then zn.mobs = { [mob] = 1 } zn.lastMob = mob end
 	UpdateYield(zn, items)
 	ZoneEvent(zn, now, items, mobMoney)
 	MergePocket(zn, p)
@@ -1439,10 +1474,10 @@ local function OnLoot()
 			-- of loot cash; an over-large return is a broken API
 			-- reading the purse, not the window
 			local money = min((GetLootMoney and GetLootMoney()) or 0, 50000)
-			MergeZone(pos, "skin", items, srcName, money)
-			UpdateYield(YieldRec("skin"), items)
+			local _, tail = MergeZone(pos, "skin", items, srcName, money)
+			UpdateYield(YieldRec("skin"), items, tail)
 			if srcName then
-				UpdateYield(YieldRec("skin:" .. srcName), items)
+				UpdateYield(YieldRec("skin:" .. srcName), items, tail)
 			end
 		end
 		if GM.GatherMap then GM.GatherMap.Refresh() end
@@ -1455,27 +1490,45 @@ local function OnLoot()
 	-- modeled. An EMPTY window still counts when the source is a
 	-- confirmed corpse: a kill with no drops is a failed farm and
 	-- must dilute the mean, or per-kill EV only ever sees winners.
+	-- The gate is a CONFIRMED CORPSE — a live NPC's name (a quest
+	-- giver standing at the camp) or a stale target must not
+	-- fabricate kills; only a dead unit or an unresolvable-API
+	-- name passes.
 	local deadFn = UnitIsDeadOrGhost or UnitIsDead
 	local srcDead = srcName ~= nil
 	if deadFn then
 		srcDead = false
+		-- prefer the DEAD unit's name: a live "Paige Armstrong"
+		-- selected while a dead crawler is under the mouse should
+		-- credit the crawler
+		srcName = nil
 		for _, u in ipairs({ "target", "mouseover" }) do
 			local okD, dead = pcall(deadFn, u)
-			if okD and dead then srcDead = true break end
+			if okD and dead then
+				srcDead = true
+				local nm = UnitName and UnitName(u)
+				if nm then srcName = nm break end
+			end
+		end
+		if not srcName then
+			for _, u in ipairs({ "target", "mouseover" }) do
+				local nm = UnitName and UnitName(u)
+				if nm then srcName = nm break end
+			end
 		end
 	end
-	if next(items) or srcDead then
+	if srcDead then
 		local pos = PosNow()
 		if pos then
 			-- coins in the window count too — money is farm value
 			-- (LoneBit tracks it per mob); capped like the skin path
 			local money = min((GetLootMoney and GetLootMoney()) or 0, 50000)
-			MergeZone(pos, "hunt", items, srcName, money)
-			UpdateYield(YieldRec("hunt"), items)
+			local _, tail = MergeZone(pos, "hunt", items, srcName, money)
+			UpdateYield(YieldRec("hunt"), items, tail)
 			-- per-mob drop table: "hunt:Ravasaur" -> flesh/leather —
 			-- the seed of a real mob-drop model
 			if srcName then
-				UpdateYield(YieldRec("hunt:" .. srcName), items)
+				UpdateYield(YieldRec("hunt:" .. srcName), items, tail)
 			end
 		end
 		if GM.GatherMap then GM.GatherMap.Refresh() end
