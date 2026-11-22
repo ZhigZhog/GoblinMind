@@ -88,7 +88,7 @@ local COALESCE_S = 4        -- loot windows this close = one kill
 -- db.speedIx picks which the solver assumes
 G.SPEEDS = {
 	{ key = "run",   name = "on foot",      yps = 7.0 },
-	{ key = "mount", name = "mount +60%",   yps = 11.2 },
+	{ key = "mount", name = "mount +40%",   yps = 9.8 },
 	{ key = "epic",  name = "mount +100%",  yps = 14.0 },
 }
 
@@ -895,9 +895,44 @@ function G.CurrentMap()
 	return p and p.map or nil
 end
 
--- transport-mode index the solver assumes (cycled in the UI)
+-- the player's riding skill picks the assumed travel speed —
+-- no riding = on foot, basic riding = the +40% mount,
+-- journeyman+ = +100%. Spell IDs first (vanilla riding spells),
+-- then a spellbook scan for "Riding" + its rank word since
+-- Forever may use custom IDs
+function G.RidingIx()
+	local known = IsSpellKnown or (C_Spell and C_Spell.IsSpellKnown)
+	if known then
+		if known(34091) or known(33391) then return 3 end
+		if known(34090) or known(33388) then return 2 end
+	end
+	local tabs = GetNumSpellTabs and GetNumSpellTabs() or 0
+	for t = 1, tabs do
+		local _, _, off, n = GetSpellTabInfo(t)
+		for s = (off or 0) + 1, (off or 0) + (n or 0) do
+			local name, rank
+			if GetSpellBookItemName then
+				name, rank = GetSpellBookItemName(s, "spell")
+			elseif GetSpellName then
+				name, rank = GetSpellName(s, "spell")
+			end
+			local both = ((name or "") .. " " .. (rank or "")):lower()
+			if both:find("riding") then
+				if both:find("journeyman") or both:find("expert")
+					or both:find("artisan") then
+					return 3
+				end
+				return 2
+			end
+		end
+	end
+	return 1
+end
+
+-- transport-mode index the solver assumes: riding skill unless
+-- the UI pinned a manual override
 function G.SpeedIx()
-	return db.speedIx or 2
+	return db.speedIx or G.RidingIx()
 end
 
 -- contention: the share of a camp's spawns you actually get when
@@ -1296,8 +1331,11 @@ function G.ZoneCat(zn)
 	for c, q in pairs(tot) do
 		if q > (bq or 0) then best, bq = c, q end
 	end
+	-- ItemCat families map onto the kind taxonomy — "ore" was the
+	-- hole: the row tag read raw "ore" and the MINE filter missed
 	return best == "flesh" and "cook"
 		or best == "leather" and "skin"
+		or best == "ore" and "mine"
 		or best or zn.kind
 end
 
@@ -1457,6 +1495,53 @@ end
 
 function G.Route()
 	return run
+end
+
+-- persist a solved loop: stops serialize as plain positions so
+-- the saved route survives node-record churn and reloads. The
+-- run only needs map/x/y (+name for display).
+function G.SaveRoute(r)
+	if not (r and r.map and r.stops and #r.stops > 1) then
+		return nil, "no route to save"
+	end
+	db.saved = db.saved or {}
+	local stops = {}
+	for i, st in ipairs(r.stops) do
+		stops[i] = {
+			x = st.x, y = st.y, map = st.map or r.map,
+			name = st.name or (st.nd and st.nd.name),
+		}
+	end
+	db.saved[r.map .. ":" .. (r.kind or "?")] = {
+		map = r.map, kind = r.kind, stops = stops,
+		lapSec = r.lapSec, evLoop = r.evLoop, gpm = r.gpm,
+	}
+	return true
+end
+
+-- best saved loop for a map, kind-pinned when given
+function G.LoadRoute(map, kind)
+	local best
+	for _, r in pairs(db.saved or {}) do
+		if r.map == map and (not kind or r.kind == kind)
+			and (not best or (r.gpm or 0) > (best.gpm or 0)) then
+			best = r
+		end
+	end
+	if best and GM.GatherMap then
+		GM.GatherMap.NoteRoute(best)
+	end
+	return best
+end
+
+function G.ClearData()
+	wipe(db.nodes)
+	wipe(db.zones)
+	wipe(db.yields)
+	wipe(db.resp)
+	wipe(db.journal)
+	wipe(db.saved or {})
+	G.StopRoute()
 end
 
 -- arrival check + lap timing, 4x/sec while a route runs

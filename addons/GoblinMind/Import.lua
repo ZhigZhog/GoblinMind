@@ -317,8 +317,27 @@ function I.Detect()
 	end
 	Detected(AUCTIONATOR_PRICE_DATABASE, "Auctionator", "Auctionator")
 	Detected(AucStatData or AucScanData, "Auc-Advanced", "Auctioneer")
-	Detected(GatherLiteDB or GatherLiteSettings or GatherLiteNodes,
-		"GatherLite", "GatherLite")
+	-- GatherLite: real import — herb/mine spawn history seeds the
+	-- gather route solver with exact positions
+	if AddonState("GatherLite") == "loaded"
+		or GatherLiteDB or GatherLiteSettings or GatherLiteNodes
+		or (GatherLite and GatherLite.GetNodes) then
+		rows[#rows + 1] = {
+			key = "gatherlite", addon = "GatherLite",
+			title = "Gathered nodes",
+			detail = "herb/mine spawn history -> gather routes",
+			run = function()
+				local st, err = GM.Gather.ImportGatherLite()
+				if not st then return nil, err end
+				return st.new .. " new nodes, " .. st.merged
+					.. " merged" .. (st.skipped > 0
+						and (", " .. st.skipped .. " skipped") or "")
+			end,
+		}
+	else
+		Detected(GatherLiteDB or GatherLiteSettings or GatherLiteNodes,
+			"GatherLite", "GatherLite")
+	end
 	return rows, extras
 end
 

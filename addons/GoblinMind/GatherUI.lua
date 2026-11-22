@@ -344,9 +344,19 @@ local function Refresh()
 			.. "a tight pocket of rich nodes can beat the whole map.|r")
 	end
 	local sp = GM.Gather.SPEEDS[GM.Gather.SpeedIx()]
-	ui.speedBtn:SetText("speed: " .. sp.name)
+	-- "~" = assumed from riding skill; plain = manual override
+	ui.speedBtn:SetText("speed: "
+		.. (GoblinMindGather.speedIx and "" or "~") .. sp.name)
 	ui.contBtn:SetText("crowd: "
 		.. GM.Gather.CONTS[GM.Gather.ContIx()].name)
+	-- routes only exist for HERB/MINE — grey out otherwise
+	local routeable = ui.kindFilter == "herb" or ui.kindFilter == "mine"
+	ui.build:SetEnabled(routeable)
+	ui.build:SetAlpha(routeable and 1 or 0.4)
+	if ui._armed then
+		ui._armed = nil
+		ui.clear.text:SetText("CLEAR")
+	end
 	ui.zoneBtn.text:SetText("zone: " .. (ui.contFilter
 		and ui.contFilter.label or ui.zoneFilter
 		and GM.Gather.ZoneName(ui.zoneFilter) or "all"))
@@ -613,8 +623,11 @@ local function FilterEntries()
 	return e
 end
 
+-- only HERB/MINE have routes — BUILD is gated to those filters
 local function Build()
-	local p = GM.Gather.CurrentMap()
+	local kind = ui.kindFilter
+	if kind ~= "herb" and kind ~= "mine" then return end
+	local p = ui.zoneFilter or GM.Gather.CurrentMap()
 	if not p then
 		-- fall back to whichever map has the most nodes
 		local best, bn
@@ -623,10 +636,12 @@ local function Build()
 		end
 		p = best
 	end
-	if not p then return end
-	local r1 = GM.Gather.SolveRoute(p, "herb")
-	local r2 = GM.Gather.SolveRoute(p, "mine")
-	local r = (r1 and r2 and (r1.gpm > r2.gpm and r1 or r2)) or r1 or r2
+	if not p then
+		GM.Print(GM.CC("textDim")
+			.. "no zone to route — pick one or stand in it|r")
+		return
+	end
+	local r = GM.Gather.SolveRoute(p, kind)
 	if r then
 		r.zoneName = GM.Gather.ZoneName(p)
 		if GM.GatherMap then GM.GatherMap.NoteRoute(r) end
@@ -636,8 +651,8 @@ local function Build()
 			.. GM.Gather.SecondsText(r.lapSec) .. "/lap, ~"
 			.. GM.MoneyShort(floor(r.gpm)) .. "/min")
 	else
-		GM.Print(GM.CC("textDim")
-			.. "not enough nodes here yet (need 3+)|r")
+		GM.Print(GM.CC("textDim") .. "not enough " .. kind
+			.. " nodes here yet (need 3+)|r")
 	end
 	Refresh()
 end
@@ -675,43 +690,60 @@ local function Toggle()
 		ui.filterBtn:SetPoint("LEFT", ui.zoneBtn, "RIGHT", 6, 0)
 		ui.build = Btn(ui, 70, "BUILD", Build)
 		ui.build:SetPoint("LEFT", ui.filterBtn, "RIGHT", 12, 0)
-		ui.start = Btn(ui, 70, "START", function()
+		ui.save = Btn(ui, 70, "SAVE", function()
 			local p = ui.mapSel or GM.Gather.CurrentMap()
 			local r = p and GM.GatherMap and GM.GatherMap.RouteFor(p)
-			if r then
-				GM.Gather.StartRoute(r)
-			else
-				GM.Print(GM.CC("textDim")
-					.. "no route for this map — BUILD first|r")
-			end
-			Refresh()
-		end)
-		ui.start:SetPoint("LEFT", ui.build, "RIGHT", 6, 0)
-		ui.stop = Btn(ui, 70, "STOP", function()
-			GM.Gather.StopRoute()
-			Refresh()
-		end)
-		ui.stop:SetPoint("LEFT", ui.start, "RIGHT", 6, 0)
-		ui.import = Btn(ui, 70, "IMPORT", function()
-			local st, err = GM.Gather.ImportGatherLite()
-			if st then
-				GM.Print(GM.CC("accent") .. "gather import:|r "
-					.. st.new .. " new, " .. st.merged
-					.. " merged" .. (st.skipped > 0
-						and (", " .. st.skipped .. " skipped") or ""))
+			local ok, err = GM.Gather.SaveRoute(r)
+			if ok then
+				GM.Print(GM.CC("accent") .. "route saved|r — "
+					.. tostring(r.zoneName or GM.Gather.ZoneName(r.map))
+					.. ", " .. #r.stops .. " stops")
 			else
 				GM.Print(GM.CC("textDim") .. (err
-					or "no GatherLite data found") .. "|r")
+					or "no route here — BUILD first") .. "|r")
 			end
 			Refresh()
 		end)
-		ui.import:SetPoint("LEFT", ui.stop, "RIGHT", 6, 0)
-		ui.speedBtn = Btn(ui, 140, "speed:", function()
-			GoblinMindGather.speedIx =
-				(GM.Gather.SpeedIx() % #GM.Gather.SPEEDS) + 1
+		ui.save:SetPoint("LEFT", ui.build, "RIGHT", 6, 0)
+		ui.load = Btn(ui, 70, "LOAD", function()
+			local p = ui.mapSel or ui.zoneFilter or GM.Gather.CurrentMap()
+			local r = p and GM.Gather.LoadRoute(p, ui.kindFilter)
+			if r then
+				ui.mapSel = r.map
+				GM.Gather.StartRoute(r)
+				GM.Print(GM.CC("accent") .. "route loaded|r — "
+					.. tostring(r.zoneName or GM.Gather.ZoneName(r.map))
+					.. ", " .. #r.stops .. " stops")
+			else
+				GM.Print(GM.CC("textDim")
+					.. "no saved route for this map|r")
+			end
 			Refresh()
 		end)
-		ui.speedBtn:SetPoint("LEFT", ui.import, "RIGHT", 12, 0)
+		ui.load:SetPoint("LEFT", ui.save, "RIGHT", 6, 0)
+		-- wipe the whole gather book — two-step arm so a stray
+		-- click can't erase hours of node/zone data
+		ui.clear = Btn(ui, 70, "CLEAR", function()
+			if not ui._armed then
+				ui._armed = true
+				ui.clear.text:SetText("SURE?")
+				return
+			end
+			GM.Gather.ClearData()
+			ui.expanded, ui.scroll, ui._armed = nil, 0, nil
+			GM.Print(GM.CC("accent") .. "gather data cleared|r")
+			Refresh()
+		end)
+		ui.clear:SetPoint("LEFT", ui.load, "RIGHT", 6, 0)
+		-- speed: riding skill by default, click to pin a manual
+		-- override (cycles run -> +40% -> +100% -> back to auto)
+		ui.speedBtn = Btn(ui, 140, "speed:", function()
+			local ix = (GoblinMindGather.speedIx or 0) + 1
+			if ix > #GM.Gather.SPEEDS then ix = nil end
+			GoblinMindGather.speedIx = ix
+			Refresh()
+		end)
+		ui.speedBtn:SetPoint("LEFT", ui.clear, "RIGHT", 12, 0)
 		ui.contBtn = Btn(ui, 100, "crowd:", function()
 			GoblinMindGather.contIx =
 				(GM.Gather.ContIx() % #GM.Gather.CONTS) + 1
@@ -830,8 +862,16 @@ local function Toggle()
 						.. "waypoint: " .. r.zoneName .. " "
 						.. r.kind .. " farm|r")
 				else
-					-- routes: start the loop from stop 1
-					GM.Gather.StartRoute(r)
+					-- routes: click toggles run/stop (row objects
+					-- rebuild each refresh — match by identity)
+					local cur = GM.Gather.Route()
+					if cur and cur.route
+						and cur.route.map == r.map
+						and cur.route.kind == r.kind then
+						GM.Gather.StopRoute()
+					else
+						GM.Gather.StartRoute(r)
+					end
 				end
 				Refresh()
 			end)
