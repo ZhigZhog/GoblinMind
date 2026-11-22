@@ -98,6 +98,42 @@ local function TargetName(id)
 	return (n and n ~= "") and n or ("item " .. tostring(id))
 end
 
+-- the expansion tree: headers per mob + the camp total, each
+-- with observed drop rows (name · drop% · value)
+local function DetailLines(r)
+	local W = GM.Widgets
+	local tid = GM.Gather.TargetID()
+	local lines = {}
+	local function addRows(rows, cap)
+		for _, s in ipairs(W.DropLines(rows,
+			{ target = tid, max = cap or 5 })) do
+			lines[#lines + 1] = s
+		end
+	end
+	if r.mob then
+		lines[#lines + 1] = GM.CC("secondary") .. r.mobName
+			.. " — " .. (r.kills or 0) .. " kills recorded|r"
+		addRows(GM.Gather.DropRows("hunt:" .. r.mobName), 10)
+	elseif r.area and r.zone then
+		for _, sec in ipairs(GM.Gather.ZoneDetail(r.zone)) do
+			lines[#lines + 1] = GM.CC("secondary") .. sec.head .. "|r"
+			addRows(sec.rows, sec.total and 8 or 4)
+		end
+	elseif r.stops then
+		local seen = {}
+		for _, st in ipairs(r.stops) do
+			local nm = st.name or (st.nd and st.nd.name)
+			if nm and not seen[nm] then
+				seen[nm] = true
+				lines[#lines + 1] = GM.CC("secondary") .. nm .. "|r"
+				addRows(GM.Gather.DropRows(nm), 3)
+			end
+			if #lines > 14 then break end
+		end
+	end
+	return lines
+end
+
 local function Refresh()
 	if not ui or not ui:IsShown() then return end
 	local tid = GM.Gather.TargetID()
@@ -131,6 +167,13 @@ local function Refresh()
 		end
 	end
 	ui.rows = rows
+	-- expansion state: the clicked row keeps full alpha and drops
+	-- a tree below it; every other row fades
+	local exIdx
+	for i, r in ipairs(rows) do
+		if r == ui.expanded then exIdx = i break end
+	end
+	if not exIdx then ui.expanded = nil end
 	for i = 1, ROWS do
 		local r, fs, rb, gpm =
 			rows[i], ui.rowFs[i], ui.rowBtn[i], ui.gpmFs[i]
@@ -141,12 +184,22 @@ local function Refresh()
 				and "~" or ""
 			gpm:SetCopperShort(floor((r.gpm or 0)),
 				r.unitSuffix)
+			rb:SetAlpha(ui.expanded and r ~= ui.expanded
+				and 0.3 or 1)
 			rb:Show()
 		else
 			fs:SetText("")
 			rb._row = nil
 			ui.gpmFs[i]:SetText("")
 			rb:Hide()
+		end
+	end
+	if ui.detail then
+		ui.detail:Clear()
+		if exIdx then
+			ui.detail:SetPoint("TOPLEFT", ui.rowBtn[exIdx],
+				"BOTTOMLEFT", 12, -2)
+			ui.detail:Fill(DetailLines(ui.expanded))
 		end
 	end
 	local all = GM.Gather.Leaderboard()
@@ -354,6 +407,8 @@ local function Toggle()
 			rb:SetScript("OnClick", function(s)
 				local r = s._row
 				if not r then return end
+				-- toggle the drop-tree expansion under this row
+				ui.expanded = (ui.expanded == r) and nil or r
 				-- pane follows the pick either way
 				ui.mapSel = r.map
 				ui.mapRow = r
@@ -385,7 +440,33 @@ local function Toggle()
 			ui.rowFs[i], ui.gpmFs[i], ui.rowBtn[i] = fs, gpm, rb
 		end
 
-		-- right column: the zone map pane
+		-- expansion frame: pooled lines drawn above the faded rows,
+		-- anchored under whichever row is expanded
+		ui.detail = CreateFrame("Frame", nil, ui)
+		ui.detail:SetFrameLevel(ui:GetFrameLevel() + 10)
+		ui.detail.fs = {}
+		function ui.detail:Clear()
+			for _, f in ipairs(self.fs) do
+				f:SetText("") f:Hide()
+			end
+		end
+		function ui.detail:Fill(lines)
+			for i, s in ipairs(lines) do
+				local f = self.fs[i]
+				if not f then
+					f = GM.MakeFontString(self, GM.FONT, 9, "text")
+					f:SetJustifyH("LEFT")
+					self.fs[i] = f
+				end
+				f:ClearAllPoints()
+				f:SetPoint("TOPLEFT", 0, -(i - 1) * 12)
+				f:SetText(s)
+				f:Show()
+			end
+		end
+
+		-- right column: the zone map pane, stretched flush to the
+		-- panel bottom above the legend
 		local mp, mt = W.TitledPanel(ui, "zone map")
 		mp:SetPoint("TOPLEFT", 590, listTop)
 		mp:SetSize(576, 470)
@@ -393,7 +474,9 @@ local function Toggle()
 		ui.pane = GM.GatherMap
 			and GM.GatherMap.CreatePane(mp, 562)
 		if ui.pane then
+			ui.pane._fixedH = true
 			ui.pane:SetPoint("TOPLEFT", 6, -20)
+			ui.pane:SetPoint("BOTTOMRIGHT", mp, "BOTTOMRIGHT", -6, 24)
 		end
 		ui.mapLegend = GM.MakeFontString(mp, GM.FONT, 9, "textDim")
 		ui.mapLegend:SetPoint("BOTTOMLEFT", 8, 6)

@@ -405,8 +405,12 @@ function M.CreatePane(parent, w)
 				aspect = lay.layerWidth / lay.layerHeight
 			end
 		end
-		local h = floor(w / aspect + 0.5)
-		self:SetHeight(h)
+		-- when the host frame pins the height (flush-bottom map
+		-- pane) the tiles stretch into it; otherwise the map keeps
+		-- its true aspect
+		local h = self._fixedH and self:GetHeight()
+			or floor(w / aspect + 0.5)
+		if not self._fixedH then self:SetHeight(h) end
 
 		local haveArt = false
 		if C_Map and C_Map.GetMapArtLayers

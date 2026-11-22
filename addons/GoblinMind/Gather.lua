@@ -22,9 +22,9 @@ local db = GoblinMindGather
 -- (pockets, per-item hits, failed-loot counting). Bump = wipe the
 -- derived records so pre-change loot doesn't poison the model.
 -- Nodes keep — positions are still valid; re-import is one click.
-local REC_V = 2
+local REC_V = 3
 if db.v ~= REC_V then
-	db.zones, db.yields, db.resp = {}, {}, {}
+	db.zones, db.yields, db.resp, db.journal = {}, {}, {}, {}
 	db.v = REC_V
 end
 
@@ -1144,26 +1144,66 @@ end
 -- item, market value, sorted by expected value contribution.
 -- Node names also fall back to the static loot table when the
 -- node was never tapped (pct = the static estimate)
-function G.DropRows(key)
+-- shared observed-table builder: yields and zone records carry the
+-- same items/hits/cnt shape
+local function RecRows(y)
 	local rows = {}
+	if not y or not y.items then return rows end
+	for id, qty in pairs(y.items) do
+		local h = (y.hits and y.hits[id])
+			or min(qty, y.cnt or 0)
+		local v = ItemVal(id)
+		local stack = h > 0 and qty / h or qty
+		local ev = (y.cnt or 0) > 0
+			and (h / y.cnt) * stack * (v or 0) or 0
+		tinsert(rows, {
+			id = id,
+			name = GM.ItemNameOr and GM.ItemNameOr(id)
+				or ("item " .. id),
+			pct = (y.cnt or 0) > 0 and (h / y.cnt * 100) or nil,
+			value = v,
+			sort = ev,
+		})
+	end
+	table.sort(rows, function(a, b) return a.sort > b.sort end)
+	return rows
+end
+
+-- a zone's own loot table — the expansion's "entire recorded
+-- drop list" for a farm camp
+function G.ZoneDropRows(zn)
+	return RecRows(zn)
+end
+
+-- expansion detail for a zone row: top mobs by kill count, each
+-- with its observed drop table, then the camp total — the "break
+-- down of the mob drops" view
+function G.ZoneDetail(zn)
+	local sec, mobs = {}, {}
+	for name, n in pairs(zn.mobs or {}) do
+		mobs[#mobs + 1] = { name, n }
+	end
+	table.sort(mobs, function(a, b) return a[2] > b[2] end)
+	for i = 1, min(3, #mobs) do
+		local name = mobs[i][1]
+		sec[#sec + 1] = {
+			head = name .. " ×" .. mobs[i][2],
+			cnt = mobs[i][2],
+			rows = G.DropRows("hunt:" .. name),
+		}
+	end
+	sec[#sec + 1] = {
+		head = "camp total — " .. (zn.kills or 0) .. " kills",
+		cnt = zn.kills, rows = RecRows(zn), total = true,
+	}
+	return sec
+end
+
+function G.DropRows(key)
 	local y = db.yields and db.yields[key]
+	local rows = {}
 	if y and y.items then
-		for id, qty in pairs(y.items) do
-			local h = (y.hits and y.hits[id])
-				or min(qty, y.cnt or 0)
-			local v = ItemVal(id)
-			local stack = h > 0 and qty / h or qty
-			local ev = (y.cnt or 0) > 0
-				and (h / y.cnt) * stack * (v or 0) or 0
-			tinsert(rows, {
-				id = id,
-				name = GM.ItemNameOr and GM.ItemNameOr(id)
-					or ("item " .. id),
-				pct = (y.cnt or 0) > 0 and (h / y.cnt * 100) or nil,
-				value = v,
-				sort = ev,
-			})
-		end
+		return RecRows(y)
 	elseif GM.Gathering and GM.Gathering.nodes
 		and GM.Gathering.nodes[key] then
 		for _, d in ipairs(GM.Gathering.nodes[key]) do
