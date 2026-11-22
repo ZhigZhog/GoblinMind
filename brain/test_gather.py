@@ -115,6 +115,9 @@ GM.ItemName = function(id)
 	local e = ITEM_DB[id] or {}
 	return e.name
 end
+-- command API lives in Core.lua, which this harness doesn't load
+GM.CMDS = {}
+GM.Cmd = function() end
 ''')
 
 # map art + item icons for the window pane

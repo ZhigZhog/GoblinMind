@@ -100,22 +100,69 @@ SLASH_GOBLINMIND2 = "/goblin"
 SLASH_GOBLINMIND3 = "/gm"
 
 -- /goblin command registry — every command is one ordered entry;
--- declaration order IS the match order (long prefixes before their
--- shared stems: "bankdebug" before "bank"). Handlers get the full
--- trimmed msg and parse their own args. Adding a command is one
--- Cmd() call, never another branch in a 40-deep if-chain.
-local CMDS = {}
-local function Cmd(names, fn, prefix)
+-- ============ slash command API ============
+-- GM.Cmd(names, fn, opts) registers a command — opts.prefix
+-- (positional bool still accepted), opts.help. GM.CmdRun(msg) is
+-- the single execution path: slash handlers, UI buttons, anything
+-- can route through it. Match = longest registered name wins, so
+-- declaration order can NEVER shadow ("gather" can't eat
+-- "gatherreset", "ledger" can't eat "ledger "). Handlers receive
+-- (arg, msg): arg = trimmed text after the command name.
+GM.CMDS = {}
+function GM.Cmd(names, fn, opts)
 	if type(names) ~= "table" then names = { names } end
+	if type(opts) ~= "table" then opts = { prefix = opts and true or false } end
 	for _, n in ipairs(names) do
-		CMDS[#CMDS + 1] = { n = n, fn = fn, p = prefix }
+		GM.CMDS[#GM.CMDS + 1] = {
+			n = n, fn = fn,
+			p = opts.prefix, h = opts.help,
+		}
 	end
+end
+local Cmd = GM.Cmd
+
+local function CmdMatch(c, low)
+	if low == c.n then return true end
+	if not c.p or low:sub(1, #c.n) ~= c.n then return end
+	-- word boundary required unless the name itself ends in one —
+	-- a prefix can't shadow a longer command's first chars either
+	local nx = low:sub(#c.n + 1, #c.n + 1)
+	return c.n:sub(-1) == " " or nx == "" or nx == " "
+end
+
+function GM.CmdRun(msg)
+	msg = strtrim(tostring(msg or ""))
+	local low = strlower(msg)
+	local best
+	for _, c in ipairs(GM.CMDS) do
+		if CmdMatch(c, low) and (not best or #c.n > #best.n
+			or (#c.n == #best.n and best.p and not c.p)) then
+			best = c
+		end
+	end
+	if best then
+		return best.fn(strtrim(msg:sub(#best.n + 1)), msg)
+	end
+	-- fallback: an item link / id targets it, else the queue opens
+	local id = GM.LinkID(msg) or tonumber(msg)
+	if id then
+		return GM.TargetItem(id, msg)
+	end
+	return GM.PlanQueue.Toggle()
+end
+
+function GM.CmdList()
+	local t = {}
+	for _, c in ipairs(GM.CMDS) do
+		t[#t + 1] = c.n .. (c.h and (" — " .. c.h) or "")
+	end
+	return t
 end
 
 -- dump the raw GetItemInfo fields DisenchantDrops gates on, plus its
 -- result — isolates client return-shape quirks vs table bugs
-local function CmdDeprobe(msg)
-	local id = tonumber(msg:match("(%d+)"))
+local function CmdDeprobe(arg)
+	local id = tonumber(arg:match("(%d+)"))
 	if not id then
 		local _, link = GameTooltip and GameTooltip:GetItem()
 		id = GM.LinkID(link) or GM.lastTooltipItemID
@@ -439,43 +486,27 @@ end)
 Cmd("groups", function() GM.GroupsUI.Toggle() end, true)
 Cmd({ "ops", "operations" }, function() GM.OpsUI.Toggle() end, true)
 Cmd("crafts", function() GM.CraftingUI.Toggle() end, true)
-Cmd("craftdebug", function(msg)
-	GM.Crafting.Debug(strtrim(msg:sub(11)))
+Cmd("craftdebug", function(arg)
+	GM.Crafting.Debug(arg)
 end, true)
-Cmd("craftpurge", function(msg)
-	local n = GM.Crafting.PurgeProf(strtrim(msg:sub(11)))
+Cmd("craftpurge", function(arg)
+	local n = GM.Crafting.PurgeProf(arg)
 	GM.Print(n > 0 and ("purged " .. n .. " recipes")
 		or "nothing purged — no recipes with that profession")
 	if GM.CraftingUI and GM.CraftingUI.Refresh then GM.CraftingUI.Refresh() end
 end, true)
-Cmd("craftprobe", function(msg)
-	GM.Crafting.CraftProbe(strtrim(msg:sub(11)))
+Cmd("craftprobe", function(arg)
+	GM.Crafting.CraftProbe(arg)
 end, true)
 Cmd("codprobe", function() GM.MailUI.CodProbe() end, true)
--- reset/import MUST precede gather/farm — prefix match is ordered
-Cmd({ "gatherreset", "farmreset" }, function()
-	local g = GoblinMindGather
-	g.zones, g.yields, g.resp, g.nodes = {}, {}, {}, {}
-	g.target = nil
-	if GM.GatherMap then GM.GatherMap.Refresh() end
-	GM.Print("gather data wiped — IMPORT to reload GatherLite nodes")
-end, true)
-Cmd({ "gatherimport", "glimport" }, function()
-	local st, err = GM.Gather.ImportGatherLite()
-	if st then
-		GM.Print("gather import: " .. st.new .. " new, "
-			.. st.merged .. " merged" .. (st.skipped > 0
-				and (", " .. st.skipped .. " skipped") or ""))
-	else
-		GM.Print(err or "no GatherLite data found")
-	end
-end, true)
-Cmd({ "gather", "farm" }, function() GM.GatherUI.Toggle() end, true)
+Cmd({ "help", "?" }, function()
+	GM.Print(table.concat(GM.CmdList(), "  ·  "))
+end, { prefix = true, help = "command list" })
 Cmd({ "orders", "writs", "writ" }, function()
 	if GM.OrdersUI then GM.OrdersUI.Toggle() end
 end)
-Cmd("board ", function(msg)
-	local name = strtrim(msg:sub(7))
+Cmd("board ", function(arg)
+	local name = arg
 	if name ~= "" and GM.Orders then
 		local rid = GM.Orders.JoinBoard(name, true)
 		GM.Print("joining board '" .. name ..
@@ -534,8 +565,8 @@ Cmd({ "dash", "home", "budget" }, function()
 	GM.PlanQueue.SetHome(true)
 	GM.PlanQueue.Show()
 end, true)
-Cmd("vendor", function(msg)
-	local sub = strtrim(msg:sub(7))
+Cmd("vendor", function(arg)
+	local sub = arg
 	if sub:sub(1, 9) == "blacklist" then
 		local arg = strtrim(sub:sub(10))
 		if arg == "" then
@@ -562,14 +593,13 @@ Cmd("snip", function() GM.SniperUI.Toggle() end, true)
 Cmd("intel", function() GM.Intel.Dump() end, true)
 Cmd("tasks", function() GM.TaskListUI.Toggle() end, true)
 Cmd("uidump", CmdUiDump, true)
-Cmd("ahdump", function(msg)
-	local arg = strtrim(msg:sub(7))
+Cmd("ahdump", function(arg)
 	local pid = tonumber(arg) or ParseItemRef(arg)
 	GM.AH.DumpRows(pid ~= "" and pid or nil)
 end, true)
 Cmd("bags", CmdBags, true)
-Cmd("inv", function(msg)
-	local pid = ParseItemRef(strtrim(msg:sub(4)))
+Cmd("inv", function(arg)
+	local pid = ParseItemRef(arg)
 	if not pid then
 		GM.Print("usage: /goblin inv <item|i:id|[name]|link>")
 		return
@@ -581,8 +611,8 @@ Cmd("inv", function(msg)
 end, true)
 -- trailing space makes this "ledger <n>" — bare "ledger" opens the
 -- Overview window above (the old flat-prefix version was dead code)
-Cmd("ledger ", function(msg)
-	local n = tonumber(msg:sub(8)) or 8
+Cmd("ledger ", function(arg)
+	local n = tonumber(arg) or 8
 	if not GM.Ledger.db then
 		GM.Print("ledger not initialized")
 		return
@@ -598,8 +628,8 @@ Cmd("ledger ", function(msg)
 			r.u and GM.Money(r.u) or "—"))
 	end
 end, true)
-Cmd("price", function(msg)
-	local sub = strtrim(msg:sub(6))
+Cmd("price", function(arg)
+	local sub = arg
 	local name, expr = sub:match("^set%s+(%S+)%s+(.+)$")
 	if name then
 		GoblinMindPrices.customSources[strlower(name)] = expr
@@ -629,21 +659,7 @@ Cmd("price", function(msg)
 	end
 end, true)
 
-SlashCmdList.GOBLINMIND = function(msg)
-	msg = strtrim(msg or "")
-	for _, c in ipairs(CMDS) do
-		if (c.p and msg:sub(1, #c.n) == c.n)
-			or (not c.p and msg == c.n) then
-			return c.fn(msg)
-		end
-	end
-	local id = GM.LinkID(msg) or tonumber(msg)
-	if id then
-		GM.TargetItem(id, msg)
-	else
-		GM.PlanQueue.Toggle()
-	end
-end
+SlashCmdList.GOBLINMIND = function(msg) GM.CmdRun(msg) end
 
 -- Debounced inbox re-query after a mail loot — CheckInbox needs a beat
 -- for the server to settle the deleted mail. Was an identical pair in

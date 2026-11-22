@@ -247,6 +247,24 @@ check('never-resolve: own items still not alt-counted',
 check('never-resolve: bank reads newest self snapshot',
       g2.GM.Inventory.BankStored(3575) == 5)
 
+print('== command API dispatch ==')
+lua.execute('''
+_TEST = {}
+GM.PlanQueue = { Toggle = function() _TEST.fb = "plan" end }
+GM.Cmd("zzt", function(a) _TEST.t = a end, { prefix = true })
+GM.Cmd("zztlong ", function(a) _TEST.tl = a end, { prefix = true })
+GM.Cmd("zztexact", function(a) _TEST.te = a end)
+''')
+lua.execute('GM.CmdRun("zzt foo bar")')
+check('arg extracted for handler', g._TEST.t == 'foo bar')
+lua.execute('GM.CmdRun("zztlong abc")')
+check('longest name wins over prefix', g._TEST.tl == 'abc')
+lua.execute('GM.CmdRun("zztlonger")')
+check('word boundary blocks prefix shadow',
+      g._TEST.tl == 'abc' and g._TEST.fb == 'plan')
+lua.execute('GM.CmdRun("zztexact")')
+check('exact command dispatched', g._TEST.te == '')
+
 print()
 if FAILURES:
     print('%d FAILURES' % len(FAILURES))

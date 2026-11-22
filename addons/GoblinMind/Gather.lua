@@ -1100,3 +1100,27 @@ evf:SetScript("OnEvent", function(_, e, ...)
 		return
 	end
 end)
+
+-- ======================== commands ========================
+-- self-registered through the shared API (Core.lua loads first).
+-- Longest-name match owns ordering now — declaration order can't
+-- shadow, so these can live in any order.
+GM.Cmd({ "gatherreset", "farmreset" }, function()
+	local g = GoblinMindGather
+	g.zones, g.yields, g.resp, g.nodes = {}, {}, {}, {}
+	g.target = nil
+	if GM.GatherMap then GM.GatherMap.Refresh() end
+	GM.Print("gather data wiped — IMPORT to reload GatherLite nodes")
+end, { prefix = true, help = "wipe gather data" })
+GM.Cmd({ "gatherimport", "glimport" }, function()
+	local st, err = GM.Gather.ImportGatherLite()
+	if st then
+		GM.Print("gather import: " .. st.new .. " new, "
+			.. st.merged .. " merged" .. (st.skipped > 0
+				and (", " .. st.skipped .. " skipped") or ""))
+	else
+		GM.Print(err or "no GatherLite data found")
+	end
+end, { prefix = true, help = "import GatherLite nodes" })
+GM.Cmd({ "gather", "farm" }, function() GM.GatherUI.Toggle() end,
+	{ prefix = true, help = "gather window" })
