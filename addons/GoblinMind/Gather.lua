@@ -1434,18 +1434,48 @@ end
 
 local lastLootSig, lastLootT
 
+-- ======================== loot journal ========================
+-- rolling forensic record of every loot window and what we did
+-- with it — the "where did that number come from" surface.
+-- Bounded + persisted; /goblin gatherlog prints it.
+local JOURNAL_MAX = 60
+local function Journal(what, e)
+	db.journal = db.journal or {}
+	local j = db.journal
+	e = e or {}
+	e.w = what
+	e.t = GetTime()
+	e.rt = time and time() or nil
+	j[#j + 1] = e
+	if #j > JOURNAL_MAX then tremove(j, 1) end
+end
+
+local function ItemStr(items)
+	if not items then return "-" end
+	local p = {}
+	for id, q in pairs(items) do
+		p[#p + 1] = id .. (q > 1 and ("x" .. q) or "")
+	end
+	table.sort(p)
+	return #p > 0 and table.concat(p, "·") or "none"
+end
+
 local function OnLoot()
 	if not (GetNumLootItems and GetLootSlotInfo) then return end
 	local items, first = LootItems()
 	if not items then
 		-- an open window with zero item slots = money-only or
 		-- truly empty — still a kill event for hunt zones
-		if GetNumLootItems() ~= 0 then return end
+		if GetNumLootItems() ~= 0 then
+			Journal("unparsed", { n = GetNumLootItems() })
+			return
+		end
 		items = {}
 	end
 	local t = GetTime()
 	local sig = tostring(first) .. ":" .. tostring(GetNumLootItems())
 	if lastLootSig == sig and t - (lastLootT or 0) < 0.5 then
+		Journal("dup", { sig = sig })
 		return
 	end
 	lastLootSig, lastLootT = sig, t
@@ -1466,6 +1496,8 @@ local function OnLoot()
 		if G.NODE_KINDS[kind] then
 			MergeNode(pos, kind, srcName)
 			UpdateYield(YieldRec(srcName or kind), items)
+			Journal("node", { kind = kind, mob = srcName,
+				items = ItemStr(items) })
 		else
 			-- skinning: a skinned corpse is a kill event — zone it,
 			-- and record yields under both the generic key and the
@@ -1473,12 +1505,17 @@ local function OnLoot()
 			-- money cap: no mob corpse legitimately carries 5g+
 			-- of loot cash; an over-large return is a broken API
 			-- reading the purse, not the window
-			local money = min((GetLootMoney and GetLootMoney()) or 0, 50000)
-			local _, tail = MergeZone(pos, "skin", items, srcName, money)
+			local rawM = (GetLootMoney and GetLootMoney()) or 0
+			local money = min(rawM, 50000)
+			local zn, tail = MergeZone(pos, "skin", items, srcName, money)
 			UpdateYield(YieldRec("skin"), items, tail)
 			if srcName then
 				UpdateYield(YieldRec("skin:" .. srcName), items, tail)
 			end
+			Journal(tail and "tail" or "skin", {
+				mob = srcName, items = ItemStr(items),
+				money = rawM, v = (LootValue(items) or 0) + money,
+				k = zn and zn.kills })
 		end
 		if GM.GatherMap then GM.GatherMap.Refresh() end
 		return
@@ -1522,16 +1559,27 @@ local function OnLoot()
 		if pos then
 			-- coins in the window count too — money is farm value
 			-- (LoneBit tracks it per mob); capped like the skin path
-			local money = min((GetLootMoney and GetLootMoney()) or 0, 50000)
-			local _, tail = MergeZone(pos, "hunt", items, srcName, money)
+			local rawM = (GetLootMoney and GetLootMoney()) or 0
+			local money = min(rawM, 50000)
+			local zn, tail = MergeZone(pos, "hunt", items, srcName, money)
 			UpdateYield(YieldRec("hunt"), items, tail)
 			-- per-mob drop table: "hunt:Ravasaur" -> flesh/leather —
 			-- the seed of a real mob-drop model
 			if srcName then
 				UpdateYield(YieldRec("hunt:" .. srcName), items, tail)
 			end
+			Journal(tail and "tail" or "kill", {
+				mob = srcName, items = ItemStr(items),
+				money = rawM, v = (LootValue(items) or 0) + money,
+				k = zn and zn.kills, map = pos.map })
+		else
+			Journal("skip", { mob = srcName,
+				items = ItemStr(items), why = "no-pos" })
 		end
 		if GM.GatherMap then GM.GatherMap.Refresh() end
+	else
+		Journal("skip", { mob = srcName,
+			items = ItemStr(items), why = "no-corpse" })
 	end
 	return
 end
@@ -1607,5 +1655,33 @@ GM.Cmd({ "gatherimport", "glimport" }, function()
 		GM.Print(err or "no GatherLite data found")
 	end
 end, { prefix = true, help = "import GatherLite nodes" })
+-- the forensic dump: every loot window, what we did with it, and
+-- the value we attributed — full cycle for phantom-number hunts
+GM.Cmd({ "gatherlog", "farmlog" }, function(arg)
+	local j = db.journal
+	if not j or #j == 0 then
+		GM.Print("gather journal: no loot events captured")
+		return
+	end
+	local n = tonumber(arg) or 20
+	local lo = max(1, #j - n + 1)
+	local prev
+	for i = lo, #j do
+		local e = j[i]
+		local gap = prev and (e.t - prev) or 0
+		prev = e.t
+		local ts = ""
+		if e.rt and date then
+			local okD, s = pcall(date, "%H:%M:%S", e.rt)
+			if okD then ts = s .. " " end
+		end
+		GM.Print(("%s+%5.1fs %-8s %-20s it=%s m=%s v=%s%s"):format(
+			ts, gap, e.w or "?", tostring(e.mob or "-"),
+			e.items or "-", tostring(e.money or "-"),
+			tostring(e.v or "-"),
+			e.k and (" k=" .. e.k) or ""))
+	end
+end, true)
+
 GM.Cmd({ "gather", "farm" }, function() GM.GatherUI.Toggle() end,
 	{ prefix = true, help = "gather window" })
