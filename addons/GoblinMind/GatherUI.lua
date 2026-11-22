@@ -106,25 +106,34 @@ local function RowID(r)
 	return "route:" .. tostring(r.map) .. ":" .. tostring(r.kind)
 end
 
--- the expansion tree: headers per mob + the camp total, each
--- with observed drop rows (name · drop% · value)
+-- the expansion tree: typed lines — {h=text} headers per mob +
+-- the camp total, and {item=rowRec, dim} for each observed drop.
+-- Item lines render as W.ItemRow frames (icon, rarity name,
+-- drop %, price, vel, item tooltip + modified clicks)
 local function DetailLines(r)
-	local W = GM.Widgets
 	local tid = GM.Gather.TargetID()
 	local lines = {}
+	local function head(s) lines[#lines + 1] = { h = s } end
 	local function addRows(rows, cap)
-		for _, s in ipairs(W.DropLines(rows,
-			{ target = tid, max = cap or 5 })) do
-			lines[#lines + 1] = s
+		local shown = 0
+		for _, dr in ipairs(rows or {}) do
+			if shown >= (cap or 5) then
+				head(GM.CC("textDim") .. "   +"
+					.. (#rows - shown) .. " more|r")
+				return
+			end
+			lines[#lines + 1] = { item = dr,
+				dim = tid ~= nil and dr.id ~= tid }
+			shown = shown + 1
 		end
 	end
 	if r.mob then
-		lines[#lines + 1] = GM.CC("secondary") .. r.mobName
-			.. " — " .. (r.kills or 0) .. " kills recorded|r"
+		head(GM.CC("secondary") .. r.mobName
+			.. " — " .. (r.kills or 0) .. " kills recorded|r")
 		addRows(GM.Gather.DropRows("hunt:" .. r.mobName), 10)
 	elseif r.area and r.zone then
 		for _, sec in ipairs(GM.Gather.ZoneDetail(r.zone)) do
-			lines[#lines + 1] = GM.CC("secondary") .. sec.head .. "|r"
+			head(GM.CC("secondary") .. sec.head .. "|r")
 			addRows(sec.rows, sec.total and 8 or 4)
 		end
 	elseif r.stops then
@@ -133,7 +142,7 @@ local function DetailLines(r)
 			local nm = st.name or (st.nd and st.nd.name)
 			if nm and not seen[nm] then
 				seen[nm] = true
-				lines[#lines + 1] = GM.CC("secondary") .. nm .. "|r"
+				head(GM.CC("secondary") .. nm .. "|r")
 				addRows(GM.Gather.DropRows(nm), 3)
 			end
 			if #lines > 14 then break end
@@ -184,7 +193,14 @@ local function Refresh()
 	end
 	if not exIdx then ui.expanded = nil end
 	if exIdx then exLines = DetailLines(rows[exIdx]) end
-	local extra = exLines and (#exLines * 12 + 6) or 0
+	-- item rows are taller than header text — sum real heights
+	local extra = 0
+	if exLines then
+		for _, ln in ipairs(exLines) do
+			extra = extra + (ln.item and 16 or 12)
+		end
+		extra = extra + 6
+	end
 	-- rows pushed past the window bottom hide instead of
 	-- overrunning the hint line (content floor ≈ -530 of 560)
 	local maxOff = (ui._rowTop or -92) + 511
@@ -458,27 +474,54 @@ local function Toggle()
 			ui.rowFs[i], ui.gpmFs[i], ui.rowBtn[i] = fs, gpm, rb
 		end
 
-		-- expansion pool: fontstrings parented to `ui` itself —
-		-- the same surface the status line uses, which provably
-		-- renders here (a wrapper frame's draw level can lose to
-		-- the row buttons' auto-assigned levels)
-		ui.tree = { fs = {} }
+		-- expansion pool: headers fontstrings + item rows, all
+		-- parented to `ui` itself — the same surface the status
+		-- line uses, which provably renders here (a wrapper
+		-- frame's draw level can lose to the row buttons'
+		-- auto-assigned levels)
+		ui.tree = { fs = {}, items = {} }
 		function ui.tree:Clear()
 			for _, f in ipairs(self.fs) do f:Hide() end
+			for _, r in ipairs(self.items) do r:Hide() end
 		end
 		function ui.tree:Fill(lines, anchor)
-			for i, s in ipairs(lines) do
-				local f = self.fs[i]
-				if not f then
-					f = GM.MakeFontString(ui, GM.FONT, 9, "text")
-					f:SetJustifyH("LEFT")
-					self.fs[i] = f
+			local fi, ri, y = 0, 0, -2
+			for _, ln in ipairs(lines) do
+				if ln.item then
+					ri = ri + 1
+					local rr = self.items[ri]
+					if not rr then
+						rr = W.ItemRow(ui, { h = 16, icon = 13 })
+						self.items[ri] = rr
+					end
+					rr:ClearAllPoints()
+					rr:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT",
+						10, y)
+					rr:SetWidth(548)
+					rr:SetItem({
+						id = ln.item.id,
+						name = ln.item.name,
+						pct = ln.item.pct,
+						price = ln.item.value,
+					})
+					rr:SetAlpha(ln.dim and 0.45 or 1)
+					rr:Show()
+					y = y - 16
+				else
+					fi = fi + 1
+					local f = self.fs[fi]
+					if not f then
+						f = GM.MakeFontString(ui, GM.FONT, 9, "text")
+						f:SetJustifyH("LEFT")
+						self.fs[fi] = f
+					end
+					f:ClearAllPoints()
+					f:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT",
+						12, y - 1)
+					f:SetText(ln.h)
+					f:Show()
+					y = y - 12
 				end
-				f:ClearAllPoints()
-				f:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT",
-					12, -2 - (i - 1) * 12)
-				f:SetText(s)
-				f:Show()
 			end
 		end
 

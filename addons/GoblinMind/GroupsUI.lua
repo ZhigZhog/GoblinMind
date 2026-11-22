@@ -51,48 +51,33 @@ local function ColPanel(parent, x, w, title)
 	return p, t
 end
 
--- item row: icon + name + dim right-text + optional remove button
+-- item row: the shared W.ItemRow (icon, rarity name, tooltip,
+-- modified clicks) + this panel's sub-line, right text, remove
+-- button, and drag-to-move pickup
 local function ItemRow(parent, w)
-	local row = CreateFrame("Button", nil, parent)
-	row:SetSize(w, 22)
-	W.HoverTint(row)
-	row.icon = row:CreateTexture(nil, "ARTWORK")
-	row.icon:SetSize(16, 16)
-	row.icon:SetPoint("LEFT", 2, 0)
-	row.icon:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
-	row.name = GM.MakeFontString(row, GM.FONT, 10, "text")
-	row.name:SetPoint("LEFT", 22, 0)
-	row.name:SetWidth(w - 150)
-	row.name:SetJustifyH("LEFT")
+	local row = W.ItemRow(parent, { h = 22, w = w, icon = 16,
+		auto = false })
+	-- two-line variant: name moves up, sub sits under it; the
+	-- widget's free right slot carries the dim right text
+	row.name:ClearAllPoints()
+	row.name:SetPoint("TOPLEFT", 22, -3)
+	row.name:SetPoint("RIGHT", row.vel, "LEFT", -8, 0)
 	row.sub = GM.MakeFontString(row, GM.FONT, 8, "secondary")
-	row.sub:SetPoint("LEFT", 22, -9)
-	row.sub:SetWidth(w - 150)
+	row.sub:SetPoint("TOPLEFT", row.name, "BOTTOMLEFT", 0, -1)
+	row.sub:SetPoint("RIGHT", row.vel, "LEFT", -8, 0)
 	row.sub:SetJustifyH("LEFT")
-	row.right = GM.MakeFontString(row, GM.FONT, 9, "textDim")
-	row.right:SetPoint("RIGHT", -18, 0)
-	row.name:SetWordWrap(false)
-	row.right:SetJustifyH("RIGHT")
+	-- right text lives in the vel slot — shift it clear of the x
+	row.vel:ClearAllPoints()
+	row.vel:SetPoint("RIGHT", -18, 0)
 	row.x = CreateFrame("Button", nil, row)
 	row.x:SetSize(14, 14)
 	row.x:SetPoint("RIGHT", -2, 0)
 	row.x.text = GM.MakeFontString(row.x, GM.FONT_BOLD, 9, "textDim")
 	row.x.text:SetPoint("CENTER")
 	row.x.text:SetText("x")
-	row:SetScript("OnEnter", function(self)
-		if not self.id then return end
-		if GameTooltip.SetItemByID then
-			GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-			GameTooltip:SetItemByID(self.id)
-			GameTooltip:Show()
-		else
-			GM.Widgets.HintShow(self, { self.name:GetText() or "" })
-		end
-	end)
-	row:SetScript("OnLeave", function()
-		GameTooltip:Hide() GM.Widgets.HintHide()
-	end)
 	row:SetScript("OnMouseDown", function(self, btn)
-		if btn == "LeftButton" and self.id then
+		if btn == "LeftButton" and self.id
+			and not IsModifiedClick() then
 			local x, y = GetCursorPosition()
 			ui.pending = { kind = "item", id = self.id,
 				icon = self.icon:GetTexture(), x = x, y = y }
@@ -117,14 +102,9 @@ end
 local RowName -- defined below with the name-cache helpers
 
 local function FillItemRow(row, id, right, sub)
-	row.id = id
-	row.icon:SetTexture(GM.ItemIcon and GM.ItemIcon(id)
-		or "Interface\\Icons\\INV_Misc_QuestionMark")
-	row.name:SetText(RowName(id))
-	row.name:SetTextColor(GM.NameColor(id))
-	W.ModifiedClick(row, function() return row.id end)
+	row:SetItem({ id = id, name = id and RowName(id) or nil })
 	row.sub:SetText(sub or "")
-	row.right:SetText(right or "")
+	row.vel:SetText(right or "")
 end
 
 local function BuildUI()

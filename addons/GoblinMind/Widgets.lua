@@ -888,6 +888,108 @@ function W.ItemSlot(parent, opts)
 	return f
 end
 
+-- compact item row: icon + rarity-colored name on the left,
+-- "pct% · price · ~vel/d" right-aligned. The shared shape any
+-- list needs when a row IS one item — hover shows the real item
+-- tooltip, shift/ctrl click runs Blizzard's default chain (chat
+-- link, dress-up, context transfers) via W.ModifiedClick.
+-- SetItem accepts an itemID or {id|itemID, name, price, vel,
+-- pct}; price/vel fall back to GM.ItemEntry's market fields
+-- unless opts.auto = false. opts.onClick fires only on a plain
+-- left click — modified clicks belong to the default chain.
+function W.ItemRow(parent, opts)
+	opts = opts or {}
+	local h = opts.h or 18
+	local iconSz = opts.icon or (h - 4)
+	local row = CreateFrame("Button", nil, parent)
+	row:SetHeight(h)
+	if opts.w then row:SetWidth(opts.w) end
+	W.HoverTint(row)
+
+	row.icon = row:CreateTexture(nil, "ARTWORK")
+	row.icon:SetSize(iconSz, iconSz)
+	row.icon:SetPoint("LEFT", 2, 0)
+	row.icon:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
+
+	-- right block, anchored inside-out: ~vel/d · price · pct
+	row.vel = GM.MakeFontString(row, GM.FONT, 9, "textDim")
+	row.vel:SetPoint("RIGHT", -4, 0)
+	row.vel:SetJustifyH("RIGHT")
+	row.price = W.Money(row, { size = 9 })
+	row.price:SetPoint("RIGHT", row.vel, "LEFT", -6, 0)
+	row.price:SetJustifyH("RIGHT")
+	row.pct = GM.MakeFontString(row, GM.FONT, 9, "textDim")
+	row.pct:SetPoint("RIGHT", row.price, "LEFT", -6, 0)
+	row.pct:SetJustifyH("RIGHT")
+
+	row.name = GM.MakeFontString(row, GM.FONT,
+		opts.nameSize or 10, "text")
+	row.name:SetPoint("LEFT", iconSz + 6, 0)
+	row.name:SetPoint("RIGHT", row.pct, "LEFT", -8, 0)
+	row.name:SetJustifyH("LEFT")
+	row.name:SetWordWrap(false)
+
+	row:SetScript("OnEnter", function(self)
+		if not self.id then return end
+		GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+		if GameTooltip.SetItemByID then
+			GameTooltip:SetItemByID(self.id)
+		else
+			GameTooltip:SetHyperlink("item:" .. self.id)
+		end
+		GameTooltip:Show()
+	end)
+	row:SetScript("OnLeave", function() GameTooltip:Hide() end)
+	if opts.onClick then
+		row:SetScript("OnClick", function(self)
+			if IsModifiedClick() or not self.id then return end
+			opts.onClick(self, self.id)
+		end)
+	end
+	W.ModifiedClick(row, function() return row.id end)
+
+	function row:SetItem(d)
+		local id = type(d) == "table" and (d.id or d.itemID) or d
+		row.id = id
+		if not id then row:Clear() return end
+		row:SetAlpha(1)
+		row.icon:SetTexture(GM.ItemIcon and GM.ItemIcon(id)
+			or "Interface\\Icons\\INV_Misc_QuestionMark")
+		local nm = type(d) == "table" and d.name or nil
+		row.name:SetText((nm and nm ~= "" and nm)
+			or GM.ItemNameOr(id))
+		row.name:SetTextColor(GM.NameColor(id))
+		local price = type(d) == "table" and d.price or nil
+		local vel = type(d) == "table" and d.vel or nil
+		if opts.auto ~= false and (not price or not vel) then
+			local e = GM.ItemEntry and GM.ItemEntry(id)
+			if e then
+				price = price or (e.mb or e.p or e.mkt)
+				vel = vel or e.vel
+			end
+		end
+		if price and price > 0 then
+			row.price:SetCopper(price)
+		else
+			row.price:SetText("")
+		end
+		local vr = GM.VelRate and GM.VelRate(vel)
+		row.vel:SetText(vr and ("· ~" .. vr .. "/d") or "")
+		local pct = type(d) == "table" and d.pct or nil
+		row.pct:SetText(pct and format("%d%%", pct + 0.5) or "")
+	end
+	function row:Clear()
+		row.id = nil
+		row.icon:SetTexture(
+			"Interface\\Icons\\INV_Misc_QuestionMark")
+		row.name:SetText("")
+		row.pct:SetText("")
+		row.price:SetText("")
+		row.vel:SetText("")
+	end
+	return row
+end
+
 -- currency text — a fontstring that formats copper through the
 -- coin-colored GM.Money/MoneyShort/Signed formatters, so every
 -- money field gets g/s/c metal colors for free. opts.suffix
