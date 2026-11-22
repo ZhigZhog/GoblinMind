@@ -19,6 +19,7 @@ local TABS = {
 	{ key = "crafting", label = "CRAFT", short = "CRFT" },
 	{ key = "overview", label = "LEDGER", short = "LDGR" },
 	{ key = "orders", label = "WRITS",  short = "WRIT" },
+	{ key = "gather", label = "GATHER", short = "GTHR" },
 	{ key = "auctions", label = "AUCTIONS", short = "AUCT" },
 	{ key = "destroy", label = "DESTROY", short = "DSTR" },
 	{ key = "settings", label = "SETTINGS", short = "SET" },
@@ -51,6 +52,7 @@ function DB.Switch(key)
 	if GM.OpsUI then GM.OpsUI.Hide() end
 	if GM.Overview then GM.Overview.Hide() end
 	if GM.OrdersUI then GM.OrdersUI.Hide() end
+	if GM.GatherUI then GM.GatherUI.Hide() end
 	if GM.Settings then GM.Settings.Hide() end
 	if key == "market" then
 		GM.Shopping.Show()
@@ -64,6 +66,8 @@ function DB.Switch(key)
 		if GM.Overview then GM.Overview.Show() end
 	elseif key == "orders" then
 		if GM.OrdersUI then GM.OrdersUI.Show() end
+	elseif key == "gather" then
+		if GM.GatherUI then GM.GatherUI.Show() end
 	elseif key == "auctions" then
 		if GM.MyAuctions then GM.MyAuctions.Show() end
 	elseif key == "destroy" then

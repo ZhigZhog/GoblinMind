@@ -452,6 +452,7 @@ Cmd("craftprobe", function(msg)
 	GM.Crafting.CraftProbe(strtrim(msg:sub(11)))
 end, true)
 Cmd("codprobe", function() GM.MailUI.CodProbe() end, true)
+Cmd({ "gather", "farm" }, function() GM.GatherUI.Toggle() end, true)
 Cmd({ "orders", "writs", "writ" }, function()
 	if GM.OrdersUI then GM.OrdersUI.Toggle() end
 end)
