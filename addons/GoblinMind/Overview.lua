@@ -74,7 +74,15 @@ local function TxAgg(ck)
 end
 
 local function ViewChar()
-	if not ui.viewChar then ui.viewChar = GM.Ledger.CharKey() end
+	-- a viewChar captured while the realm was still empty goes stale
+	-- once MigrateCharKeys folds the bare key into Name-Realm — fall
+	-- back to the live key whenever the stored one isn't a real bucket
+	if ui.viewChar then
+		for _, ck in ipairs(GM.Ledger.Chars()) do
+			if ck == ui.viewChar then return ui.viewChar end
+		end
+	end
+	ui.viewChar = GM.Ledger.CharKey()
 	return ui.viewChar
 end
 

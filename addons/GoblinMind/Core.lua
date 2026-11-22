@@ -39,6 +39,7 @@ GM.frame:SetScript("OnEvent", function(_, event, arg1)
 		if GM.Budget then GM.Budget.Init() end
 		GM.frame:UnregisterEvent("ADDON_LOADED")
 	elseif event == "PLAYER_LOGIN" then
+		GM.MigrateCharKeys()
 		if GM.MinimapInit then pcall(GM.MinimapInit) end
 		-- pre-build the plan window: its ~100 widgets cost real time,
 		-- and paying that at first AH open reads as a multi-second
@@ -723,6 +724,76 @@ function GM.CharKey()
 	local name = UnitName("player") or "?"
 	local realm = GetRealmName and GetRealmName() or ""
 	return realm ~= "" and (name .. "-" .. realm) or name
+end
+
+-- nil while GetRealmName answers "" — on Forever that's not just early
+-- login: it stays empty mid-session and through PLAYER_LOGOUT teardown.
+-- Anything that PERSISTS a char key must use this and skip when nil:
+-- a bare-name write ("Zhig") reads as a DIFFERENT character once the
+-- realm resolves ("Zhig-CAMWOW US1 Realm 5 PvE"), which is how a char's
+-- own bags ended up counted as an alt in crafting.
+function GM.CharKeyQualified()
+	local realm = GetRealmName and GetRealmName() or ""
+	if realm == "" then return nil end
+	return GM.CharKey()
+end
+
+-- Self test for persisted keys: same character iff the name part
+-- matches and the key's realm part, when it has one, can't be
+-- disproved (realm unknown this session, or the key has none). Char
+-- names can't contain "-", so the first dash splits name from realm.
+function GM.IsSelfCharKey(key)
+	if key == GM.CharKey() then return true end
+	local name = UnitName and UnitName("player")
+	if not name or name == "" or name == "Unknown Entity" then
+		return false
+	end
+	local kname, krealm = key:match("^(.-)%-(.*)$")
+	if not kname then return key == name end
+	if kname ~= name then return false end
+	local realm = GetRealmName and GetRealmName() or ""
+	return realm == "" or krealm == realm
+end
+
+-- Fold bare-name keys (written during the empty-realm window) into
+-- "Name-<realm>" form inside a char-keyed SV table. merge(old,
+-- existing) picks the value kept under the qualified key. Bare keys
+-- are assumed to belong to this client's realm — the empty-realm
+-- writer was a session on this client, and stale keys were already
+-- miscounted as alts, so re-keying is never a regression. Returns
+-- true when anything moved.
+function GM.CanonicalizeCharKeys(tbl, merge)
+	if not tbl then return false end
+	local realm = GetRealmName and GetRealmName() or ""
+	if realm == "" then return false end
+	local moved, stale = false, {}
+	for k in pairs(tbl) do
+		if not k:find("-", 1, true) then stale[#stale + 1] = k end
+	end
+	for _, k in ipairs(stale) do
+		local t = k .. "-" .. realm
+		tbl[t] = merge(tbl[k], tbl[t])
+		tbl[k] = nil
+		moved = true
+	end
+	return moved
+end
+
+-- One-shot canonicalization, first call after the realm resolves.
+-- Triggered from PLAYER_LOGIN plus opportunistically inside Snapshot
+-- / AltTotal so a late-resolving realm still cleans up mid-session.
+local charMigrated = false
+function GM.MigrateCharKeys()
+	if charMigrated then return end
+	local realm = GetRealmName and GetRealmName() or ""
+	if realm == "" then return end
+	charMigrated = true
+	if GM.Ledger and GM.Ledger.MigrateKeys then
+		pcall(GM.Ledger.MigrateKeys)
+	end
+	if GM.Inventory and GM.Inventory.MigrateKeys then
+		pcall(GM.Inventory.MigrateKeys)
+	end
 end
 
 -- Realm key matching AppData scopes, e.g. "Normal-Alliance"

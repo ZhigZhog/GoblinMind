@@ -118,6 +118,8 @@ end
 -- stay visible between visits (tLeft rebases off the stored `at`)
 local function SaveOwned()
 	if not GoblinMindSettings then return end
+	local me = GM.CharKeyQualified()
+	if not me then return end -- never persist a bare-name key
 	GoblinMindSettings.owned = GoblinMindSettings.owned or {}
 	local rows = {}
 	for fp, a in pairs(auctionCache) do
@@ -129,7 +131,7 @@ local function SaveOwned()
 	end
 	local bs = {}
 	for aid, b in pairs(bids) do bs[aid] = b end
-	GoblinMindSettings.owned[GM.CharKey()] =
+	GoblinMindSettings.owned[me] =
 		{ rows = rows, bids = bs, at = time() }
 end
 
@@ -137,8 +139,16 @@ end
 -- snapshot must never feed post/sell ledger deltas; the first live
 -- refresh re-primes cleanly
 local function LoadOwned()
-	local snap = GoblinMindSettings and GoblinMindSettings.owned
-		and GoblinMindSettings.owned[GM.CharKey()]
+	local owned = GoblinMindSettings and GoblinMindSettings.owned
+	if not owned then return end
+	-- the same char can sit under bare and realm-qualified keys (the
+	-- empty-realm window) — take the newest self-keyed snapshot
+	local snap, at = nil, -1
+	for char, s in pairs(owned) do
+		if GM.IsSelfCharKey(char) and (s.at or 0) >= at then
+			snap, at = s, s.at or 0
+		end
+	end
 	if not snap then return end
 	for fp, a in pairs(snap.rows or {}) do
 		auctionCache[fp] = { fp = fp, itemID = a.itemID,
@@ -552,8 +562,6 @@ end
 -- BAG_UPDATE (debounced) + logout; bank on BANKFRAME_OPENED + bag
 -- changes while the frame is up.
 
-local CharKey = GM.CharKey
-
 -- container lists are built per call — the carried range is learned
 -- dynamically (a reagent/profession bag past the computed range gets
 -- added the first time items enumerate there while the bank is
@@ -576,9 +584,13 @@ end
 
 local function Snapshot(where)
 	GM.Inventory._snaps = (GM.Inventory._snaps or 0) + 1
+	GM.MigrateCharKeys() -- one-shot canon once the realm resolves
 	if not GoblinMindSettings then return end
+	-- realm-unresolved sessions must not write a bare-name key — it
+	-- reads back as a different character (phantom alt) forever after
+	local me = GM.CharKeyQualified()
+	if not me then return end
 	GoblinMindSettings.inv = GoblinMindSettings.inv or {}
-	local me = CharKey()
 	local snap = GoblinMindSettings.inv[me]
 		or { bags = {}, bank = {}, at = 0 }
 	snap[where] = ScanContainers(
@@ -591,22 +603,52 @@ end
 function GM.Inventory.BankStored(itemID)
 	local live = GM.BankCount(itemID)
 	if live > 0 then return live end
-	local snap = GoblinMindSettings and GoblinMindSettings.inv
-		and GoblinMindSettings.inv[CharKey()]
-	return snap and snap.bank and snap.bank[itemID] or 0
+	local inv = GoblinMindSettings and GoblinMindSettings.inv
+	if not inv then return 0 end
+	-- newest snapshot keyed to THIS char — bare and realm-qualified
+	-- spellings of the same char both count as self
+	local best, at = 0, -1
+	for char, snap in pairs(inv) do
+		if GM.IsSelfCharKey(char) and (snap.at or 0) >= at then
+			at = snap.at or 0
+			best = snap.bank and snap.bank[itemID] or 0
+		end
+	end
+	return best
 end
 
 -- every OTHER character's bag + bank stock combined
 function GM.Inventory.AltTotal(itemID)
-	local me, n = CharKey(), 0
+	GM.MigrateCharKeys() -- realm may resolve between login and first read
+	local n = 0
 	for char, snap in pairs(
 		GoblinMindSettings and GoblinMindSettings.inv or {}) do
-		if char ~= me then
+		if not GM.IsSelfCharKey(char) then
 			n = n + (snap.bags and snap.bags[itemID] or 0)
 				+ (snap.bank and snap.bank[itemID] or 0)
 		end
 	end
 	return n
+end
+
+-- called by GM.MigrateCharKeys once the realm answers: folds bare-name
+-- inv/owned keys into Name-Realm form (snapshots are newest-wins), then
+-- rehydrates the owned cache if it populated under a stale key at login
+function GM.Inventory.MigrateKeys()
+	if not GoblinMindSettings then return end
+	local keepNewest = function(a, b)
+		if not a then return b end
+		if not b then return a end
+		return ((a.at or 0) >= (b.at or 0)) and a or b
+	end
+	GM.CanonicalizeCharKeys(GoblinMindSettings.inv, keepNewest)
+	GM.CanonicalizeCharKeys(GoblinMindSettings.owned, keepNewest)
+	-- live auction data always outranks a rehydrated snapshot
+	if not ownedPrimed then
+		wipe(auctionCache)
+		wipe(bids)
+		LoadOwned()
+	end
 end
 
 -- ============ counts ============

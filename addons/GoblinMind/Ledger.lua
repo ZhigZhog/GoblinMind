@@ -21,6 +21,11 @@ function GM.Ledger.Init()
 	L.byChar = L.byChar or {}
 	L.itemStats = L.itemStats or {}
 	local ck = CharKey()
+	-- the key this session's live bucket was created under — bare
+	-- ("Zhig") when Init runs before GetRealmName resolves, which on
+	-- Forever can be the whole ADDON_LOADED window. MigrateKeys re-keys
+	-- the bucket in place once the realm answers.
+	GM.Ledger._ck = ck
 	local c = L.byChar[ck]
 	if not c then c = {} L.byChar[ck] = c end
 	-- migrate legacy root-level data into this char's bucket
@@ -166,6 +171,43 @@ end
 
 function GM.Ledger.CharKey()
 	return CharKey()
+end
+
+-- merge src's txn/gold history into dst's arrays in place (the facade
+-- holds references to the live bucket's tables), time-ordered, capped
+local function MergeHist(dst, src)
+	for _, f in ipairs({ "transactions", "gold" }) do
+		local d = dst[f] or {}
+		for _, e in ipairs(src[f] or {}) do d[#d + 1] = e end
+		sort(d, function(x, y) return (x.t or 0) < (y.t or 0) end)
+		local cap = f == "gold" and GOLD_CAP or TX_CAP
+		while #d > cap do table.remove(d, 1) end
+		dst[f] = d
+	end
+end
+
+-- called by GM.MigrateCharKeys once GetRealmName answers: re-keys the
+-- live bucket when it sits under a bare name from the empty-realm
+-- window, then folds any other bare keys (older sessions' splits).
+function GM.Ledger.MigrateKeys()
+	local L = GoblinMindLedger
+	if not (L and L.byChar) then return end
+	local ck = GM.CharKeyQualified()
+	if not ck then return end
+	local oldCk = GM.Ledger._ck
+	if oldCk and oldCk ~= ck and L.byChar[oldCk] then
+		local live = L.byChar[oldCk]
+		local prev = L.byChar[ck]
+		if prev and prev ~= live then MergeHist(live, prev) end
+		L.byChar[ck] = live
+		L.byChar[oldCk] = nil
+		GM.Ledger._ck = ck
+	end
+	GM.CanonicalizeCharKeys(L.byChar, function(a, b)
+		if not b then return a end
+		MergeHist(b, a)
+		return b
+	end)
 end
 
 function GM.Ledger.Recent(n)

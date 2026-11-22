@@ -253,7 +253,29 @@ Primary data = the in-house book feed below.
   extrapolates. v1 protocol is FATAL ≳100k clients (167ms/frame
   at 1M); v2 as shipped is 2.45ms/frame degraded at 1M; v2 + 8
   cohorts is ok; +1024 cohorts trivial.
-  The watcher also scans `WTF\Account\*\SavedVariables\GoblinMind.lua`
+  **`python brain\test_charkey.py`** — char-key migration sim:
+  Core+Ledger+Inventory in lupa, `_REALM` drives GetRealmName
+  flakiness. 26 checks over bare→qualified key folds, live-bucket
+  rekey, read-side self-matching, never-resolve sessions.
+  `lua.table_from` is SHALLOW — nested dicts stay Python and
+  KeyError on Lua-side indexing; `lt()` in the file recurses.
+- **Forever quirk — `GetRealmName()` is intermittently empty**:
+  not just early login; it can stay empty mid-session and through
+  PLAYER_LOGOUT teardown (found 2026-11-21 — the user's own char
+  existed in SV as both `Zhig` and `Zhig-CAMWOW US1 Realm 5 PvE`,
+  and `AltTotal` counted the player's own bags as an alt).
+  `GM.CharKey()` keeps the name-only fallback for DISPLAY use, but
+  anything PERSISTING a char key must go through
+  `GM.CharKeyQualified()` (nil while unresolved) and skip the write.
+  `GM.IsSelfCharKey(key)` treats same-name keys whose realm part
+  can't be disproved as self — use it for every "is this me/other
+  char" test, never `key ~= CharKey()`. `GM.MigrateCharKeys()`
+  (Core) one-shot-folds bare keys into `Name-<realm>` across
+  `inv`/`owned`/`byChar` once the realm answers — called at
+  PLAYER_LOGIN and opportunistically from `Snapshot`/`AltTotal`.
+  The Ledger's live bucket re-keys in place (`GM.Ledger._ck`) so
+  facade refs and in-session txns survive.
+- **Bug-report pipeline**: the watcher scans `WTF\Account\*\SavedVariables\GoblinMind.lua`
   each poll for staged bug reports (`gm-<ts>-<n>|<hex>` strings in
   `GoblinMindSettings.bugReports`), files them to GitHub issues
   (repo `ZhigZhog/GoblinMind`; token pulled from `git credential fill`
