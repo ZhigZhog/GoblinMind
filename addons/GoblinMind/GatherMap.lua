@@ -443,12 +443,12 @@ function M.CreatePane(parent, w)
 		return t
 	end
 
-	local function line(x1, y1, x2, y2, r, g, b, a)
+	local function line(x1, y1, x2, y2, r, g, b, a, wd)
 		local dx, dy = x2 - x1, y2 - y1
 		local len = sqrt(dx * dx + dy * dy)
 		if len < 2 then return end
 		local t = put("line")
-		t:SetSize(len, 2)
+		t:SetSize(len, wd or 2)
 		t:SetPoint("CENTER", pane, "TOPLEFT",
 			(x1 + x2) / 2, -(y1 + y2) / 2)
 		if t.SetRotation then
@@ -469,8 +469,8 @@ function M.CreatePane(parent, w)
 	-- art tiles cover a TOPLEFT-anchored rect sized to the art's own
 	-- aspect (letterboxed into the pane); overlays map 0-1 coords
 	-- onto the same rect
-	function pane:SetData(mapID, route)
-		self._mapID, self._route = mapID, route
+	function pane:SetData(mapID, route, sel)
+		self._mapID, self._route, self._sel = mapID, route, sel
 		if self._drawing then return end
 		self._drawing = true
 		clear()
@@ -716,6 +716,9 @@ function M.CreatePane(parent, w)
 			if x and x > -0.02 and x < 1.02
 				and y > -0.02 and y < 1.02 then
 				local match = not tid or G.ZoneTargets(zn, tid)
+				-- the selected row's camp pops: brighter fill/ring
+				-- plus an outer accent outline
+				local isSel = sel and sel.zone == zn
 				local col = G.KIND_COLOR[zn.kind] or { 1, 1, 1 }
 				local rPx = max(10, (zn.r or 60) * upy * w)
 				local px, py = x * w, y * h
@@ -723,26 +726,35 @@ function M.CreatePane(parent, w)
 				d:SetSize(rPx * 2, rPx * 2)
 				d:SetPoint("CENTER", self, "TOPLEFT", px, -py)
 				d:SetVertexColor(col[1], col[2], col[3],
-					match and 0.16 or 0.05)
+					isSel and 0.3 or (match and 0.16 or 0.05))
 				local seg = 24
 				for i = 1, seg do
 					local a0 = (i - 1) / seg * 6.2831853
 					local a1 = i / seg * 6.2831853
 					line(px + cos(a0) * rPx, py + sin(a0) * rPx,
 						px + cos(a1) * rPx, py + sin(a1) * rPx,
-						col[1], col[2], col[3], match and 0.5 or 0.15)
+						col[1], col[2], col[3],
+						isSel and 0.95 or (match and 0.5 or 0.15))
+					if isSel then
+						line(px + cos(a0) * (rPx + 4),
+							py + sin(a0) * (rPx + 4),
+							px + cos(a1) * (rPx + 4),
+							py + sin(a1) * (rPx + 4),
+							1, 0.82, 0.1, 0.85)
+					end
 				end
 				local ic = put("icon")
 				local fid = ItemIcon(G.ZoneIconID(zn))
 				if fid then
 					ic:SetTexture(fid)
-					ic:SetVertexColor(1, 1, 1, match and 1 or 0.3)
+					ic:SetVertexColor(1, 1, 1,
+						(match or isSel) and 1 or 0.3)
 				else
 					ic:SetTexture("Interface\\BUTTONS\\WHITE8X8")
 					ic:SetVertexColor(col[1], col[2], col[3],
-						match and 0.9 or 0.3)
+						(match or isSel) and 0.9 or 0.3)
 				end
-				ic:SetSize(18, 18)
+				ic:SetSize(isSel and 24 or 18, isSel and 24 or 18)
 				ic:SetPoint("CENTER", self, "TOPLEFT", px, -py)
 			end
 		end
@@ -800,6 +812,10 @@ function M.CreatePane(parent, w)
 		local stops = (run and run.route and run.route.map == mapID
 				and run.stops)
 			or (r and r.stops)
+		-- a selected route row draws its loop wider and brighter —
+		-- only when the drawn stops are that row's own (a running
+		-- route on the same map keeps the normal look)
+		local selLoop = sel and sel.stops and stops == sel.stops
 		if stops and #stops > 1 then
 			for i = 1, #stops do
 				local a, b = stops[i], stops[i % #stops + 1]
@@ -809,7 +825,8 @@ function M.CreatePane(parent, w)
 					and ax > -0.02 and ax < 1.02
 					and bx > -0.02 and bx < 1.02 then
 					line(ax * w, ay * h, bx * w, by * h,
-						0.4, 0.85, 1.0, 0.85)
+						0.4, 0.85, 1.0, selLoop and 1 or 0.85,
+						selLoop and 4 or 2)
 				end
 			end
 		end
@@ -822,7 +839,7 @@ function M.CreatePane(parent, w)
 	pane:SetScript("OnSizeChanged", function(self, w, h)
 		if self._mapID and w and h and w > 0 and h > 0
 			and (self._dw ~= w or self._dh ~= floor(h)) then
-			self:SetData(self._mapID, self._route)
+			self:SetData(self._mapID, self._route, self._sel)
 		end
 	end)
 

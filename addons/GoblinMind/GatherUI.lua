@@ -81,7 +81,7 @@ local function DrawPane()
 	ui.mapTitle:SetText(map and GM.Gather.ZoneName(map)
 		or "zone map")
 	local r = ui.mapRow and ui.mapRow.stops and ui.mapRow
-	ui.pane:SetData(map, r)
+	ui.pane:SetData(map, r, ui.mapRow)
 	if map then
 		ui.mapLegend:SetText(
 			"icons = best drop · size = spawns grouped · "
