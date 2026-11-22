@@ -358,6 +358,88 @@ function W.ScrollText(fs, off, visible, total)
 	end
 end
 
+-- dropdown popover anchored under a button: entries are
+-- { label, checked, cb } rows; wheel-pages long lists, a
+-- screen-wide catcher dismisses it. One menu per host frame —
+-- re-pressing the same button toggles it closed.
+function W.PopupMenu(btn, entries, opts)
+	opts = opts or {}
+	local host = opts.host or (btn and btn:GetParent()) or UIParent
+	local m = host._gmMenu
+	if m and m:IsShown() and m.btn == btn then
+		m:Hide()
+		if m.catcher then m.catcher:Hide() end
+		return
+	end
+	if not m then
+		local catcher = CreateFrame("Button", nil, host)
+		catcher:SetAllPoints(UIParent)
+		catcher:SetFrameLevel(host:GetFrameLevel() + 39)
+		catcher:SetScript("OnClick", function()
+			host._gmMenu:Hide()
+			catcher:Hide()
+		end)
+		m = CreateFrame("Frame", nil, host)
+		m:SetFrameLevel(host:GetFrameLevel() + 40)
+		GM.Panel(m, "contLow", "outline")
+		m.catcher = catcher
+		host._gmMenu = m
+	end
+	if not (entries and #entries > 0) then return end
+	local w = opts.w or 220
+	local MAX = opts.maxRows or 14
+	local vis = math.min(#entries, MAX)
+	m.btns = m.btns or {}
+	m.off = 0
+	local function Paint()
+		for _, b in ipairs(m.btns) do b:Hide() end
+		for i = 1, vis do
+			local e = entries[m.off + i]
+			if not e then break end
+			local b = m.btns[i]
+			if not b then
+				b = CreateFrame("Button", nil, m)
+				b:SetHeight(18)
+				b.text = GM.MakeFontString(b, GM.FONT, 10, "text")
+				b.text:SetPoint("LEFT", 6, 0)
+				b.text:SetWidth(w - 12)
+				b.text:SetWordWrap(false)
+				local hov = b:CreateTexture(nil, "ARTWORK")
+				hov:SetAllPoints()
+				hov:SetColorTexture(GM.RGB("contHigh"))
+				hov:Hide()
+				b:SetScript("OnEnter", function() hov:Show() end)
+				b:SetScript("OnLeave", function() hov:Hide() end)
+				m.btns[i] = b
+			end
+			b:SetWidth(w)
+			b:SetPoint("TOPLEFT", 2, -2 - (i - 1) * 18)
+			b.text:SetJustifyH(opts.justify or "LEFT")
+			b.text:SetText(e.label)
+			b.text:SetTextColor(GM.RGB(e.checked and "accent" or "text"))
+			b:SetScript("OnClick", function()
+				m:Hide()
+				m.catcher:Hide()
+				e.cb()
+			end)
+			b:Show()
+		end
+	end
+	m:EnableMouseWheel(true)
+	m:SetScript("OnMouseWheel", function(_, d)
+		m.off = math.min(math.max(0, #entries - vis),
+			math.max(0, m.off - d))
+		Paint()
+	end)
+	Paint()
+	m:SetSize(w + 4, 4 + vis * 18)
+	m:ClearAllPoints()
+	m:SetPoint("TOPRIGHT", btn, "BOTTOMRIGHT", 0, -2)
+	m.btn = btn
+	m:Show()
+	m.catcher:Show()
+end
+
 -- standard frame furniture: title + close X, shared offsets so every
 -- window's chrome sits identically
 function W.Chrome(f, name, titleText)

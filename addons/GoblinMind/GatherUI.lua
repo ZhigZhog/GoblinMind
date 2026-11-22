@@ -13,7 +13,8 @@ local W = GM.Widgets
 local Btn = W.Btn
 
 local ui
-local ROWS = 15
+local ROWS = 20
+local KIND_ORDER = { "herb", "mine", "skin", "hunt", "cloth", "cook" }
 
 local function KindLabel(k)
 	return ({ herb = "HERB", mine = "MINE", hunt = "HUNT",
@@ -81,7 +82,7 @@ local function DrawPane()
 	ui.mapTitle:SetText(map and GM.Gather.ZoneName(map)
 		or "zone map")
 	local r = ui.mapRow and ui.mapRow.stops and ui.mapRow
-	ui.pane:SetData(map, r, ui.mapRow)
+	ui.pane:SetData(map, r, ui.mapRow, ui.kindFilter)
 	if map then
 		ui.mapLegend:SetText(
 			"icons = best drop · size = spawns grouped · "
@@ -104,6 +105,23 @@ local function RowID(r)
 	if r.mob then return "mob:" .. tostring(r.mobName) end
 	if r.area then return "zone:" .. tostring(r.zone) end
 	return "route:" .. tostring(r.map) .. ":" .. tostring(r.kind)
+end
+
+-- a mob row's category is its best camp's, not its recording
+-- disposition — a cook camp's mob belongs under COOK
+local function RowKind(r)
+	if r.mob and r.zone and GM.Gather.ZoneCat then
+		return GM.Gather.ZoneCat(r.zone)
+	end
+	return r.kind
+end
+
+local function RowKeep(r)
+	if ui.zoneFilter and r.map ~= ui.zoneFilter then return false end
+	if ui.kindFilter and RowKind(r) ~= ui.kindFilter then
+		return false
+	end
+	return true
 end
 
 -- the expansion tree: typed lines — {h=text} headers per mob +
@@ -169,41 +187,48 @@ local function Refresh()
 				keep = GM.Gather.RowTargets(r, tid)
 					and not GM.Gather.ZoneHasMobDrop(r.zone, tid)
 			end
-			if keep then rows[#rows + 1] = r end
+			if keep and RowKeep(r) then rows[#rows + 1] = r end
 		end
 		for _, r in ipairs(GM.Gather.MobRows(tid)) do
 			r.targetName = tn
-			rows[#rows + 1] = r
+			if RowKeep(r) then rows[#rows + 1] = r end
 		end
 		table.sort(rows, function(a, b)
 			return (a.gpm or 0) > (b.gpm or 0)
 		end)
 	else
 		for _, r in ipairs(GM.Gather.Leaderboard()) do
-			rows[#rows + 1] = r
+			if RowKeep(r) then rows[#rows + 1] = r end
 		end
 	end
 	ui.rows = rows
+	-- scroll window over the filtered rows (mousewheel on ui)
+	ui.scroll = math.min(ui.scroll or 0,
+		math.max(0, #rows - ROWS))
 	-- expansion state: the clicked row keeps full alpha, every
 	-- other row fades, and rows BELOW it physically drop to make
-	-- room for the drop tree — a real expansion, not an overlay
+	-- room for the drop tree — a real expansion, not an overlay.
+	-- Scrolled out of view, the tree hides but the state survives
+	-- so scrolling back restores it
 	local exIdx, exLines
 	for i, r in ipairs(rows) do
 		if RowID(r) == ui.expanded then exIdx = i break end
 	end
 	if not exIdx then ui.expanded = nil end
 	if exIdx then exLines = DetailLines(rows[exIdx]) end
+	local exVis = exIdx and (exIdx - ui.scroll)
+	local exShown = exVis and exVis >= 1 and exVis <= ROWS
 	-- the tree only gets the space below the expanded row down to
 	-- the content floor — a longer list truncates with "+N more"
 	-- rather than spilling past the window
 	local exAvail = 0
-	if exIdx then
-		exAvail = (ui._rowTop or -92) - (exIdx - 1) * 20
+	if exShown then
+		exAvail = (ui._rowTop or -112) - (exVis - 1) * 20
 			- 19 - (ui._floorY or -526)
 	end
 	-- item rows are taller than header text — sum real heights
 	local extra = 0
-	if exLines then
+	if exLines and exShown then
 		for _, ln in ipairs(exLines) do
 			local lh = ln.item and 16 or 12
 			if extra + lh > exAvail then break end
@@ -213,15 +238,16 @@ local function Refresh()
 	end
 	-- rows pushed past the window bottom hide instead of
 	-- overrunning the hint line (content floor ≈ -530 of 560)
-	local maxOff = (ui._rowTop or -92) + 511
-	for i = 1, ROWS do
+	local maxOff = (ui._rowTop or -112) + 511
+	for vi = 1, ROWS do
+		local i = vi + ui.scroll
 		local r, fs, rb, gpm =
-			rows[i], ui.rowFs[i], ui.rowBtn[i], ui.gpmFs[i]
-		local off = (i - 1) * 20
-			+ (exIdx and i > exIdx and extra or 0)
+			rows[i], ui.rowFs[vi], ui.rowBtn[vi], ui.gpmFs[vi]
+		local off = (vi - 1) * 20
+			+ (exShown and i > exIdx and extra or 0)
 		if r and off <= maxOff then
 			rb:ClearAllPoints()
-			rb:SetPoint("TOPLEFT", 10, (ui._rowTop or -92) - off)
+			rb:SetPoint("TOPLEFT", 10, (ui._rowTop or -112) - off)
 			fs:SetText(RowText(r))
 			rb._row = r
 			gpm._prefix = (r.conf == "low" or r.conf == "fair")
@@ -234,22 +260,25 @@ local function Refresh()
 		else
 			fs:SetText("")
 			rb._row = nil
-			ui.gpmFs[i]:SetText("")
+			ui.gpmFs[vi]:SetText("")
 			rb:Hide()
 		end
 	end
 	if ui.tree then
 		ui.tree:Clear()
-		if exIdx then
-			ui.tree:Fill(exLines, ui.rowBtn[exIdx], exAvail)
+		if exShown then
+			ui.tree:Fill(exLines, ui.rowBtn[exVis], exAvail)
 		end
 	end
 	local all = GM.Gather.Leaderboard()
+	local filtered = ui.zoneFilter or ui.kindFilter
 	ui.count:SetText(tid
 		and (#rows .. " producers of " .. TargetName(tid)
 			.. "  (" .. #all .. " hidden)")
+		or (filtered and (#rows .. " of " .. #all .. " shown"))
 		or (#rows > 0 and (#rows .. " routes + zones")
 			or "no data yet — gather nodes or farm mobs to seed"))
+	W.ScrollText(ui.scrollFs, ui.scroll, ROWS, #rows)
 	-- detail line for the selected/current-map route
 	local run = GM.Gather.Route()
 	if run then
@@ -267,6 +296,10 @@ local function Refresh()
 	ui.speedBtn:SetText("speed: " .. sp.name)
 	ui.contBtn:SetText("crowd: "
 		.. GM.Gather.CONTS[GM.Gather.ContIx()].name)
+	ui.zoneBtn.text:SetText("zone: " .. (ui.zoneFilter
+		and GM.Gather.ZoneName(ui.zoneFilter) or "all"))
+	ui.filterBtn.text:SetText("filter: " .. (ui.kindFilter
+		and string.lower(KindLabel(ui.kindFilter)) or "all"))
 	if tid then ui.targetSlot:SetItem(tid)
 	else ui.targetSlot:Clear() end
 	DrawPane()
@@ -294,6 +327,58 @@ local function SetTarget(id)
 		GM.Print(GM.CC("textDim") .. "gather target cleared|r")
 	end
 	Refresh()
+end
+
+-- every mapID carrying any farm record — node loops and hunt
+-- zones — sorted by display name for the zone picker
+local function KnownMaps()
+	local seen, out = {}, {}
+	for m in pairs(GoblinMindGather.nodes or {}) do seen[m] = true end
+	for m in pairs(GoblinMindGather.zones or {}) do seen[m] = true end
+	for m in pairs(seen) do out[#out + 1] = m end
+	table.sort(out, function(a, b)
+		return GM.Gather.ZoneName(a) < GM.Gather.ZoneName(b)
+	end)
+	return out
+end
+
+local function SetZoneFilter(m)
+	ui.zoneFilter = m
+	if m then ui.mapSel = m end
+	ui.scroll = 0
+	Refresh()
+end
+
+local function ZoneEntries()
+	local e = { { label = "all zones",
+		checked = not ui.zoneFilter,
+		cb = function() SetZoneFilter(nil) end } }
+	for _, m in ipairs(KnownMaps()) do
+		e[#e + 1] = {
+			label = GM.Gather.ZoneName(m),
+			checked = ui.zoneFilter == m,
+			cb = function() SetZoneFilter(m) end,
+		}
+	end
+	return e
+end
+
+local function FilterEntries()
+	local e = { { label = "everything",
+		checked = not ui.kindFilter,
+		cb = function()
+			ui.kindFilter = nil ui.scroll = 0 Refresh()
+		end } }
+	for _, k in ipairs(KIND_ORDER) do
+		e[#e + 1] = {
+			label = KindColor(k) .. KindLabel(k) .. "|r",
+			checked = ui.kindFilter == k,
+			cb = function()
+				ui.kindFilter = k ui.scroll = 0 Refresh()
+			end,
+		}
+	end
+	return e
 end
 
 local function Build()
@@ -336,11 +421,29 @@ local function Toggle()
 		ui.detail = GM.MakeFontString(ui, GM.FONT, 10, "text")
 		ui.detail:SetPoint("TOPLEFT", 14, -32)
 
-		-- controls row
+		-- controls row 1: zone scope + category filter, then the
+		-- route controls and the model assumptions
 		local y = -50
-		ui.build = Btn(ui, 80, "BUILD", Build)
-		ui.build:SetPoint("TOPLEFT", 14, y)
-		ui.start = Btn(ui, 80, "START", function()
+		ui.current = Btn(ui, 80, "CURRENT", function()
+			local m = GM.Gather.CurrentMap()
+			if m then
+				SetZoneFilter(m)
+			else
+				GM.Print(GM.CC("textDim") .. "no map here|r")
+			end
+		end)
+		ui.current:SetPoint("TOPLEFT", 14, y)
+		ui.zoneBtn = Btn(ui, 150, "zone: all", function(s)
+			W.PopupMenu(s, ZoneEntries(), { host = ui, w = 190 })
+		end)
+		ui.zoneBtn:SetPoint("LEFT", ui.current, "RIGHT", 6, 0)
+		ui.filterBtn = Btn(ui, 130, "filter: all", function(s)
+			W.PopupMenu(s, FilterEntries(), { host = ui, w = 150 })
+		end)
+		ui.filterBtn:SetPoint("LEFT", ui.zoneBtn, "RIGHT", 6, 0)
+		ui.build = Btn(ui, 70, "BUILD", Build)
+		ui.build:SetPoint("LEFT", ui.filterBtn, "RIGHT", 12, 0)
+		ui.start = Btn(ui, 70, "START", function()
 			local p = ui.mapSel or GM.Gather.CurrentMap()
 			local r = p and GM.GatherMap and GM.GatherMap.RouteFor(p)
 			if r then
@@ -352,12 +455,12 @@ local function Toggle()
 			Refresh()
 		end)
 		ui.start:SetPoint("LEFT", ui.build, "RIGHT", 6, 0)
-		ui.stop = Btn(ui, 80, "STOP", function()
+		ui.stop = Btn(ui, 70, "STOP", function()
 			GM.Gather.StopRoute()
 			Refresh()
 		end)
 		ui.stop:SetPoint("LEFT", ui.start, "RIGHT", 6, 0)
-		ui.import = Btn(ui, 80, "IMPORT", function()
+		ui.import = Btn(ui, 70, "IMPORT", function()
 			local st, err = GM.Gather.ImportGatherLite()
 			if st then
 				GM.Print(GM.CC("accent") .. "gather import:|r "
@@ -371,22 +474,23 @@ local function Toggle()
 			Refresh()
 		end)
 		ui.import:SetPoint("LEFT", ui.stop, "RIGHT", 6, 0)
-		ui.speedBtn = Btn(ui, 150, "speed:", function()
+		ui.speedBtn = Btn(ui, 140, "speed:", function()
 			GoblinMindGather.speedIx =
 				(GM.Gather.SpeedIx() % #GM.Gather.SPEEDS) + 1
 			Refresh()
 		end)
-		ui.speedBtn:SetPoint("LEFT", ui.import, "RIGHT", 6, 0)
-		ui.contBtn = Btn(ui, 110, "crowd:", function()
+		ui.speedBtn:SetPoint("LEFT", ui.import, "RIGHT", 12, 0)
+		ui.contBtn = Btn(ui, 100, "crowd:", function()
 			GoblinMindGather.contIx =
 				(GM.Gather.ContIx() % #GM.Gather.CONTS) + 1
 			Refresh()
 		end)
 		ui.contBtn:SetPoint("LEFT", ui.speedBtn, "RIGHT", 6, 0)
 
-		-- target pick: name/link/id text box that also takes drops
+		-- controls row 2: the target pick — name/link/id text box
+		-- that also takes drops
 		ui.target = W.EditBox(ui, 190, "target item...")
-		ui.target:SetPoint("LEFT", ui.contBtn, "RIGHT", 10, 0)
+		ui.target:SetPoint("TOPLEFT", 14, y - 24)
 		ui.target:SetScript("OnEnterPressed", function(s)
 			local id = ResolveTarget(s:GetText())
 			if id then
@@ -422,10 +526,26 @@ local function Toggle()
 		ui.targetSlot:SetPoint("LEFT", ui.targetClear, "RIGHT", 8, 0)
 
 		-- leaderboard: left column
-		local listTop = y - 26
+		local listTop = y - 50
 		ui.count = GM.MakeFontString(ui, GM.FONT, 9, "textDim")
 		ui.count:SetPoint("TOPLEFT", 14, listTop)
 		ui.count:SetJustifyH("LEFT")
+		ui.scrollFs = GM.MakeFontString(ui, GM.FONT, 9, "textDim")
+		ui.scrollFs:SetPoint("TOPRIGHT", -598, listTop)
+		ui.scrollFs:SetJustifyH("RIGHT")
+
+		-- wheel anywhere in the window pages the list — the row
+		-- buttons don't claim the wheel, so it lands here
+		ui:EnableMouseWheel(true)
+		ui:SetScript("OnMouseWheel", function(_, d)
+			local mx = math.max(0, #(ui.rows or {}) - ROWS)
+			local ns = math.min(mx,
+				math.max(0, (ui.scroll or 0) - d * 3))
+			if ns ~= (ui.scroll or 0) then
+				ui.scroll = ns
+				Refresh()
+			end
+		end)
 
 		ui.rowFs, ui.gpmFs, ui.rowBtn = {}, {}, {}
 		local top = listTop - 16
@@ -566,7 +686,7 @@ local function Toggle()
 		-- panel bottom above the legend
 		local mp, mt = W.TitledPanel(ui, "zone map")
 		mp:SetPoint("TOPLEFT", 590, listTop)
-		mp:SetSize(576, 470)
+		mp:SetSize(576, 444)
 		ui.mapTitle = mt
 		ui.pane = GM.GatherMap
 			and GM.GatherMap.CreatePane(mp, 562)

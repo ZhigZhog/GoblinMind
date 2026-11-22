@@ -471,8 +471,9 @@ function M.CreatePane(parent, w)
 	-- art tiles cover a TOPLEFT-anchored rect sized to the art's own
 	-- aspect (letterboxed into the pane); overlays map 0-1 coords
 	-- onto the same rect
-	function pane:SetData(mapID, route, sel)
-		self._mapID, self._route, self._sel = mapID, route, sel
+	function pane:SetData(mapID, route, sel, filter)
+		self._mapID, self._route, self._sel, self._filter =
+			mapID, route, sel, filter
 		if self._drawing then return end
 		self._drawing = true
 		clear()
@@ -714,16 +715,18 @@ function M.CreatePane(parent, w)
 		-- no stored x,y) get skipped — a px<0 disc bleeds outside the
 		-- pane into the list column
 		for _, zn in ipairs(zones) do
+			local zc = G.ZoneCat and G.ZoneCat(zn) or zn.kind
 			local x, y = MapXY(zn, mapID)
 			if x and x > -0.02 and x < 1.02
-				and y > -0.02 and y < 1.02 then
+				and y > -0.02 and y < 1.02
+				-- the category filter isolates the overlay —
+				-- non-matching camps drop off the map entirely
+				and (not filter or zc == filter) then
 				local match = not tid or G.ZoneTargets(zn, tid)
 				-- the selected row's camp pops: brighter fill/ring
 				-- plus an outer accent outline
 				local isSel = sel and sel.zone == zn
-				local col = G.KIND_COLOR[
-					G.ZoneCat and G.ZoneCat(zn) or zn.kind]
-					or { 1, 1, 1 }
+				local col = G.KIND_COLOR[zc] or { 1, 1, 1 }
 				local rPx = max(10, (zn.r or 60) * upy * w)
 				local px, py = x * w, y * h
 				local d = put("disc")
@@ -769,7 +772,8 @@ function M.CreatePane(parent, w)
 		for _, nd in ipairs(nodes) do
 			local x, y = MapXY(nd, mapID)
 			if x and x > -0.02 and x < 1.02
-				and y > -0.02 and y < 1.02 then
+				and y > -0.02 and y < 1.02
+				and (not filter or nd.kind == filter) then
 				drawable[#drawable + 1] = nd
 			end
 		end
@@ -816,11 +820,17 @@ function M.CreatePane(parent, w)
 		local stops = (run and run.route and run.route.map == mapID
 				and run.stops)
 			or (r and r.stops)
+		-- the kind the drawn loop belongs to — a mismatched
+		-- category filter drops it off the overlay too
+		local loopKind = (run and run.route
+				and run.route.map == mapID and run.route.kind)
+			or (r and r.kind)
 		-- a selected route row draws its loop wider and brighter —
 		-- only when the drawn stops are that row's own (a running
 		-- route on the same map keeps the normal look)
 		local selLoop = sel and sel.stops and stops == sel.stops
-		if stops and #stops > 1 then
+		if stops and #stops > 1
+			and (not filter or loopKind == filter) then
 			for i = 1, #stops do
 				local a, b = stops[i], stops[i % #stops + 1]
 				local ax, ay = MapXY(a, mapID)
@@ -843,7 +853,8 @@ function M.CreatePane(parent, w)
 	pane:SetScript("OnSizeChanged", function(self, w, h)
 		if self._mapID and w and h and w > 0 and h > 0
 			and (self._dw ~= w or self._dh ~= floor(h)) then
-			self:SetData(self._mapID, self._route, self._sel)
+			self:SetData(self._mapID, self._route, self._sel,
+				self._filter)
 		end
 	end)
 
