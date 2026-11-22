@@ -35,9 +35,14 @@ local function RowText(r)
 			and (GM.CC("textDim") .. "  raw "
 				.. GM.MoneyShort(floor(r.gpmRaw * 10000))
 				.. "/min|r") or ""
+		-- mob names first — "what" distinguishes two camps in the
+		-- same zone better than the map name does
+		local mobs = r.zone and GM.Gather.ZoneMobs(r.zone)
+		local where = mobs and (mobs .. " — " .. r.zoneName)
+			or r.zoneName
 		return format(
 			"%s%-5s|r  %s  ·  %d kills  ·  %d spawns  ·  %ss/kill  ·  %s/kill%s",
-			col, KindLabel(r.kind), r.zoneName,
+			col, KindLabel(r.kind), where,
 			r.kills or 0, r.spawns or 0,
 			format("%.0f", r.lapSec),
 			GM.MoneyShort(floor((r.evLoop or 0) * 10000)), raw)

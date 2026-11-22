@@ -302,6 +302,10 @@ zn = g.GoblinMindGather.zones[1419][1]
 check('empty corpse counted as kill', zn.kills == k0 + 1)
 check('items unchanged by empty loot',
       zn['items'][12184] == 3 and zn.cnt == k0 + 1)
+check('zone tracks mob names',
+      zn.mobs['Young Raptor'] == 4 and zn.mobs['Peacebloom'] == 2)
+check('mob label sorts by kills',
+      G.ZoneMobs(zn) == 'Young Raptor ×4 · Peacebloom ×2')
 
 print('== target-relative EV ==')
 # with raptor flesh targeted the row shows flesh-per-kill, not the

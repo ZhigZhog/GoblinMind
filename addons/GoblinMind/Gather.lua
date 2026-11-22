@@ -241,7 +241,7 @@ local function MergePocket(zn, p)
 	best.last = now
 end
 
-local function MergeZone(p, kind, items)
+local function MergeZone(p, kind, items, mob)
 	local list = ZoneList(p.map)
 	if not list then return nil end
 	local now = GetTime()
@@ -258,6 +258,10 @@ local function MergeZone(p, kind, items)
 				end
 				zn.lastGT = now
 				zn.kills = (zn.kills or 0) + 1
+				if mob then
+					zn.mobs = zn.mobs or {}
+					zn.mobs[mob] = (zn.mobs[mob] or 0) + 1
+				end
 				UpdateYield(zn, items)
 				MergePocket(zn, p)
 				if d > (zn.r or 0) then zn.r = floor(d + 25) end
@@ -272,6 +276,7 @@ local function MergeZone(p, kind, items)
 		activeT = 0, lastGT = now, items = {}, cnt = 0,
 		pockets = {},
 	}
+	if mob then zn.mobs = { [mob] = 1 } end
 	UpdateYield(zn, items)
 	MergePocket(zn, p)
 	tinsert(list, zn)
@@ -364,6 +369,22 @@ end
 
 G.ZoneRate = ZoneRate
 G.ZoneEV = ZoneEV
+-- mob label for a zone: "Screecher ×5", "Screecher ×3 · Lashtail ×2",
+-- "+N" tail when a camp mixes more than two mobs
+function G.ZoneMobs(zn)
+	local mobs = zn.mobs
+	if not mobs then return nil end
+	local t = {}
+	for name, n in pairs(mobs) do t[#t + 1] = { name, n } end
+	table.sort(t, function(a, b) return a[2] > b[2] end)
+	local s
+	for i = 1, min(2, #t) do
+		s = (s and (s .. " · ") or "")
+			.. t[i][1] .. " ×" .. t[i][2]
+	end
+	if #t > 2 then s = s .. " +" .. (#t - 2) end
+	return s
+end
 -- repeatable per-kill EV — drops the one-shot lottery items
 function G.ZoneSusEV(zn)
 	return ItemsEV(zn, true) or 0
@@ -1010,7 +1031,7 @@ local function OnLoot()
 			-- skinning: a skinned corpse is a kill event — zone it,
 			-- and record yields under both the generic key and the
 			-- mob name
-			MergeZone(pos, "skin", items)
+			MergeZone(pos, "skin", items, srcName)
 			UpdateYield(YieldRec("skin"), items)
 			if srcName then
 				UpdateYield(YieldRec("skin:" .. srcName), items)
@@ -1038,7 +1059,7 @@ local function OnLoot()
 	if next(items) or srcDead then
 		local pos = PosNow()
 		if pos then
-			MergeZone(pos, "hunt", items)
+			MergeZone(pos, "hunt", items, srcName)
 			UpdateYield(YieldRec("hunt"), items)
 			-- per-mob drop table: "hunt:Ravasaur" -> flesh/leather —
 			-- the seed of a real mob-drop model
