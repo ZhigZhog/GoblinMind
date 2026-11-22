@@ -352,6 +352,10 @@ local function Refresh()
 		and GM.Gather.ZoneName(ui.zoneFilter) or "all"))
 	ui.filterBtn.text:SetText("filter: " .. (ui.kindFilter
 		and string.lower(KindLabel(ui.kindFilter)) or "all"))
+	if GM.GatherMinimap then
+		local n = GM.GatherMinimap.Count()
+		ui.mmBtn.text:SetText("minimap: " .. n)
+	end
 	if tid then ui.targetSlot:SetItem(tid)
 	else ui.targetSlot:Clear() end
 	DrawPane()
@@ -613,6 +617,25 @@ local function FilterEntries()
 	return e
 end
 
+-- checkable layer toggles for the minimap overlay
+local function MiniEntries()
+	local e = {}
+	local MM = GM.GatherMinimap
+	if not MM then return e end
+	for _, k in ipairs(MM.LAYERS) do
+		local kk = k
+		e[#e + 1] = {
+			label = MM.LABEL[k],
+			checked = MM.Enabled(k),
+			cb = function()
+				MM.Set(kk, not MM.Enabled(kk))
+				Refresh()
+			end,
+		}
+	end
+	return e
+end
+
 -- only HERB/MINE have routes — BUILD is gated to those filters
 local function Build()
 	local kind = ui.kindFilter
@@ -724,6 +747,11 @@ local function Toggle()
 			Refresh()
 		end)
 		ui.clear:SetPoint("LEFT", ui.load, "RIGHT", 6, 0)
+		-- per-layer minimap overlay toggles
+		ui.mmBtn = Btn(ui, 110, "minimap:", function(s)
+			W.PopupMenu(s, MiniEntries(), { host = ui, w = 120 })
+		end)
+		ui.mmBtn:SetPoint("LEFT", ui.clear, "RIGHT", 12, 0)
 
 		-- controls row 2: the target pick — name/link/id text box
 		-- that also takes drops

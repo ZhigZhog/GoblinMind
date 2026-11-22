@@ -50,6 +50,7 @@ OrdersUI.lua
 GatherUI.lua
 MapRevealData.lua
 GatherMap.lua
+GatherMinimap.lua
 Settings.lua
 ItemInput.lua
 Tooltip.lua
