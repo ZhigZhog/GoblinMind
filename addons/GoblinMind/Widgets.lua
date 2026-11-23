@@ -469,11 +469,12 @@ function W.MapLayer(host)
 		l:SetTextColor(r or 1, g or 1, b or 1, a or 1)
 	end
 
-	function L:tag(x, y, text)
+	function L:tag(x, y, text, a)
 		local l = put("tag")
 		l:SetPoint("CENTER", self.host, "TOPLEFT", x, -y)
 		l:SetMaxLines(1) -- one glance line, never a wrap
 		l:SetText(text or "")
+		l:SetAlpha(a or 1) -- pooled: always re-set
 	end
 
 	-- invisible hover region: fn(GameTooltip) fills and shows it

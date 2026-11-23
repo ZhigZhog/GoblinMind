@@ -70,11 +70,17 @@ end
 function M.AlphaNode()
 	return mm().alphaNode or 1
 end
+function M.AlphaIcon()
+	return mm().alphaIcon or 1
+end
 function M.SetAlphaZone(v)
 	mm().alphaZone = tonumber(v) or 1
 end
 function M.SetAlphaNode(v)
 	mm().alphaNode = tonumber(v) or 1
+end
+function M.SetAlphaIcon(v)
+	mm().alphaIcon = tonumber(v) or 1
 end
 function M.Color(k)
 	local c = mm().col
@@ -313,6 +319,7 @@ local function Update()
 	-- geometry, so it rides oaN (muting nodes must mute its loop)
 	local oaZ = M.AlphaZone()
 	local oaN = M.AlphaNode()
+	local oaI = M.AlphaIcon()
 	local SA = GM.Widgets.MapStyle.A
 
 	local function seg(u1, v1, u2, v2)
@@ -422,7 +429,7 @@ local function Update()
 							cx - hw, cy - hh)
 						ic:SetTexture(it)
 						ic:SetVertexColor(1, 1, 1,
-							SA.full * oaZ)
+							SA.full * oaI)
 					end
 				end
 			end

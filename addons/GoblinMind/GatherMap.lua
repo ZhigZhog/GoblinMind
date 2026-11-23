@@ -459,10 +459,11 @@ local function ZoneScene(L, zn, prj, w, h, st)
 		if st.tag then
 			-- icon-relative offset (S2): the tag sits under the
 			-- art, not at a fixed dip that drifts with iconSz
-			L:tag(cx, cy + (st.tagDY or sz / 2 + 8), st.tag)
+			L:tag(cx, cy + (st.tagDY or sz / 2 + 8), st.tag,
+				st.iconA)
 		end
 	elseif st.tag then
-		L:tag(cx, cy + (st.tagDY or 14), st.tag)
+		L:tag(cx, cy + (st.tagDY or 14), st.tag, st.iconA)
 	end
 	return cx, cy
 end
@@ -593,6 +594,7 @@ function M.Refresh()
 	-- nodes covers spawn cluster icons and badges
 	local oaZ = GM.GatherMinimap and GM.GatherMinimap.AlphaZone() or 1
 	local oaN = GM.GatherMinimap and GM.GatherMinimap.AlphaNode() or 1
+	local oaI = GM.GatherMinimap and GM.GatherMinimap.AlphaIcon() or 1
 	-- record -> normalized map coords on the displayed frame;
 	-- cross-mapID records reproject via the shared MapXY
 	local function RecXY(p)
@@ -640,7 +642,7 @@ function M.Refresh()
 				ringA = S.A.zoneRing * oaZ,
 				ringPx = 3,
 				iconID = G.ZoneIconID and G.ZoneIconID(zn),
-				iconA = S.A.full * oaZ,
+				iconA = S.A.full * oaI,
 				tag = ZoneLabel(zn, mapName),
 				mapID = map,
 				rPx = function(yd)
@@ -1333,6 +1335,8 @@ function M.CreatePane(parent, w)
 		local ref = nodes[1] or zones[1]
 		local upy = UnitsPerYard(mapID, ref)
 		local tid = G.TargetID and G.TargetID()
+		local oaI = GM.GatherMinimap
+			and GM.GatherMinimap.AlphaIcon() or 1
 		-- continent/world view: child-zone geometry projects into
 		-- the parent's frame at the wrong scale — no camps, pins,
 		-- or loops here; the per-zone summary marks replace them
@@ -1371,8 +1375,8 @@ function M.CreatePane(parent, w)
 						sel = isSel,
 						iconID = G.ZoneIconID
 							and G.ZoneIconID(zn),
-						iconA = (match or isSel) and S.A.full
-							or S.A.nonMatch,
+						iconA = ((match or isSel) and S.A.full
+							or S.A.nonMatch) * oaI,
 						iconSz = isSel and S.ZONE_ICON_SEL
 							or S.ZONE_ICON,
 						mapID = mapID,

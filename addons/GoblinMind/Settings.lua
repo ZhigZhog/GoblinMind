@@ -797,10 +797,11 @@ local function Build()
 	-- colors. Same mm table the layer toggles write — colors flow
 	-- through G.KindCol so rows, labels, discs, and blobs all
 	-- honor a pick
-	local ov = Panel(f, 10, -794, 600, 118, "GATHERING · MAP OVERLAY")
+	local ov = Panel(f, 10, -794, 600, 142, "GATHERING · MAP OVERLAY")
 	if GM.GatherMinimap and GM.Gather then
-		-- two opacity channels: zone blobs/borders/farm icons vs
-		-- node spawn clusters — settings persist separately
+		-- three opacity channels: zone blobs/borders, farm icons
+		-- + labels, node spawn clusters — settings persist
+		-- separately
 		local steps = { 0.25, 0.5, 0.75, 1 }
 		local function segRow(label, y, get, set)
 			RowAt(ov, label, 12, y)
@@ -831,8 +832,11 @@ local function Build()
 		ui.ovSegsN = segRow("NODES", 50,
 			GM.GatherMinimap.AlphaNode,
 			GM.GatherMinimap.SetAlphaNode)
+		ui.ovSegsI = segRow("ICONS", 74,
+			GM.GatherMinimap.AlphaIcon,
+			GM.GatherMinimap.SetAlphaIcon)
 
-		RowAt(ov, "FILL COLORS", 12, 80)
+		RowAt(ov, "FILL COLORS", 12, 104)
 		ui.ovSwatch = {}
 		-- click = pick; right-click = back to the builtin color.
 		-- Swatch list = the kind registry — new kinds appear
@@ -880,7 +884,7 @@ local function Build()
 			local x = 116 + (i - 1) * pitch
 			local sw = CreateFrame("Button", nil, ov)
 			sw:SetSize(16, 16)
-			sw:SetPoint("TOPLEFT", x, -78)
+			sw:SetPoint("TOPLEFT", x, -102)
 			GM.Panel(sw, "contHigh")
 			sw:RegisterForClicks("LeftButtonUp",
 				"RightButtonUp")
@@ -899,7 +903,7 @@ local function Build()
 			end)
 			local lbl = GM.MakeFontString(ov, GM.FONT, 9,
 				"textDim")
-			lbl:SetPoint("TOPLEFT", x + 20, -82)
+			lbl:SetPoint("TOPLEFT", x + 20, -106)
 			lbl:SetText(GM.Gather.KindLabel(k))
 			ui.ovSwatch[k] = sw
 			paintSwatch(k)
@@ -910,7 +914,7 @@ local function Build()
 	-- entry point to the shared importer (GM.Import.Mount — the same
 	-- row list the onboarding wizard shows). Panel itself only
 	-- reports what detection sees; the window does the work
-	local imp = Panel(f, 10, -918, 600, 60,
+	local imp = Panel(f, 10, -942, 600, 60,
 		"IMPORT FROM OTHER ADDONS")
 	ui.impScan = CreateFrame("Button", nil, imp)
 	ui.impScan:SetSize(110, 22)
