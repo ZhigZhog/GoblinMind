@@ -92,6 +92,7 @@ end
 -- pools hold idle objects; `live` holds what the last pass drew —
 -- refresh hides live, returns it to the pools, then redraws
 local pinPool, linePool, circPool = {}, {}, {}
+local iconPool, lblPool = {}, {}
 local live = {}
 
 local function Reclaim()
@@ -146,6 +147,30 @@ local function PutZone(canvas)
 	live[#live + 1] = c.fill
 	live[#live + 1] = c.label
 	return c
+end
+
+-- node icons sit above fills (sublevel 0) and lines (1); count
+-- badges ride the same strata as zone labels
+local function PutIcon(canvas)
+	local t = tremove(iconPool)
+	if not t then
+		t = canvas:CreateTexture(nil, "OVERLAY", nil, 2)
+	end
+	t:SetParent(canvas)
+	t:Show()
+	live[#live + 1] = t
+	return t
+end
+
+local function PutLbl(canvas)
+	local l = tremove(lblPool)
+	if not l then
+		l = GM.MakeFontString(canvas, GM.FONT, 9, "text")
+	end
+	l:SetParent(canvas)
+	l:Show()
+	live[#live + 1] = l
+	return l
 end
 
 -- ======================== draw helpers ========================
@@ -327,6 +352,60 @@ function M.ClearRoute(map)
 	lastRoutes[map] = nil
 end
 
+local function ItemIcon(id)
+	if not id then return nil end
+	if C_Item and C_Item.GetItemIconByID then
+		local ok, ic = pcall(C_Item.GetItemIconByID, id)
+		if ok and ic then return ic end
+	end
+	if GetItemIcon then
+		local ok, ic = pcall(GetItemIcon, id)
+		if ok and ic then return ic end
+	end
+end
+
+-- map-units per yard near (n,w): project two points a known world
+-- distance apart and measure. Fallback matches the world map's
+-- 1500yd-per-map-width assumption
+local function UnitsPerYard(mapID, p)
+	if p and p.n and p.w then
+		local ax, ay = GM.MapPos(p.c or 0, p.n, p.w, mapID)
+		local bx, by = GM.MapPos(p.c or 0, p.n + 100, p.w, mapID)
+		if ax and bx then
+			local d = sqrt((bx - ax) ^ 2 + (by - ay) ^ 2)
+			if d > 1e-6 then return d / 100 end
+		end
+	end
+	return 1 / 1500
+end
+
+-- greedy proximity merge in map units — display-only; the data
+-- layer's tighter merge already ran, this just thins pin spam
+local function Cluster(nodes, xy, thresh)
+	local out = {}
+	for _, nd in ipairs(nodes) do
+		local x, y = xy(nd)
+		if x then
+			local hit
+			for _, c in ipairs(out) do
+				local dx, dy = x - c.x, y - c.y
+				if dx * dx + dy * dy < thresh * thresh then
+					hit = c break
+				end
+			end
+			if hit then
+				hit.x = (hit.x * hit.n + x) / (hit.n + 1)
+				hit.y = (hit.y * hit.n + y) / (hit.n + 1)
+				hit.n = hit.n + 1
+				hit.nodes[#hit.nodes + 1] = nd
+			else
+				out[#out + 1] = { x = x, y = y, n = 1, nodes = { nd } }
+			end
+		end
+	end
+	return out
+end
+
 function M.Refresh()
 	G = G or GM.Gather
 	if not MapShown() or not G then
@@ -443,18 +522,51 @@ function M.Refresh()
 		end)
 	end
 
-	-- node pins; dim inside the learned respawn window
+	-- node pins: Gatherer-style stacking — records within ~70yd
+	-- merge into one spawn icon (best drop's item art) sized and
+	-- badged by group; plain colored pin when the client can't
+	-- resolve an icon. Dim when every member is inside the
+	-- learned respawn window
+	local nodes = {}
 	for _, nd in ipairs(G.NodeList(map) or {}) do
-		local x, y = RecXY(nd)
-		if x then
-			local col = G.KindCol and G.KindCol(nd.kind)
-				or G.KIND_COLOR[nd.kind] or { 1, 1, 1 }
+		if RecXY(nd) then nodes[#nodes + 1] = nd end
+	end
+	local upy = nodes[1] and UnitsPerYard(map, nodes[1])
+		or (1 / 1500)
+	for _, c in ipairs(Cluster(nodes, RecXY, 70 * upy)) do
+		local rep = c.nodes[1]
+		local col = G.KindCol and G.KindCol(rep.kind)
+			or G.KIND_COLOR[rep.kind] or { 1, 1, 1 }
+		local best, dimAll = nil, true
+		for _, nd in ipairs(c.nodes) do
+			best = best or (G.NodeIconID and G.NodeIconID(nd))
 			local resp = G.RespawnSec(map, nd.kind)
-			local dim = nd.last
-				and (time() - nd.last) < resp * 0.8
-			DrawPin(draw, x * w, y * h,
-				col[1], col[2], col[3],
-				(dim and 0.35 or 0.95) * oa)
+			if not (nd.last
+				and (time() - nd.last) < resp * 0.8) then
+				dimAll = false
+			end
+		end
+		local a = (dimAll and 0.35 or 0.95) * oa
+		local x, y = c.x * w, c.y * h
+		local fid = ItemIcon(best)
+		if fid then
+			local ic = PutIcon(draw)
+			local sz = min(26, 14 + 4 * sqrt(c.n))
+			ic:SetTexture(fid)
+			ic:SetVertexColor(1, 1, 1, a)
+			ic:SetSize(sz, sz)
+			ic:ClearAllPoints()
+			ic:SetPoint("CENTER", draw, "TOPLEFT", x, -y)
+		else
+			DrawPin(draw, x, y, col[1], col[2], col[3], a)
+		end
+		if c.n > 1 then
+			local l = PutLbl(draw)
+			l:ClearAllPoints()
+			l:SetPoint("CENTER", draw, "TOPLEFT", x,
+				-(y + (fid and 14 or 8)))
+			l:SetText(tostring(c.n))
+			l:SetTextColor(col[1], col[2], col[3], a)
 		end
 	end
 
@@ -492,17 +604,6 @@ end
 
 local abs = math.abs
 
-local function ItemIcon(id)
-	if not id then return nil end
-	if C_Item and C_Item.GetItemIconByID then
-		local ok, ic = pcall(C_Item.GetItemIconByID, id)
-		if ok and ic then return ic end
-	end
-	if GetItemIcon then
-		local ok, ic = pcall(GetItemIcon, id)
-		if ok and ic then return ic end
-	end
-end
 
 -- normalized map coords for a record; projects world->map for
 -- records captured before the map projection resolved (harness
@@ -540,47 +641,7 @@ local function MapXY(p, mapID)
 	if p.x and p.y then return p.x, p.y end
 end
 
--- map-units per yard near (n,w): project two points a known world
--- distance apart and measure. Fallback matches the world map's
--- 1500yd-per-map-width assumption
-local function UnitsPerYard(mapID, p)
-	if p and p.n and p.w then
-		local ax, ay = GM.MapPos(p.c or 0, p.n, p.w, mapID)
-		local bx, by = GM.MapPos(p.c or 0, p.n + 100, p.w, mapID)
-		if ax and bx then
-			local d = sqrt((bx - ax) ^ 2 + (by - ay) ^ 2)
-			if d > 1e-6 then return d / 100 end
-		end
-	end
-	return 1 / 1500
-end
 
--- greedy proximity merge in map units — display-only; the data
--- layer's tighter merge already ran, this just thins pin spam
-local function Cluster(nodes, mapID, thresh)
-	local out = {}
-	for _, nd in ipairs(nodes) do
-		local x, y = MapXY(nd, mapID)
-		if x then
-			local hit
-			for _, c in ipairs(out) do
-				local dx, dy = x - c.x, y - c.y
-				if dx * dx + dy * dy < thresh * thresh then
-					hit = c break
-				end
-			end
-			if hit then
-				hit.x = (hit.x * hit.n + x) / (hit.n + 1)
-				hit.y = (hit.y * hit.n + y) / (hit.n + 1)
-				hit.n = hit.n + 1
-				hit.nodes[#hit.nodes + 1] = nd
-			else
-				out[#out + 1] = { x = x, y = y, n = 1, nodes = { nd } }
-			end
-		end
-	end
-	return out
-end
 
 -- MapWise terrain path: MapWiseAPI exposes the addon's whole
 -- table — TerrainIndex holds world-terrain tile fileIDs
@@ -1104,7 +1165,8 @@ function M.CreatePane(parent, w)
 				drawable[#drawable + 1] = nd
 			end
 		end
-		local clusters = Cluster(drawable, mapID, 70 * upy)
+		local clusters = Cluster(drawable,
+			function(nd) return MapXY(nd, mapID) end, 70 * upy)
 		for _, c in ipairs(clusters) do
 			local rep = c.nodes[1]
 			local col = G.KIND_COLOR[rep.kind] or { 1, 1, 1 }
