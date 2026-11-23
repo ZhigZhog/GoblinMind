@@ -297,7 +297,10 @@ end
 -- of splitting into two "camps" at an arbitrary centroid radius
 local function ZoneMergeable(zn, p)
 	local d = DistYd(zn, p)
-	if d and d <= max(ZONE_MERGE_YD, (zn.r or 0)) then
+	-- fixed reach only — gating on zn.r snowballs: every absorbed
+	-- kill extends r, which extends the next merge's reach, until
+	-- one "camp" swallows half the zone (the giant Witherbark disc)
+	if d and d <= ZONE_MERGE_YD then
 		return true
 	end
 	for _, pk in ipairs(zn.pockets or {}) do
@@ -311,7 +314,7 @@ end
 -- pass that heals splits already recorded under centroid merging
 local function ZonesNear(a, b)
 	local d = DistYd(a, b)
-	if d and d <= max(ZONE_MERGE_YD, a.r or 0) then return true end
+	if d and d <= ZONE_MERGE_YD then return true end
 	for _, pk in ipairs(a.pockets or {}) do
 		local pd = DistYd(pk, b)
 		if pd and pd <= ZONE_MERGE_YD then return true end
@@ -338,6 +341,10 @@ local function FoldZone(dst, src)
 	for mob, k in pairs(src.mobs or {}) do
 		dst.mobs = dst.mobs or {}
 		dst.mobs[mob] = (dst.mobs[mob] or 0) + k
+	end
+	for t, q in pairs(src.subs or {}) do
+		dst.subs = dst.subs or {}
+		dst.subs[t] = (dst.subs[t] or 0) + q
 	end
 	for id, q in pairs(src.items or {}) do
 		dst.items[id] = (dst.items[id] or 0) + q
@@ -407,6 +414,37 @@ local function CoalesceZones()
 	end
 end
 
+-- the subzone the player is standing in ("Witherbark Village") —
+-- the landmark name a camp's disc should carry. Empty off named
+-- ground; GetMinimapZoneText is the fallback on clients where
+-- GetSubZoneText stays blank
+local function SubZone()
+	local fn = GetSubZoneText or GetMinimapZoneText
+	if not fn then return nil end
+	local ok, t = pcall(fn)
+	if ok and t and t ~= "" then return t end
+end
+
+-- tally the kill's subzone so a camp labels itself by the landmark
+-- its kills actually cluster on, not just the zone text
+local function NoteSub(zn)
+	local st = SubZone()
+	if st then
+		zn.subs = zn.subs or {}
+		zn.subs[st] = (zn.subs[st] or 0) + 1
+	end
+end
+
+-- dominant recorded landmark for a camp — falls back to the zone
+-- text, then the generic map name
+function G.ZonePlace(zn)
+	local best, bq
+	for t, q in pairs(zn.subs or {}) do
+		if q > (bq or 0) then best, bq = t, q end
+	end
+	return best or zn.area
+end
+
 local function MergeZone(p, kind, items, mob, mobMoney)
 	local list = ZoneList(p.map)
 	if not list then return nil end
@@ -449,6 +487,7 @@ local function MergeZone(p, kind, items, mob, mobMoney)
 			UpdateYield(zn, items)
 			ZoneEvent(zn, now, items, mobMoney)
 			MergePocket(zn, p)
+			NoteSub(zn)
 			local d = DistYd(zn, p)
 			if d and d > (zn.r or 0) then zn.r = floor(d + 25) end
 			return zn
@@ -474,6 +513,7 @@ local function MergeZone(p, kind, items, mob, mobMoney)
 	UpdateYield(zn, items)
 	ZoneEvent(zn, now, items, mobMoney)
 	MergePocket(zn, p)
+	NoteSub(zn)
 	tinsert(list, zn)
 	return zn
 end
@@ -1389,7 +1429,7 @@ function G.Leaderboard()
 			tinsert(rows, {
 				area = true, map = map, zone = zn,
 				kind = G.ZoneCat(zn),
-				zoneName = zn.area or G.ZoneName(map),
+				zoneName = G.ZonePlace(zn) or G.ZoneName(map),
 				gpm = evS * sus,
 				gpmRaw = (wall and wall.gpm) or (evR * rate),
 				evLoop = evS, evRaw = evR,

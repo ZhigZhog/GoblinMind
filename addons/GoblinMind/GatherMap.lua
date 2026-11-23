@@ -130,14 +130,11 @@ local function PutZone(canvas)
 	local c = tremove(circPool)
 	if not c then
 		c = { fill = canvas:CreateTexture(nil, "OVERLAY") }
-		c.fill:SetTexture("Interface\\BUTTONS\\WHITE8X8")
-		-- circular mask -> translucent disc; if masks don't exist on
-		-- this client the fill just stays square and the segment
-		-- ring still reads as the zone outline
-		pcall(function()
-			c.fill:SetMaskTexture(
-				"Interface\\CharacterFrame\\TempPortraitAlphaMask")
-		end)
+		-- vendored soft circle — SetMaskTexture no-ops on this
+		-- client and left a square halo over the map; the TGA
+		-- carries its own alpha edge (same fix as the pane discs)
+		c.fill:SetTexture(
+			"Interface\\AddOns\\GoblinMind\\Media\\disc.tga")
 		c.label = canvas:CreateFontString(nil, "OVERLAY",
 			"GameFontHighlightSmall")
 	end
@@ -202,6 +199,14 @@ end
 local function YdToPx(canvas, yd)
 	local w = canvas:GetWidth() or 1000
 	return yd / 1500 * w
+end
+
+-- recorded span can dwarf the real farm (legacy merges let r
+-- snowball) — the disc is an extent hint, clamp what we draw;
+-- zn.r itself stays the honest kill-span
+local ZONE_DRAW_MAX_YD = 220
+local function DispR(zn)
+	return min(zn.r or 60, ZONE_DRAW_MAX_YD)
 end
 
 -- ======================== refresh ========================
@@ -296,19 +301,23 @@ function M.Refresh()
 		return
 	end
 
-	-- hunt zones first (under the pins): translucent disc + stats
+	-- hunt zones first (under the pins): translucent disc + stats.
+	-- Label = dominant landmark (ZonePlace) + display category —
+	-- the raw record kind is always "hunt"/"skin", never the
+	-- cloth/meat/mine family the camp actually farms
 	for _, zn in ipairs(G.ZoneList(map) or {}) do
 		local x, y = RecXY(zn)
 		if x then
-			local col = G.KIND_COLOR[
-				G.ZoneCat and G.ZoneCat(zn) or zn.kind]
-				or { 1, 1, 1 }
+			local zc = G.ZoneCat and G.ZoneCat(zn) or zn.kind
+			local col = G.KIND_COLOR[zc] or { 1, 1, 1 }
+			local place = G.ZonePlace and G.ZonePlace(zn)
 			local gpm = G.ZoneEV(zn) * G.ZoneRate(zn)
 			DrawZone(draw, x * w, y * h,
-				YdToPx(draw, zn.r or 60),
+				YdToPx(draw, DispR(zn)),
 				col[1], col[2], col[3],
 				format("%s · %s kills · %s/min",
-					zn.kind, zn.kills or 0,
+					place and (place .. " · " .. zc) or zc,
+					zn.kills or 0,
 					GM.MoneyShort
 						and GM.MoneyShort(floor(gpm))
 						or tostring(floor(gpm))))
@@ -887,7 +896,7 @@ function M.CreatePane(parent, w)
 				-- plus an outer accent outline
 				local isSel = sel and sel.zone == zn
 				local col = G.KIND_COLOR[zc] or { 1, 1, 1 }
-				local rPx = max(10, (zn.r or 60) * upy * w)
+				local rPx = max(10, DispR(zn) * upy * w)
 				local px, py = x * w, y * h
 				local d = put("disc")
 				d:SetSize(rPx * 2, rPx * 2)
