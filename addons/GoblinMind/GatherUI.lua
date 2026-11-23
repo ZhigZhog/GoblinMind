@@ -756,16 +756,14 @@ local function Build()
 		r.zoneName = GM.Gather.ZoneName(p)
 		if GM.GatherMap then GM.GatherMap.NoteRoute(r) end
 		ui.mapSel = p
-		-- the loop exists the moment it's solved — plant the
-		-- in-world waypoint on the nearest stop straight away,
-		-- MapWise's checkpoint-chase, don't make the user run
-		-- it first
-		local nav = GM.Gather.NavRoute(r)
+		-- BUILD means run it: StartRoute joins at the nearest
+		-- stop, starts the arrival tick, and plants the marker —
+		-- a planted waypoint nobody chases never advances
+		GM.Gather.StartRoute(r)
 		GM.Print(GM.CC("accent") .. "route: " .. r.zoneName .. "|r  "
 			.. #r.stops .. " stops, "
 			.. GM.Gather.SecondsText(r.lapSec) .. "/lap, ~"
-			.. GM.MoneyShort(floor(r.gpm)) .. "/min"
-			.. (nav and " · waypoint set" or ""))
+			.. GM.MoneyShort(floor(r.gpm)) .. "/min")
 	else
 		GM.Print(GM.CC("textDim") .. "not enough " .. kind
 			.. " nodes "
