@@ -1330,9 +1330,50 @@ end)
 
 -- world yards (north,west on world `worldID`) -> map coords on
 -- mapID. Returns x,y in 0..1 space or nil.
+--
+-- Two projection paths, affine first: the map->world transform
+-- is affine on every WoW map, so two corner reads through
+-- GetWorldPosFromMapPos pin the inverse exactly — and the answer
+-- is frame-exact by construction because it inverts the SAME
+-- function our records' n,w were projected through. Forever's
+-- GetMapPosFromWorldPos is unreliable (returns nil for in-map
+-- positions), which used to leave world->map dead: records fell
+-- back to stored x,y and stale-frame coords drew on the wrong
+-- zone. Only successes are cached — map data can be unloaded at
+-- early login and the next call should retry.
+local mapRectCache = {}
 function GM.MapPos(worldID, n, w, mapID)
-	if not (C_Map and C_Map.GetMapPosFromWorldPos
-		and CreateVector2D and n and w and mapID) then return end
+	if not (C_Map and CreateVector2D and n and w and mapID)
+		then return end
+	local r = mapRectCache[mapID]
+	if r == nil then
+		if C_Map.GetWorldPosFromMapPos then
+			-- three corners pin the full 2x2 affine — axis
+			-- conventions differ by client (sim maps n->x, w->y;
+			-- retail maps n->y, w->x) so the transform is solved,
+			-- not assumed
+			local n00, w00, c0 = GM.WorldPos(mapID, 0, 0)
+			local n10, w10 = GM.WorldPos(mapID, 1, 0)
+			local n01, w01, c1 = GM.WorldPos(mapID, 0, 1)
+			if n00 and n10 and n01 and c0 == c1 then
+				local a, b = n10 - n00, n01 - n00
+				local c, d = w10 - w00, w01 - w00
+				local det = a * d - b * c
+				if det ~= 0 then
+					r = { c = c0, n0 = n00, w0 = w00,
+						a = a, b = b, cc = c, d = d,
+						det = det }
+					mapRectCache[mapID] = r
+				end
+			end
+		end
+	end
+	if r and (worldID or 0) == r.c then
+		local dn, dw = n - r.n0, w - r.w0
+		return (dn * r.d - r.b * dw) / r.det,
+			(r.a * dw - r.cc * dn) / r.det
+	end
+	if not C_Map.GetMapPosFromWorldPos then return end
 	local ok, _, p = pcall(C_Map.GetMapPosFromWorldPos,
 		worldID or 0, CreateVector2D(n, w), mapID)
 	local okV, x, y = pcall(function()
