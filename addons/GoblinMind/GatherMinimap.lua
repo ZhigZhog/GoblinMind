@@ -31,12 +31,22 @@ local VIEW = {
 		200, 133 + 1 / 3 },
 }
 
-M.LAYERS = { "route", "herb", "mine", "skin", "hunt", "cloth",
-	"cook" }
-M.LABEL = {
-	route = "ROUTE", herb = "HERB", mine = "MINE", skin = "SKIN",
-	hunt = "HUNT", cloth = "CLOTH", cook = "COOK",
-}
+-- layer list derives from the kind registry (this file loads
+-- before Gather.lua) — rebuilt lazily on first access so a
+-- registered kind shows up with no list edits
+local layerSrc
+function M.Layers()
+	if layerSrc ~= GM.Gather then
+		M.LAYERS = { "route" }
+		M.LABEL = { route = "ROUTE" }
+		for _, k in ipairs(GM.Gather and GM.Gather.KINDS or {}) do
+			M.LAYERS[#M.LAYERS + 1] = k
+			M.LABEL[k] = GM.Gather.KindLabel(k)
+		end
+		layerSrc = GM.Gather or false
+	end
+	return M.LAYERS
+end
 
 local function mm()
 	GoblinMindGather = GoblinMindGather or {}
@@ -77,7 +87,7 @@ function M.SetColor(k, r, g, b)
 end
 function M.Count()
 	local n = 0
-	for _, k in ipairs(M.LAYERS) do
+	for _, k in ipairs(M.Layers()) do
 		if M.Enabled(k) then n = n + 1 end
 	end
 	return n, #M.LAYERS
@@ -169,7 +179,7 @@ end
 
 local function WrapNodes(mapID, recs, mmSet)
 	local sig = ""
-	for _, k in ipairs(M.LAYERS) do
+	for _, k in ipairs(M.Layers()) do
 		sig = sig .. (mmSet[k] ~= false and "1" or "0")
 	end
 	if cluMap == mapID and cluN == #recs and cluSig == sig then

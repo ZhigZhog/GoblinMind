@@ -704,12 +704,18 @@ for _, id in ipairs({
 	4305, 4339, 14048,
 }) do CAT_ID[id] = "cloth" end
 for _, id in ipairs({
-	2672, 2673, 2674, 3173, 3685, 5503, 5504, 6303, 6308, 6317,
-	6358, 6359, 6361, 6362, 6522, 6889, 8365, 12037, 12184,
+	2672, 2673, 2674, 3173, 3685, 6889, 12037, 12184,
 	12202, 12203, 12204, 12205, 12206, 12207, 12208, 12223,
-	13422, 13754, 13755, 13756, 13757, 13758, 13759, 13760,
-	13888, 13889, 13893, 19807, 21024, 21071, 21153,
 }) do CAT_ID[id] = "flesh" end
+-- fish is its own family now — clams count (fishing bycatch) and
+-- 21024 tags here too since a mistagged fishing-window item
+-- vetoes the whole catch while a mistagged corpse item just
+-- stays a kill either way (both families are corpse-flagged)
+for _, id in ipairs({
+	5503, 5504, 6303, 6308, 6317, 6358, 6359, 6361, 6362, 6522,
+	8365, 13422, 13754, 13755, 13756, 13757, 13758, 13759, 13760,
+	13888, 13889, 13893, 19807, 21024, 21071, 21153,
+}) do CAT_ID[id] = "fish" end
 
 local SUB_CAT = {
 	["Metal & Stone"] = "ore",

@@ -781,7 +781,7 @@ local function Build()
 	local gt = Panel(f, 10, -710, 600, 78, "GATHERING · MINIMAP LAYERS")
 	ui.mmLayers = {}
 	if GM.GatherMinimap then
-		for i, k in ipairs(GM.GatherMinimap.LAYERS) do
+		for i, k in ipairs(GM.GatherMinimap.Layers()) do
 			local col, r = (i - 1) % 4, floor((i - 1) / 4)
 			RowAt(gt, GM.GatherMinimap.LABEL[k] or k,
 				12 + col * 148, 26 + r * 24)
@@ -834,9 +834,10 @@ local function Build()
 
 		RowAt(ov, "FILL COLORS", 12, 80)
 		ui.ovSwatch = {}
-		-- click = pick; right-click = back to the builtin color
-		local kinds = { "herb", "mine", "skin", "hunt", "cloth",
-			"cook" }
+		-- click = pick; right-click = back to the builtin color.
+		-- Swatch list = the kind registry — new kinds appear
+		-- automatically (spacing tightens past 6 so they fit)
+		local kinds = GM.Gather.KINDS
 		local function paintSwatch(k)
 			local c = GM.Gather.KindCol(k)
 			ui.ovSwatch[k]._gmBg:SetColorTexture(
@@ -874,8 +875,9 @@ local function Build()
 				CPF:Show()
 			end
 		end
+		local pitch = #kinds > 6 and floor(470 / #kinds) or 82
 		for i, k in ipairs(kinds) do
-			local x = 116 + (i - 1) * 82
+			local x = 116 + (i - 1) * pitch
 			local sw = CreateFrame("Button", nil, ov)
 			sw:SetSize(16, 16)
 			sw:SetPoint("TOPLEFT", x, -78)

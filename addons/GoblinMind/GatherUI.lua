@@ -14,7 +14,19 @@ local Btn = W.Btn
 
 local ui
 local ROWS = 24              -- row-button pool; ~21 show at once
-local KIND_ORDER = { "herb", "mine", "skin", "hunt", "cloth", "cook" }
+-- filter order comes from the kind registry when it's loaded
+-- (new kinds just appear); the literal stays as a load-order
+-- fallback for sims
+local function KindOrder()
+	return (GM.Gather and GM.Gather.KINDS)
+		or { "herb", "mine", "skin", "hunt", "cloth", "cook" }
+end
+-- node kinds (registry flag) are the routeable ones — fish pools
+-- solve loops the same as herb/mine spawns
+local function Routeable(k)
+	return GM.Gather and GM.Gather.NODE_KINDS
+		and GM.Gather.NODE_KINDS[k] or false
+end
 
 -- shared tag helpers live on Gather (G.KindLabel/G.KindHex) —
 -- world-map labels read the same table so tags match in case
@@ -461,7 +473,7 @@ local function Refresh()
 			.. "a tight pocket of rich nodes can beat the whole map.|r")
 	end
 	-- routes only exist for HERB/MINE — grey out otherwise
-	local routeable = ui.kindFilter == "herb" or ui.kindFilter == "mine"
+	local routeable = Routeable(ui.kindFilter)
 	ui.build:SetEnabled(routeable)
 	ui.build:SetAlpha(routeable and 1 or 0.4)
 	ui.zoneBtn.text:SetText("ZONE: " .. (ui.contFilter
@@ -732,7 +744,7 @@ local function FilterEntries()
 		cb = function()
 			ui.kindFilter = nil ui.scroll = 0 Refresh()
 		end } }
-	for _, k in ipairs(KIND_ORDER) do
+	for _, k in ipairs(KindOrder()) do
 		e[#e + 1] = {
 			label = KindColor(k) .. KindLabel(k) .. "|r",
 			checked = ui.kindFilter == k,
@@ -749,7 +761,7 @@ local function MiniEntries()
 	local e = {}
 	local MM = GM.GatherMinimap
 	if not MM then return e end
-	for _, k in ipairs(MM.LAYERS) do
+	for _, k in ipairs(MM.Layers()) do
 		local kk = k
 		e[#e + 1] = {
 			label = MM.LABEL[k],
@@ -766,7 +778,7 @@ end
 -- only HERB/MINE have routes — BUILD is gated to those filters
 local function Build()
 	local kind = ui.kindFilter
-	if kind ~= "herb" and kind ~= "mine" then return end
+	if not Routeable(kind) then return end
 	-- explicit zone scope = solve just that zone. Everything
 	-- else ranks candidates by solved GPM: "zone: all" means the
 	-- best loop anywhere, not wherever the player happens to
@@ -855,14 +867,13 @@ local function Toggle()
 		-- the herb/mine gate is invisible otherwise — the tip
 		-- explains why the button sits grey
 		W.Tip(ui.build, function()
-			if ui.kindFilter == "herb"
-				or ui.kindFilter == "mine" then
+			if Routeable(ui.kindFilter) then
 				return { "Build route",
 					"Solves the most profitable loop from the",
 					"recorded nodes in the scoped zone." }
 			end
 			return { "Build route",
-				"Requires FILTER: HERB or MINE —",
+				"Pick a node filter (HERB, MINE, FISH) —",
 				"routes need gathering-node records." }
 		end)
 		ui.save = Btn(ui, 70, "SAVE", function()

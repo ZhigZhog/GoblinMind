@@ -325,7 +325,7 @@ function I.Detect()
 		rows[#rows + 1] = {
 			key = "gatherlite", addon = "GatherLite",
 			title = "Gathered nodes",
-			detail = "herb/mine spawn history -> gather routes",
+			detail = "herb/mine/fishing spawn history -> gather routes",
 			run = function()
 				local st, err = GM.Gather.ImportGatherLite()
 				if not st then return nil, err end
@@ -334,15 +334,14 @@ function I.Detect()
 						and (", " .. st.skipped .. " skipped") or "")
 			end,
 		}
-		-- GatherLite also records fishing spots and containers —
-		-- kinds we don't track yet. Say so instead of looking like
-		-- the import covers everything it saved
+		-- GatherLite also records containers — a kind we don't
+		-- track (fishing imports as the fish kind). Say so
+		-- instead of looking like the import covers everything
 		local nodes = GatherLiteSettings
 			and GatherLiteSettings.global
 			and GatherLiteSettings.global.nodes
-		if type(nodes) == "table" and (nodes.fishing
-			or nodes.containers) then
-			extras[#extras + 1] = "GatherLite fishing/containers - "
+		if type(nodes) == "table" and nodes.containers then
+			extras[#extras + 1] = "GatherLite containers - "
 				.. "detected, not importable yet"
 		end
 	else

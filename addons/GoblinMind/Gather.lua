@@ -41,30 +41,94 @@ end
 
 -- ======================== constants ========================
 
--- cast spellIDs verified on Forever per the proposal (GatherLite);
--- name fallback below because Forever can omit spellID on cast info
-local CAST_KIND = { [2383] = "herb", [2580] = "mine", [8613] = "skin" }
-local CAST_NAME = {
-	herb = "herb gathering", mine = "mining", skin = "skinning",
-}
+-- ======================== kind registry ========================
+-- one declarative record per gather kind drives every consumer:
+-- cast attribution, item-family verdicts, GatherLite imports,
+-- node-vs-zone behavior, display colors/labels, layer toggles,
+-- route gating. Blizzard (or Forever) adding a gather type =
+-- one G.RegisterKind call — the rest of the system never sees it.
+--
+-- fields:
+--   node      — point-spawn kind (routes); false/nil = zone kind
+--   area      — zone-record kind (MergeZone families)
+--   cats      -- item families (GM.Gathering.ItemCat) that
+--               classify a loot window as this kind
+--   corpse    -- this family is corpse cargo: it can NEVER
+--               classify a window on its own (cloth, flesh, and
+--               fish — a dead mob legitimately carries raw fish)
+--   tailKill  -- window only counts trailing a recent kill
+--               (skinning: a corpse's own window carries leather)
+--   keepArm   -- armed cast survives a dead-source window
+--               (skin + fish: the gather isn't corpse loot even
+--               when a corpse is standing there)
+--   castIds   -- UNIT_SPELLCAST_SUCCEEDED spellIDs that arm it
+--   castNames -- spell-name substrings when spellID is missing
+--   glCats    -- GatherLite SV categories that import as it
+local CAST_KIND = {}
+local CAST_NAME = {}
+local GL_KIND = {}
+local CAT_KIND = {}   -- item family -> kind id
+
+G.KindDefs = {}
+G.KINDS = {}
+G.KIND_COLOR = {}
+G.KIND_LABEL = {}
+-- node kinds build routes; area kinds build zones
+G.NODE_KINDS = {}
+G.AREA_KINDS = {}
+
+function G.RegisterKind(def)
+	local id = def.id
+	G.KindDefs[id] = def
+	table.insert(G.KINDS, id)
+	G.KIND_COLOR[id] = def.color or { 1, 1, 1 }
+	G.KIND_LABEL[id] = def.label or id:upper()
+	if def.node then G.NODE_KINDS[id] = true end
+	if def.area then G.AREA_KINDS[id] = true end
+	for _, s in ipairs(def.castIds or {}) do CAST_KIND[s] = id end
+	for _, p in ipairs(def.castNames or {}) do CAST_NAME[id] = p end
+	for _, g in ipairs(def.glCats or {}) do GL_KIND[g] = id end
+	for _, c in ipairs(def.cats or {}) do CAT_KIND[c] = id end
+end
+
+G.RegisterKind{ id = "herb", label = "HERB",
+	color = { 0.2, 0.9, 0.3 }, node = true,
+	cats = { "herb" }, castIds = { 2383 },
+	castNames = { "herb gathering" }, glCats = { "herbalism" } }
+G.RegisterKind{ id = "mine", label = "MINE",
+	color = { 0.95, 0.7, 0.2 }, node = true,
+	cats = { "ore" }, castIds = { 2580 },
+	castNames = { "mining" }, glCats = { "mining" } }
+G.RegisterKind{ id = "fish", label = "FISH",
+	color = { 0.35, 0.65, 0.95 }, node = true,
+	cats = { "fish" }, corpse = true, keepArm = true,
+	castIds = { 7620 }, castNames = { "fishing" },
+	glCats = { "fishing" } }
+G.RegisterKind{ id = "skin", label = "SKIN",
+	color = { 0.7, 0.45, 0.25 }, area = true,
+	cats = { "leather" }, tailKill = true, keepArm = true,
+	castIds = { 8613 }, castNames = { "skinning" } }
+G.RegisterKind{ id = "hunt", label = "HUNT",
+	color = { 0.9, 0.4, 0.2 }, area = true }
+G.RegisterKind{ id = "cloth", label = "CLOTH",
+	color = { 0.85, 0.85, 0.95 }, area = true,
+	cats = { "cloth" }, corpse = true }
+G.RegisterKind{ id = "cook", label = "COOK",
+	color = { 0.95, 0.55, 0.55 },
+	cats = { "flesh" }, corpse = true }
+
 
 -- hunt = the mob-farm kind — no cast; every non-gather loot window
 -- is a kill event. Meat, cloth, greens, quest drops: all yield data
 -- lands on the zone so targeting can find producers of anything.
 -- (Was cloth-only at first — a camp dropping cloth AND meat split
 -- into two overlapping zones until the kind unified.)
-G.KIND_COLOR = {
-	herb = { 0.2, 0.9, 0.3 }, mine = { 0.95, 0.7, 0.2 },
-	skin = { 0.7, 0.45, 0.25 }, hunt = { 0.9, 0.4, 0.2 },
-	cloth = { 0.85, 0.85, 0.95 }, -- legacy zone rows
-	cook = { 0.95, 0.55, 0.55 },
-}
+-- Kind tables themselves are populated by the registry above.
+
 -- shared display surface: UPPERCASE tag + kind color. KindCol
 -- checks the settings override (GoblinMindGather.mm.col) first —
 -- row tags, map labels, and disc fills all read through it so
 -- one color pick applies everywhere
-G.KIND_LABEL = { herb = "HERB", mine = "MINE", hunt = "HUNT",
-	skin = "SKIN", cloth = "CLOTH", cook = "COOK" }
 function G.KindLabel(k)
 	return G.KIND_LABEL[k] or k
 end
@@ -77,11 +141,6 @@ function G.KindHex(k)
 	return format("|cff%02x%02x%02x",
 		floor(c[1] * 255), floor(c[2] * 255), floor(c[3] * 255))
 end
-
-G.KINDS = { "herb", "mine", "skin", "hunt", "cloth" }
--- node kinds build routes; area kinds build zones
-G.NODE_KINDS = { herb = true, mine = true }
-G.AREA_KINDS = { skin = true, hunt = true, cloth = true }
 
 local WINDOW_SEC = 3        -- gather cast -> loot attribution window
 local NODE_MERGE_YD = 14    -- one record ≈ one spawn point: routes
@@ -832,7 +891,8 @@ end
 
 -- ======================== GatherLite import ========================
 
-local GL_KIND = { mining = "mine", herbalism = "herb" }
+-- GL_KIND comes from the registry (glCats) — GatherLite's
+-- "fishing" category now maps to the fish kind too
 local GL_MERGE_YD = 8   -- import dedup: tighter than live-merge so
                         -- legit adjacent spawn points stay separate
 
@@ -886,8 +946,10 @@ local function GLImportOne(e, kind)
 	if items then
 		UpdateYield(YieldRec(nd.name or kind), items)
 		-- GatherLite tags the node type — an unmapped custom id
-		-- riding a mining node IS ore; learn it once here
-		local fam = kind == "mine" and "ore" or "herb"
+		-- riding a mining node IS ore; learn it once here. The
+		-- family is the kind's registered item family
+		local def = G.KindDefs[kind]
+		local fam = def and def.cats and def.cats[1] or kind
 		if GM.Gathering.LearnCat then
 			local IC = GM.Gathering.ItemCat
 			for id in pairs(items) do
@@ -1424,6 +1486,7 @@ function G.ZoneCat(zn)
 	return best == "flesh" and "cook"
 		or best == "leather" and "skin"
 		or best == "ore" and "mine"
+		or best == "fish" and "fish"
 		or best or zn.kind
 end
 
@@ -1763,12 +1826,14 @@ local function WindowKind(items, mob)
 	local cat, unknown
 	for id in pairs(items) do
 		local c = IC(id)
-		-- cloth/flesh hard-veto — corpse cargo can never be a node
-		-- tap. Unclassified items ride the window's verdict instead
-		-- of vetoing it: a Mithril+Bauxite window is still a vein
-		-- even though Bauxite has no family entry
-		if c == "cloth" or c == "flesh" then return nil end
 		if c then
+			-- registry veto — a family marked corpse cargo (cloth,
+			-- flesh, fish) can never classify a window on its own.
+			-- Unclassified items ride the verdict instead: a
+			-- Mithril+Bauxite window is still a vein even though
+			-- Bauxite has no family entry
+			local kd = CAT_KIND[c] and G.KindDefs[CAT_KIND[c]]
+			if not kd or kd.corpse then return nil end
 			if cat and c ~= cat then return nil end
 			cat = c
 		else
@@ -1777,15 +1842,14 @@ local function WindowKind(items, mob)
 		end
 	end
 	if not cat then return nil end
-	local kind
-	if cat == "leather" then
-		if not (lastKill and (not mob or mob == lastKill.mob)
+	local kd = CAT_KIND[cat] and G.KindDefs[CAT_KIND[cat]]
+	-- tailKill families (leather): a corpse's own window can carry
+	-- dropped scales, so it only counts trailing a recent kill on
+	-- the same mob — a leather-bearing first window is corpse loot
+	if kd.tailKill
+		and not (lastKill and (not mob or mob == lastKill.mob)
 			and GetTime() - lastKill.t <= SKIN_TAIL_S) then
-			return nil
-		end
-		kind = "skin"
-	else
-		kind = cat == "ore" and "mine" or cat
+		return nil
 	end
 	-- accepted window: teach the unknowns this family so a later
 	-- solo drop of the same custom item classifies on its own
@@ -1794,7 +1858,7 @@ local function WindowKind(items, mob)
 			GM.Gathering.LearnCat(id, cat)
 		end
 	end
-	return kind
+	return CAT_KIND[cat]
 end
 
 -- name an unarmed gather tap by its contents: a window of Iron
@@ -1921,7 +1985,8 @@ local function OnLoot()
 		if wkind and wkind ~= gKind then
 			gKind = wkind
 		elseif not wkind and srcDead and next(items)
-			and gKind ~= "skin" then
+			and not (G.KindDefs[gKind]
+				and G.KindDefs[gKind].keepArm) then
 			gKind = nil
 		end
 	else
