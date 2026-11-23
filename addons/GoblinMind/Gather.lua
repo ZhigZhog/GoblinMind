@@ -1877,7 +1877,9 @@ local function NavDrawMarker(elapsed)
 	f:ClearAllPoints()
 	f:SetPoint("CENTER", nf, "CENTER")
 	f.lead:SetStartPoint("BOTTOM", UIParent, 0, 140)
-	f.lead:SetEndPoint("CENTER", f, 0, 0)
+	-- endpoint anchors to the nav frame, not f — a line endpoint
+	-- may not depend on its own parent in the re-anchored chain
+	f.lead:SetEndPoint("CENTER", nf, 0, 0)
 	f.age = f.age + (elapsed or 0)
 	f.ring:SetAlpha(.25 + .65
 		* (1 + math.cos(f.age * 2 * math.pi / 2.4)) * .5)
