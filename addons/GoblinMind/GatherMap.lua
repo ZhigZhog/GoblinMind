@@ -258,18 +258,40 @@ local function ZonePoly(pts, pad, minR)
 	return poly, cx, cy
 end
 
-local function DrawZoneFit(canvas, zn, RecXY, w, h, r, g, b, label,
-		oa)
+-- pocket px points for the fit; records that predate pockets
+-- fabricate a span-proportioned scatter (kill-skewed hexagon) so
+-- they draw as blobs too instead of falling back to a circle
+local function ZonePts(zn, recXY, w, h, rPx)
 	local pts = {}
 	for _, pk in ipairs(zn.pockets or {}) do
-		local px, py = RecXY(pk)
+		local px, py = recXY(pk)
 		if px and px >= -0.05 and px <= 1.05
 			and py >= -0.05 and py <= 1.05 then
 			pts[#pts + 1] = { x = px * w, y = py * h }
 		end
 	end
-	-- pocket centroid anchors the fit (zn.x is the FIRST kill,
-	-- not the middle); need a real cluster to fit around
+	if #pts < 3 then
+		local zx, zy = recXY(zn)
+		if not zx then return pts end
+		local cx0, cy0 = zx * w, zy * h
+		-- scatter at recorded-span minus the fit's pad so the
+		-- resulting blob lands at roughly DispR's footprint
+		local r0 = max(20, rPx(DispR(zn) - POCKET_PAD_YD))
+		local skew = (zn.kills or 1) * 0.7
+		pts = {}
+		for i = 0, 5 do
+			local a = skew + i / 6 * 6.2831853
+			pts[#pts + 1] = { x = cx0 + cos(a) * r0,
+				y = cy0 + sin(a) * r0 }
+		end
+	end
+	return pts
+end
+
+local function DrawZoneFit(canvas, zn, RecXY, w, h, r, g, b, label,
+		oa)
+	local pts = ZonePts(zn, RecXY, w, h,
+		function(yd) return YdToPx(canvas, yd) end)
 	local poly, cx, cy = ZonePoly(pts,
 		YdToPx(canvas, POCKET_PAD_YD), YdToPx(canvas, ZONE_MIN_YD))
 	if not poly then return false end
@@ -649,7 +671,7 @@ function M.CreatePane(parent, w)
 	pane:SetWidth(w)
 	pane.live = {}
 	pane.pool = { tile = {}, exptile = {}, disc = {}, line = {},
-		icon = {}, lbl = {}, medal = {} }
+		icon = {}, lbl = {}, medal = {}, fill = {} }
 
 	-- every drawable lives on a scroll child: a ScrollFrame is the
 	-- only hard clip rect textures get, and edge-anchored icons,
@@ -1004,13 +1026,9 @@ function M.CreatePane(parent, w)
 				-- same fitted blob the world map draws: support
 				-- function over the camp's pockets, Chaikin-smoothed,
 				-- scanline-filled. <3 pockets keeps the plain disc
-				local pts = {}
-				for _, pk in ipairs(zn.pockets or {}) do
-					local kx, ky = MapXY(pk, mapID)
-					if kx then
-						pts[#pts + 1] = { x = kx * w, y = ky * h }
-					end
-				end
+				local pts = ZonePts(zn,
+					function(p) return MapXY(p, mapID) end,
+					w, h, function(yd) return yd * upy * w end)
 				local poly, cx, cy = ZonePoly(pts,
 					POCKET_PAD_YD * upy * w, ZONE_MIN_YD * upy * w)
 				if poly then
