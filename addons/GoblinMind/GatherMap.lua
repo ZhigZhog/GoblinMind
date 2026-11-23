@@ -260,15 +260,36 @@ local function DrawZoneFit(canvas, zn, RecXY, w, h, r, g, b, label)
 		end
 		poly = out
 	end
-	-- fill: soft disc per pocket — union reads as the farmed area
-	local frPx = YdToPx(canvas, 65)
-	for _, p in ipairs(pts) do
-		local c = PutZone(canvas)
-		c.fill:SetSize(frPx * 2, frPx * 2)
-		c.fill:ClearAllPoints()
-		c.fill:SetPoint("CENTER", canvas, "TOPLEFT", p.x, -p.y)
-		c.fill:SetVertexColor(r, g, b, 0.2)
-		c.label:SetText("")
+	-- fill: scanline bands across the smoothed polygon — each
+	-- band's left/right edge crossings bound one rect, so the
+	-- shaded area is the true blob shape (not a dot union, and
+	-- no fan-convergence bright spot). The polygon is
+	-- star-shaped around the centroid so a band crosses twice
+	local ymin, ymax = 1e9, -1e9
+	for _, p in ipairs(poly) do
+		if p.y < ymin then ymin = p.y end
+		if p.y > ymax then ymax = p.y end
+	end
+	local step = 7
+	for y = ymin + step / 2, ymax, step do
+		local xl, xr = 1e9, -1e9
+		for i = 1, #poly do
+			local a, b = poly[i], poly[i % #poly + 1]
+			if (a.y <= y) ~= (b.y <= y) then
+				local t = (y - a.y) / (b.y - a.y)
+				local xi = a.x + t * (b.x - a.x)
+				if xi < xl then xl = xi end
+				if xi > xr then xr = xi end
+			end
+		end
+		if xl < xr then
+			local t = PutPin(canvas)
+			t:SetSize(xr - xl, step + 0.5)
+			t:ClearAllPoints()
+			t:SetPoint("TOPLEFT", canvas, "TOPLEFT", xl,
+				-(y - step / 2))
+			t:SetVertexColor(r, g, b, 0.18)
+		end
 	end
 	local c = PutZone(canvas)
 	c.fill:Hide()
