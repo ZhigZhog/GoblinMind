@@ -697,6 +697,11 @@ Primary data = the in-house book feed below.
       lacks (`|Hitem:249425|h[Bauxite]|h`): `GM.LinkName`/
       `GM.LinkQuality` (`|cnIQN:` prefix) are the fallback for
       Forever customs — always carry `link` on browse/scan rows.
+    - `a and f() or g()` truncates multi-returns to ONE value —
+      `SetTextColor(id and NameColor(id) or RGB("text"))` passes a
+      single arg. Pick the SOURCE with if/else, then call. And a
+      per-row paint inside a feed must run in pcall — one
+      unresolvable item must never blank the rows after it.
   - **Frame names must never equal a SavedVariable name**: SVs load at
     ADDON_LOADED (after files run) and OVERWRITE the frame global —
     `UISpecialFrames` then resolves to a plain table and Blizzard's
