@@ -1744,6 +1744,25 @@ end
 -- restore on release only if nothing else touched it — the MapWise
 -- etiquette the proposal prescribes.
 local nav = {}
+
+-- the waypoint only renders in the 3D world while the client's
+-- in-game navigation display is on — MapWise's
+-- EnsureNavigationSetting: only flip an explicit '0', own it so a
+-- later release restores, never poke an unreadable cvar
+local function NavEnsureDisplay()
+	local get = C_CVar and C_CVar.GetCVar or GetCVar
+	local set = C_CVar and C_CVar.SetCVar or SetCVar
+	if type(get) ~= "function" or type(set) ~= "function" then
+		return
+	end
+	if nav.cvarOwned then return end -- already own the flip
+	if get("showInGameNavigation") ~= "0" then return end
+	if pcall(set, "showInGameNavigation", "1")
+		and get("showInGameNavigation") == "1" then
+		nav.cvarOwned = "0"
+	end
+end
+
 function G.NavTo(map, x, y)
 	if not (C_Map and C_Map.SetUserWaypoint and UiMapPoint) then
 		return nil, "no waypoint api"
@@ -1768,6 +1787,7 @@ function G.NavTo(map, x, y)
 	if C_SuperTrack and C_SuperTrack.SetSuperTrackedUserWaypoint then
 		pcall(C_SuperTrack.SetSuperTrackedUserWaypoint, true)
 	end
+	NavEnsureDisplay()
 	nav.ours = true
 	return true
 end
@@ -1786,6 +1806,18 @@ local function NavRelease()
 		pcall(C_Map.SetUserWaypoint, nav.saved)
 	end
 	nav.saved, nav.savedSet = nil, nil
+	if nav.cvarOwned then
+		local get = C_CVar and C_CVar.GetCVar or GetCVar
+		local set = C_CVar and C_CVar.SetCVar or SetCVar
+		-- only restore while it's still on — a manual switch-off
+		-- is the user's call, we just drop ownership
+		if type(set) == "function"
+			and (type(get) ~= "function"
+				or get("showInGameNavigation") == "1") then
+			pcall(set, "showInGameNavigation", nav.cvarOwned)
+		end
+		nav.cvarOwned = nil
+	end
 end
 
 -- point the native waypoint at a recorded position (map coords);

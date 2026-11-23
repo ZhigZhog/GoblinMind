@@ -1016,14 +1016,35 @@ local function Toggle()
 				local now = GetTime and GetTime() or 0
 				local dbl = s._lastC and (now - s._lastC) < 0.35
 				s._lastC = now
-				if isRoute and dbl then
-					local cur = GM.Gather.Route()
-					if cur and cur.route
-						and cur.route.map == r.map
-						and cur.route.kind == r.kind then
-						GM.Gather.StopRoute()
+				if dbl then
+					if isRoute then
+						-- route rows: double-click = run/stop; the
+						-- run drives the native waypoint stop-to-stop
+						-- (the in-world marker MapWise chases with)
+						local cur = GM.Gather.Route()
+						if cur and cur.route
+							and cur.route.map == r.map
+							and cur.route.kind == r.kind then
+							GM.Gather.StopRoute()
+						else
+							GM.Gather.StartRoute(r)
+						end
+					elseif r.zone then
+						-- camp/mob rows: double-click plants the
+						-- waypoint in the world — single click
+						-- used to navigate, which made "look"
+						-- and "go" the same gesture
+						GM.Gather.PointAt(r.zone)
+						GM.Print(GM.CC("accent") .. "waypoint: "
+							.. (r.mobName or r.zoneName or "?")
+							.. (r.mobName and r.zoneName
+								and (" — " .. r.zoneName) or "")
+							.. "|r")
 					else
-						GM.Gather.StartRoute(r)
+						GM.Print(GM.CC("textDim")
+							.. "no farm spot recorded for "
+							.. (r.mobName or "that row")
+							.. " yet|r")
 					end
 					Refresh()
 					return
@@ -1038,25 +1059,6 @@ local function Toggle()
 				-- the ZONE button, the list, and the pane must all
 				-- say the same map or "select" reads broken
 				if r.map then SetZoneFilter(r.map) end
-				if r.mob then
-					-- mob rows navigate to the mob's best zone
-					if r.zone then
-						GM.Gather.PointAt(r.zone)
-						GM.Print(GM.CC("accent")
-							.. "waypoint: " .. r.mobName .. " — "
-							.. (r.zoneName or "?") .. "|r")
-					else
-						GM.Print(GM.CC("textDim")
-							.. "no farm spot recorded for "
-							.. r.mobName .. " yet|r")
-					end
-				elseif r.area then
-					-- hunt zones: waypoint to the centroid
-					GM.Gather.PointAt(r.zone)
-					GM.Print(GM.CC("accent")
-						.. "waypoint: " .. r.zoneName .. " "
-						.. r.kind .. " farm|r")
-				end
 				Refresh()
 			end)
 			W.HoverTint(rb)
@@ -1138,8 +1140,9 @@ local function Toggle()
 		ui.hint:SetWidth(566)
 		ui.hint:SetWordWrap(false)
 		ui.hint:SetText(
-			"click = inspect · double-click route = run · "
-			.. "click zone = waypoint · loot records automatically")
+			"click = inspect · double-click = waypoint "
+			.. "· double-click route = run · "
+			.. "loot records automatically")
 	end
 	if ui:IsShown() then
 		ui:Hide()
