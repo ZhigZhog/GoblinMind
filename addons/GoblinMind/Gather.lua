@@ -861,11 +861,17 @@ local function GLImportOne(e, kind)
 		or not e.posY or e.posX < 0 or e.posX > 1 then
 		return "skip"
 	end
-	-- map coords only — GatherLite's worldX/Y come from a different
-	-- frame than our UnitPosition n,w; mixing them corrupts DistYd
+	-- GatherLite's worldX/Y come from a different frame than our
+	-- UnitPosition n,w — but GM.WorldPos is OUR transform, so the
+	-- imported record can carry real world yards. Without n,w the
+	-- route solver (nd.n gate) can't see the node at all, and a
+	-- live gather at the same spawn can't merge with it either
+	local nw, ww, cw = GM.WorldPos(e.mapID, e.posX, e.posY)
 	local before = #(db.nodes[e.mapID] or {})
-	local nd = MergeNode({ map = e.mapID, x = e.posX, y = e.posY },
-		kind, GLNodeName(e), { mergeYd = GL_MERGE_YD, stamp = false })
+	local nd = MergeNode({
+		map = e.mapID, x = e.posX, y = e.posY,
+		n = nw, w = ww, c = cw,
+	}, kind, GLNodeName(e), { mergeYd = GL_MERGE_YD, stamp = false })
 	if not nd then return "skip" end
 	nd.src = nd.src or "gl"
 	-- observed loot seeds the yield record under the node's name
@@ -1138,9 +1144,21 @@ function G.SolveRoute(map, kind)
 	if not list then return nil end
 	local pts, evs = {}, {}
 	for _, nd in ipairs(list) do
-		if nd.kind == kind and nd.n then
-			pts[#pts + 1] = nd
-			evs[#evs + 1] = NodeEV(nd)
+		if nd.kind == kind then
+			-- x,y-only records (older imports) backfill real world
+			-- yards once — persists on the record, so the solver,
+			-- minimap, and live-merge dedup all see the same frame
+			if not nd.n and nd.x and nd.y then
+				local n, w, c = GM.WorldPos(map, nd.x, nd.y)
+				if n then nd.n, nd.w, nd.c = n, w, c end
+			end
+			-- either coordinate frame routes: cross-frame pairs
+			-- get nil distance -> unlinked components, so mixed
+			-- records can never corrupt a shared loop
+			if nd.n or (nd.x and nd.y) then
+				pts[#pts + 1] = nd
+				evs[#evs + 1] = NodeEV(nd)
+			end
 		end
 	end
 	if #pts < 3 then return nil end
