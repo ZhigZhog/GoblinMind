@@ -1748,22 +1748,69 @@ local run -- active route instance (declared early: NavDiag reads it)
 local tick -- arrival ticker (declared early: StartRoute shows it)
 local navErr, routeErr -- last tick errors (NavDiag reports them)
 
+local function NavCVar(name)
+	local get = C_CVar and C_CVar.GetCVar or GetCVar
+	if type(get) ~= "function" then return end
+	local ok, v = pcall(get, name)
+	if ok then return v end
+end
+
+local function NavCVarSet(name, v)
+	local set = C_CVar and C_CVar.SetCVar or SetCVar
+	if type(set) ~= "function" then return end
+	return pcall(set, name, v)
+end
+
+-- normalize the client waypoint slot — Forever's position is a
+-- plain {x,y} table, modern clients hand back a GetXY vector.
+-- Returns the raw point (for re-setting) + normalized map/x/y.
+local function NavWaypoint()
+	if not (C_Map and C_Map.GetUserWaypoint) then return end
+	local ok, p = pcall(C_Map.GetUserWaypoint)
+	if not ok or not p then return nil, ok and "empty" or p end
+	local pos = p.position or p
+	local x, y
+	if pos.GetXY then x, y = pos:GetXY() end
+	return p, p.uiMapID or p.map, x or pos.x, y or pos.y
+end
+
+-- does the slot still hold OUR point? Release-side ownership
+-- check — a hand-placed pin between our set and release isn't
+-- ours to clear or restore over
+local function NavOwns(raw, map, x, y)
+	local t = nav.pt
+	return raw and t and map == t.map
+		and x and y
+		and math.abs(x - t.x) < .001
+		and math.abs(y - t.y) < .001
+end
+
 -- the waypoint only renders in the 3D world while the client's
 -- in-game navigation display is on — MapWise's
 -- EnsureNavigationSetting: only flip an explicit '0', own it so a
 -- later release restores, never poke an unreadable cvar
 local function NavEnsureDisplay()
-	local get = C_CVar and C_CVar.GetCVar or GetCVar
-	local set = C_CVar and C_CVar.SetCVar or SetCVar
-	if type(get) ~= "function" or type(set) ~= "function" then
-		return
-	end
 	if nav.cvarOwned then return end -- already own the flip
-	if get("showInGameNavigation") ~= "0" then return end
-	if pcall(set, "showInGameNavigation", "1")
-		and get("showInGameNavigation") == "1" then
+	if NavCVar("showInGameNavigation") ~= "0" then return end
+	if NavCVarSet("showInGameNavigation", "1")
+		and NavCVar("showInGameNavigation") == "1" then
 		nav.cvarOwned = "0"
 	end
+end
+
+-- tracking snapshot: what was super-tracked before we hijack —
+-- release puts a tracked quest back instead of leaving nothing
+local function NavTracking()
+	if not C_SuperTrack then return end
+	local qid
+	if C_SuperTrack.IsSuperTrackingQuest
+		and C_SuperTrack.GetSuperTrackedQuestID then
+		local okQ, q = pcall(C_SuperTrack.IsSuperTrackingQuest)
+		local okI, id = pcall(C_SuperTrack.GetSuperTrackedQuestID)
+		if okQ and q and okI and type(id) == "number"
+			and id > 0 then qid = id end
+	end
+	return qid
 end
 
 function G.NavTo(map, x, y)
@@ -1776,12 +1823,13 @@ function G.NavTo(map, x, y)
 			return nil, "waypoints disabled"
 		end
 	end
-	if not nav.savedSet and C_Map.GetUserWaypoint then
-		local ok, prev = pcall(C_Map.GetUserWaypoint)
-		if ok then
+	if not nav.savedSet then
+		local prev, meta = NavWaypoint()
+		if prev or meta == "empty" then
 			nav.saved = prev
 			nav.savedSet = true
 		end
+		nav.prevQuest = NavTracking()
 	end
 	local okP, pt = pcall(UiMapPoint.CreateFromCoordinates, map, x, y)
 	if not okP or not pt then return nil, "bad point" end
@@ -1791,6 +1839,13 @@ function G.NavTo(map, x, y)
 		pcall(C_SuperTrack.SetSuperTrackedUserWaypoint, true)
 	end
 	NavEnsureDisplay()
+	-- remember what we own — the readback if it resolves (the
+	-- client may normalize), else the point we asked for; release
+	-- only clears a slot that still matches
+	local cur, cm, cx, cy = NavWaypoint()
+	nav.pt = (cur and cm and cx and cy)
+		and { map = cm, x = cx, y = cy }
+		or { map = map, x = x, y = y }
 	nav.ours = true
 	return true
 end
@@ -1801,6 +1856,12 @@ end
 -- pulse ring + skull + live distance; when the target clamps to
 -- the screen edge the native arrow owns the visual and we hide.
 local marker
+
+local function NavHideMarker()
+	if marker then marker:Hide() end
+end
+
+local PULSE_SPEED = 2 * math.pi / 2.4 -- ring period, MapWise's 2.4s
 
 local function NavMarker()
 	if marker then return marker end
@@ -1846,10 +1907,13 @@ end
 local function NavDrawMarker(elapsed)
 	local f = marker
 	if not f then return end
-	local function gone() f:Hide() end
+	local gone = NavHideMarker
 	if not nav.ours then return gone() end
-	if WorldMapFrame and WorldMapFrame:IsShown()
-		then return gone() end
+	if WorldMapFrame and WorldMapFrame.IsShown then
+		local okW, shown = pcall(WorldMapFrame.IsShown,
+			WorldMapFrame)
+		if okW and shown then return gone() end
+	end
 	if not (C_Navigation
 		and C_Navigation.HasValidScreenPosition
 		and C_Navigation.GetFrame) then return gone() end
@@ -1865,13 +1929,17 @@ local function NavDrawMarker(elapsed)
 	local okX, x, y = pcall(nf.GetCenter, nf)
 	if not okX or not x or not y or x <= 0 or y <= 0
 		then return gone() end
-	f:SetFrameLevel(
-		(nf.GetFrameLevel and nf:GetFrameLevel() or 0) + 1)
+	local lvl = 0
+	if nf.GetFrameLevel then
+		local okL, l = pcall(nf.GetFrameLevel, nf)
+		if okL and l then lvl = l end
+	end
+	f:SetFrameLevel(lvl + 1)
 	f:ClearAllPoints()
 	f:SetPoint("CENTER", nf, "CENTER")
 	f.age = f.age + (elapsed or 0)
 	f.ring:SetAlpha(.25 + .65
-		* (1 + math.cos(f.age * 2 * math.pi / 2.4)) * .5)
+		* (1 + math.cos(f.age * PULSE_SPEED)) * .5)
 	if C_Navigation.GetDistance then
 		local okD, dd = pcall(C_Navigation.GetDistance)
 		if okD and type(dd) == "number" and dd >= 0 then
@@ -1885,18 +1953,21 @@ end
 
 -- a throwing OnUpdate is an error storm: wrap the draw, print
 -- each distinct error once, and park the marker until the next
--- successful pass
+-- successful pass. navErr clears on success so a transient
+-- fault doesn't mute every future report.
 local navDriver = CreateFrame("Frame")
 navDriver:SetScript("OnUpdate", function(_, elapsed)
-	if marker and marker:IsShown() or nav.ours then
-		if nav.ours then NavMarker() end
-		local ok, err = pcall(NavDrawMarker, elapsed)
-		if not ok and err ~= navErr then
-			navErr = err
-			GM.Print(GM.CC("bad") .. "nav marker: "
-				.. tostring(err) .. "|r")
-			if marker then marker:Hide() end
-		end
+	if not (nav.ours or (marker and marker:IsShown()))
+		then return end
+	if nav.ours and not marker then NavMarker() end
+	local ok, err = pcall(NavDrawMarker, elapsed)
+	if ok then
+		navErr = nil
+	elseif err ~= navErr then
+		navErr = err
+		GM.Print(GM.CC("bad") .. "nav marker: "
+			.. tostring(err) .. "|r")
+		NavHideMarker()
 	end
 end)
 
@@ -1904,26 +1975,38 @@ local function NavRelease()
 	if not nav.ours then return end
 	nav.ours = nil
 	if marker then marker:Hide() end
-	if C_Map and C_Map.ClearUserWaypoint then
-		local ok, cur = pcall(C_Map.GetUserWaypoint)
-		if ok and cur then pcall(C_Map.ClearUserWaypoint) end
+	local cur, cm, cx, cy = NavWaypoint()
+	local restoreSaved = nav.savedSet and nav.saved
+		and C_Map.SetUserWaypoint
+	if cur and NavOwns(cur, cm, cx, cy) then
+		-- still our pin — clear, then put back what we replaced
+		if C_Map.ClearUserWaypoint then
+			pcall(C_Map.ClearUserWaypoint)
+		end
+		if restoreSaved then
+			pcall(C_Map.SetUserWaypoint, nav.saved)
+		end
+	elseif not cur and restoreSaved then
+		-- slot's already empty — restoring a hand-cleared pin is
+		-- still the polite move
+		pcall(C_Map.SetUserWaypoint, nav.saved)
 	end
+	-- foreign pin in the slot: leave it, drop our claim entirely
+	nav.saved, nav.savedSet, nav.pt = nil, nil, nil
 	if C_SuperTrack and C_SuperTrack.SetSuperTrackedUserWaypoint then
 		pcall(C_SuperTrack.SetSuperTrackedUserWaypoint, false)
 	end
-	if nav.savedSet and nav.saved and C_Map.SetUserWaypoint then
-		pcall(C_Map.SetUserWaypoint, nav.saved)
+	if nav.prevQuest and C_SuperTrack
+		and C_SuperTrack.SetSuperTrackedQuestID then
+		pcall(C_SuperTrack.SetSuperTrackedQuestID, nav.prevQuest)
 	end
-	nav.saved, nav.savedSet = nil, nil
+	nav.prevQuest = nil
 	if nav.cvarOwned then
-		local get = C_CVar and C_CVar.GetCVar or GetCVar
-		local set = C_CVar and C_CVar.SetCVar or SetCVar
 		-- only restore while it's still on — a manual switch-off
 		-- is the user's call, we just drop ownership
-		if type(set) == "function"
-			and (type(get) ~= "function"
-				or get("showInGameNavigation") == "1") then
-			pcall(set, "showInGameNavigation", nav.cvarOwned)
+		local v = NavCVar("showInGameNavigation")
+		if v == "1" or v == nil then
+			NavCVarSet("showInGameNavigation", nav.cvarOwned)
 		end
 		nav.cvarOwned = nil
 	end
@@ -1934,9 +2017,12 @@ end
 function G.PointAt(p)
 	if p.x and p.y and p.map then
 		local ok, err = G.NavTo(p.map, p.x, p.y)
-		if ok then return true end
-		GM.Print(GM.CC("textDim") .. "waypoint: "
-			.. tostring(err) .. "|r")
+		if ok then nav.lastErr = nil return true end
+		if err ~= nav.lastErr then
+			nav.lastErr = err
+			GM.Print(GM.CC("textDim") .. "waypoint: "
+				.. tostring(err) .. "|r")
+		end
 		return nil
 	end
 	return nil
@@ -1968,22 +2054,13 @@ function G.NavDiag()
 			and type(UiMapPoint.CreateFromCoordinates)
 				== "function",
 	}
-	local get = C_CVar and C_CVar.GetCVar or GetCVar
-	if type(get) == "function" then
-		d.cvar = get("showInGameNavigation")
-	end
+	d.cvar = NavCVar("showInGameNavigation")
 	if d.api.GetUserWaypoint then
-		local ok, p = pcall(C_Map.GetUserWaypoint)
-		if ok and p then
-			local pos = p.position or p
-			local x, y
-			if pos.GetXY then x, y = pos:GetXY() end
-			x, y = x or pos.x, y or pos.y
-			d.wp = { map = p.uiMapID or p.map, x = x, y = y }
-		elseif ok then
-			d.wp = "nil"
+		local p, m, x, y = NavWaypoint()
+		if p then
+			d.wp = { map = m, x = x, y = y }
 		else
-			d.wp = "err:" .. tostring(p)
+			d.wp = m == "empty" and "nil" or ("err:" .. tostring(m))
 		end
 	end
 	if d.api.SuperTrackIs then
@@ -2019,10 +2096,7 @@ function G.NavDiag()
 		local ok, v = pcall(C_Navigation.GetDistance)
 		d.navDist = ok and v or ("err:" .. tostring(v))
 	end
-	if C_SuperTrack and C_SuperTrack.IsSuperTrackingQuest then
-		local ok, v = pcall(C_SuperTrack.IsSuperTrackingQuest)
-		d.questTracking = ok and v or ("err:" .. tostring(v))
-	end
+	d.questTracking = NavTracking()
 	return d
 end
 
@@ -2187,7 +2261,9 @@ tick:SetScript("OnUpdate", function(_, dt)
 			G.PointAt(run.stops[run.idx])
 		end
 	end)
-	if not ok and err ~= routeErr then
+	if ok then
+		routeErr = nil
+	elseif err ~= routeErr then
 		routeErr = err
 		GM.Print(GM.CC("bad") .. "route tick: "
 			.. tostring(err) .. "|r")
