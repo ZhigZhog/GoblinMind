@@ -76,18 +76,115 @@ local function PaneMap()
 	for k in pairs(GoblinMindGather.zones or {}) do return k end
 end
 
+-- is map m a descendant of the displayed map? zones sit one
+-- level under continents; the world map takes every zone
+local function MapChildOf(m, display)
+	if display == 947 then
+		return not (GM.GatherMap.IsWorldy
+			and GM.GatherMap.IsWorldy(m))
+	end
+	local GetInfo = C_Map and C_Map.GetMapInfo
+	if not GetInfo then return false end
+	local cur = m
+	for _ = 1, 8 do
+		local ok, info = pcall(GetInfo, cur)
+		if not ok or not info or not info.parentMapID
+			or info.parentMapID == cur then
+			return false
+		end
+		if info.parentMapID == display then return true end
+		cur = info.parentMapID
+	end
+	return false
+end
+
+-- a zone's marker spot on the continent/world map: record
+-- centroid in world yards projected into the display frame;
+-- x,y-only records (imports) convert through world pos
+local function ZoneCentroid(m, displayMap)
+	local sn, sw, n, c = 0, 0, 0, nil
+	local xy
+	for _, list in ipairs({ GoblinMindGather.nodes[m],
+		GoblinMindGather.zones[m] }) do
+		for _, rec in ipairs(list or {}) do
+			if rec.n and rec.w then
+				sn, sw, n = sn + rec.n, sw + rec.w, n + 1
+				c = c or (rec.c ~= 0 and rec.c or nil)
+			elseif rec.x and rec.y then
+				xy = xy or rec
+			end
+		end
+	end
+	if n == 0 and xy and C_Map.GetWorldPosFromMapPos
+		and CreateVector2D then
+		local ok, v = pcall(C_Map.GetWorldPosFromMapPos, m,
+			CreateVector2D(xy.x, xy.y))
+		if ok and v and v.x then sn, sw, n = v.x, v.y, 1 end
+	end
+	if n == 0 or not (C_Map and C_Map.GetMapPosFromWorldPos
+		and CreateVector2D) then return nil end
+	local ok, mp = pcall(C_Map.GetMapPosFromWorldPos, c or 0,
+		CreateVector2D(sn / n, sw / n), displayMap)
+	if ok and mp and mp.x and mp.x >= 0 and mp.x <= 1 then
+		return mp.x, mp.y
+	end
+end
+
+-- per-zone summary marks for the continent/world view:
+-- camps + solvable routes per record-bearing child zone,
+-- ranked by best GPM for the medal tier
+local function ZoneMarks(displayMap, rows)
+	local byMap = {}
+	for _, r in ipairs(rows or {}) do
+		if r.map and not r.mob then
+			local e = byMap[r.map]
+			if not e then
+				e = { camps = 0, routes = 0, gpm = 0 }
+				byMap[r.map] = e
+			end
+			if r.area then e.camps = e.camps + 1
+			else e.routes = e.routes + 1 end
+			if (r.gpm or 0) > e.gpm then e.gpm = r.gpm end
+		end
+	end
+	local marks = {}
+	for m, e in pairs(byMap) do
+		if m ~= displayMap and MapChildOf(m, displayMap) then
+			local x, y = ZoneCentroid(m, displayMap)
+			if x then
+				marks[#marks + 1] = { x = x, y = y,
+					count = e.camps + e.routes, gpm = e.gpm }
+			end
+		end
+	end
+	table.sort(marks, function(a, b)
+		return (a.gpm or 0) > (b.gpm or 0) end)
+	for i, m in ipairs(marks) do
+		if i <= 3 and (m.gpm or 0) > 0 then m.medal = i end
+	end
+	return marks
+end
+
 local function DrawPane()
 	if not ui or not ui.pane then return end
 	local map = PaneMap()
 	ui.mapTitle:SetText(map and GM.Gather.ZoneName(map)
 		or "zone map")
 	local r = ui.mapRow and ui.mapRow.stops and ui.mapRow
-	ui.pane:SetData(map, r, ui.mapRow, ui.kindFilter)
-	if map then
+	local marks
+	if map and GM.GatherMap.IsWorldy
+		and GM.GatherMap.IsWorldy(map) then
+		marks = ZoneMarks(map, ui._all)
+		ui.mapLegend:SetText(
+			"marker = farm activity · count = camps+routes · "
+			.. "medals = top-3 GPM zones")
+	else
 		ui.mapLegend:SetText(
 			"icons = best drop · size = spawns grouped · "
 			.. "blue loop = route · discs = hunt zones")
-	else
+	end
+	ui.pane:SetData(map, r, ui.mapRow, ui.kindFilter, marks)
+	if not map then
 		ui.mapLegend:SetText(
 			"no farm data yet — gather nodes or kill mobs to seed")
 	end
@@ -322,6 +419,7 @@ local function Refresh()
 		end
 	end
 	local all = GM.Gather.Leaderboard()
+	ui._all = all
 	local filtered = ui.zoneFilter or ui.kindFilter
 	ui.count:SetText(tid
 		and (#rows .. " producers of " .. TargetName(tid)

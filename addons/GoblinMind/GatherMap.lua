@@ -267,6 +267,18 @@ end
 -- normalized map coords for a record; projects world->map for
 -- records captured before the map projection resolved (harness
 -- data, early-login casts)
+-- continent scale: the world map or its direct children
+-- (continents). Child-zone geometry projects onto them at the
+-- wrong size — they get summary marks instead of overlays
+function M.IsWorldy(mapID)
+	if not mapID then return false end
+	if mapID == 947 then return true end
+	local GetInfo = C_Map and C_Map.GetMapInfo
+	if not GetInfo then return false end
+	local ok, info = pcall(GetInfo, mapID)
+	return ok and info and info.parentMapID == 947
+end
+
 local function MapXY(p, mapID)
 	-- cached x,y is only valid in the map frame it was projected
 	-- for — a record merged from a different mapID must reproject
@@ -414,7 +426,7 @@ function M.CreatePane(parent, w)
 	pane:SetWidth(w)
 	pane.live = {}
 	pane.pool = { tile = {}, exptile = {}, disc = {}, line = {},
-		icon = {}, lbl = {} }
+		icon = {}, lbl = {}, medal = {} }
 
 	-- every drawable lives on a scroll child: a ScrollFrame is the
 	-- only hard clip rect textures get, and edge-anchored icons,
@@ -453,6 +465,10 @@ function M.CreatePane(parent, w)
 			elseif kind == "line" then
 				t = inner:CreateTexture(nil, "OVERLAY", nil, 1)
 				t:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+			elseif kind == "medal" then
+				t = inner:CreateTexture(nil, "OVERLAY", nil, 3)
+				t:SetTexture(
+					"Interface\\AddOns\\GoblinMind\\Media\\ring.tga")
 			else -- icon
 				t = inner:CreateTexture(nil, "OVERLAY", nil, 2)
 			end
@@ -489,9 +505,9 @@ function M.CreatePane(parent, w)
 	-- art tiles cover a TOPLEFT-anchored rect sized to the art's own
 	-- aspect (letterboxed into the pane); overlays map 0-1 coords
 	-- onto the same rect
-	function pane:SetData(mapID, route, sel, filter)
-		self._mapID, self._route, self._sel, self._filter =
-			mapID, route, sel, filter
+	function pane:SetData(mapID, route, sel, filter, marks)
+		self._mapID, self._route, self._sel, self._filter,
+			self._marks = mapID, route, sel, filter, marks
 		if self._drawing then return end
 		self._drawing = true
 		clear()
@@ -730,12 +746,17 @@ function M.CreatePane(parent, w)
 		local ref = nodes[1] or zones[1]
 		local upy = UnitsPerYard(mapID, ref)
 		local tid = G.TargetID and G.TargetID()
+		-- continent/world view: child-zone geometry projects into
+		-- the parent's frame at the wrong scale — no camps, pins,
+		-- or loops here; the per-zone summary marks replace them
+		local worldy = M.IsWorldy(mapID)
 
 		-- hunt zones under everything: disc + drop icon at center.
 		-- With a target set, non-producers recede to a faint trace.
 		-- Out-of-bounds projections (bad world->map for records with
 		-- no stored x,y) get skipped — a px<0 disc bleeds outside the
 		-- pane into the list column
+		if not worldy then
 		for _, zn in ipairs(zones) do
 			local zc = G.ZoneCat and G.ZoneCat(zn) or zn.kind
 			local x, y = MapXY(zn, mapID)
@@ -866,6 +887,41 @@ function M.CreatePane(parent, w)
 				end
 			end
 		end
+		end -- not worldy
+
+		-- per-zone summary marks on continent/world maps: count
+		-- of camps+routes, medal ring for the top-3 GPM zones
+		if worldy and marks then
+			local MEDAL = {
+				{ 1.0, 0.84, 0.27 },   -- gold
+				{ 0.82, 0.84, 0.9 },   -- silver
+				{ 0.82, 0.53, 0.22 },  -- bronze
+			}
+			for _, m in ipairs(marks) do
+				if m.x and m.x > -0.02 and m.x < 1.02
+					and m.y > -0.02 and m.y < 1.02 then
+					local px, py = m.x * w, m.y * h
+					local mc = m.medal and MEDAL[m.medal]
+						or { 0.55, 0.6, 0.55 }
+					local d = put("disc")
+					d:SetSize(22, 22)
+					d:SetPoint("CENTER", inner, "TOPLEFT",
+						px, -py)
+					d:SetVertexColor(0.02, 0.03, 0.02, 0.85)
+					local rg = put("medal")
+					rg:SetSize(25, 25)
+					rg:SetPoint("CENTER", inner, "TOPLEFT",
+						px, -py)
+					rg:SetVertexColor(mc[1], mc[2], mc[3],
+						m.medal and 0.95 or 0.4)
+					local l = put("lbl")
+					l:SetPoint("CENTER", inner, "TOPLEFT",
+						px, -py)
+					l:SetText(tostring(m.count))
+					l:SetTextColor(mc[1], mc[2], mc[3], 1)
+				end
+			end
+		end
 		self._drawing = nil
 	end
 
@@ -876,7 +932,7 @@ function M.CreatePane(parent, w)
 		if self._mapID and w and h and w > 0 and h > 0
 			and (self._dw ~= w or self._dh ~= floor(h)) then
 			self:SetData(self._mapID, self._route, self._sel,
-				self._filter)
+				self._filter, self._marks)
 		end
 	end)
 
