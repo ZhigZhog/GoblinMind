@@ -869,6 +869,27 @@ local function ProduceItem(kind, rec)
 	end
 	return best
 end
+-- same pick off the STATIC drop table — imported nodes have no
+-- yield record yet, but the node name still resolves its table.
+-- Non-gem bonus rolls first by pct; the tables list the node's
+-- own produce before bonus rolls anyway
+local function StaticProduce(kind, key)
+	local stat = GM.Gathering and GM.Gathering.nodes
+		and GM.Gathering.nodes[key]
+	local def = G.KindDefs and G.KindDefs[kind]
+	local IC = GM.Gathering and GM.Gathering.ItemCat
+	if not (stat and def and def.cats and IC) then return nil end
+	local fam = {}
+	for _, c in ipairs(def.cats) do fam[c] = true end
+	local best, bp
+	for _, d in ipairs(stat) do
+		if not d.gem and fam[IC(d.id)]
+			and (d.pct or 0) > (bp or 0) then
+			best, bp = d.id, d.pct
+		end
+	end
+	return best or (stat[1] and stat[1].id)
+end
 -- icon picks memoize on the data epoch — minimap ticks call these
 -- per cluster at 8Hz and the answer only changes on a mutation
 local iconMemo = {}
@@ -878,6 +899,7 @@ function G.NodeIconID(nd)
 	local y = db.yields and db.yields[nd.name or nd.kind]
 	local id = ProduceItem(nd.kind, y)
 		or (y and BestYieldItem(y.items))
+		or StaticProduce(nd.kind, nd.name or nd.kind)
 		or KIND_ICON_ITEM[nd.kind]
 	iconMemo[nd] = { v = dataV, id = id }
 	return id
