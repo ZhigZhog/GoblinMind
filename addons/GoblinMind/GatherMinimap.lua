@@ -379,13 +379,16 @@ local function Update()
 				function(r) return r.w, r.n end, 70)) do
 			local u, v, px, py = uv(c.x, c.y)
 			local rr = u * u + v * v
-			-- distance fade on the TRUE range (not the pinned
-			-- spot): full alpha at the center, 55% at the rim,
-			-- floor of 30% for far-off pins — the minimap reads
-			-- near spawns bright, distant ones as a quiet radar
 			local dist = sqrt(rr)
-			local a = oaN * math.max(0.3, 1 - 0.5 * dist)
-			if rr > CLIP2 then
+			-- past ~2.5 view radii a rim pin stops being radar
+			-- and becomes border noise — cull it outright
+			if dist <= 2.5 then
+			-- steep distance fade on the TRUE range: full at the
+			-- center, ~24% at the rim, floor ~12% for far pins —
+			-- near spawns pop, distant ones are whispers
+			local a = oaN * math.max(0.12, 1 - 0.85 * dist)
+			local pinned = rr > CLIP2
+			if pinned then
 				local s = sqrt(CLIP2 / rr) * 0.96
 				u, v = u * s, v * s
 				px, py = u * hw, -v * hh
@@ -405,7 +408,10 @@ local function Update()
 				end
 			end
 			if dimAll then a = a * 0.35 end
+			-- pinned icons shrink too — an edge of full-size
+			-- squares still leaks into the play area
 			local sz = min(16, 10 + 2 * sqrt(c.n))
+				* (pinned and 0.7 or 1)
 			local ic = put("icon")
 			ic:SetSize(sz, sz)
 			ic:SetPoint("CENTER", host, "CENTER", px, py)
@@ -420,12 +426,13 @@ local function Update()
 				ic:SetTexture(DISC)
 				ic:SetVertexColor(col[1], col[2], col[3], a)
 			end
-			if c.n > 1 then
+			if c.n > 1 and not pinned then
 				local b = putStr("badge")
 				b:SetPoint("CENTER", host, "CENTER",
 					px, py - sz / 2 - 4)
 				b:SetText(tostring(c.n))
 				b:SetTextColor(col[1], col[2], col[3], a)
+			end
 			end
 		end
 	end
