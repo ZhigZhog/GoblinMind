@@ -647,13 +647,13 @@ function M.Refresh()
 	local r = run and run.route or M.RouteFor(map)
 	local stops = run and run.stops or (r and r.stops)
 	if stops and #stops > 1 then
-		RouteScene(L, stops, RecXY, w, h, 0.8 * oaZ,
+		RouteScene(L, stops, RecXY, w, h, 0.8 * oaN,
 			r and RouteTip(r))
 		local s = run and run.stops[run.idx]
 		local sx, sy = s and RecXY(s)
 		if sx then
 			L:pin(sx * w, sy * h, 8,
-				0.4, 0.85, 1.0, 1 * oaZ)
+				0.4, 0.85, 1.0, 1 * oaN)
 		end
 	end
 end
