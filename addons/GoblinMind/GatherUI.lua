@@ -603,6 +603,13 @@ local function OpenZoneMenu(btn)
 				hov:Hide()
 				b:SetScript("OnEnter", function() hov:Show() end)
 				b:SetScript("OnLeave", function() hov:Hide() end)
+				-- buttons eat wheel events — forward to the menu's
+				-- pager or scrolling only works over the 2px gaps
+				b:EnableMouseWheel(true)
+				b:SetScript("OnMouseWheel", function(_, d)
+					local f = m:GetScript("OnMouseWheel")
+					if f then f(m, d) end
+				end)
 				m.rows[rowIx] = b
 			end
 			b.text:SetWidth(w - 12)
@@ -627,7 +634,13 @@ local function OpenZoneMenu(btn)
 		-- the rows to the whole continent — then paged entries
 		for ci, col in ipairs(cols) do
 			local x = 2 + (ci - 1) * COLW
-			Row(x, -2 - RH, COLW, col.label,
+			-- a column past its window isn't missing zones, it's
+			-- paged — say so on the header (Wetlands etc live past
+			-- row 18 on Eastern Kingdoms)
+			local hidden = #col.entries - m.off - vis
+			Row(x, -2 - RH, COLW,
+				col.label .. (hidden > 0
+					and format(" · +%d", hidden) or ""),
 				ui.contFilter and ui.contFilter.id == col.id,
 				col.id and function()
 					SetContFilter(col.id, col.label)
