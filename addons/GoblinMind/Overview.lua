@@ -370,15 +370,21 @@ function OV.RefreshChart()
 	-- window-filtered samples + stats pass
 	local cutoff = WIN_SECS[ui.chartWin or "ALL"]
 	cutoff = cutoff and (time() - cutoff) or -math.huge
+	local me = GM.CharKeyQualified and GM.CharKeyQualified()
 	local hist, tMin, tMax, vMin, vMax =
 		{}, math.huge, 0, math.huge, 0
+	local vals = {}
 	local n, st, sv, stt, stv = 0, 0, 0, 0, 0
 	for _, p in ipairs(GM.db.wealthHist or {}) do
-		if p.t >= cutoff then
+		-- untagged legacy samples (no c) still count; tagged ones
+		-- only count when they're THIS char — wealth is per-char
+		if p.t >= cutoff
+			and (not p.c or not me or p.c == me) then
 			hist[#hist + 1] = p
 			if p.t < tMin then tMin = p.t end
 			if p.t > tMax then tMax = p.t end
 			local wv = (p.g or 0) + (p.a or 0)
+			vals[#vals + 1] = wv
 			if wv > vMax then vMax = wv end
 			if wv < vMin then vMin = wv end
 			n = n + 1; st = st + p.t; sv = sv + wv
@@ -453,15 +459,29 @@ function OV.RefreshChart()
 
 	-- normalize the Y range to the sample band + padding: a
 	-- 0-pinned axis compresses the line into a ceiling sliver once
-	-- wealth sits well above zero, and the dips eat the rest.
-	-- lo floors at 0 (wealth can't go negative); the minimum pad
-	-- keeps a flat line from zooming to a hairline.
-	local pad = math.max((vMax - vMin) * 0.08, vMax * 0.02, 100)
-	local lo = math.max(0, vMin - pad)
-	local hi = vMax + pad
+	-- wealth sits well above zero. Robust edges — Tukey fences at
+	-- 1.5×IQR — so a handful of real dips (a big spend, a char the
+	-- filter missed) clip at the chart edge instead of owning the
+	-- whole range; wy clamps so outliers flatten at the rim, not
+	-- into the gutter.
+	local loD, hiD = vMin, vMax
+	if n >= 8 then
+		table.sort(vals)
+		local q1 = vals[math.max(1, math.floor(n * 0.25))]
+		local q3 = vals[math.max(1, math.ceil(n * 0.75))]
+		local iqr = q3 - q1
+		if iqr > 0 then
+			loD = math.max(vMin, q1 - 1.5 * iqr)
+			hiD = math.min(vMax, q3 + 1.5 * iqr)
+		end
+	end
+	local pad = math.max((hiD - loD) * 0.08, vMax * 0.02, 100)
+	local lo = math.max(0, loD - pad)
+	local hi = hiD + pad
 	local vspan = hi - lo
 	local function wy(v)
-		return gy + (v - lo) / vspan * h
+		local c = math.max(lo, math.min(hi, v))
+		return gy + (c - lo) / vspan * h
 	end
 
 	-- gridlines at ¼-steps with right-justified money labels in the
