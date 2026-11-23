@@ -49,11 +49,22 @@ local function Host(canvas)
 		host = CreateFrame("Frame", nil, canvas)
 		host:SetAllPoints(canvas)
 		host:EnableMouse(false)
-		-- +6: above terrain (+2), still below interactive pins
-		local lv = canvas.GetFrameLevel and canvas:GetFrameLevel()
-		if host.SetFrameLevel then
-			host:SetFrameLevel((lv or 0) + 6)
-		end
+	end
+	-- +6 over the canvas on a bare client. MapWise re-levels its
+	-- terrain layer dynamically — up past the native pin manager's
+	-- exploration band (~510) — so re-check it every refresh: a
+	-- fixed offset lands UNDER the opaque terrain and the whole
+	-- overlay silently vanishes
+	local lv = canvas.GetFrameLevel and canvas:GetFrameLevel()
+	local want = (lv or 0) + 6
+	local terra = _G.ForeverAtlasTerrainLayer
+		or (MapWiseAPI and MapWiseAPI.Map and MapWiseAPI.Map.view)
+	if terra and terra.GetFrameLevel then
+		local tl = terra:GetFrameLevel()
+		if tl and tl >= want then want = tl + 1 end
+	end
+	if host.SetFrameLevel and host:GetFrameLevel() ~= want then
+		host:SetFrameLevel(want)
 	end
 	host:Show()
 	return host
