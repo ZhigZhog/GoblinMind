@@ -13,6 +13,7 @@ local G -- GM.Gather, resolved lazily (file order)
 
 local floor, sqrt, cos, sin = math.floor, math.sqrt,
 	math.cos, math.sin
+local format = string.format
 
 -- canvas lookup: modern frames expose GetCanvas() (the frame
 -- MapWise attaches its terrain layer to); older keep a
@@ -1012,10 +1013,38 @@ function M.CreatePane(parent, w)
 		if inner ~= self then inner:SetSize(w, h) end
 
 		local haveArt = false
+		local tr = {}
+		local att, okd, bad = 0, 0, 0
+		local function note(s, ...)
+			tr[#tr + 1] = "|cff9fd35fmap|r " .. format(s, ...)
+		end
+		M.ArtTrace = tr
+		note("mapID=%s w=%.0f h=%.0f inner=%s lvl=%s",
+			tostring(mapID), w, h, tostring(inner ~= self),
+			tostring(inner.GetFrameLevel
+				and inner:GetFrameLevel()))
 		-- terrain beats parchment: real ground tiles via
 		-- MapWise's index when the addon is present — same look
 		-- as their map
 		local terrain = TerrainTiles(mapID)
+		-- MapWise load pattern: checked SetTexture with
+		-- clamp+filter, plain retry, hide on genuine failure —
+		-- traced per call so mapdebug can see WHERE the chain
+		-- dies on a given client
+		local function setfile(t, fid)
+			att = att + 1
+			local okS, loaded = pcall(t.SetTexture, t,
+				fid, "CLAMP", "CLAMP", "TRILINEAR")
+			if not okS then
+				okS, loaded = pcall(t.SetTexture, t, fid)
+			end
+			if okS and loaded ~= false then
+				okd = okd + 1
+				return true
+			end
+			bad = bad + 1
+			return false
+		end
 		if terrain then
 			for _, t2 in ipairs(terrain) do
 				-- edge tiles bleed past the box — crop them with
@@ -1025,12 +1054,7 @@ function M.CreatePane(parent, w)
 				local rr = min(1, t2.x + t2.w)
 				local bb = min(1, t2.y + t2.h)
 				local t = put("tile")
-				local okS, loaded = pcall(t.SetTexture, t,
-					t2.file, "CLAMP", "CLAMP", "TRILINEAR")
-				if not okS then
-					okS, loaded = pcall(t.SetTexture, t, t2.file)
-				end
-				if okS and loaded ~= false then
+				if setfile(t, t2.file) then
 					t:SetTexCoord((l - t2.x) / t2.w,
 						(rr - t2.x) / t2.w,
 						(tp - t2.y) / t2.h,
@@ -1043,10 +1067,13 @@ function M.CreatePane(parent, w)
 					t:Hide()
 				end
 			end
+			note("terrain loaded: %d/%d", okd, att)
 		end
 		if not terrain and C_Map and C_Map.GetMapArtLayers
 			and C_Map.GetMapArtLayerTextures then
 			local okL, layers = pcall(C_Map.GetMapArtLayers, mapID)
+			note("artlayers: ok=%s n=%d",
+				tostring(okL), okL and layers and #layers or 0)
 			if okL and layers then
 				for li, lay in ipairs(layers) do
 					local okT, texs = pcall(
@@ -1061,17 +1088,7 @@ function M.CreatePane(parent, w)
 						local tw, th = w / cols, h / rows
 						for i, fileID in ipairs(texs) do
 							local t = put("tile")
-							-- MapWise load pattern: checked
-							-- SetTexture with clamp+filter, plain
-							-- retry, hide on genuine failure
-							local okS, loaded = pcall(t.SetTexture, t,
-								fileID, "CLAMP", "CLAMP",
-								"TRILINEAR")
-							if not okS then
-								okS, loaded = pcall(t.SetTexture,
-									t, fileID)
-							end
-							if okS and loaded ~= false then
+							if setfile(t, fileID) then
 								t:SetSize(tw, th)
 								t:SetPoint("TOPLEFT", inner,
 									"TOPLEFT",
@@ -1108,15 +1125,16 @@ function M.CreatePane(parent, w)
 			-- {fileID, ox, oy, w, h, tcRight, tcBottom}
 			local mw = MapWiseAPI and MapWiseAPI.RevealData
 				and MapWiseAPI.RevealData[artID]
+			note("artID=%s mwReveal=%d leatrix=%d",
+				tostring(artID),
+				mw and #mw or 0,
+				artID and GM.MapRevealData
+					and GM.MapRevealData[artID] and 1 or 0)
 			if mw then
+				local before = okd
 				for _, row in ipairs(mw) do
 					local t = put("exptile")
-					local okS, loaded = pcall(t.SetTexture, t,
-						row[1], "CLAMP", "CLAMP", "TRILINEAR")
-					if not okS then
-						okS, loaded = pcall(t.SetTexture, t, row[1])
-					end
-					if okS and loaded ~= false then
+					if setfile(t, row[1]) then
 						t:SetTexCoord(0, row[6], 0, row[7])
 						t:SetSize(row[4] * w, row[5] * h)
 						t:SetPoint("TOPLEFT", inner, "TOPLEFT",
@@ -1126,12 +1144,19 @@ function M.CreatePane(parent, w)
 						t:Hide()
 					end
 				end
+				note("mwReveal loaded: %d/%d", okd - before, #mw)
 			end
 			local records = (not mw) and artID
 				and GM.MapRevealData
 				and GM.MapRevealData[artID]
 			local okL2, lay2 = pcall(C_Map.GetMapArtLayers, mapID)
 			local lay = okL2 and lay2 and lay2[1]
+			if not mw then
+				note("leatrix path: records=%s lay=%s tileW=%s",
+					tostring(records ~= nil),
+					tostring(lay ~= nil),
+					tostring(lay and lay.tileWidth))
+			end
 			if records and lay and lay.tileWidth
 				and lay.tileWidth > 0 then
 				local explored
@@ -1151,7 +1176,20 @@ function M.CreatePane(parent, w)
 								e.offsetX or 0,
 								e.offsetY or 0)] = true
 						end
+						local e1 = exps[1]
+						note("explored=%d e[1] w=%s h=%s ox=%s oy=%s",
+							#exps,
+							tostring(e1.textureWidth),
+							tostring(e1.textureHeight),
+							tostring(e1.offsetX),
+							tostring(e1.offsetY))
+					else
+						note("explored empty: ok=%s n=%d",
+							tostring(okE),
+							okE and exps and #exps or 0)
 					end
+				else
+					note("no C_MapExplorationInfo API")
 				end
 				local pw = w / (lay.layerWidth or 1002)
 				local ph = h / (lay.layerHeight or 668)
@@ -1166,8 +1204,10 @@ function M.CreatePane(parent, w)
 				local keys = {}
 				for key in pairs(records) do keys[#keys + 1] = key end
 				table.sort(keys)
+				local match, skipped = 0, 0
 				for _, key in ipairs(keys) do
 					if not explored or explored[key] then
+						match = match + 1
 						local rw, rh, ox, oy = key:match(
 							"^(%d+):(%d+):(%d+):(%d+)$")
 						rw, rh, ox, oy = tonumber(rw), tonumber(rh),
@@ -1229,10 +1269,20 @@ function M.CreatePane(parent, w)
 								end
 							end
 						end
+					else
+						skipped = skipped + 1
 					end
 				end
+				note("leatrix keys: %d match, %d skipped "
+					.. "(explored=%s)", match, skipped,
+					tostring(explored ~= nil))
 			end
 		end
+		note("done: tiles att=%d ok=%d bad=%d haveArt=%s "
+			.. "shown=%s alpha=%s", att, okd, bad,
+			tostring(haveArt),
+			tostring(inner.IsShown and inner:IsShown()),
+			tostring(inner.GetAlpha and inner:GetAlpha()))
 		if not haveArt then
 			local t = put("tile")
 			t:SetTexture("Interface\\BUTTONS\\WHITE8X8")
@@ -1434,3 +1484,36 @@ mf:SetScript("OnUpdate", function(_, dt)
 		M.Refresh()
 	end
 end)
+
+-- /goblin mapdebug — dumps the pane's last art-pass trace (what
+-- mapID/artID it ran for, which tile source answered, how many
+-- files actually loaded). The pane re-traces on every redraw, so
+-- open the Gather window on the broken zone first, then run this.
+GM.Cmd("mapdebug", function()
+	G = G or GM.Gather
+	local tr = M.ArtTrace
+	if not tr then
+		GM.Print("mapdebug: no pane draw yet — "
+			.. "open the Gather window first")
+		return
+	end
+	GM.Print("--- map art trace (last pane draw) ---")
+	for _, s in ipairs(tr) do GM.Print(s) end
+	-- live context: what the map + MapWise are doing right now
+	local mapID = CurrentMap()
+	local okA, art = pcall(C_Map.GetMapArtID, mapID or 0)
+	GM.Print(format(
+		"live: worldmap=%s artID=%s shown=%s",
+		tostring(mapID), tostring(okA and art),
+		tostring(MapShown())))
+	if MapWiseAPI then
+		local rd = MapWiseAPI.RevealData
+		GM.Print(format(
+			"MapWise: RevealData=%s rows[artID]=%s "
+			.. "revealMap=%s",
+			tostring(rd ~= nil),
+			tostring(rd and art and rd[art] and #rd[art]),
+			tostring(MapWiseAPI.db
+				and MapWiseAPI.db.revealMap)))
+	end
+end, { help = "dump the pane map art-pass trace" })
