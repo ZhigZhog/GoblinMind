@@ -1877,9 +1877,14 @@ local function NavDrawMarker(elapsed)
 	f:ClearAllPoints()
 	f:SetPoint("CENTER", nf, "CENTER")
 	f.lead:SetStartPoint("BOTTOM", UIParent, 0, 140)
-	-- endpoint anchors to the nav frame, not f — a line endpoint
-	-- may not depend on its own parent in the re-anchored chain
-	f.lead:SetEndPoint("CENTER", nf, 0, 0)
+	-- the nav frame rejects LINE dependents (SetPoint to it is
+	-- fine, SetEndPoint isn't) — anchor the endpoint in absolute
+	-- UIParent space instead, scale-converted like MapWise does
+	local fs = nf.GetEffectiveScale and nf:GetEffectiveScale()
+	local us = UIParent:GetEffectiveScale()
+	local k = (fs and us and us > 0) and fs / us or 1
+	f.lead:SetEndPoint("BOTTOMLEFT", UIParent,
+		x * k, y * k)
 	f.age = f.age + (elapsed or 0)
 	f.ring:SetAlpha(.25 + .65
 		* (1 + math.cos(f.age * 2 * math.pi / 2.4)) * .5)
