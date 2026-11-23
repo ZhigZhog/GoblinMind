@@ -379,12 +379,16 @@ local function Update()
 				function(r) return r.w, r.n end, 70)) do
 			local u, v, px, py = uv(c.x, c.y)
 			local rr = u * u + v * v
-			local a = oaN
+			-- distance fade on the TRUE range (not the pinned
+			-- spot): full alpha at the center, 55% at the rim,
+			-- floor of 30% for far-off pins — the minimap reads
+			-- near spawns bright, distant ones as a quiet radar
+			local dist = sqrt(rr)
+			local a = oaN * math.max(0.3, 1 - 0.5 * dist)
 			if rr > CLIP2 then
 				local s = sqrt(CLIP2 / rr) * 0.96
 				u, v = u * s, v * s
 				px, py = u * hw, -v * hh
-				a = a * 0.65   -- rim pins sit back a touch
 			end
 			local rep = c.nodes[1].nd
 			local col = G.KindCol and G.KindCol(rep.kind)
