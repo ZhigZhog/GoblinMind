@@ -411,8 +411,15 @@ local function Update()
 			ic:SetPoint("CENTER", host, "CENTER", px, py)
 			local tex = IconTex(G.NodeIconID
 				and G.NodeIconID(rep))
-			if tex then ic:SetTexture(tex) else ic:SetTexture(DISC) end
-			ic:SetVertexColor(col[1], col[2], col[3], a)
+			-- same rule as MapLayer's icon: real item art stays
+			-- natural, the kind tint is only for the fallback disc
+			if tex then
+				ic:SetTexture(tex)
+				ic:SetVertexColor(1, 1, 1, a)
+			else
+				ic:SetTexture(DISC)
+				ic:SetVertexColor(col[1], col[2], col[3], a)
+			end
 			if c.n > 1 then
 				local b = putStr("badge")
 				b:SetPoint("CENTER", host, "CENTER",
