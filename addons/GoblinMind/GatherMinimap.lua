@@ -279,40 +279,29 @@ local function Update()
 		return u, v, u * hw, -v * hh
 	end
 
-	-- clamp a segment's far end to the clip circle; nil = fully
-	-- outside (both endpoints past 90% radius)
+	-- segment–disc intersection: return the chord inside the clip
+	-- circle, nil when the segment misses it entirely. The old
+	-- both-outside early-out culled chords that cross the radar
+	-- edge-to-edge — that's what chopped visible gaps into routes
 	local function clip(u1, v1, u2, v2)
-		if u1 * u1 + v1 * v1 > CLIP2
-			and u2 * u2 + v2 * v2 > CLIP2 then
+		local du, dv = u2 - u1, v2 - v1
+		local aa = du * du + dv * dv
+		if aa == 0 then
+			if u1 * u1 + v1 * v1 <= CLIP2 then
+				return u1, v1, u2, v2
+			end
 			return nil
 		end
-		if u2 * u2 + v2 * v2 > CLIP2 then
-			-- enter the circle at the near intersection
-			local du, dv = u2 - u1, v2 - v1
-			local aa = du * du + dv * dv
-			if aa == 0 then return nil end
-			local bb = 2 * (u1 * du + v1 * dv)
-			local cc = u1 * u1 + v1 * v1 - CLIP2
-			local disc = bb * bb - 4 * aa * cc
-			if disc <= 0 then return nil end
-			local t = (-bb - sqrt(disc)) / (2 * aa)
-			if t <= 0 then t = (-bb + sqrt(disc)) / (2 * aa) end
-			if t <= 0 or t > 1 then return nil end
-			u2, v2 = u1 + du * t, v1 + dv * t
-		end
-		if u1 * u1 + v1 * v1 > CLIP2 then
-			local du, dv = u1 - u2, v1 - v2
-			local aa = du * du + dv * dv
-			if aa == 0 then return nil end
-			local bb = 2 * (u2 * du + v2 * dv)
-			local cc = u2 * u2 + v2 * v2 - CLIP2
-			local disc = bb * bb - 4 * aa * cc
-			if disc <= 0 then return nil end
-			local t = (-bb - sqrt(disc)) / (2 * aa)
-			if t <= 0 or t > 1 then return nil end
-			u1, v1 = u2 + du * t, v2 + dv * t
-		end
-		return u1, v1, u2, v2
+		local bb = 2 * (u1 * du + v1 * dv)
+		local cc = u1 * u1 + v1 * v1 - CLIP2
+		local disc = bb * bb - 4 * aa * cc
+		if disc <= 0 then return nil end
+		local sq = sqrt(disc)
+		local lo = math.max(0, (-bb - sq) / (2 * aa))
+		local hi = math.min(1, (-bb + sq) / (2 * aa))
+		if lo >= hi then return nil end
+		return u1 + du * lo, v1 + dv * lo,
+			u1 + du * hi, v1 + dv * hi
 	end
 
 	-- opacity channels hoist above the closures: the route is node
