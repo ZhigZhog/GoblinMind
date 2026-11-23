@@ -1126,6 +1126,16 @@ if r:
     r6 = lua.eval('GM.Gather.LoadRoute')(1420, 'mine')
     check('kind-less stale record loses to the real one',
           r6 is not None and r6.kind == 'mine')
+    # CLEAR ROUTE semantics: plain clear drops the live loop but
+    # keeps the save; forget=true is the destructive path
+    lua.execute('GM.GatherMap.NoteRoute('
+                '{ map = 1420, kind = "mine", stops = {} })')
+    lua.eval('GM.Gather.ClearRoute')(1420)
+    check('plain clear keeps the saved record',
+          g.GoblinMindGather.saved['1420:mine'] is not None)
+    lua.eval('GM.Gather.ClearRoute')(1420, True)
+    check('shift-clear deletes the saved record',
+          g.GoblinMindGather.saved['1420:mine'] is None)
 
 
 print()

@@ -1544,12 +1544,14 @@ function G.LoadRoute(map, kind)
 	return best
 end
 
--- drop a map's route: the saved loop, the noted overlay, and a
--- running instance — the data (nodes/zones) stays
-function G.ClearRoute(map)
+-- drop a map's route: the noted overlay and a running instance.
+-- forget=true also deletes the saved record — plain clears used
+-- to nuke the save too, which read as "save doesn't work" when
+-- the user cleared the display then tried to load it back
+function G.ClearRoute(map, forget)
 	if not map then return nil end
 	local touched
-	if db.saved then
+	if forget and db.saved then
 		for k in pairs(db.saved) do
 			if tonumber(k:match("^(%d+):")) == map then
 				db.saved[k] = nil

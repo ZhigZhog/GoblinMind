@@ -919,12 +919,15 @@ local function Toggle()
 			"Restores the best saved loop for the viewed",
 			"map and starts running it.",
 		})
-		-- drop the route on the viewed map: saved loop, overlay,
-		-- and a running instance — node/zone data is untouched
+		-- plain click drops the live route (overlay + running
+		-- instance) but keeps the save — forgetting the record is
+		-- the destructive path and needs a shift-click
 		ui.clear = Btn(ui, 92, "CLEAR ROUTE", function()
 			local p = ui.mapSel or ui.zoneFilter or GM.Gather.CurrentMap()
-			if p and GM.Gather.ClearRoute(p) then
-				GM.Print(GM.CC("accent") .. "route cleared|r")
+			local forget = IsShiftKeyDown and IsShiftKeyDown()
+			if p and GM.Gather.ClearRoute(p, forget) then
+				GM.Print(GM.CC("accent") .. (forget
+					and "saved route deleted|r" or "route cleared|r"))
 			else
 				GM.Print(GM.CC("textDim")
 					.. "no route here to clear|r")
@@ -934,8 +937,9 @@ local function Toggle()
 		ui.clear:SetPoint("LEFT", ui.load, "RIGHT", 6, 0)
 		W.Tip(ui.clear, {
 			"Clear route",
-			"Drops the saved and running loop on the viewed map —",
-			"node and zone records are untouched.",
+			"Drops the running loop and pane overlay on the",
+			"viewed map — the saved record stays.",
+			"Shift-click also deletes the saved route.",
 		})
 		-- per-layer minimap overlay toggles
 		ui.mmBtn = Btn(ui, 110, "MINIMAP:", function(s)
