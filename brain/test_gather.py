@@ -640,7 +640,11 @@ check('route polyline drawn',
 print('== window pane: hunt-zone disc + icon ==')
 pane.SetData(pane, 1419, None)
 kinds = [e[1] for e in pane.live.values()]
-check('zone discs drawn', kinds.count('disc') == 2)
+# zones with recorded pockets draw as fitted blobs (scanline
+# fill bands + polyline ring); the disc.tga circle only renders
+# for pre-pocket records with no points to fit
+check('zone blobs drawn', kinds.count('fill') > 0
+      and kinds.count('line') > 24)
 icons = [e[2] for e in pane.live.values() if e[1] == 'icon']
 texs = set(ic._tex for ic in icons)
 check('cloth icon at zone center', 42589 in texs)
@@ -680,9 +684,11 @@ check('non-producers shrunk',
       all(ic._w <= 10 for ic in dim))
 # hunt-zone dimming: no zone produces ore on 1419
 pane.SetData(pane, 1419, None)
-discs = [e[2] for e in pane.live.values() if e[1] == 'disc']
-check('non-producing zone discs faint',
-      all(d._col[4] <= 0.06 for d in discs))
+discs = [e[2] for e in pane.live.values()
+         if e[1] in ('disc', 'fill')]
+check('non-producing zone fills faint',
+      len(discs) > 0
+      and all(d._col[4] <= 0.06 for d in discs))
 G.SetTarget(None)
 
 print('== window pane: draw error cannot freeze the pane ==')
@@ -704,7 +710,7 @@ lua.execute('''
 pane.SetData(pane, 1419, None)
 kinds = [e[1] for e in pane.live.values()]
 check('next draw still renders after error',
-      kinds.count('disc') == 2 and not pane._err)
+      kinds.count('fill') > 0 and not pane._err)
 
 print('== GatherLite import ==')
 # stub the SV + the runtime API. Two personal mining points ~21yd
