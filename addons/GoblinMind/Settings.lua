@@ -519,7 +519,7 @@ local function Build()
 	-- leaving UISpecialFrames pointing at a plain table (IsShown crash)
 	local f = GM.Widgets.Window({
 		name = "GoblinMindSettingsFrame", title = "SETTINGS",
-		w = 620, h = 716, x = -60, y = 10, tab = "settings",
+		w = 620, h = 802, x = -60, y = 10, tab = "settings",
 	})
 	ui.frame = f
 
@@ -774,6 +774,25 @@ local function Build()
 	hint:SetText("usable in any op price field · builtins can't be "
 		.. "shadowed · >5 manage via /goblin price set")
 
+	-- ===== GATHERING =====
+	-- the same layer toggles the gather window's MINIMAP: dropdown
+	-- owns; both write GoblinMindGather.mm through
+	-- GatherMinimap.Set so they can't disagree
+	local gt = Panel(f, 10, -710, 600, 78, "GATHERING · MINIMAP LAYERS")
+	ui.mmLayers = {}
+	if GM.GatherMinimap then
+		for i, k in ipairs(GM.GatherMinimap.LAYERS) do
+			local col, r = (i - 1) % 4, floor((i - 1) / 4)
+			RowAt(gt, GM.GatherMinimap.LABEL[k] or k,
+				12 + col * 148, 26 + r * 24)
+			local seg = BoolSeg(gt,
+				function() return GM.GatherMinimap.Enabled(k) end,
+				function(v) GM.GatherMinimap.Set(k, v) end)
+			seg:SetPoint("TOPLEFT", 12 + col * 148 + 64, -24 - r * 24)
+			ui.mmLayers[i] = seg
+		end
+	end
+
 	S.Relayout()
 end
 
@@ -839,6 +858,9 @@ function S.Refresh()
 	ui.mmHide.paint()
 	ui.embed.paint()
 	ui.mod.paint()
+	if ui.mmLayers then
+		for _, seg in ipairs(ui.mmLayers) do seg.paint() end
+	end
 	ui.fmt.paint()
 	if ui.detail then ui.detail.paint() end
 	for _, r in ipairs(ui.ttRows or {}) do

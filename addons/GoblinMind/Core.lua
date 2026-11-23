@@ -1189,6 +1189,34 @@ function GM.ItemQuality(id)
 	return q
 end
 
+-- BuyMerchantItem fails the whole call when the count crosses the
+-- item's stack cap ("Internal Bag Error" — issue #21). Chunk the
+-- purchase into stack-sized calls; the max stack comes from the
+-- item itself (field 8), the merchant's sale stack as fallback,
+-- and a single call as last resort
+function GM.MerchantBuy(idx, n)
+	if not (idx and n and n > 0 and BuyMerchantItem) then return end
+	local max
+	local link = GetMerchantItemLink and GetMerchantItemLink(idx)
+	local id = link and GM.LinkID(link)
+	if id and GetInfo then
+		local ok, ms = pcall(function()
+			return select(8, GetInfo(id)) end)
+		if ok and type(ms) == "number" and ms > 0 then max = ms end
+	end
+	if not max then
+		local info = C_MerchantFrame and C_MerchantFrame.GetItemInfo
+			and C_MerchantFrame.GetItemInfo(idx)
+		max = info and info.stackCount
+			and info.stackCount > 0 and info.stackCount or n
+	end
+	while n > 0 do
+		local c = math.min(n, max)
+		if not pcall(BuyMerchantItem, idx, c) then break end
+		n = n - c
+	end
+end
+
 -- quality straight off a link's |cnIQN: prefix — item links carry
 -- their own display data, which is all we have for items the
 -- client's DB can't resolve (Forever customs like 249425)

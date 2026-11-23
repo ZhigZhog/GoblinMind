@@ -400,9 +400,7 @@ local function Build()
 			local n = math.floor(tonumber(eb:GetText()) or 0)
 			local idx = eb.buyIdx
 			eb:ClearFocus()
-			if idx and n > 0 then
-				pcall(BuyMerchantItem, idx, n)
-			end
+			if idx and n > 0 then GM.MerchantBuy(idx, n) end
 			VU.Refresh()
 		end)
 		qb:SetScript("OnEscapePressed", function(eb) eb:ClearFocus() end)
@@ -581,7 +579,7 @@ function VU.Refresh()
 						GM.ModifiedItemClick(r.id)
 						return
 					end
-					pcall(BuyMerchantItem, idx, r.qty or 1)
+					GM.MerchantBuy(idx, r.qty or 1)
 					VU.Refresh()
 				end)
 				row:SetScript("OnClick", function()

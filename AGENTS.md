@@ -747,6 +747,10 @@ Primary data = the in-house book feed below.
   `GetBuybackItemInfo(i)` → (_, _, price, qty); `BuyMerchantItem`,
   `BuybackItem`, `CanMerchantRepair`, `GetRepairAllCost`,
   `RepairAllItems(fromGuild)` all global (TSM LibTSMWoW/API/Merchant.lua).
+  **`BuyMerchantItem(idx, n)` fails the whole call** ("Internal Bag
+  Error") when n crosses the item's max stack — go through
+  `GM.MerchantBuy(idx, n)`, which chunks into stack-sized buys
+  (issue #21).
 - **Group import/export** (`Groups.lua` + GroupsUI IMP/EXP buttons):
   - TSM group paths are **backtick-separated** (`Tailoring`Bags`);
     ```` is an escaped literal comma. Ours use `/` — convert at the
