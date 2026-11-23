@@ -697,10 +697,7 @@ end
 -- in the normal TRADE_SKILL_SHOW path — C._pumping just suppresses
 -- the UI takeover so the window doesn't flash once per line.
 local function ProfPump()
-	if C._pumping or not (GetProfessions and GetProfessionInfo
-		and C_TradeSkillUI and C_TradeSkillUI.OpenTradeSkill) then
-		return
-	end
+	if not (GetProfessions and GetProfessionInfo) then return end
 	local seen = {}
 	for id in pairs(GoblinMindCrafting.recipes) do
 		local p = C.Prof(id)
@@ -713,37 +710,17 @@ local function ProfPump()
 			tinsert(missing, line)
 		end
 	end
-	if #missing == 0 then return end
-	C._pumping = true
-	GM.Print("first load — scanning " .. #missing .. " profession"
-		.. (#missing == 1 and "" or "s") .. "…")
-	local i = 0
-	local function step()
-		i = i + 1
-		local line = missing[i]
-		if not line then
-			C._pumping = nil
-			if C_TradeSkillUI.CloseTradeSkill then
-				pcall(C_TradeSkillUI.CloseTradeSkill)
-			end
-			return
-		end
-		-- OpenTradeSkill is hardware-gated on Forever: from a timer
-		-- the pcall still fires the "interface action failed" banner
-		-- (once per missing line). Bail on the first block and point
-		-- at the manual path — the normal TRADE_SKILL_SHOW scan
-		-- still records recipes when the player opens each prof
-		local ok = pcall(C_TradeSkillUI.OpenTradeSkill, line)
-		if not ok then
-			C._pumping = nil
-			GM.Print(GM.CC("textDim")
-				.. "auto-scan blocked — open each profession once"
-				.. " to record its recipes|r")
-			return
-		end
-		GM.After(1.0, step)
+	-- C_TradeSkillUI.OpenTradeSkill is hardware-gated on Forever —
+	-- pumping from a timer fires the "interface action failed"
+	-- banner once per missing line and the pcall can't suppress it.
+	-- There's no scripted path to a profession window at all, so
+	-- the pump just tells the player: one manual open per line runs
+	-- the same TRADE_SKILL_SHOW scan and fills the DB
+	if #missing > 0 then
+		GM.Print(GM.CC("textDim") .. #missing
+			.. " profession" .. (#missing == 1 and "" or "s")
+			.. " unscanned — open each once (K) to record recipes|r")
 	end
-	step()
 end
 
 function C.Init()

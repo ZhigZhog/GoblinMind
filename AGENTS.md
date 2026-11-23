@@ -751,6 +751,13 @@ Primary data = the in-house book feed below.
   Error") when n crosses the item's max stack — go through
   `GM.MerchantBuy(idx, n)`, which chunks into stack-sized buys
   (issue #21).
+- **Hardware-gated APIs on Forever**: `C_TradeSkillUI.OpenTradeSkill`
+  (and likely other action-class calls like `C_Map.SetUserWaypoint`)
+  only run inside a hardware event — a `GM.After`/OnUpdate call
+  fails AND still fires the "interface action failed because of an
+  AddOn" banner; `pcall` catches the Lua error but NOT the banner.
+  Never invoke them from timers — drive them from OnClick only, or
+  skip the scripted path entirely (ProfPump was removed for this).
 - **Group import/export** (`Groups.lua` + GroupsUI IMP/EXP buttons):
   - TSM group paths are **backtick-separated** (`Tailoring`Bags`);
     ```` is an escaped literal comma. Ours use `/` — convert at the
