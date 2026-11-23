@@ -48,6 +48,7 @@ local function Region()
 	function r:SetTextColor() end
 	function r:SetJustifyH() end
 	function r:SetWordWrap() end
+	function r:SetMaxLines() end
 	function r:SetParent(p) self._parent = p end
 	function r:EnableMouse() end
 	function r:SetScrollChild(c) self._scrollChild = c end
@@ -679,8 +680,8 @@ check('skin row passes',
 G.SetTarget(9999)
 pane.SetData(pane, 1420, r)
 icons = [e[2] for e in pane.live.values() if e[1] == 'icon']
-bright = [ic for ic in icons if ic._col and ic._col[4] >= 1]
-dim = [ic for ic in icons if ic._col and ic._col[4] < 1]
+bright = [ic for ic in icons if ic._col and ic._col[4] >= 0.9]
+dim = [ic for ic in icons if ic._col and ic._col[4] < 0.9]
 check('producer cluster stays bright',
       len(bright) == 1 and bright[0]._tex == 49999)
 check('non-producers dimmed', len(dim) >= 4)
@@ -1047,8 +1048,9 @@ check('no overlay drawn on raw canvas',
 check('host leveled above MapWise terrain (+2)',
       host is not None and getattr(host, '_fl', None) == 9)
 lbls = [r._text for r in regs if getattr(r, '_text', None)]
+# tag contract (map-widget-unification S2): KINDTAG · Nk · GPM/m
 check('zone disc label on world map',
-      any('kills' in str(t) for t in lbls))
+      any('/m' in str(t) for t in lbls))
 
 print('== world-map pass: continent marks, no detail ==')
 lua.execute(r'''

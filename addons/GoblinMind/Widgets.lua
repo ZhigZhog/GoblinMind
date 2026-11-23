@@ -280,11 +280,56 @@ end
 -- paint above every texture in the layer.
 --   ring(3) blob borders · disc/fill(4) interiors + count discs
 --   pin/line(5) route dots + fallback pins · icon(6) · medal(7)
+-- ====================== map style contract ======================
+-- ONE style table every map surface (world map, window pane,
+-- minimap) reads — see WoWVault/Proposals/map-widget-unification.
+-- Object alphas multiply the user's oaZ/oaN channel sliders;
+-- state alphas never stack multiplicatively — callers take min().
+W.MapStyle = {
+	A = {
+		full      = 0.95,  -- normal object
+		depleted  = 0.35,  -- all members inside respawn window
+		nonMatch  = 0.28,  -- target set, not a producer
+		muted     = 0.15,  -- deepest "barely there"
+		zoneFill  = 0.18,  zoneFillSel = 0.30, zoneFillMute = 0.06,
+		zoneRing  = 0.70,  zoneRingSel = 0.95, zoneRingMute = 0.15,
+		route     = 0.85,  routeSel    = 1.00,
+	},
+	MEDAL = { { 1.0, 0.84, 0.27 }, { 0.82, 0.84, 0.9 },
+		{ 0.82, 0.53, 0.22 } },          -- gold / silver / bronze
+	MEDAL_OFF = { 0.55, 0.6, 0.55 },
+	TAG_FONT = 8, BADGE_FONT = 8, MARK_FONT = 9,
+	ZONE_ICON = 16, ZONE_ICON_SEL = 20, ZONE_ICON_MM = 13,
+	SHRINK_CAP = 8, SHRINK_CAP_MM = 7,   -- non-match icon caps
+	ROUTE_HOT_SPACING = 36,              -- px between hover pads
+}
+-- cluster icon px by member count — minimap runs a size class
+-- smaller (its canvas is tiny). math.* not the bare globals: the
+-- test harness extracts this block without WoW's aliases
+function W.MapStyle.ClusterSize(n, mini)
+	return mini and math.min(12, 7 + 1.5 * math.sqrt(n))
+		or math.min(18, 9 + 2.5 * math.sqrt(n))
+end
+
+-- shrink/expand a polygon toward/away from its centroid by d px —
+-- the border-band trick blob() uses; minimap blobs share it
+function W.PolyShrink(poly, cx, cy, d)
+	local out = {}
+	for i, p in ipairs(poly) do
+		local dx, dy = p.x - cx, p.y - cy
+		local len = math.sqrt(dx * dx + dy * dy)
+		local s = len > 0 and (len + d) / len or 1
+		out[i] = { x = cx + dx * s, y = cy + dy * s }
+	end
+	return out
+end
+
 function W.MapLayer(host)
 	local L = { host = host, live = {}, pool = {} }
 	local sqrt = math.sqrt
 	local atan2 = math.atan2
 		or function(y, x) return math.atan(y, x) end
+	local S = W.MapStyle
 
 	local function put(kind)
 		local pool = L.pool[kind]
@@ -292,9 +337,17 @@ function W.MapLayer(host)
 		local t = tremove(pool)
 		if not t then
 			if kind == "tag" then
-				t = GM.MakeFontString(host, GM.FONT, 10, "text")
+				-- map terrain is noisy — always OUTLINE, small:
+				-- the tag annotates, it doesn't shout (S1)
+				t = GM.MakeFontString(host, GM.FONT,
+					S.TAG_FONT, "text", "OUTLINE")
 			elseif kind == "badge" then
-				t = GM.MakeFontString(host, GM.FONT, 9, "text")
+				t = GM.MakeFontString(host, GM.FONT,
+					S.BADGE_FONT, "text", "OUTLINE")
+			elseif kind == "mbadge" then
+				-- mark counts keep the bigger rank font (S1)
+				t = GM.MakeFontString(host, GM.FONT,
+					S.MARK_FONT, "text", "OUTLINE")
 			elseif kind == "tile" then
 				t = host:CreateTexture(nil, "BACKGROUND")
 			elseif kind == "exptile" then
@@ -419,6 +472,7 @@ function W.MapLayer(host)
 	function L:tag(x, y, text)
 		local l = put("tag")
 		l:SetPoint("CENTER", self.host, "TOPLEFT", x, -y)
+		l:SetMaxLines(1) -- one glance line, never a wrap
 		l:SetText(text or "")
 	end
 
@@ -439,25 +493,17 @@ function W.MapLayer(host)
 	-- tint, leaving a uniform rim. sel adds a gold rim 3px out
 	function L:blob(poly, cx, cy, r, g, b, fillA, ringA, ringPx, sel)
 		ringPx = ringPx or 3
-		local function offset(d)
-			local out = {}
-			for i, p in ipairs(poly) do
-				local dx, dy = p.x - cx, p.y - cy
-				local len = sqrt(dx * dx + dy * dy)
-				local s = len > 0 and (len + d) / len or 1
-				out[i] = { x = cx + dx * s, y = cy + dy * s }
-			end
-			return out
-		end
 		if sel then
-			W.PolyFill(self.host, offset(ringPx + 3), 6,
+			W.PolyFill(self.host,
+				W.PolyShrink(poly, cx, cy, ringPx + 3), 6,
 				1, 0.82, 0.1, 0.9,
 				function() return put("ring") end)
 		end
 		W.PolyFill(self.host, poly, 6, r, g, b, ringA,
 			function() return put("ring") end)
-		W.PolyFill(self.host, offset(-ringPx), 6, r, g, b, fillA,
-			function() return put("fill") end)
+		W.PolyFill(self.host,
+			W.PolyShrink(poly, cx, cy, -ringPx), 6, r, g, b,
+			fillA, function() return put("fill") end)
 	end
 
 	-- continent summary mark: dark count disc + ring + number —
@@ -468,7 +514,10 @@ function W.MapLayer(host)
 		rg:SetSize(25, 25)
 		rg:SetPoint("CENTER", self.host, "TOPLEFT", x, -y)
 		rg:SetVertexColor(r, g, b, medal and 0.95 or 0.4)
-		self:badge(x, y, tostring(count), r, g, b, 1)
+		local l = put("mbadge")
+		l:SetPoint("CENTER", self.host, "TOPLEFT", x, -y)
+		l:SetText(tostring(count))
+		l:SetTextColor(r, g, b, 1)
 	end
 
 	return L

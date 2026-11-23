@@ -140,13 +140,13 @@ end
 
 GM._fontFixups = setmetatable({}, { __mode = "k" })
 
-local function ApplyFont(fs, font, size)
+local function ApplyFont(fs, font, size, flags)
 	-- a custom font that fails to resolve must degrade, not blank the
 	-- UI — a first-run install blanked every FONT_MED label until
 	-- /reload. This client's SetFont doesn't return false on failure,
 	-- so prove the font works by measuring a real glyph — a dead font
 	-- reports zero width.
-	local ok = fs:SetFont(font, size, "")
+	local ok = fs:SetFont(font, size, flags or "")
 	local dead = ok == false
 	if not dead and fs.GetStringWidth then
 		local prev = fs:GetText()
@@ -154,14 +154,14 @@ local function ApplyFont(fs, font, size)
 		dead = fs:GetStringWidth() == 0
 		fs:SetText(prev)
 	end
-	if dead then fs:SetFont("Fonts\\FRIZQT__.TTF", size, "") end
+	if dead then fs:SetFont("Fonts\\FRIZQT__.TTF", size, flags or "") end
 end
 
-function GM.MakeFontString(parent, template, size, colorKey)
+function GM.MakeFontString(parent, template, size, colorKey, flags)
 	local fs = parent:CreateFontString(nil, "OVERLAY")
 	local font = template or GM.FONT
-	ApplyFont(fs, font, size or 11)
-	GM._fontFixups[fs] = { font, size or 11 }
+	ApplyFont(fs, font, size or 11, flags)
+	GM._fontFixups[fs] = { font, size or 11, flags }
 	fs:SetTextColor(GM.RGB(colorKey or "text"))
 	return fs
 end
@@ -174,7 +174,7 @@ function GM.FixupFonts()
 	-- still dead degrades to FRIZQT instead of rendering blank.
 	for fs, spec in pairs(GM._fontFixups) do
 		if spec[1] ~= "Fonts\\FRIZQT__.TTF" then
-			ApplyFont(fs, spec[1], spec[2])
+			ApplyFont(fs, spec[1], spec[2], spec[3])
 		end
 	end
 end

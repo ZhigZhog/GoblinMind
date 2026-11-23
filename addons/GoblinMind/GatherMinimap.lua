@@ -309,6 +309,12 @@ local function Update()
 		return u1, v1, u2, v2
 	end
 
+	-- opacity channels hoist above the closures: the route is node
+	-- geometry, so it rides oaN (muting nodes must mute its loop)
+	local oaZ = M.AlphaZone()
+	local oaN = M.AlphaNode()
+	local SA = GM.Widgets.MapStyle.A
+
 	local function seg(u1, v1, u2, v2)
 		local a, b, c2, d = clip(u1, v1, u2, v2)
 		if not a then return end
@@ -326,7 +332,7 @@ local function Update()
 			-- sign flip like the TOPLEFT-space map pane uses
 			pcall(t.SetRotation, t, atan2(dy, dx))
 		end
-		t:SetVertexColor(0.4, 0.85, 1.0, 0.85 * oaZ)
+		t:SetVertexColor(0.4, 0.85, 1.0, SA.route * oaN)
 	end
 
 	-- hunt-zone territory under everything: the same fitted
@@ -336,7 +342,6 @@ local function Update()
 	-- free here: world-yard space has no map frames, the distance
 	-- cull does the filtering
 	local mmSet = mm()
-	local oaZ = M.AlphaZone()
 	local ZP = GM.GatherMap
 	local clipC = { x = hw, y = hh, r = hw * 0.9 }
 	for _, zl in pairs(GoblinMindGather.zones or {}) do
@@ -387,26 +392,19 @@ local function Update()
 					rPx(ZP.POCKET_PAD_YD), rPx(ZP.ZONE_MIN_YD),
 					rPx(ZP.ZONE_DRAW_MAX_YD))
 				if poly then
-					GM.Widgets.PolyFill(host, poly, 4,
+					GM.Widgets.PolyFill(host, poly, 6,
 						col[1], col[2], col[3],
-						0.5 * oaZ,
+						SA.zoneRing * oaZ,
 						function()
 							return put("zring")
 						end, clipC)
 					-- interior copy shrunk toward the centroid —
 					-- the same border-band trick L:blob runs
-					local inner = {}
-					for i, p in ipairs(poly) do
-						local dx, dy = p.x - cx, p.y - cy
-						local len = sqrt(dx * dx + dy * dy)
-						local s = len > 2
-							and (len - 2) / len or 0.5
-						inner[i] = { x = cx + dx * s,
-							y = cy + dy * s }
-					end
-					GM.Widgets.PolyFill(host, inner, 4,
+					GM.Widgets.PolyFill(host,
+						GM.Widgets.PolyShrink(poly,
+							cx, cy, -2), 6,
 						col[1], col[2], col[3],
-						0.13 * oaZ,
+						SA.zoneFill * oaZ,
 						function()
 							return put("zfill")
 						end, clipC)
@@ -416,13 +414,15 @@ local function Update()
 						and G.ZoneIconID(zn))
 					if it then
 						local ic = put("icon")
-						ic:SetSize(13, 13)
+						local zsz = GM.Widgets.MapStyle
+							.ZONE_ICON_MM
+						ic:SetSize(zsz, zsz)
 						ic:SetPoint("CENTER", host,
 							"CENTER",
 							cx - hw, cy - hh)
 						ic:SetTexture(it)
 						ic:SetVertexColor(1, 1, 1,
-							0.9 * oaZ)
+							SA.full * oaZ)
 					end
 				end
 			end
@@ -451,7 +451,7 @@ local function Update()
 				local s = put("stop")
 				s:SetSize(7, 7)
 				s:SetPoint("CENTER", host, "CENTER", a.px, a.py)
-				s:SetVertexColor(0.4, 0.85, 1.0, 0.9 * oaZ)
+				s:SetVertexColor(0.4, 0.85, 1.0, SA.full * oaN)
 			end
 		end
 	end
@@ -460,7 +460,6 @@ local function Update()
 	-- map runs, in world-yard space. Off-view clusters pin to the
 	-- rim (the radar edge) so recorded spawns keep pointing at
 	-- themselves; empty = plain kind dot when no icon resolves
-	local oaN = M.AlphaNode()
 	if oaN > 0 and GM.GatherMap and GM.GatherMap.Cluster then
 		local recs = WrapNodes(mapID, G.NodeList(mapID) or {}, mmSet)
 		for _, c in ipairs(GM.GatherMap.Cluster(recs,
@@ -473,8 +472,9 @@ local function Update()
 			if dist <= 2.5 then
 			-- steep distance fade on the TRUE range: full at the
 			-- center, ~24% at the rim, floor ~12% for far pins —
-			-- near spawns pop, distant ones are whispers
-			local a = oaN * math.max(0.12, 1 - 0.85 * dist)
+			-- near spawns pop, distant ones are whispers.
+			-- States only lower it — min() stacking (S3)
+			local fade = math.max(0.12, 1 - 0.85 * dist)
 			local pinned = rr > CLIP2
 			if pinned then
 				local s = sqrt(CLIP2 / rr) * 0.96
@@ -491,10 +491,11 @@ local function Update()
 					dimAll = false break
 				end
 			end
-			if dimAll then a = a * 0.35 end
+			local a = oaN * min(
+				dimAll and SA.depleted or SA.full, fade)
 			-- Questie-icon scale, same as the world map — pinned
 			-- icons shrink another notch so the rim stays quiet
-			local sz = min(13, 8 + 1.5 * sqrt(c.n))
+			local sz = GM.Widgets.MapStyle.ClusterSize(c.n, true)
 				* (pinned and 0.7 or 1)
 			local ic = put("icon")
 			ic:SetSize(sz, sz)

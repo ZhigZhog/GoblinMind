@@ -396,6 +396,30 @@ local function ClusterTip(c, mapID)
 end
 
 
+-- kills abbrev: Nk — "5k" for 5, "1.2k" ≥1000 (tag contract S2)
+local function KillsK(n)
+	return n >= 1000 and format("%.1fk", n / 1000)
+		or tostring(n) .. "k"
+end
+
+-- canonical camp tag: KINDTAG · Nk · GPM/m, font-8 glance line.
+-- The place name is a textDim aside kept only while the whole
+-- line stays ≤26 visible chars — the hover tip carries the
+-- full story (pockets, mobs, drop table)
+local function ZoneLabel(zn, mapName)
+	local zc = G.ZoneCat(zn)
+	local stats = KillsK(zn.kills or 0) .. " · "
+		.. GM.MoneyShort(floor(G.ZoneGPM(zn))) .. "/m"
+	local place = G.ZonePlace and G.ZonePlace(zn)
+	if place == mapName then place = nil end
+	local vis = #G.KindLabel(zc) + 3 + #stats
+	if place and vis + 3 + #place <= 26 then
+		return G.KindTag(zc) .. " · " .. stats
+			.. GM.CC("textDim") .. " · " .. place .. "|r"
+	end
+	return G.KindTag(zc) .. " · " .. stats
+end
+
 -- zone object: fitted blob (solid border band + translucent
 -- interior) or disc fallback, farm icon at the centroid,
 -- optional stats tag beneath. st = {
@@ -424,15 +448,21 @@ local function ZoneScene(L, zn, prj, w, h, st)
 			col[1], col[2], col[3], st.fillA)
 	end
 	if st.iconID then
-		local sz = st.iconSz or 18
+		local sz = st.iconSz or GM.Widgets.MapStyle.ZONE_ICON
 		L:icon(cx, cy, sz, GM.ItemIcon(st.iconID),
 			col[1], col[2], col[3], st.iconA or 1)
 		if st.tip ~= false then
 			L:hot(cx, cy, sz + 6, sz + 6,
 				ZoneTip(zn, st.mapID))
 		end
+		if st.tag then
+			-- icon-relative offset (S2): the tag sits under the
+			-- art, not at a fixed dip that drifts with iconSz
+			L:tag(cx, cy + (st.tagDY or sz / 2 + 8), st.tag)
+		end
+	elseif st.tag then
+		L:tag(cx, cy + (st.tagDY or 14), st.tag)
 	end
-	if st.tag then L:tag(cx, cy + (st.tagDY or 15), st.tag) end
 	return cx, cy
 end
 
@@ -452,10 +482,9 @@ local function ClusterScene(L, c, w, h, st)
 		end
 	end
 	local a = st.a or 1
-	-- Questie-icon scale: a lone spawn reads ~12px like a quest
-	-- marker, and only dense clusters push toward 20
-	local sz = min(20, 10 + 3 * sqrt(c.n))
-	if st.shrink then sz = min(sz, 8) end
+	local S = GM.Widgets.MapStyle
+	local sz = S.ClusterSize(c.n)
+	if st.shrink then sz = min(sz, S.SHRINK_CAP) end
 	local x, y = c.x * w, c.y * h
 	L:icon(x, y, sz, GM.ItemIcon(best), col[1], col[2], col[3], a)
 	if c.n > 1 then
@@ -516,7 +545,8 @@ local function RouteScene(L, stops, prj, w, h, a, tipFn)
 			L:dots(x1, y1, x2, y2, 0.4, 0.85, 1.0, a or 0.85)
 			if tipFn then
 				local len = sqrt((x2 - x1) ^ 2 + (y2 - y1) ^ 2)
-				local n = max(1, floor(len / 36))
+				local n = max(1, floor(
+					len / GM.Widgets.MapStyle.ROUTE_HOT_SPACING))
 				for j = 0, n - 1 do
 					L:hot(x1 + (x2 - x1) * (j + 0.5) / n,
 						y1 + (y2 - y1) * (j + 0.5) / n,
@@ -574,15 +604,11 @@ function M.Refresh()
 	-- place under several IDs), medal-ringed by best gpm — the
 	-- same ZoneMarks the window pane draws
 	if M.IsWorldy(map) then
-		local MEDAL = {
-			{ 1.0, 0.84, 0.27 },   -- gold
-			{ 0.82, 0.84, 0.9 },   -- silver
-			{ 0.82, 0.53, 0.22 },  -- bronze
-		}
+		local S = GM.Widgets.MapStyle
 		for _, m in ipairs(M.ZoneMarks(map,
 			G.Leaderboard and G.Leaderboard() or {})) do
-			local mc = m.medal and MEDAL[m.medal]
-				or { 0.55, 0.6, 0.55 }
+			local mc = m.medal and S.MEDAL[m.medal]
+				or S.MEDAL_OFF
 			L:mark(m.x * w, m.y * h, m.count,
 				mc[1], mc[2], mc[3], m.medal)
 		end
@@ -595,6 +621,7 @@ function M.Refresh()
 	-- "hunt"/"skin", never the cloth/meat/mine family the camp
 	-- actually farms. A landmark equal to the map's own name adds
 	-- nothing — drop it
+	local S = GM.Widgets.MapStyle
 	local mapName = G.ZoneName and G.ZoneName(map)
 	-- every record landing on the displayed map, whatever mapID
 	-- the client stored it under (custom zones, Riverglades, ...)
@@ -606,25 +633,14 @@ function M.Refresh()
 		pcall(function()
 			local zc = G.ZoneCat(zn)
 			local col = G.KindCol(zc)
-			local place = G.ZonePlace and G.ZonePlace(zn)
-			if place == mapName then place = nil end
-			local gpm = G.ZoneGPM(zn)
-			-- same tag contract as the mod's rows: kind-colored
-			-- UPPERCASE label, then stats in text color
-			local label = format("%s%s · %s kills · %s/min",
-				G.KindTag(zc),
-				place and ("  " .. place) or "",
-				zn.kills or 0,
-				GM.MoneyShort
-					and GM.MoneyShort(floor(gpm))
-					or tostring(floor(gpm)))
 			ZoneScene(L, zn, RecXY, w, h, {
 				col = col,
-				fillA = 0.22 * oaZ, ringA = 0.85 * oaZ,
+				fillA = S.A.zoneFill * oaZ,
+				ringA = S.A.zoneRing * oaZ,
 				ringPx = 3,
 				iconID = G.ZoneIconID and G.ZoneIconID(zn),
-				iconA = 0.95 * oaZ,
-				tag = label,
+				iconA = S.A.full * oaZ,
+				tag = ZoneLabel(zn, mapName),
 				mapID = map,
 				rPx = function(yd)
 					return YdToPx(draw, yd)
@@ -667,8 +683,10 @@ function M.Refresh()
 		end
 		local match = not tid or tHit
 		ClusterScene(L, c, w, h, {
-			a = (dimAll and 0.35 or (match and 0.95 or 0.3))
-				* oaN,
+			-- states only lower alpha — min() stacking, not
+			-- ad-hoc products (S3)
+			a = min(dimAll and S.A.depleted or S.A.full,
+				match and S.A.full or S.A.nonMatch) * oaN,
 			shrink = not match,
 			tid = tid,
 			mapID = map,
@@ -682,13 +700,13 @@ function M.Refresh()
 	local r = run and run.route or M.RouteFor(map)
 	local stops = run and run.stops or (r and r.stops)
 	if stops and #stops > 1 then
-		RouteScene(L, stops, RecXY, w, h, 0.8 * oaN,
+		RouteScene(L, stops, RecXY, w, h, S.A.route * oaN,
 			r and RouteTip(r))
 		local s = run and run.stops[run.idx]
 		local sx, sy = s and RecXY(s)
 		if sx then
 			L:pin(sx * w, sy * h, 8,
-				0.4, 0.85, 1.0, 1 * oaN)
+				0.4, 0.85, 1.0, S.A.full * oaN)
 		end
 	end
 end
@@ -1236,20 +1254,25 @@ function M.CreatePane(parent, w)
 				-- plus an outer accent band
 				local isSel = sel and sel.zone == zn
 				local col = G.KindCol(zc)
+				local S = GM.Widgets.MapStyle
 				ZoneScene(L, zn,
 					function(p) return MapXY(p, mapID) end,
 					w, h, {
 						col = col,
-						fillA = isSel and 0.3
-							or (match and 0.18 or 0.06),
-						ringA = isSel and 0.95
-							or (match and 0.55 or 0.15),
+						fillA = isSel and S.A.zoneFillSel
+							or (match and S.A.zoneFill
+								or S.A.zoneFillMute),
+						ringA = isSel and S.A.zoneRingSel
+							or (match and S.A.zoneRing
+								or S.A.zoneRingMute),
 						ringPx = 2.5,
 						sel = isSel,
 						iconID = G.ZoneIconID
 							and G.ZoneIconID(zn),
-						iconA = (match or isSel) and 1 or 0.3,
-						iconSz = isSel and 24 or 18,
+						iconA = (match or isSel) and S.A.full
+							or S.A.nonMatch,
+						iconSz = isSel and S.ZONE_ICON_SEL
+							or S.ZONE_ICON,
 						mapID = mapID,
 						rPx = function(yd)
 							return yd * upy * w
@@ -1280,8 +1303,12 @@ function M.CreatePane(parent, w)
 			end
 			local match = not tid or tHit
 			ClusterScene(L, c, w, h, {
-				-- same depletion dim as the world map
-				a = dimAll and 0.35 or (match and 1 or 0.25),
+				-- same alpha contract as the world map (S3)
+				a = min(dimAll
+						and GM.Widgets.MapStyle.A.depleted
+						or GM.Widgets.MapStyle.A.full,
+					match and GM.Widgets.MapStyle.A.full
+						or GM.Widgets.MapStyle.A.nonMatch),
 				shrink = not match,
 				tid = tid,
 				mapID = mapID,
@@ -1311,7 +1338,8 @@ function M.CreatePane(parent, w)
 			RouteScene(L, stops, function(p)
 				local px, py = MapXY(p, mapID)
 				if M.OnFrame(px, py) then return px, py end
-			end, w, h, selLoop and 1 or 0.85,
+			end, w, h, selLoop and GM.Widgets.MapStyle.A.routeSel
+				or GM.Widgets.MapStyle.A.route,
 				r and RouteTip(r))
 		end
 		end -- not worldy
@@ -1319,16 +1347,11 @@ function M.CreatePane(parent, w)
 		-- per-zone summary marks on continent/world maps: count
 		-- of camps+routes, medal ring for the top-3 GPM zones
 		if worldy and marks then
-			local MEDAL = {
-				{ 1.0, 0.84, 0.27 },   -- gold
-				{ 0.82, 0.84, 0.9 },   -- silver
-				{ 0.82, 0.53, 0.22 },  -- bronze
-			}
+			local S = GM.Widgets.MapStyle
 			for _, m in ipairs(marks) do
-				if m.x and m.x > -0.02 and m.x < 1.02
-					and m.y > -0.02 and m.y < 1.02 then
-					local mc = m.medal and MEDAL[m.medal]
-						or { 0.55, 0.6, 0.55 }
+				if M.OnFrame(m.x, m.y) then
+					local mc = m.medal and S.MEDAL[m.medal]
+						or S.MEDAL_OFF
 					L:mark(m.x * w, m.y * h, m.count,
 						mc[1], mc[2], mc[3], m.medal)
 				end
