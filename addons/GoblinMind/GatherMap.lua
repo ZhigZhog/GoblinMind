@@ -17,16 +17,46 @@ local floor, sqrt, cos, sin = math.floor, math.sqrt,
 -- harness) only have two-arg atan
 local atan2 = math.atan2 or function(y, x) return math.atan(y, x) end
 
--- canvas lookup: retail keeps a ScrollContainer.Child; older/odd
--- map frames get probed for a canvas-ish child, else the frame
--- itself. Pins anchor CENTER in normalized*pixel coords either way.
+-- canvas lookup: modern frames expose GetCanvas() (the frame
+-- MapWise attaches its terrain layer to); older keep a
+-- ScrollContainer.Child; last resort the frame itself. Pins
+-- anchor CENTER in normalized*pixel coords either way.
 local function Canvas()
 	local f = WorldMapFrame
 	if not f then return nil end
+	if f.GetCanvas then
+		local ok, c = pcall(f.GetCanvas, f)
+		if ok and c then return c end
+	end
 	if f.ScrollContainer and f.ScrollContainer.Child then
 		return f.ScrollContainer.Child
 	end
 	return f
+end
+
+-- our draw host: a frame of our own ON the canvas, leveled above
+-- MapWise's terrain layer (canvas+2). Drawing straight on the
+-- canvas puts the pins under their view frame and nothing shows
+-- — the "no overlays on the world map" bug
+local host, hostCanvas
+local function Host(canvas)
+	if hostCanvas ~= canvas then
+		if host then host:Hide() host:SetParent(nil) end
+		host = nil
+		hostCanvas = canvas
+	end
+	if not host then
+		host = CreateFrame("Frame", nil, canvas)
+		host:SetAllPoints(canvas)
+		host:EnableMouse(false)
+		-- +6: above terrain (+2), still below interactive pins
+		local lv = canvas.GetFrameLevel and canvas:GetFrameLevel()
+		if host.SetFrameLevel then
+			host:SetFrameLevel((lv or 0) + 6)
+		end
+	end
+	host:Show()
+	return host
 end
 
 local function MapShown()
@@ -185,21 +215,86 @@ function M.Refresh()
 		return
 	end
 	local canvas = Canvas()
-	if not canvas then return end
-	Reclaim()
+	if not canvas then Reclaim() return end
 	local map = CurrentMap()
-	if not map then return end
+	if not map then Reclaim() return end
+	local draw = Host(canvas)
+	Reclaim()
 	local w, h = canvas:GetWidth() or 1, canvas:GetHeight() or 1
+	-- record -> normalized map coords on the displayed frame;
+	-- n,w-only records project, everything else fails nil
+	local function RecXY(p)
+		if p.x and p.y then return p.x, p.y end
+		if p.n and p.w then
+			local x, y = GM.MapPos(p.c or 0, p.n, p.w, map)
+			if x and x >= 0 and x <= 1
+				and y >= 0 and y <= 1 then
+				return x, y
+			end
+		end
+	end
+
+	-- continent/world view: child-zone geometry projects at the
+	-- wrong scale — a count disc per record-bearing zone, same
+	-- summary model the window pane uses (no ring segments:
+	-- 24/zone on a 1s ticker would paint thousands of lines)
+	if M.IsWorldy(map) then
+		local db = GoblinMindGather or {}
+		local function mark(m, list, r, g, b, n)
+			local rec = list[1]
+			if not rec then return end
+			local sn, sw, cnt, c = 0, 0, 0, nil
+			for _, p in ipairs(list) do
+				if p.n and p.w then
+					sn, sw, cnt = sn + p.n, sw + p.w, cnt + 1
+					c = c or (p.c ~= 0 and p.c or nil)
+				end
+			end
+			local x, y
+			if cnt > 0 then
+				x, y = GM.MapPos(c or 0, sn / cnt, sw / cnt, map)
+			elseif rec.x then
+				-- x,y-only list (imports): hop through world yards —
+				-- rec.x is normalized to m, not to the continent
+				local n2, w2, c2 = GM.WorldPos(m, rec.x, rec.y)
+				if n2 then
+					x, y = GM.MapPos(c2 or rec.c or 0,
+						n2, w2, map)
+				end
+			end
+			if x and x >= 0 and x <= 1
+				and y and y >= 0 and y <= 1 then
+				local mk = PutZone(draw)
+				mk.fill:SetSize(22, 22)
+				mk.fill:ClearAllPoints()
+				mk.fill:SetPoint("CENTER", draw, "TOPLEFT",
+					x * w, -(y * h))
+				mk.fill:SetVertexColor(r, g, b, 0.6)
+				mk.label:ClearAllPoints()
+				mk.label:SetPoint("CENTER", draw, "TOPLEFT",
+					x * w, -(y * h))
+				mk.label:SetText(tostring(n))
+			end
+		end
+		for m, list in pairs(db.nodes or {}) do
+			mark(m, list, 0.4, 0.85, 1.0, #list)
+		end
+		for m, list in pairs(db.zones or {}) do
+			mark(m, list, 0.95, 0.8, 0.3, #list)
+		end
+		return
+	end
 
 	-- hunt zones first (under the pins): translucent disc + stats
 	for _, zn in ipairs(G.ZoneList(map) or {}) do
-		if zn.x and zn.y then
+		local x, y = RecXY(zn)
+		if x then
 			local col = G.KIND_COLOR[
 				G.ZoneCat and G.ZoneCat(zn) or zn.kind]
 				or { 1, 1, 1 }
 			local gpm = G.ZoneEV(zn) * G.ZoneRate(zn)
-			DrawZone(canvas, zn.x * w, zn.y * h,
-				YdToPx(canvas, zn.r or 60),
+			DrawZone(draw, x * w, y * h,
+				YdToPx(draw, zn.r or 60),
 				col[1], col[2], col[3],
 				format("%s · %s kills · %s/min",
 					zn.kind, zn.kills or 0,
@@ -211,12 +306,13 @@ function M.Refresh()
 
 	-- node pins; dim inside the learned respawn window
 	for _, nd in ipairs(G.NodeList(map) or {}) do
-		if nd.x and nd.y then
+		local x, y = RecXY(nd)
+		if x then
 			local col = G.KIND_COLOR[nd.kind] or { 1, 1, 1 }
 			local resp = G.RespawnSec(map, nd.kind)
 			local dim = nd.last
 				and (time() - nd.last) < resp * 0.8
-			DrawPin(canvas, nd.x * w, nd.y * h,
+			DrawPin(draw, x * w, y * h,
 				col[1], col[2], col[3], dim and 0.35 or 0.95)
 		end
 	end
@@ -229,15 +325,18 @@ function M.Refresh()
 	if stops and #stops > 1 then
 		for i = 1, #stops do
 			local a, b = stops[i], stops[i % #stops + 1]
-			if a.x and b.x then
-				DrawLine(canvas, a.x * w, a.y * h,
-					b.x * w, b.y * h,
+			local ax, ay = RecXY(a)
+			local bx, by = RecXY(b)
+			if ax and bx then
+				DrawLine(draw, ax * w, ay * h,
+					bx * w, by * h,
 					0.4, 0.85, 1.0, 0.8)
 			end
 		end
 		local s = run and run.stops[run.idx]
-		if s and s.x then
-			DrawPin(canvas, s.x * w, s.y * h,
+		local sx, sy = s and RecXY(s)
+		if sx then
+			DrawPin(draw, sx * w, sy * h,
 				0.4, 0.85, 1.0, 1)
 		end
 	end

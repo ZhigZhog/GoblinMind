@@ -1017,5 +1017,15 @@ Primary data = the in-house book feed below.
     fallback. Sets: `"Azeroth"`=EK, `"Kalimdor"`, `"2991"`;
     `files[set]["mapCC_RR"]` = WDT tile fileID on a 533.33yd
     grid, `valid[set]["CxR"]` = real-tile mask.
+  - **Main-map overlays attach to `WorldMapFrame:GetCanvas()`**,
+    not the frame itself: MapWise's "WoW map" view IS the native
+    WorldMapFrame hosting MapWise's terrain layer at
+    `canvas:GetFrameLevel()+2` — textures on the bare frame (or
+    raw canvas) render UNDER it, invisibly. `GatherMap.M.Refresh`
+    parents a dedicated host frame at `+6` (above terrain, below
+    interactive pins) and anchors normalized*pixel coords to it.
+    Continent/world mapIDs (`IsWorldy`: 947 or parent==947) get
+    per-zone count discs projected through `GM.MapPos` — never
+    child-zone geometry at continent scale.
 - Not yet registered on the Codebase Map (project started 2026-11-11,
   post-closure).

@@ -946,6 +946,107 @@ check('no mine node from the corpse window',
       all(nd.kind != 'mine' or nd.n != 5400
           for nd in (g.GoblinMindGather.nodes[1419] or {}).values()))
 
+print('== world-map pass: MapWise canvas host ==')
+# MapWise renders its terrain layer on WorldMapFrame:GetCanvas()
+# at frame level +2 — the world-map pass must draw on a host
+# frame above that, never on the bare frame or raw canvas
+lua.execute(r'''
+	_REGIONS = {}
+	local _CF2 = CreateFrame
+	function CreateFrame(kind, name, parent)
+		local f = _CF2(kind, name, parent)
+		f._parentArg = parent
+		f.SetFrameLevel = function(self, l) self._fl = l end
+		f.GetFrameLevel = function(self) return self._fl or 0 end
+		local _ct, _cfs = f.CreateTexture, f.CreateFontString
+		if _ct then
+			f.CreateTexture = function(self, ...)
+				local t = _ct(self, ...)
+				t._maker = self
+				_REGIONS[#_REGIONS + 1] = t
+				return t
+			end
+			f.CreateFontString = function(self, ...)
+				local s = _cfs(self, ...)
+				s._maker = self
+				_REGIONS[#_REGIONS + 1] = s
+				return s
+			end
+		end
+		return f
+	end
+	_CANVAS = CreateFrame("Frame")
+	_CANVAS._tag = "MWCANVAS"
+	_CANVAS:SetSize(1000, 500)
+	_CANVAS.SetFrameLevel = function(self, l) self._fl = l end
+	_CANVAS.GetFrameLevel = function(self) return 3 end
+	WorldMapFrame = CreateFrame("Frame")
+	WorldMapFrame.IsShown = function() return true end
+	WorldMapFrame.GetMapID = function() return 5555 end
+	WorldMapFrame.GetCanvas = function() return _CANVAS end
+	GoblinMindGather.nodes = GoblinMindGather.nodes or {}
+	GoblinMindGather.nodes[5555] = {
+		{ n = 1000, w = 2000, c = 0, kind = "herb" },
+		{ n = 1100, w = 2100, c = 0, kind = "mine" },
+	}
+	GoblinMindGather.zones = GoblinMindGather.zones or {}
+	GoblinMindGather.zones[5555] = {
+		{ n = 1500, w = 1900, c = 0, kind = "cloth",
+		  kills = 9, r = 80 },
+	}
+	GM.GatherMap.Refresh()
+''')
+regs = list(g._REGIONS.values())
+check('world-map draw produced overlays', len(regs) > 0)
+makers = set(id(r._maker) for r in regs)
+check('all overlays share one host', len(makers) == 1)
+host = regs[0]._maker if regs else None
+check("host is the GetCanvas() frame child",
+      host is not None
+      and getattr(host._parentArg, '_tag', None) == 'MWCANVAS')
+check('no overlay drawn on raw canvas',
+      all(getattr(r._maker, '_tag', None) != 'MWCANVAS'
+          for r in regs))
+check('host leveled above MapWise terrain (+2)',
+      host is not None and getattr(host, '_fl', None) == 9)
+lbls = [r._text for r in regs if getattr(r, '_text', None)]
+check('zone disc label on world map',
+      any('kills' in str(t) for t in lbls))
+
+print('== world-map pass: continent marks, no detail ==')
+lua.execute(r'''
+	WorldMapFrame.GetMapID = function() return 1414 end
+	local _GMI = C_Map.GetMapInfo
+	C_Map.GetMapInfo = function(m)
+		if m == 1414 then
+			return { name = "Kalimdor", parentMapID = 947 }
+		end
+		return _GMI(m)
+	end
+	GoblinMindGather.nodes[6666] = {
+		{ n = 1e9, w = 1e9, c = 0, kind = "mine" } }
+	_REGIONS = {}
+	GM.GatherMap.Refresh()
+''')
+regs = list(g._REGIONS.values())
+check('continent view drew summary marks', len(regs) >= 2)
+# ring/route segments set _rot; marks must be pure disc+label
+lines = [r for r in regs if getattr(r, '_rot', None) is not None]
+check('no zone geometry at continent scale', len(lines) == 0)
+lbls = [r._text for r in regs if getattr(r, '_text', None)]
+check('marks carry counts',
+      any(str(t).isdigit() for t in lbls))
+# every drawn region anchors inside the canvas bounds — the
+# n=1e9 map-6666 mark must never reach SetPoint
+xs = [pt[4] for r in regs for pt in r._pts.values()
+      if pt[1] == 'CENTER']
+ys = [pt[5] for r in regs for pt in r._pts.values()
+      if pt[1] == 'CENTER']
+check('foreign-continent records culled',
+      xs and all(0 <= x <= 1000 for x in xs)
+      and all(-500 <= y <= 0 for y in ys))
+
+
 print()
 fails = [n for n, ok in CHECKS if not ok]
 if fails:

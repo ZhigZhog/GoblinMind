@@ -1283,14 +1283,15 @@ function GM.MapPos(worldID, n, w, mapID)
 end
 
 -- map coords on mapID -> world yards (north,west). Returns
--- n,w or nil.
+-- n,w,worldID or nil (the id is third so n,w callers are
+-- unaffected — world-marks need it to re-project cross-map)
 function GM.WorldPos(mapID, x, y)
 	if not (C_Map and C_Map.GetWorldPosFromMapPos
 		and CreateVector2D and x and y and mapID) then return end
-	local ok, _, p = pcall(C_Map.GetWorldPosFromMapPos,
+	local ok, wid, p = pcall(C_Map.GetWorldPosFromMapPos,
 		mapID, CreateVector2D(x, y))
 	local okV, n, w = pcall(function()
 		if p and p.x and p.y then return p.x, p.y end
 	end)
-	if ok and okV and n then return n, w end
+	if ok and okV and n then return n, w, wid end
 end
