@@ -307,6 +307,7 @@ end
 
 -- shared import path — panel feedback goes to ui.profMsg when the
 -- settings window exists; the dialog also shows inline errors
+local ImportProfile -- forward-declared: defined below ApplyImport
 local function ApplyImport(str)
 	-- snapshot reload-gated values so an import that changes them
 	-- surfaces the reload prompt
@@ -430,7 +431,7 @@ ShowProfDialog = function(mode)
 	d.eb:SetFocus()
 end
 
-local function ImportProfile(str)
+ImportProfile = function(str)
 	local raw = HexDec(str and str:gsub("%s", ""))
 	if not raw or raw:sub(1, 1) ~= "{" or raw:find("[%(]") then
 		return nil, "not a profile string"

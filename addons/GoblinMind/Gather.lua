@@ -18,6 +18,10 @@ local G = GM.Gather
 GoblinMindGather = GoblinMindGather or {}
 local db = GoblinMindGather
 
+local tinsert = table.insert
+local floor, sqrt = math.floor, math.sqrt
+local max, min = math.max, math.min
+
 -- record schema version: zone/yield math changed under early data
 -- (pockets, per-item hits, failed-loot counting). Bump = wipe the
 -- derived records so pre-change loot doesn't poison the model.
@@ -174,10 +178,6 @@ G.SPEEDS = {
 	{ key = "mount", name = "mount +40%",   yps = 9.8 },
 	{ key = "epic",  name = "mount +100%",  yps = 14.0 },
 }
-
-local tinsert = table.insert
-local floor, sqrt = math.floor, math.sqrt
-local max, min = math.max, math.min
 
 function G.SecondsText(s)
 	if not s then return "?" end
@@ -1746,6 +1746,7 @@ end
 local nav = {}
 local run -- active route instance (declared early: NavDiag reads it)
 local tick -- arrival ticker (declared early: StartRoute shows it)
+local navErr, routeErr -- last tick errors (NavDiag reports them)
 
 -- the waypoint only renders in the 3D world while the client's
 -- in-game navigation display is on — MapWise's
@@ -1891,11 +1892,20 @@ local function NavDrawMarker(elapsed)
 	f:Show()
 end
 
+-- a throwing OnUpdate is an error storm: wrap the draw, print
+-- each distinct error once, and park the marker until the next
+-- successful pass
 local navDriver = CreateFrame("Frame")
 navDriver:SetScript("OnUpdate", function(_, elapsed)
 	if marker and marker:IsShown() or nav.ours then
 		if nav.ours then NavMarker() end
-		NavDrawMarker(elapsed)
+		local ok, err = pcall(NavDrawMarker, elapsed)
+		if not ok and err ~= navErr then
+			navErr = err
+			GM.Print(GM.CC("bad") .. "nav marker: "
+				.. tostring(err) .. "|r")
+			if marker then marker:Hide() end
+		end
 	end
 end)
 
@@ -1947,7 +1957,7 @@ end
 -- needs every link; this names the missing one
 function G.NavDiag()
 	local d = { ours = nav.ours, cvarOwned = nav.cvarOwned,
-		run = run ~= nil }
+		run = run ~= nil, navErr = navErr, routeErr = routeErr }
 	local function has(t, n)
 		return t and type(t[n]) == "function"
 	end
@@ -2154,7 +2164,10 @@ function G.ClearData()
 	G.StopRoute()
 end
 
--- arrival check + lap timing, 4x/sec while a route runs
+-- arrival check + lap timing, 4x/sec while a route runs. The
+-- body is pcall'd like the nav driver — this ticker was dead
+-- code until the forward-declare fix, so it earns the same
+-- once-per-error reporting instead of a storm
 tick = CreateFrame("Frame")
 tick:Hide()
 tick.acc = 0
@@ -2162,24 +2175,31 @@ tick:SetScript("OnUpdate", function(_, dt)
 	tick.acc = tick.acc + dt
 	if tick.acc < 0.25 then return end
 	tick.acc = 0
-	if not run then tick:Hide() return end
-	local p = PosNow()
-	if not p then return end
-	local stop = run.stops[run.idx]
-	local d = DistYd(p, stop)
-	if d and d <= ARRIVE_YD then
-		local now = GetTime()
-		if run.idx == 1 then
-			-- arriving back at stop 1 closes a lap
-			if run.lapStart then
-				run.lapSum = (run.lapSum or 0)
-					+ (now - run.lapStart)
-				run.laps = (run.laps or 0) + 1
+	local ok, err = pcall(function()
+		if not run then tick:Hide() return end
+		local p = PosNow()
+		if not p then return end
+		local stop = run.stops[run.idx]
+		local d = DistYd(p, stop)
+		if d and d <= ARRIVE_YD then
+			local now = GetTime()
+			if run.idx == 1 then
+				-- arriving back at stop 1 closes a lap
+				if run.lapStart then
+					run.lapSum = (run.lapSum or 0)
+						+ (now - run.lapStart)
+					run.laps = (run.laps or 0) + 1
+				end
+				run.lapStart = now
 			end
-			run.lapStart = now
+			run.idx = run.idx % #run.stops + 1
+			G.PointAt(run.stops[run.idx])
 		end
-		run.idx = run.idx % #run.stops + 1
-		G.PointAt(run.stops[run.idx])
+	end)
+	if not ok and err ~= routeErr then
+		routeErr = err
+		GM.Print(GM.CC("bad") .. "route tick: "
+			.. tostring(err) .. "|r")
 	end
 end)
 
@@ -2626,6 +2646,10 @@ GM.Cmd("navdebug", function()
 	GM.Print("navFrame=" .. tostring(d.navFrame)
 		.. " clamped=" .. tostring(d.navClamped)
 		.. " navDist=" .. tostring(d.navDist))
+	if d.navErr or d.routeErr then
+		GM.Print("errors: nav=" .. tostring(d.navErr)
+			.. " | route=" .. tostring(d.routeErr))
+	end
 	local wp = d.wp
 	GM.Print("waypoint=" .. (type(wp) == "table"
 		and format("%s @ %.4f,%.4f",
