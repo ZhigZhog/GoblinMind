@@ -1835,6 +1835,13 @@ local function NavMarker()
 	d:SetTextColor(1, .82, .25)
 	d:SetJustifyH("CENTER")
 	f.dist = d
+	-- leader line: bottom-center (above the action bars) to the
+	-- marker. The one world line the client can honestly draw —
+	-- it only projects the single tracked point.
+	local ld = f:CreateLine(nil, "BORDER")
+	ld:SetThickness(2.5)
+	ld:SetColorTexture(1, .82, .25, .55)
+	f.lead = ld
 	f.age = 0
 	f:Hide()
 	marker = f
@@ -1867,6 +1874,8 @@ local function NavDrawMarker(elapsed)
 		(nf.GetFrameLevel and nf:GetFrameLevel() or 0) + 1)
 	f:ClearAllPoints()
 	f:SetPoint("CENTER", nf, "CENTER")
+	f.lead:SetStartPoint("BOTTOM", UIParent, 0, 140)
+	f.lead:SetEndPoint("CENTER", f, 0, 0)
 	f.age = f.age + (elapsed or 0)
 	f.ring:SetAlpha(.25 + .65
 		* (1 + math.cos(f.age * 2 * math.pi / 2.4)) * .5)
