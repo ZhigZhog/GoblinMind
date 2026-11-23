@@ -255,18 +255,37 @@ end
 -- it was projected for — Forever resolves one place to several
 -- mapIDs, so records stored under a different ID reproject world
 -- coords (custom zones reporting as Tanaris, Riverglades, ...)
+-- per-record projection memo (session-only): the projection is
+-- deterministic for a given (n,w,c)->mapID, and Refresh ticks once
+-- a second while the map is open — re-calling the pcall'd API for
+-- every record every tick is the old "several seconds" problem.
+-- nil results aren't cached: map data can be unloaded at login and
+-- the next tick should retry
+local projCache = setmetatable({}, { __mode = "k" })
 local function MapXY(p, mapID)
-	if p.x and p.y and (not p.map or p.map == mapID) then
-		return p.x, p.y
-	end
+	-- world yards are the authoritative shared frame: Forever swaps
+	-- a zone's map variant under the same mapID (compact vs composite
+	-- canvas), which leaves stored x,y in a stale frame that draws
+	-- the record on the WRONG zone — the "all zones but the
+	-- selected one" inverse. n,w reproject every time and heal x,y.
 	if p.n and p.w then
+		local pc = projCache[p]
+		if pc and pc.m == mapID and pc.n == p.n
+			and pc.w == p.w and pc.c == p.c then
+			return pc.x, pc.y
+		end
 		local mx, my = GM.MapPos(p.c or 0, p.n, p.w, mapID)
-		if mx and mx >= 0 and mx <= 1 then
+		if mx then
+			projCache[p] = { m = mapID, n = p.n, w = p.w,
+				c = p.c, x = mx, y = my }
 			if not p.map or p.map == mapID then
 				p.x, p.y = mx, my
 			end
 			return mx, my
 		end
+	end
+	if p.x and p.y and (not p.map or p.map == mapID) then
+		return p.x, p.y
 	end
 	-- x,y-only foreign record: hop through its own map frame
 	if p.x and p.y and p.map and p.map ~= mapID then
