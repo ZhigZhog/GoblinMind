@@ -412,16 +412,64 @@ local function ClusterScene(L, c, w, h, st)
 	end
 end
 
+-- solved-loop tooltip: money first — steady-state GPM the
+-- saturation model expects — then lap economics and the
+-- respawn-uptime derate behind the headline number
+local function RouteTip(r)
+	return function(tip)
+		local G = GM.Gather
+		tip:AddLine("≈ " .. GM.MoneyShort(floor(r.gpm or 0))
+			.. "/min" .. GM.CC("textDim") .. " expected|r")
+		tip:AddLine((G.KindHex and G.KindHex(r.kind) or "")
+			.. (G.KindLabel and G.KindLabel(r.kind)
+				or "ROUTE") .. "|r loop · " .. #r.stops
+			.. " stops" .. (r.running and " · active" or ""))
+		if r.evLoop then
+			tip:AddLine(GM.MoneyShort(floor(r.evLoop)) .. "/lap"
+				.. GM.CC("textDim")
+				.. (r.lapSec
+					and (" · ~" .. G.SecondsText(r.lapSec)
+						.. " lap") or "") .. "|r")
+		end
+		local info
+		if r.yards then
+			info = "~" .. (r.yards >= 1000
+				and format("%.1fk", r.yards / 1000)
+				or floor(r.yards + 0.5)) .. " yd"
+		end
+		if r.respawn and r.lapSec then
+			local up = min(1, r.lapSec / r.respawn) * 100
+			info = (info and (info .. " · ") or "")
+				.. floor(up + 0.5) .. "% uptime"
+		end
+		if info then
+			tip:AddLine(GM.CC("secondary") .. info .. "|r")
+		end
+	end
+end
+
 -- route loop: dashed polyline (rotation-free — the world-map
--- canvas drops rotated textures on this client)
-local function RouteScene(L, stops, prj, w, h, a)
+-- canvas drops rotated textures on this client). tipFn adds
+-- invisible hover pads along each leg so the whole loop shows
+-- the route-value tooltip without blocking map drags elsewhere
+local function RouteScene(L, stops, prj, w, h, a, tipFn)
 	for i = 1, #stops do
 		local p, q = stops[i], stops[i % #stops + 1]
 		local ax, ay = prj(p)
 		local bx, by = prj(q)
 		if ax and bx then
-			L:dots(ax * w, ay * h, bx * w, by * h,
-				0.4, 0.85, 1.0, a or 0.85)
+			local x1, y1 = ax * w, ay * h
+			local x2, y2 = bx * w, by * h
+			L:dots(x1, y1, x2, y2, 0.4, 0.85, 1.0, a or 0.85)
+			if tipFn then
+				local len = sqrt((x2 - x1) ^ 2 + (y2 - y1) ^ 2)
+				local n = max(1, floor(len / 36))
+				for j = 0, n - 1 do
+					L:hot(x1 + (x2 - x1) * (j + 0.5) / n,
+						y1 + (y2 - y1) * (j + 0.5) / n,
+						20, 20, tipFn)
+				end
+			end
 		end
 	end
 end
@@ -599,12 +647,13 @@ function M.Refresh()
 	local r = run and run.route or M.RouteFor(map)
 	local stops = run and run.stops or (r and r.stops)
 	if stops and #stops > 1 then
-		RouteScene(L, stops, RecXY, w, h, 0.8 * oaZ)
+		RouteScene(L, stops, RecXY, w, h, 0.8 * oaZ,
+			r and RouteTip(r))
 		local s = run and run.stops[run.idx]
 		local sx, sy = s and RecXY(s)
 		if sx then
 			L:pin(sx * w, sy * h, 8,
-				0.4, 0.85, 1.0, 1 * oa)
+				0.4, 0.85, 1.0, 1 * oaZ)
 		end
 	end
 end
@@ -1115,7 +1164,8 @@ function M.CreatePane(parent, w)
 					and py > -0.02 and py < 1.02 then
 					return px, py
 				end
-			end, w, h, selLoop and 1 or 0.85)
+			end, w, h, selLoop and 1 or 0.85,
+				r and RouteTip(r))
 		end
 		end -- not worldy
 
