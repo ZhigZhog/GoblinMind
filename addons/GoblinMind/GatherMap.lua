@@ -303,6 +303,12 @@ end
 -- shared proximity merge — GatherMinimap clusters in world-yard
 -- space with the same routine instead of a second merge
 M.Cluster = Cluster
+-- same story for the camp fit: the minimap draws the identical
+-- blob in its own pixel space, so it consumes the support-fn fit
+-- and the pad/floor/cap constants rather than re-deriving them
+M.ZonePoly, M.DispR = ZonePoly, DispR
+M.POCKET_PAD_YD, M.ZONE_MIN_YD = POCKET_PAD_YD, ZONE_MIN_YD
+M.ZONE_DRAW_MAX_YD = ZONE_DRAW_MAX_YD
 
 -- ======================== shared scenes ========================
 -- every map object renders through these — world-map overlay and

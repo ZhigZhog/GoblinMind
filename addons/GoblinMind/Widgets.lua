@@ -229,7 +229,10 @@ end
 -- with screen-y down; put() yields a fresh WHITE8X8 texture the
 -- caller pools/reclaims. Star-shaped outlines cross each band
 -- exactly twice — that's the support-function fit contract.
-function W.PolyFill(canvas, poly, step, r, g, b, a, put)
+-- clip: optional {x, y, r} circle in the same TOPLEFT-px space —
+-- each band's span intersects the circle chord at that y, so
+-- fills can pour onto the minimap without bleeding past the rim
+function W.PolyFill(canvas, poly, step, r, g, b, a, put, clip)
 	local ymin, ymax = 1e9, -1e9
 	for _, p in ipairs(poly) do
 		if p.y < ymin then ymin = p.y end
@@ -245,6 +248,16 @@ function W.PolyFill(canvas, poly, step, r, g, b, a, put)
 					* (s.x - q.x)
 				if not xl or xi < xl then xl = xi end
 				if not xr or xi > xr then xr = xi end
+			end
+		end
+		if clip then
+			local ch2 = clip.r * clip.r - (y - clip.y) ^ 2
+			if ch2 <= 0 then
+				xl, xr = nil, nil
+			elseif xl then
+				local ch = math.sqrt(ch2)
+				xl = math.max(xl, clip.x - ch)
+				xr = math.min(xr, clip.x + ch)
 			end
 		end
 		if xl and xr and xl < xr then

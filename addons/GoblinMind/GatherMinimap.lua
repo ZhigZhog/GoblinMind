@@ -122,6 +122,12 @@ local function put(kind)
 		if kind == "seg" then
 			t:SetTexture(FLAT)
 			t:SetDrawLayer("OVERLAY", 4)
+		elseif kind == "zring" then
+			t:SetTexture(FLAT)
+			t:SetDrawLayer("OVERLAY", 1)
+		elseif kind == "zfill" then
+			t:SetTexture(FLAT)
+			t:SetDrawLayer("OVERLAY", 2)
 		elseif kind == "ring" then
 			t:SetTexture(RING)
 			t:SetDrawLayer("OVERLAY", 1)
@@ -328,28 +334,106 @@ local function Update()
 		t:SetVertexColor(0.4, 0.85, 1.0, 0.85 * oaZ)
 	end
 
-	-- hunt-zone discs under everything
+	-- hunt-zone territory under everything: the same fitted
+	-- support-function blob the map surfaces draw — pockets in
+	-- world yards -> minimap px, scanline fill clipped to the
+	-- radar circle band-by-band. Iterating every record list is
+	-- free here: world-yard space has no map frames, the distance
+	-- cull does the filtering
 	local mmSet = mm()
 	local oaZ = M.AlphaZone()
-	for _, zn in ipairs(G.ZoneList(mapID) or {}) do
+	local ZP = GM.GatherMap
+	local clipC = { x = hw, y = hh, r = hw * 0.9 }
+	for _, zl in pairs(GoblinMindGather.zones or {}) do
+	for _, zn in ipairs(zl) do
 		local zc = G.ZoneCat and G.ZoneCat(zn) or zn.kind
-		if zn.n and zn.w and mmSet[zc] ~= false then
-			local u, v, px, py = uv(zn.w, zn.n)
-			local rN = (zn.r or 150) / radius
-			if sqrt(u * u + v * v) - rN <= 0.9 then
+		local znN, znW = zn.n, zn.w
+		if not (znN and znW) and zn.x and zn.y and zn.map then
+			znN, znW = GM.WorldPos(zn.map, zn.x, zn.y)
+		end
+		if znN and znW and mmSet[zc] ~= false
+			and ZP and ZP.ZonePoly and GM.Widgets then
+			local u0, v0, px0, py0 = uv(znW, znN)
+			if sqrt(u0 * u0 + v0 * v0)
+				- ZP.DispR(zn) / radius <= 0.9 then
+				local rPx = function(yd)
+					return yd / radius * hw
+				end
 				local col = G.KindCol and G.KindCol(zc)
 					or G.KIND_COLOR[zc] or { 1, 1, 1 }
-				local dia = rN * 2 * hw
-				local d = put("zone")
-				d:SetSize(dia, dia)
-				d:SetPoint("CENTER", host, "CENTER", px, py)
-				d:SetVertexColor(col[1], col[2], col[3], 0.12 * oaZ)
-				local rg = put("ring")
-				rg:SetSize(dia + 3, dia + 3)
-				rg:SetPoint("CENTER", host, "CENTER", px, py)
-				rg:SetVertexColor(col[1], col[2], col[3], 0.45 * oaZ)
+				-- TOPLEFT-px pocket points for the shared fit —
+				-- own-frame x,y hops through WorldPos like the
+				-- map surfaces' MapXY does
+				local pts = {}
+				for _, pk in ipairs(zn.pockets or {}) do
+					local pn, pw = pk.n, pk.w
+					if not (pn and pw) and pk.x and pk.y
+						and pk.map then
+						pn, pw = GM.WorldPos(pk.map,
+							pk.x, pk.y)
+					end
+					if pn and pw then
+						local _, _, px, py = uv(pw, pn)
+						pts[#pts + 1] = { x = hw + px,
+							y = hh + py }
+					end
+				end
+				local zx, zy = hw + px0, hh + py0
+				if #pts < 3 then
+					local r0 = max(20, rPx(ZP.DispR(zn)
+						- ZP.POCKET_PAD_YD))
+					local skew = (zn.kills or 1) * 0.7
+					for i = 0, 5 do
+						local a = skew + i / 6 * 6.2831853
+						pts[#pts + 1] = { x = zx + cos(a) * r0,
+							y = zy + sin(a) * r0 }
+					end
+				end
+				local poly, cx, cy = ZP.ZonePoly(pts,
+					rPx(ZP.POCKET_PAD_YD), rPx(ZP.ZONE_MIN_YD),
+					rPx(ZP.ZONE_DRAW_MAX_YD))
+				if poly then
+					GM.Widgets.PolyFill(host, poly, 4,
+						col[1], col[2], col[3],
+						0.5 * oaZ,
+						function()
+							return put("zring")
+						end, clipC)
+					-- interior copy shrunk toward the centroid —
+					-- the same border-band trick L:blob runs
+					local inner = {}
+					for i, p in ipairs(poly) do
+						local dx, dy = p.x - cx, p.y - cy
+						local len = sqrt(dx * dx + dy * dy)
+						local s = len > 2
+							and (len - 2) / len or 0.5
+						inner[i] = { x = cx + dx * s,
+							y = cy + dy * s }
+					end
+					GM.Widgets.PolyFill(host, inner, 4,
+						col[1], col[2], col[3],
+						0.13 * oaZ,
+						function()
+							return put("zfill")
+						end, clipC)
+					-- farm icon at the centroid, like the
+					-- world map's camp widget
+					local it = IconTex(G.ZoneIconID
+						and G.ZoneIconID(zn))
+					if it then
+						local ic = put("icon")
+						ic:SetSize(13, 13)
+						ic:SetPoint("CENTER", host,
+							"CENTER",
+							cx - hw, cy - hh)
+						ic:SetTexture(it)
+						ic:SetVertexColor(1, 1, 1,
+							0.9 * oaZ)
+					end
+				end
 			end
 		end
+	end
 	end
 
 	-- route loop (running route wins over the noted one)
