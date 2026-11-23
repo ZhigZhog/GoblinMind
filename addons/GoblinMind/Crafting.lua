@@ -728,7 +728,19 @@ local function ProfPump()
 			end
 			return
 		end
-		pcall(C_TradeSkillUI.OpenTradeSkill, line)
+		-- OpenTradeSkill is hardware-gated on Forever: from a timer
+		-- the pcall still fires the "interface action failed" banner
+		-- (once per missing line). Bail on the first block and point
+		-- at the manual path — the normal TRADE_SKILL_SHOW scan
+		-- still records recipes when the player opens each prof
+		local ok = pcall(C_TradeSkillUI.OpenTradeSkill, line)
+		if not ok then
+			C._pumping = nil
+			GM.Print(GM.CC("textDim")
+				.. "auto-scan blocked — open each profession once"
+				.. " to record its recipes|r")
+			return
+		end
 		GM.After(1.0, step)
 	end
 	step()
