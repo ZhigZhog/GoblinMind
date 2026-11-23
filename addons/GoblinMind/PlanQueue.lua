@@ -993,6 +993,32 @@ function PQ.ExecuteNext()
 		result = GM.AH.Execute(step)
 	end
 	if result == "bounce" then
+		-- a producer step a later craft consumes can't move past
+		-- its dependents or auto-skip — the plan would try to
+		-- craft with nothing. Park it in place and say what's
+		-- needed; SKIP is still the deliberate way out
+		local needed
+		if step.itemID and GoblinMindCrafting
+			and GoblinMindCrafting.recipes then
+			for i = PQ.stepIndex + 1, #PQ.plan.steps do
+				local s = PQ.plan.steps[i]
+				local r = s.recipeID
+					and GoblinMindCrafting.recipes[s.recipeID]
+				for _, m in ipairs(r and r.mats or {}) do
+					if m.id == step.itemID then needed = true break end
+				end
+				if needed then break end
+			end
+		end
+		if needed then
+			GM.Print(GM.CC("warn")
+				.. tostring(step.verb or step.kind) .. " "
+				.. tostring(step.name or step.itemID) .. " — "
+				.. tostring(reason)
+				.. " — a later craft needs it|r")
+			PQ.Refresh()
+			return
+		end
 		step.bounces = (step.bounces or 0) + 1
 		if step.bounces >= 3 then
 			GM.Print(GM.CC("warn")
