@@ -1793,9 +1793,106 @@ function G.NavTo(map, x, y)
 	return true
 end
 
+-- the client only projects the tracked target — nothing renders
+-- it. MapWise's trick, ported: our own UIParent marker anchored
+-- at the nav frame's projected screen position each tick. A gold
+-- pulse ring + skull + live distance; when the target clamps to
+-- the screen edge the native arrow owns the visual and we hide.
+local marker
+
+local function NavMarker()
+	if marker then return marker end
+	local f = CreateFrame("Frame", nil, UIParent)
+	f:SetSize(96, 96)
+	f:EnableMouse(false)
+	f:SetFrameStrata("HIGH")
+	local ring = CreateFrame("Frame", nil, f)
+	ring:SetPoint("CENTER")
+	ring:SetSize(72, 72)
+	ring:EnableMouse(false)
+	local rad = 30
+	for i = 1, 32 do
+		local a, b = (i - 1) * 2 * math.pi / 32,
+			i * 2 * math.pi / 32
+		local ln = ring:CreateLine(nil, "OVERLAY")
+		ln:SetThickness(2.5)
+		ln:SetColorTexture(1, .82, .25, 1)
+		ln:SetStartPoint("CENTER", ring,
+			rad * math.cos(a), rad * math.sin(a))
+		ln:SetEndPoint("CENTER", ring,
+			rad * math.cos(b), rad * math.sin(b))
+	end
+	f.ring = ring
+	local ic = f:CreateTexture(nil, "OVERLAY")
+	ic:SetPoint("CENTER")
+	ic:SetSize(38, 38)
+	ic:SetTexture(
+		"Interface\\TargetingFrame\\UI-RaidTargetingIcon_1")
+	f.icon = ic
+	local d = f:CreateFontString(nil, "OVERLAY",
+		"NumberFontNormal")
+	d:SetPoint("TOP", f, "CENTER", 0, -52)
+	d:SetTextColor(1, .82, .25)
+	d:SetJustifyH("CENTER")
+	f.dist = d
+	f.age = 0
+	f:Hide()
+	marker = f
+	return f
+end
+
+local function NavDrawMarker(elapsed)
+	local f = marker
+	if not f then return end
+	local function gone() f:Hide() end
+	if not nav.ours then return gone() end
+	if WorldMapFrame and WorldMapFrame:IsShown()
+		then return gone() end
+	if not (C_Navigation
+		and C_Navigation.HasValidScreenPosition
+		and C_Navigation.GetFrame) then return gone() end
+	local okS, valid = pcall(C_Navigation.HasValidScreenPosition)
+	if not okS or not valid then return gone() end
+	if C_Navigation.WasClampedToScreen then
+		local okC, cl = pcall(C_Navigation.WasClampedToScreen)
+		if okC and cl then return gone() end -- edge arrow owns it
+	end
+	local okF, nf = pcall(C_Navigation.GetFrame)
+	if not okF or not nf or not nf.GetCenter
+		then return gone() end
+	local okX, x, y = pcall(nf.GetCenter, nf)
+	if not okX or not x or not y or x <= 0 or y <= 0
+		then return gone() end
+	f:SetFrameLevel(
+		(nf.GetFrameLevel and nf:GetFrameLevel() or 0) + 1)
+	f:ClearAllPoints()
+	f:SetPoint("CENTER", nf, "CENTER")
+	f.age = f.age + (elapsed or 0)
+	f.ring:SetAlpha(.25 + .65
+		* (1 + math.cos(f.age * 2 * math.pi / 2.4)) * .5)
+	if C_Navigation.GetDistance then
+		local okD, dd = pcall(C_Navigation.GetDistance)
+		if okD and type(dd) == "number" and dd >= 0 then
+			f.dist:SetFormattedText("%d yd", dd)
+		else
+			f.dist:SetText("")
+		end
+	end
+	f:Show()
+end
+
+local navDriver = CreateFrame("Frame")
+navDriver:SetScript("OnUpdate", function(_, elapsed)
+	if marker and marker:IsShown() or nav.ours then
+		if nav.ours then NavMarker() end
+		NavDrawMarker(elapsed)
+	end
+end)
+
 local function NavRelease()
 	if not nav.ours then return end
 	nav.ours = nil
+	if marker then marker:Hide() end
 	if C_Map and C_Map.ClearUserWaypoint then
 		local ok, cur = pcall(C_Map.GetUserWaypoint)
 		if ok and cur then pcall(C_Map.ClearUserWaypoint) end
@@ -1867,11 +1964,11 @@ function G.NavDiag()
 	if d.api.GetUserWaypoint then
 		local ok, p = pcall(C_Map.GetUserWaypoint)
 		if ok and p then
-			d.wp = {
-				map = p.uiMapID,
-				x = p.position and p.position.GetXY
-					and p.position:GetXY(),
-			}
+			local pos = p.position or p
+			local x, y
+			if pos.GetXY then x, y = pos:GetXY() end
+			x, y = x or pos.x, y or pos.y
+			d.wp = { map = p.uiMapID or p.map, x = x, y = y }
 		elseif ok then
 			d.wp = "nil"
 		else
@@ -1892,6 +1989,28 @@ function G.NavDiag()
 		local ok, v = pcall(
 			C_Navigation.HasValidScreenPosition)
 		d.navScreen = ok and v or ("err:" .. tostring(v))
+	end
+	if C_Navigation and C_Navigation.WasClampedToScreen then
+		local ok, v = pcall(C_Navigation.WasClampedToScreen)
+		d.navClamped = ok and v or ("err:" .. tostring(v))
+	end
+	if C_Navigation and C_Navigation.GetFrame then
+		local okF, nf = pcall(C_Navigation.GetFrame)
+		if okF and nf and nf.GetCenter then
+			local okX, x, y = pcall(nf.GetCenter, nf)
+			d.navFrame = okX and format("%.0f,%.0f",
+				x or -1, y or -1) or ("err:" .. tostring(x))
+		else
+			d.navFrame = "missing"
+		end
+	end
+	if C_Navigation and C_Navigation.GetDistance then
+		local ok, v = pcall(C_Navigation.GetDistance)
+		d.navDist = ok and v or ("err:" .. tostring(v))
+	end
+	if C_SuperTrack and C_SuperTrack.IsSuperTrackingQuest then
+		local ok, v = pcall(C_SuperTrack.IsSuperTrackingQuest)
+		d.questTracking = ok and v or ("err:" .. tostring(v))
 	end
 	return d
 end
@@ -2491,8 +2610,12 @@ GM.Cmd("navdebug", function()
 	GM.Print("api: " .. table.concat(parts, " "))
 	GM.Print("cvar showInGameNavigation=" .. tostring(d.cvar)
 		.. " tracking=" .. tostring(d.tracking)
+		.. " quest=" .. tostring(d.questTracking)
 		.. " navState=" .. tostring(d.navState)
 		.. " navScreen=" .. tostring(d.navScreen))
+	GM.Print("navFrame=" .. tostring(d.navFrame)
+		.. " clamped=" .. tostring(d.navClamped)
+		.. " navDist=" .. tostring(d.navDist))
 	local wp = d.wp
 	GM.Print("waypoint=" .. (type(wp) == "table"
 		and format("%s @ %.4f,%.4f",
