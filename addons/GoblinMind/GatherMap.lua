@@ -158,12 +158,12 @@ local function DrawPin(canvas, x, y, r, g, b, a)
 end
 
 -- axis-free segment: center + rotation on a white texture
-local function DrawLine(canvas, x1, y1, x2, y2, r, g, b, a)
+local function DrawLine(canvas, x1, y1, x2, y2, r, g, b, a, wd)
 	local dx, dy = x2 - x1, y2 - y1
 	local len = sqrt(dx * dx + dy * dy)
 	if len < 2 then return end
 	local t = PutLine(canvas)
-	t:SetSize(len, 2)
+	t:SetSize(len, wd or 2)
 	t:ClearAllPoints()
 	t:SetPoint("CENTER", canvas, "TOPLEFT",
 		(x1 + x2) / 2, -(y1 + y2) / 2)
@@ -178,7 +178,7 @@ local function DrawZone(canvas, x, y, rPx, r, g, b, label)
 	c.fill:SetSize(rPx * 2, rPx * 2)
 	c.fill:ClearAllPoints()
 	c.fill:SetPoint("CENTER", canvas, "TOPLEFT", x, -y)
-	c.fill:SetVertexColor(r, g, b, 0.15)
+	c.fill:SetVertexColor(r, g, b, 0.22)
 	c.label:ClearAllPoints()
 	c.label:SetPoint("CENTER", canvas, "TOPLEFT", x, -y)
 	c.label:SetText(label or "")
@@ -190,7 +190,7 @@ local function DrawZone(canvas, x, y, rPx, r, g, b, label)
 		DrawLine(canvas,
 			x + cos(a0) * rPx, y + sin(a0) * rPx,
 			x + cos(a1) * rPx, y + sin(a1) * rPx,
-			r, g, b, 0.7)
+			r, g, b, 0.85, 3)
 	end
 end
 
@@ -261,13 +261,13 @@ local function DrawZoneFit(canvas, zn, RecXY, w, h, r, g, b, label)
 		poly = out
 	end
 	-- fill: soft disc per pocket — union reads as the farmed area
-	local frPx = YdToPx(canvas, 50)
+	local frPx = YdToPx(canvas, 65)
 	for _, p in ipairs(pts) do
 		local c = PutZone(canvas)
 		c.fill:SetSize(frPx * 2, frPx * 2)
 		c.fill:ClearAllPoints()
 		c.fill:SetPoint("CENTER", canvas, "TOPLEFT", p.x, -p.y)
-		c.fill:SetVertexColor(r, g, b, 0.12)
+		c.fill:SetVertexColor(r, g, b, 0.2)
 		c.label:SetText("")
 	end
 	local c = PutZone(canvas)
@@ -277,7 +277,7 @@ local function DrawZoneFit(canvas, zn, RecXY, w, h, r, g, b, label)
 	c.label:SetText(label or "")
 	for i = 1, #poly do
 		local a, b = poly[i], poly[i % #poly + 1]
-		DrawLine(canvas, a.x, a.y, b.x, b.y, r, g, b, 0.7)
+		DrawLine(canvas, a.x, a.y, b.x, b.y, r, g, b, 0.85, 3)
 	end
 	return true
 end
@@ -381,8 +381,11 @@ function M.Refresh()
 	-- equal to the map's own name adds nothing — drop it
 	local mapName = G.ZoneName and G.ZoneName(map)
 	for _, zn in ipairs(G.ZoneList(map) or {}) do
-		local x, y = RecXY(zn)
-		if x then
+		-- a bad record can't kill the overlay pass — one zone's
+		-- draw failing must not take every later zone/pin with it
+		pcall(function()
+			local x, y = RecXY(zn)
+			if not x then return end
 			local zc = G.ZoneCat and G.ZoneCat(zn) or zn.kind
 			local col = G.KIND_COLOR[zc] or { 1, 1, 1 }
 			local place = G.ZonePlace and G.ZonePlace(zn)
@@ -400,7 +403,7 @@ function M.Refresh()
 					YdToPx(draw, DispR(zn)),
 					col[1], col[2], col[3], label)
 			end
-		end
+		end)
 	end
 
 	-- node pins; dim inside the learned respawn window
