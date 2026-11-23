@@ -2,10 +2,11 @@
 
 A standalone auction-house intelligence addon for **World of Warcraft:
 Forever** (interface `16001`). Price model, execution planner, player
-buy-order boards, crafting planner, ledger, group/operation system,
-session takeovers — TSM-styled dark UI, **no TSM required**.
+buy-order boards, crafting planner, ledger, gathering routes +
+map overlays, group/operation system, session takeovers — TSM-styled
+dark UI, **no TSM required**.
 
-**0.1.3-beta** — live on
+**0.2.0-beta** — live on
 [CurseForge](https://www.curseforge.com/wow/addons/goblinmind) and
 [Releases](https://github.com/ZhigZhog/GoblinMind/releases).
 Expect rough edges; bug reports file themselves to the issue
@@ -139,6 +140,42 @@ full cost vs effective cost (mats you already own), profit vs buying
 the mats. QUEUE builds a stock plan; the plan executes through the
 tradeskill session with click-per-step crafts.
 
+### Gathering (`/goblin gather`)
+
+Node and farm tracking that learns as you play. Herb, mine, and fish
+nodes record as exact spawn points; killing mobs builds **farm zones**
+with observed drop rates, kill rates, and expected value per hour
+(sustained GPM — spawn capacity and respawn bounds included, not just
+raw yield). The leaderboard ranks camps by real money rate; click a
+row to inspect, double-click to plant a waypoint.
+
+**BUILD** solves the most profitable loop in the scoped zone and
+starts running it immediately — an in-world **marker** (pulse ring +
+distance readout) chases you stop to stop, advancing as you arrive.
+Routes save/load per zone. The map pane inside the window shows real
+terrain (MapWise when installed, parchment + explored tiles
+otherwise); world map and minimap overlays show node pins, camp
+blobs, and the route loop, each on its own opacity channel in
+settings. `/goblin gatherimport` pulls in GatherLite data.
+
+### Gathering (`/goblin gather`)
+
+Node and farm tracking that learns as you play. Herb, mine, and fish
+nodes record as exact spawn points; killing mobs builds **farm zones**
+with observed drop rates, kill rates, and expected value per hour
+(sustained GPM — spawn capacity and respawn bounds included, not just
+raw yield). The leaderboard ranks camps by real money rate; click a
+row to inspect, double-click to plant a waypoint.
+
+**BUILD** solves the most profitable loop in the scoped zone and
+starts running it immediately — an in-world **marker** (pulse ring +
+distance readout) chases you stop to stop, advancing as you arrive.
+Routes save/load per zone. The map pane inside the window shows real
+terrain (MapWise when installed, parchment + explored tiles
+otherwise); world map and minimap overlays show node pins, camp
+blobs, and the route loop, each on its own opacity channel in
+settings. `/goblin gatherimport` pulls in GatherLite data.
+
 ### Groups & operations (`/goblin groups`, `/goblin ops`)
 
 TSM-style group trees. Groups contain items; **operations** (auctioning,
@@ -222,6 +259,10 @@ over the mesh when the backend is unreachable.
 | `/goblin writs` / `orders` | buy-order boards + your orders |
 | `/goblin snipe` | sniper |
 | `/goblin crafts` | crafting planner |
+| `/goblin gather` / `farm` | gathering leaderboard + route controls |
+| `/goblin gatherimport` / `glimport` | import GatherLite node data |
+| `/goblin gather` / `farm` | gathering leaderboard + route controls |
+| `/goblin gatherimport` / `glimport` | import GatherLite node data |
 | `/goblin groups` | group tree |
 | `/goblin ops` | operations |
 | `/goblin ledger` | accounts, charts, history |
