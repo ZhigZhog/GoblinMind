@@ -470,7 +470,7 @@ Cmd("onboard", function()
 	GM.Print("onboarding reset — pops at every login until DONE")
 end)
 Cmd("import", function()
-	if GM.Onboard then GM.Onboard.Show("import") end
+	if GM.Import then GM.Import.Show() end
 end)
 Cmd("api", function()
 	if GM.Onboard then GM.Onboard.Show("api") end

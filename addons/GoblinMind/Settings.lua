@@ -519,7 +519,7 @@ local function Build()
 	-- leaving UISpecialFrames pointing at a plain table (IsShown crash)
 	local f = GM.Widgets.Window({
 		name = "GoblinMindSettingsFrame", title = "SETTINGS",
-		w = 620, h = 894, x = -60, y = 10, tab = "settings",
+		w = 620, h = 960, x = -60, y = 10, tab = "settings",
 	})
 	ui.frame = f
 
@@ -893,6 +893,32 @@ local function Build()
 		end
 	end
 
+	-- ===== IMPORT FROM OTHER ADDONS =====
+	-- entry point to the shared importer (GM.Import.Mount — the same
+	-- row list the onboarding wizard shows). Panel itself only
+	-- reports what detection sees; the window does the work
+	local imp = Panel(f, 10, -892, 600, 60,
+		"IMPORT FROM OTHER ADDONS")
+	ui.impScan = CreateFrame("Button", nil, imp)
+	ui.impScan:SetSize(110, 22)
+	ui.impScan:SetPoint("TOPLEFT", 12, -24)
+	GM.Panel(ui.impScan, "accent")
+	ui.impScan.text = GM.MakeFontString(ui.impScan, GM.FONT_BOLD,
+		10, "contLowest")
+	ui.impScan.text:SetPoint("CENTER")
+	ui.impScan.text:SetText("OPEN IMPORTER")
+	ui.impScan:SetScript("OnClick", function()
+		if GM.Import then GM.Import.Show() end
+	end)
+	ui.impCount = GM.MakeFontString(imp, GM.FONT, 9, "textDim")
+	ui.impCount:SetPoint("TOPLEFT", ui.impScan, "TOPRIGHT", 10, -6)
+	ui.impCount:SetWidth(300)
+	ui.impCount:SetJustifyH("LEFT")
+	local hint = GM.MakeFontString(imp, GM.FONT, 9, "secondary")
+	hint:SetPoint("BOTTOMLEFT", 12, 6)
+	hint:SetText("TSM groups/ops/searches · GatherLite nodes "
+		.. "· merges into your setup, never deletes")
+
 	S.Relayout()
 end
 
@@ -990,6 +1016,19 @@ function S.Refresh()
 				row:Hide()
 			end
 		end
+	end
+	-- addon-import detection count — cheap scan, same Detect() the
+	-- importer window runs so the numbers always agree
+	if ui.impCount and GM.Import then
+		local items = GM.Import.Detect()
+		local pending = 0
+		for _, it in ipairs(items) do
+			if not it.done then pending = pending + 1 end
+		end
+		ui.impCount:SetText(#items == 0
+			and "no compatible addon data found"
+			or format("%d importable item%s (%d pending)",
+				#items, #items == 1 and "" or "s", pending))
 	end
 end
 

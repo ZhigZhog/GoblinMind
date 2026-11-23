@@ -319,9 +319,9 @@ function I.Detect()
 	Detected(AucStatData or AucScanData, "Auc-Advanced", "Auctioneer")
 	-- GatherLite: real import — herb/mine spawn history seeds the
 	-- gather route solver with exact positions
-	if AddonState("GatherLite") == "loaded"
-		or GatherLiteDB or GatherLiteSettings or GatherLiteNodes
-		or (GatherLite and GatherLite.GetNodes) then
+	local glData = GatherLiteDB or GatherLiteSettings or GatherLiteNodes
+		or (GatherLite and GatherLite.GetNodes)
+	if AddonState("GatherLite") == "loaded" or glData then
 		rows[#rows + 1] = {
 			key = "gatherlite", addon = "GatherLite",
 			title = "Gathered nodes",
@@ -334,9 +334,19 @@ function I.Detect()
 						and (", " .. st.skipped .. " skipped") or "")
 			end,
 		}
+		-- GatherLite also records fishing spots and containers —
+		-- kinds we don't track yet. Say so instead of looking like
+		-- the import covers everything it saved
+		local nodes = GatherLiteSettings
+			and GatherLiteSettings.global
+			and GatherLiteSettings.global.nodes
+		if type(nodes) == "table" and (nodes.fishing
+			or nodes.containers) then
+			extras[#extras + 1] = "GatherLite fishing/containers - "
+				.. "detected, not importable yet"
+		end
 	else
-		Detected(GatherLiteDB or GatherLiteSettings or GatherLiteNodes,
-			"GatherLite", "GatherLite")
+		Detected(glData, "GatherLite", "GatherLite")
 	end
 	return rows, extras
 end
@@ -356,4 +366,141 @@ function I.Run(row)
 		return summary
 	end
 	return nil, err or "nothing imported"
+end
+
+-- ============ shared import UI ============
+-- ONE row-list implementation mounted by both surfaces that need it:
+-- onboarding page 3 and the standalone importer window the settings
+-- panel opens. Detection/running already lives here, so the widget
+-- does too — a second copy anywhere would be a second failure point.
+-- Returns a refresh fn; callers own their own nav buttons.
+function I.Mount(parent)
+	local W = GM.Widgets
+	local status = GM.MakeFontString(parent, GM.FONT, 9, "textDim")
+	status:SetPoint("TOPLEFT", 12, -28)
+	status:SetWordWrap(false)
+	local body = GM.MakeFontString(parent, GM.FONT, 10, "text")
+	body:SetPoint("TOPLEFT", 14, -44)
+	body:SetWidth(432)
+	body:SetJustifyH("LEFT")
+	body:SetSpacing(3)
+	body:SetText("Found settings in other addons. Importing adds "
+		.. "to GoblinMind — it never deletes anything you already made.")
+	local status2 = GM.MakeFontString(parent, GM.FONT, 9, "textDim")
+	status2:SetPoint("BOTTOMLEFT", 12, 36)
+	status2:SetWidth(436)
+	status2:SetJustifyH("LEFT")
+
+	local rows = {}
+	local function MakeRow(ix)
+		local r = CreateFrame("Frame", nil, parent)
+		r:SetSize(436, 46)
+		r:SetPoint("TOPLEFT", 12, -64 - (ix - 1) * 50)
+		GM.Panel(r, "contLowest")
+		r.addon = GM.MakeFontString(r, GM.FONT, 8, "textDim")
+		r.addon:SetPoint("TOPLEFT", 8, -4)
+		r.title = GM.MakeFontString(r, GM.FONT_BOLD, 10, "text")
+		r.title:SetPoint("TOPLEFT", 8, -15)
+		r.title:SetWidth(340)
+		r.title:SetJustifyH("LEFT")
+		r.detail = GM.MakeFontString(r, GM.FONT, 9, "textDim")
+		r.detail:SetPoint("TOPLEFT", 8, -29)
+		r.detail:SetWidth(340)
+		r.detail:SetJustifyH("LEFT")
+		r.btn = W.Btn(r, 70, "IMPORT", function()
+			local summary, err = I.Run(r.data)
+			if summary then
+				r.btn.text:SetText("DONE")
+				r.btn.text:SetTextColor(GM.RGB("pos"))
+				r.result:SetText(GM.CC("pos") .. summary .. "|r")
+			else
+				r.result:SetText(GM.CC("warn")
+					.. tostring(err or "nothing") .. "|r")
+			end
+		end)
+		r.btn:SetPoint("RIGHT", -8, 0)
+		r.result = GM.MakeFontString(r, GM.FONT, 8, "textDim")
+		r.result:SetPoint("TOPRIGHT", r.btn, "BOTTOMRIGHT", 0, -2)
+		r.result:SetWidth(240)
+		r.result:SetJustifyH("RIGHT")
+		r.result:SetWordWrap(false)
+		r:Hide()
+		return r
+	end
+
+	return function()
+		local items, extras = I.Detect()
+		for i, item in ipairs(items) do
+			local r = rows[i] or MakeRow(i)
+			rows[i] = r
+			r.data = item
+			r.addon:SetText(item.addon:upper())
+			r.title:SetText(item.title)
+			r.detail:SetText(item.detail)
+			r.result:SetText("")
+			r.btn.text:SetText(item.done and "DONE" or "IMPORT")
+			r.btn.text:SetTextColor(GM.RGB(
+				item.done and "pos" or "textDim"))
+			r:Show()
+		end
+		for i = #items + 1, #rows do rows[i]:Hide() end
+		local note = extras and #extras > 0
+			and table.concat(extras, "\n") or nil
+		if #items == 0 then
+			status:SetText(GM.CC("warn")
+				.. "no compatible addon data found|r")
+		else
+			status:SetText(format("%d importable item%s detected",
+				#items, #items == 1 and "" or "s"))
+		end
+		status2:SetText(note or "")
+	end
+end
+
+-- ============ standalone window ============
+-- settings opens this; the onboarding page mounts the same list.
+local win
+local function BuildWindow()
+	if win then return end
+	local f = CreateFrame("Frame", "GoblinMindImportFrame", UIParent)
+	f:SetSize(460, 380)
+	f:SetPoint("CENTER")
+	f:SetFrameStrata("HIGH")
+	f:SetToplevel(true)
+	f:SetMovable(true)
+	f:EnableMouse(true)
+	f:RegisterForDrag("LeftButton")
+	f:SetScript("OnDragStart", f.StartMoving)
+	f:SetScript("OnDragStop", f.StopMovingOrSizing)
+	f:Hide()
+	GM.Panel(f, "contLow")
+	tinsert(UISpecialFrames, "GoblinMindImportFrame")
+	win = f
+
+	local title = GM.MakeFontString(f, GM.FONT_BOLD, 13, "accent")
+	title:SetPoint("TOPLEFT", 12, -10)
+	title:SetText("IMPORT FROM OTHER ADDONS")
+
+	local close = CreateFrame("Button", nil, f)
+	close:SetSize(16, 16)
+	close:SetPoint("TOPRIGHT", -6, -6)
+	close.text = GM.MakeFontString(close, GM.FONT_BOLD, 12, "textDim")
+	close.text:SetPoint("CENTER")
+	close.text:SetText("x")
+	close:SetScript("OnClick", function() f:Hide() end)
+
+	f.refresh = I.Mount(f)
+
+	local rescan = GM.Widgets.Btn(f, 90, "RESCAN", function()
+		f.refresh()
+	end)
+	rescan:SetPoint("BOTTOMLEFT", 12, 10)
+	local done = GM.Widgets.Btn(f, 90, "CLOSE", function() f:Hide() end)
+	done:SetPoint("BOTTOMRIGHT", -12, 10)
+end
+
+function I.Show()
+	BuildWindow()
+	win.refresh()
+	win:Show()
 end

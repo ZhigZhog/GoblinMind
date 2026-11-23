@@ -287,97 +287,17 @@ local function Build()
 	ui.watch2 = WatchHint(p2)
 
 	-- ======================= page 3: import ========================
-
-	local iStatus = GM.MakeFontString(p3, GM.FONT, 9, "textDim")
-	iStatus:SetPoint("TOPLEFT", 12, -28)
-	ui.iStatus = iStatus
-
-	local iBody = GM.MakeFontString(p3, GM.FONT, 10, "text")
-	iBody:SetPoint("TOPLEFT", 14, -44)
-	iBody:SetWidth(432)
-	iBody:SetJustifyH("LEFT")
-	iStatus:SetWordWrap(false)
-	iBody:SetSpacing(3)
-	iBody:SetText("Found settings in other addons. Importing adds "
-		.. "to GoblinMind — it never deletes anything you already made.")
-
-	local rows = {}
-	ui.rows = rows
-	ui.iStatus2 = GM.MakeFontString(p3, GM.FONT, 9, "textDim")
-	ui.iStatus2:SetPoint("BOTTOMLEFT", 12, 36)
-	ui.iStatus2:SetWidth(436)
-	ui.iStatus2:SetJustifyH("LEFT")
+	-- the row list itself is shared with the standalone importer
+	-- window (GM.Import.Mount) — the wizard only owns its nav buttons
+	if GM.Import then
+		ui.RefreshImport = GM.Import.Mount(p3)
+	end
 
 	local back = Btn(p3, 90, "< BACK", function() SetPage("api") end)
 	back:SetPoint("BOTTOMLEFT", 12, 10)
 
 	local toOpts = Btn(p3, 90, "NEXT >", function() SetPage("app") end)
 	toOpts:SetPoint("BOTTOMRIGHT", -12, 10)
-
-	local function MakeRow(ix)
-		local r = CreateFrame("Frame", nil, p3)
-		r:SetSize(436, 46)
-		r:SetPoint("TOPLEFT", 12, -64 - (ix - 1) * 50)
-		GM.Panel(r, "contLowest")
-		r.addon = GM.MakeFontString(r, GM.FONT, 8, "textDim")
-		r.addon:SetPoint("TOPLEFT", 8, -4)
-		r.title = GM.MakeFontString(r, GM.FONT_BOLD, 10, "text")
-		r.title:SetPoint("TOPLEFT", 8, -15)
-		r.title:SetWidth(340)
-		r.title:SetJustifyH("LEFT")
-		r.detail = GM.MakeFontString(r, GM.FONT, 9, "textDim")
-		r.detail:SetPoint("TOPLEFT", 8, -29)
-		r.detail:SetWidth(340)
-		r.detail:SetJustifyH("LEFT")
-		r.btn = Btn(r, 70, "IMPORT", function()
-			local summary, err = GM.Import.Run(r.data)
-			if summary then
-				r.btn.text:SetText("DONE")
-				r.btn.text:SetTextColor(GM.RGB("pos"))
-				r.result:SetText(GM.CC("pos") .. summary .. "|r")
-			else
-				r.result:SetText(GM.CC("warn")
-					.. tostring(err or "nothing") .. "|r")
-			end
-		end)
-		r.btn:SetPoint("RIGHT", -8, 0)
-		r.result = GM.MakeFontString(r, GM.FONT, 8, "textDim")
-		r.result:SetPoint("TOPRIGHT", r.btn, "BOTTOMRIGHT", 0, -2)
-		r.result:SetWidth(240)
-		r.result:SetJustifyH("RIGHT")
-		r.result:SetWordWrap(false)
-		r:Hide()
-		return r
-	end
-
-	function ui.RefreshImport()
-		if not GM.Import then return end
-		local items, extras = GM.Import.Detect()
-		for i, item in ipairs(items) do
-			local r = rows[i] or MakeRow(i)
-			rows[i] = r
-			r.data = item
-			r.addon:SetText(item.addon:upper())
-			r.title:SetText(item.title)
-			r.detail:SetText(item.detail)
-			r.result:SetText("")
-			r.btn.text:SetText(item.done and "DONE" or "IMPORT")
-			r.btn.text:SetTextColor(GM.RGB(
-				item.done and "pos" or "textDim"))
-			r:Show()
-		end
-		for i = #items + 1, #rows do rows[i]:Hide() end
-		local note = extras and #extras > 0
-			and table.concat(extras, "\n") or nil
-		if #items == 0 then
-			ui.iStatus:SetText(GM.CC("warn")
-				.. "no compatible addon data found|r")
-		else
-			ui.iStatus:SetText(format("%d importable item%s detected",
-				#items, #items == 1 and "" or "s"))
-		end
-		ui.iStatus2:SetText(note or "")
-	end
 
 	-- ================= page 4: companion app ==================
 
