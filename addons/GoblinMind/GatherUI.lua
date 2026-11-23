@@ -457,7 +457,7 @@ local function Refresh()
 				and ("  ·  " .. run.laps .. " laps") or ""))
 	else
 		ui.detail:SetText(GM.CC("textDim")
-			.. "BUILD solves the best loop for your current zone — "
+			.. "BUILD solves the best loop in the zone scope — "
 			.. "a tight pocket of rich nodes can beat the whole map.|r")
 	end
 	-- routes only exist for HERB/MINE — grey out otherwise
@@ -757,21 +757,37 @@ end
 local function Build()
 	local kind = ui.kindFilter
 	if kind ~= "herb" and kind ~= "mine" then return end
-	local p = ui.zoneFilter or GM.Gather.CurrentMap()
-	if not p then
-		-- fall back to whichever map has the most nodes
-		local best, bn
-		for m, l in pairs(GoblinMindGather.nodes or {}) do
-			if not bn or #l > bn then best, bn = m, #l end
+	-- explicit zone scope = solve just that zone. Everything
+	-- else ranks candidates by solved GPM: "zone: all" means the
+	-- best loop anywhere, not wherever the player happens to
+	-- stand (CurrentMap once won by default and built a
+	-- Stormwind route when the profitable nodes were in Arathi)
+	local cands, seen = {}, {}
+	local function cand(m)
+		if m and not seen[m] then
+			seen[m] = true
+			cands[#cands + 1] = m
 		end
-		p = best
 	end
-	if not p then
-		GM.Print(GM.CC("textDim")
-			.. "no zone to route — pick one or stand in it|r")
-		return
+	if ui.zoneFilter then
+		cand(ui.zoneFilter)
+	else
+		for m in pairs(GoblinMindGather.nodes or {}) do
+			if not ui.contFilter or m == ui.contFilter.id
+				or ContLabel(MapContinent(m))
+					== ui.contFilter.label then
+				cand(m)
+			end
+		end
+		cand(GM.Gather.CurrentMap())
 	end
-	local r = GM.Gather.SolveRoute(p, kind)
+	local r, p
+	for _, m in ipairs(cands) do
+		local s = GM.Gather.SolveRoute(m, kind)
+		if s and (not r or (s.gpm or 0) > (r.gpm or 0)) then
+			r, p = s, m
+		end
+	end
 	if r then
 		r.zoneName = GM.Gather.ZoneName(p)
 		if GM.GatherMap then GM.GatherMap.NoteRoute(r) end
@@ -782,7 +798,9 @@ local function Build()
 			.. GM.MoneyShort(floor(r.gpm)) .. "/min")
 	else
 		GM.Print(GM.CC("textDim") .. "not enough " .. kind
-			.. " nodes here yet (need 3+)|r")
+			.. " nodes "
+			.. (ui.zoneFilter and "here" or "anywhere")
+			.. " yet (need 3+)|r")
 	end
 	Refresh()
 end
@@ -1038,8 +1056,11 @@ local function Toggle()
 				local id = RowID(r)
 				local opening = ui.expanded ~= id
 				ui.expanded = opening and id or nil
-				ui.mapSel = r.map
 				ui.mapRow = opening and r or nil
+				-- selecting a row scopes the window to its zone —
+				-- the ZONE button, the list, and the pane must all
+				-- say the same map or "select" reads broken
+				if r.map then SetZoneFilter(r.map) end
 				if r.mob then
 					-- mob rows navigate to the mob's best zone
 					if r.zone then
