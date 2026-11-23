@@ -48,17 +48,24 @@ local function Host(canvas)
 		host:EnableMouse(false)
 	end
 	-- +6 over the canvas on a bare client. MapWise re-levels its
-	-- terrain layer dynamically — up past the native pin manager's
-	-- exploration band (~510) — so re-check it every refresh: a
-	-- fixed offset lands UNDER the opaque terrain and the whole
-	-- overlay silently vanishes
+	-- layers dynamically (terrain view, Reveal fog, explored-tile
+	-- frames — all canvas children) — up past the native pin
+	-- manager's exploration band (~510). Chasing the terrain layer
+	-- by name still let a re-leveled sibling sit on top of us:
+	-- explored zones painted detail tiles over the icons while
+	-- unexplored parchment showed through — the "inverse" bug.
+	-- Target the topmost canvas child instead of a named layer —
+	-- skip our own host or we'd chase our own tail upward.
 	local lv = canvas.GetFrameLevel and canvas:GetFrameLevel()
 	local want = (lv or 0) + 6
-	local terra = _G.ForeverAtlasTerrainLayer
-		or (MapWiseAPI and MapWiseAPI.Map and MapWiseAPI.Map.view)
-	if terra and terra.GetFrameLevel then
-		local tl = terra:GetFrameLevel()
-		if tl and tl >= want then want = tl + 1 end
+	if canvas.GetChildren then
+		local kids = { canvas:GetChildren() }
+		for _, kid in ipairs(kids) do
+			if kid and kid ~= host and kid.GetFrameLevel then
+				local tl = kid:GetFrameLevel()
+				if tl and tl >= want then want = tl + 1 end
+			end
+		end
 	end
 	if host.SetFrameLevel and host:GetFrameLevel() ~= want then
 		host:SetFrameLevel(want)
