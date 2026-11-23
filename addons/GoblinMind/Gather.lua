@@ -1833,6 +1833,24 @@ function G.PointAt(p)
 	return nil
 end
 
+-- waypoint the stop nearest the player — the MapWise
+-- checkpoint-chase: you join a loop where it's closest, not at
+-- stop 1. Returns the winning index (falls back to 1)
+local function NearestStop(stops)
+	local p, best, bd = PosNow(), 1, math.huge
+	if not p then return best end
+	for i, st in ipairs(stops) do
+		local d = DistYd(p, st)
+		if d and d < bd then bd, best = d, i end
+	end
+	return best
+end
+
+function G.NavRoute(r)
+	if not (r and r.stops and r.stops[1]) then return nil end
+	return G.PointAt(r.stops[NearestStop(r.stops)])
+end
+
 -- ======================== route running ========================
 
 -- active loop: stop refs (survive later solves), index, arrival
@@ -1842,10 +1860,13 @@ local run
 
 function G.StartRoute(r)
 	if not r or not r.stops or #r.stops < 2 then return end
-	run = { route = r, stops = r.stops, idx = 1 }
+	-- join at the nearest stop — it's a loop, any entry is the
+	-- head; marching to stop 1 first wasted a whole leg
+	run = { route = r, stops = r.stops,
+		idx = NearestStop(r.stops) }
 	r.running = true
 	tick:Show()
-	G.PointAt(r.stops[1])
+	G.PointAt(r.stops[run.idx])
 	GM.Print(GM.CC("accent") .. "route started|r — " .. #r.stops
 		.. " stops, est " .. G.SecondsText(r.lapSec) .. "/lap")
 end
