@@ -33,7 +33,7 @@ local function RowText(r)
 		-- mob row (target search): name · zone · kills · drop %
 		-- · target EV/kill — "the mobs that drop that item"
 		return format(
-			"%s%-5s|r  %s — %s  ·  %d kills  ·  %s %.0f%%  ·  %s/kill",
+			"%s%-5s|r  %s — %s  ·  %d kills  ·  %s %.0f%%  ·  ev %s/kill",
 			col, "MOB", r.mobName, r.zoneName or "?",
 			r.kills or 0, r.targetName or "?",
 			(r.chance or 0) * 100,
@@ -52,18 +52,19 @@ local function RowText(r)
 		local where = mobs and (mobs .. " — " .. r.zoneName)
 			or r.zoneName
 		return format(
-			"%s%-5s|r  %s  ·  %d kills  ·  %d spawns  ·  %ss/kill  ·  %s/kill%s",
+			"%s%-5s|r  %s  ·  %d kills  ·  %d spawns  ·  %ss/kill  ·  ev %s/kill%s",
 			col, KindLabel(r.kind), where,
 			r.kills or 0, r.spawns or 0,
 			format("%.0f", r.lapSec),
 			GM.MoneyShort(floor((r.evLoop or 0))), raw)
 	end
-	-- route row: kind · stops · lap time · EV/lap
-	return format("%s%-5s|r  %s  ·  %d stops  ·  %s/lap  ·  %s/lap",
+	-- route row: kind · stops · lap time — the GPM column
+	-- already carries the money readout, so a second /lap for
+	-- lap EV just reads as a duplicated lap time
+	return format("%s%-5s|r  %s  ·  %d stops  ·  %s/lap",
 		col, KindLabel(r.kind), r.zoneName,
 		r.stops and #r.stops or 0,
-		GM.Gather.SecondsText(r.lapObs or r.lapSec),
-		GM.MoneyShort(floor((r.evLoop or 0))))
+		GM.Gather.SecondsText(r.lapObs or r.lapSec))
 end
 
 -- the pane shows the selected row's map; default = wherever the
@@ -115,29 +116,14 @@ local function ZoneCentroid(m, displayMap)
 			end
 		end
 	end
-	if n == 0 and xy and C_Map.GetWorldPosFromMapPos
-		and CreateVector2D then
-		-- returns (worldMapID, position) — v must be the second
-		local ok, _, v = pcall(C_Map.GetWorldPosFromMapPos, m,
-			CreateVector2D(xy.x, xy.y))
-		local okV, good = pcall(function()
-			return v and v.x and v.y
-		end)
-		if ok and okV and good then sn, sw, n = v.x, v.y, 1 end
+	if n == 0 and xy then
+		local pn, pw = GM.WorldPos(m, xy.x, xy.y)
+		if pn then sn, sw, n = pn, pw, 1 end
 	end
-	if n == 0 or not (C_Map and C_Map.GetMapPosFromWorldPos
-		and CreateVector2D) then return nil end
-	-- returns (uiMapID, position) — the position is the SECOND
-	-- value; binding it to mp made mp.x index a number and the
-	-- throw froze the pane on the previous map's tiles
-	local ok, _, mp = pcall(C_Map.GetMapPosFromWorldPos, c or 0,
-		CreateVector2D(sn / n, sw / n), displayMap)
-	-- protected coords must range-check inside a pcall too
-	local okV, valid = pcall(function()
-		return mp and mp.x and mp.x >= 0 and mp.x <= 1
-	end)
-	if ok and okV and valid then
-		return mp.x, mp.y
+	if n == 0 then return nil end
+	local x, y = GM.MapPos(c or 0, sn / n, sw / n, displayMap)
+	if x and x >= 0 and x <= 1 then
+		return x, y
 	end
 end
 
@@ -412,10 +398,22 @@ local function Refresh()
 				lastVis = i
 				rb:ClearAllPoints()
 				rb:SetPoint("TOPLEFT", 0, -topY)
-				fs:SetText(RowText(r))
+				-- expansion affordance: > closed, v open —
+				-- nothing else marked a row as expandable
+				fs:SetText((RowID(r) == ui.expanded and "v "
+					or "> ") .. RowText(r))
 				rb._row = r
-				gpm._prefix = (r.conf == "low" or r.conf == "fair")
-					and "~" or ""
+				if rb.zb then
+					local cr, cg, cb = GM.RGB("contHighest")
+					rb.zb:SetColorTexture(cr, cg, cb,
+						vi % 2 == 0 and 0.05 or 0)
+				end
+				-- estimated GPM (~) reads dim, confirmed stays
+				-- accent — the honesty signal was invisible
+				local est = r.conf == "low" or r.conf == "fair"
+				gpm._prefix = est and "~" or ""
+				gpm:SetTextColor(GM.RGB(
+					est and "textDim" or "accent"))
 				gpm:SetCopperShort(floor((r.gpm or 0)),
 					r.unitSuffix)
 				rb:SetAlpha(ui.expanded
@@ -445,7 +443,7 @@ local function Refresh()
 		and (#rows .. " producers of " .. TargetName(tid)
 			.. "  (" .. #all .. " hidden)")
 		or (filtered and (#rows .. " of " .. #all .. " shown"))
-		or (#rows > 0 and (#rows .. " routes + zones")
+		or (#rows > 0 and (#rows .. " farms")
 			or "no data yet — gather nodes or farm mobs to seed"))
 	W.ScrollText(ui.scrollFs, (firstVis or 1) - 1,
 		math.max(0, (lastVis or 0) - (firstVis or 1) + 1), #rows)
@@ -466,14 +464,14 @@ local function Refresh()
 	local routeable = ui.kindFilter == "herb" or ui.kindFilter == "mine"
 	ui.build:SetEnabled(routeable)
 	ui.build:SetAlpha(routeable and 1 or 0.4)
-	ui.zoneBtn.text:SetText("zone: " .. (ui.contFilter
+	ui.zoneBtn.text:SetText("ZONE: " .. (ui.contFilter
 		and ui.contFilter.label or ui.zoneFilter
 		and GM.Gather.ZoneName(ui.zoneFilter) or "all"))
-	ui.filterBtn.text:SetText("filter: " .. (ui.kindFilter
+	ui.filterBtn.text:SetText("FILTER: " .. (ui.kindFilter
 		and string.lower(KindLabel(ui.kindFilter)) or "all"))
 	if GM.GatherMinimap then
-		local n = GM.GatherMinimap.Count()
-		ui.mmBtn.text:SetText("minimap: " .. n)
+		local n, total = GM.GatherMinimap.Count()
+		ui.mmBtn.text:SetText("MINIMAP: " .. n .. "/" .. total)
 	end
 	if tid then ui.targetSlot:SetItem(tid)
 	else ui.targetSlot:Clear() end
@@ -797,7 +795,7 @@ local function Toggle()
 			w = 1180, h = 560, tab = "gather",
 		})
 
-		ui.detail = GM.MakeFontString(ui, GM.FONT, 10, "text")
+		ui.detail = GM.MakeFontString(ui, GM.FONT, 10, "textDim")
 		ui.detail:SetPoint("TOPLEFT", 14, -32)
 
 		-- controls row 1: zone scope + category filter, then the
@@ -812,16 +810,33 @@ local function Toggle()
 			end
 		end)
 		ui.current:SetPoint("TOPLEFT", 14, y)
-		ui.zoneBtn = Btn(ui, 150, "zone: all", function(s)
+		W.Tip(ui.current, {
+			"Current zone",
+			"Scope the list and the map pane to the zone you're standing in.",
+		})
+		ui.zoneBtn = Btn(ui, 150, "ZONE: all", function(s)
 			OpenZoneMenu(s)
 		end)
 		ui.zoneBtn:SetPoint("LEFT", ui.current, "RIGHT", 6, 0)
-		ui.filterBtn = Btn(ui, 130, "filter: all", function(s)
+		ui.filterBtn = Btn(ui, 130, "FILTER: all", function(s)
 			W.PopupMenu(s, FilterEntries(), { host = ui, w = 150 })
 		end)
 		ui.filterBtn:SetPoint("LEFT", ui.zoneBtn, "RIGHT", 6, 0)
 		ui.build = Btn(ui, 70, "BUILD", Build)
 		ui.build:SetPoint("LEFT", ui.filterBtn, "RIGHT", 12, 0)
+		-- the herb/mine gate is invisible otherwise — the tip
+		-- explains why the button sits grey
+		W.Tip(ui.build, function()
+			if ui.kindFilter == "herb"
+				or ui.kindFilter == "mine" then
+				return { "Build route",
+					"Solves the most profitable loop from the",
+					"recorded nodes in the scoped zone." }
+			end
+			return { "Build route",
+				"Requires FILTER: HERB or MINE —",
+				"routes need gathering-node records." }
+		end)
 		ui.save = Btn(ui, 70, "SAVE", function()
 			local p = ui.mapSel or GM.Gather.CurrentMap()
 			local r = p and GM.GatherMap and GM.GatherMap.RouteFor(p)
@@ -837,6 +852,11 @@ local function Toggle()
 			Refresh()
 		end)
 		ui.save:SetPoint("LEFT", ui.build, "RIGHT", 6, 0)
+		W.Tip(ui.save, {
+			"Save route",
+			"Stores the loop shown on the pane —",
+			"survives reloads, keyed to this map.",
+		})
 		ui.load = Btn(ui, 70, "LOAD", function()
 			local p = ui.mapSel or ui.zoneFilter or GM.Gather.CurrentMap()
 			local r = p and GM.Gather.LoadRoute(p, ui.kindFilter)
@@ -853,9 +873,14 @@ local function Toggle()
 			Refresh()
 		end)
 		ui.load:SetPoint("LEFT", ui.save, "RIGHT", 6, 0)
+		W.Tip(ui.load, {
+			"Load route",
+			"Restores the best saved loop for the viewed",
+			"map and starts running it.",
+		})
 		-- drop the route on the viewed map: saved loop, overlay,
 		-- and a running instance — node/zone data is untouched
-		ui.clear = Btn(ui, 70, "CLEAR", function()
+		ui.clear = Btn(ui, 92, "CLEAR ROUTE", function()
 			local p = ui.mapSel or ui.zoneFilter or GM.Gather.CurrentMap()
 			if p and GM.Gather.ClearRoute(p) then
 				GM.Print(GM.CC("accent") .. "route cleared|r")
@@ -866,16 +891,25 @@ local function Toggle()
 			Refresh()
 		end)
 		ui.clear:SetPoint("LEFT", ui.load, "RIGHT", 6, 0)
+		W.Tip(ui.clear, {
+			"Clear route",
+			"Drops the saved and running loop on the viewed map —",
+			"node and zone records are untouched.",
+		})
 		-- per-layer minimap overlay toggles
-		ui.mmBtn = Btn(ui, 110, "minimap:", function(s)
+		ui.mmBtn = Btn(ui, 110, "MINIMAP:", function(s)
 			W.PopupMenu(s, MiniEntries(), { host = ui, w = 120 })
 		end)
 		ui.mmBtn:SetPoint("LEFT", ui.clear, "RIGHT", 12, 0)
 
 		-- controls row 2: the target pick — name/link/id text box
-		-- that also takes drops
-		ui.target = W.EditBox(ui, 190, "target item...")
-		ui.target:SetPoint("TOPLEFT", 14, y - 26)
+		-- that also takes drops. The "target:" label makes it
+		-- plain the row scopes the leaderboard to producers
+		local tlbl = GM.MakeFontString(ui, GM.FONT, 9, "textDim")
+		tlbl:SetPoint("TOPLEFT", 14, y - 31)
+		tlbl:SetText("target:")
+		ui.target = W.EditBox(ui, 190, "item name, link or id...")
+		ui.target:SetPoint("TOPLEFT", 56, y - 26)
 		ui.target:SetScript("OnEnterPressed", function(s)
 			local id = ResolveTarget(s:GetText())
 			if id then
@@ -895,10 +929,15 @@ local function Toggle()
 				s:SetText(TargetName(id) or "")
 			end
 		end)
-		ui.targetClear = Btn(ui, 60, "CLEAR", function()
+		ui.targetClear = Btn(ui, 60, "RESET", function()
 			SetTarget(nil)
 			ui.target:SetText("")
 		end)
+		W.Tip(ui.targetClear, {
+			"Reset target",
+			"Clears the producer search —",
+			"the list goes back to all farms.",
+		})
 		ui.targetClear:SetPoint("LEFT", ui.target, "RIGHT", 6, 0)
 
 		-- shared slot: drop a target item onto it; shows icon+name+id
@@ -955,6 +994,10 @@ local function Toggle()
 			local rb = CreateFrame("Button", nil, ui.inner)
 			rb:SetPoint("TOPLEFT", 0, -(i - 1) * 20)
 			rb:SetSize(560, 19)
+			-- zebra striping — SniperUI's list convention; the
+			-- pool indexes visible rows so Refresh decides parity
+			rb.zb = rb:CreateTexture(nil, "BACKGROUND")
+			rb.zb:SetAllPoints()
 			local gpm = W.Money(rb, {
 				font = GM.FONT_BOLD, size = 10, color = "accent",
 				suffix = "/min",
@@ -971,6 +1014,25 @@ local function Toggle()
 			rb:SetScript("OnClick", function(s)
 				local r = s._row
 				if not r then return end
+				-- routes: double-click = run/stop, single = inspect.
+				-- click used to do both — expanding a route's tree
+				-- committed you to the run
+				local isRoute = not r.mob and not r.area
+				local now = GetTime and GetTime() or 0
+				local dbl = s._lastC and (now - s._lastC) < 0.35
+				s._lastC = now
+				if isRoute and dbl then
+					local cur = GM.Gather.Route()
+					if cur and cur.route
+						and cur.route.map == r.map
+						and cur.route.kind == r.kind then
+						GM.Gather.StopRoute()
+					else
+						GM.Gather.StartRoute(r)
+					end
+					Refresh()
+					return
+				end
 				-- toggle the drop-tree expansion under this row —
 				-- collapsing it also drops the map highlight
 				local id = RowID(r)
@@ -996,17 +1058,6 @@ local function Toggle()
 					GM.Print(GM.CC("accent")
 						.. "waypoint: " .. r.zoneName .. " "
 						.. r.kind .. " farm|r")
-				else
-					-- routes: click toggles run/stop (row objects
-					-- rebuild each refresh — match by identity)
-					local cur = GM.Gather.Route()
-					if cur and cur.route
-						and cur.route.map == r.map
-						and cur.route.kind == r.kind then
-						GM.Gather.StopRoute()
-					else
-						GM.Gather.StartRoute(r)
-					end
 				end
 				Refresh()
 			end)
@@ -1085,7 +1136,8 @@ local function Toggle()
 		ui.hint = GM.MakeFontString(ui, GM.FONT, 9, "textDim")
 		ui.hint:SetPoint("BOTTOMLEFT", 12, 10)
 		ui.hint:SetText(
-			"click a route to run it · click a zone for a waypoint · "
+			"click = inspect · double-click a route to run/stop · "
+			.. "click a zone for a waypoint · "
 			.. "gather casts and cloth/skin loot record automatically")
 	end
 	if ui:IsShown() then

@@ -1257,3 +1257,40 @@ iw:SetScript("OnEvent", function(_, e)
 		for _, fn in ipairs(GM.itemWatch.cbs) do pcall(fn) end
 	end)
 end)
+
+-- ===================== map projection =====================
+-- C_Map.GetWorldPosFromMapPos AND C_Map.GetMapPosFromWorldPos
+-- both return (uiMapID, position) — the position is the SECOND
+-- value. Binding the first and indexing it (v.x on a worldID
+-- number) throws; a gather-UI centroid did exactly that and
+-- froze the map pane on the previous map's tiles. Coords can
+-- also come back protected on some builds, so the field reads
+-- stay inside a pcall too. Both helpers return nil on any
+-- failure — callers treat nil as "can't project", never as
+-- zero, and apply their own bounds checks when needed.
+
+-- world yards (north,west on world `worldID`) -> map coords on
+-- mapID. Returns x,y in 0..1 space or nil.
+function GM.MapPos(worldID, n, w, mapID)
+	if not (C_Map and C_Map.GetMapPosFromWorldPos
+		and CreateVector2D and n and w and mapID) then return end
+	local ok, _, p = pcall(C_Map.GetMapPosFromWorldPos,
+		worldID or 0, CreateVector2D(n, w), mapID)
+	local okV, x, y = pcall(function()
+		if p and p.x and p.y then return p.x, p.y end
+	end)
+	if ok and okV and x then return x, y end
+end
+
+-- map coords on mapID -> world yards (north,west). Returns
+-- n,w or nil.
+function GM.WorldPos(mapID, x, y)
+	if not (C_Map and C_Map.GetWorldPosFromMapPos
+		and CreateVector2D and x and y and mapID) then return end
+	local ok, _, p = pcall(C_Map.GetWorldPosFromMapPos,
+		mapID, CreateVector2D(x, y))
+	local okV, n, w = pcall(function()
+		if p and p.x and p.y then return p.x, p.y end
+	end)
+	if ok and okV and n then return n, w end
+end

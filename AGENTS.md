@@ -978,5 +978,44 @@ Primary data = the in-house book feed below.
   Data.lua; lenient ones parse `\b`→0x08 and render mangled text
   (the empty onboarding path box). Any new emitted string field
   with user paths/URLs must round-trip through `_enc` untouched.
+- **Gathering system** (`feature/gathering`): `Gather.lua` =
+  data model (nodes/zones/journal/respawns, GPM route solver,
+  riding-speed detect, saved routes); `GatherUI.lua` = window;
+  `GatherMap.lua` = map pane (MapWise terrain or parchment);
+  `GatherMinimap.lua` = minimap overlay engine. Harness:
+  `python brain\test_gather.py` (139 checks; stub frames carry a
+  Region surface — extend it when pane code calls new widget
+  methods).
+  - **`C_Map` projection returns TWO values** —
+    `GetWorldPosFromMapPos`/`GetMapPosFromWorldPos` →
+    `(uiMapID, position)`; the position is the SECOND return.
+    Binding the first and indexing `.x` throws (index-number) —
+    the "EK pane shows Kalimdor" bug. ALWAYS project via
+    `GM.MapPos(worldID, n, w, mapID)` / `GM.WorldPos(mapID, x, y)`
+    (Core.lua) — they bind the right return AND pcall the field
+    reads (coords can be protected). Raw calls only when you
+    need the uiMapID itself (GatherMap TerrainTiles calibration).
+  - **Map-pane draw contract**: `SetData` wraps the draw in
+    `xpcall` — `_drawing` (reentry guard) always resets; a
+    failure stashes `pane._err` for the host to surface. Any
+    exception inside a draw must never latch the flag — that
+    freeze class produced stale-continent tiles.
+  - **ScrollFrame = the only clip rect** for textures: overlay
+    drawables that can bleed past a pane edge live on a scroll
+    child. `SetMaskTexture` silently no-ops here — soft circles
+    are vendored TGAs (`Media\disc.tga`, `ring.tga`) carrying
+    their own alpha falloff.
+  - **Minimap overlay axes** (GatherLite/HBD-Pins convention):
+    `UnitPosition` → (north,west); north = +y screen, west = +x.
+    `minimapZoom` cvar MATCHING `GetMinimapZoom()` = outdoor zoom
+    table (mismatch = indoor — the check inverts easily).
+  - **MapWise terrain index** (`MapWiseAPI.TerrainIndex`):
+    `maps[uiMapID] = {set, areaIx}` for ZONES only — continents
+    (1414/1415) aren't keyed; resolve their set via the map's
+    world instance (`GetWorldPosFromMapPos` wid: 0→"Azeroth"(EK),
+    1→"Kalimdor") then `boxes[set][0]`, hardcoded ids as last
+    fallback. Sets: `"Azeroth"`=EK, `"Kalimdor"`, `"2991"`;
+    `files[set]["mapCC_RR"]` = WDT tile fileID on a 533.33yd
+    grid, `valid[set]["CxR"]` = real-tile mask.
 - Not yet registered on the Codebase Map (project started 2026-11-11,
   post-closure).

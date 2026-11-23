@@ -131,6 +131,14 @@ local _CAT = { [765]="herb", [2447]="herb", [2770]="ore",
 GM.Gathering.ItemCat = function(id) return _CAT[id] end
 ''')
 
+# map-projection helpers: the harness skips Core.lua, so pull the
+# real GM.MapPos/GM.WorldPos block out of it (same code under test)
+core = open('addons/GoblinMind/Core.lua', encoding='utf-8').read()
+seg = core.split(
+    '-- ===================== map projection =====================',
+    1)[1]
+lua.execute(seg)
+
 # map art + item icons for the window pane
 lua.execute(r'''
 C_Map.GetMapArtLayers = function(m)

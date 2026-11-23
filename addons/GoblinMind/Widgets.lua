@@ -110,10 +110,14 @@ function W.HintHide()
 end
 
 function W.Tip(f, linesFn)
-	-- accepts a fn returning lines, a plain string, or nil (no tip)
+	-- accepts a fn returning lines, a lines table, a plain
+	-- string, or nil (no tip)
 	if type(linesFn) == "string" then
 		local s = linesFn
 		linesFn = function() return { s } end
+	elseif type(linesFn) == "table" then
+		local t = linesFn
+		linesFn = function() return t end
 	end
 	if type(linesFn) ~= "function" then return end
 	f:HookScript("OnEnter", function()

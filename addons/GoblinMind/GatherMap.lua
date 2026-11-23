@@ -286,20 +286,13 @@ local function MapXY(p, mapID)
 	if p.x and p.y and (not p.map or p.map == mapID) then
 		return p.x, p.y
 	end
-	if p.n and p.w and C_Map and C_Map.GetMapPosFromWorldPos
-		and CreateVector2D then
-		local ok, _, mp = pcall(C_Map.GetMapPosFromWorldPos,
-			p.c or 0, CreateVector2D(p.n, p.w), mapID)
-		-- coords can come back protected: the range check must
-		-- be inside the pcall too or a bad value kills the draw
-		local okV, valid = pcall(function()
-			return mp and mp.x and mp.x >= 0 and mp.x <= 1
-		end)
-		if ok and okV and valid then
+	if p.n and p.w then
+		local mx, my = GM.MapPos(p.c or 0, p.n, p.w, mapID)
+		if mx and mx >= 0 and mx <= 1 then
 			if not p.map or p.map == mapID then
-				p.x, p.y = mp.x, mp.y
+				p.x, p.y = mx, my
 			end
-			return mp.x, mp.y
+			return mx, my
 		end
 	end
 	-- fall back to the raw stored coords only when the frame can't
@@ -311,21 +304,13 @@ end
 -- distance apart and measure. Fallback matches the world map's
 -- 1500yd-per-map-width assumption
 local function UnitsPerYard(mapID, p)
-	if p and p.n and p.w and C_Map
-		and C_Map.GetMapPosFromWorldPos and CreateVector2D then
-		local okA, _, a = pcall(C_Map.GetMapPosFromWorldPos,
-			p.c or 0, CreateVector2D(p.n, p.w), mapID)
-		local okB, _, b = pcall(C_Map.GetMapPosFromWorldPos,
-			p.c or 0, CreateVector2D(p.n + 100, p.w), mapID)
-		-- field access + arithmetic stay inside the pcall: a
-		-- returned position with missing/protected coords used
-		-- to throw here and freeze the pane on the old map
-		local okD, d = pcall(function()
-			return a and b and a.x and b.x and a.y and b.y
-				and sqrt((b.x - a.x) ^ 2 + (b.y - a.y) ^ 2)
-				or nil
-		end)
-		if okD and d and d > 1e-6 then return d / 100 end
+	if p and p.n and p.w then
+		local ax, ay = GM.MapPos(p.c or 0, p.n, p.w, mapID)
+		local bx, by = GM.MapPos(p.c or 0, p.n + 100, p.w, mapID)
+		if ax and bx then
+			local d = sqrt((bx - ax) ^ 2 + (by - ay) ^ 2)
+			if d > 1e-6 then return d / 100 end
+		end
 	end
 	return 1 / 1500
 end
