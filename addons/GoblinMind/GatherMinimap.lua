@@ -50,13 +50,21 @@ end
 function M.Set(k, on)
 	mm()[k] = on and true or false
 end
--- world-map overlay opacity + per-kind fill colors ride the same
--- mm settings table — one persistence surface for all map layers
-function M.Alpha()
-	return mm().alpha or 1
+-- world-map overlay opacity (split per object family) + per-kind
+-- fill colors ride the same mm settings table — one persistence
+-- surface for all map layers. alphaZone falls back to the legacy
+-- single "alpha" key so existing settings carry over
+function M.AlphaZone()
+	return mm().alphaZone or mm().alpha or 1
 end
-function M.SetAlpha(v)
-	mm().alpha = tonumber(v) or 1
+function M.AlphaNode()
+	return mm().alphaNode or 1
+end
+function M.SetAlphaZone(v)
+	mm().alphaZone = tonumber(v) or 1
+end
+function M.SetAlphaNode(v)
+	mm().alphaNode = tonumber(v) or 1
 end
 function M.Color(k)
 	local c = mm().col
@@ -113,6 +121,9 @@ local function put(kind)
 		elseif kind == "stop" then
 			t:SetTexture(RING)
 			t:SetDrawLayer("OVERLAY", 5)
+		elseif kind == "icon" then
+			t:SetTexture(DISC)   -- real item art set per draw
+			t:SetDrawLayer("OVERLAY", 6)
 		else
 			t:SetTexture(DISC)
 			t:SetDrawLayer("OVERLAY", kind == "edge" and 6 or 7)
@@ -123,6 +134,60 @@ local function put(kind)
 	t:Show()
 	live[#live + 1] = { kind, t }
 	return t
+end
+
+-- fontstring pool for cluster count badges — textures can't
+-- carry text and a second object type pools identically
+local function putStr(kind)
+	local pool = pools[kind]
+	if not pool then
+		pool = {}
+		pools[kind] = pool
+	end
+	local fs = pool[#pool]
+	if not fs then
+		fs = host:CreateFontString(nil, "OVERLAY")
+		fs:SetFont(GM.FONT, 8, "OUTLINE")
+	end
+	pool[#pool] = nil
+	fs:ClearAllPoints()
+	fs:Show()
+	live[#live + 1] = { kind, fs }
+	return fs
+end
+
+-- shared cluster merge runs in world-yard space here (the map
+-- surfaces run it in map-fraction space) — same routine either way
+local cluMap, cluN, cluSig, cluList
+
+local function IconTex(id)
+	if id and C_Item and C_Item.GetItemIconByID then
+		local ok, t = pcall(C_Item.GetItemIconByID, id)
+		if ok and t then return t end
+	end
+end
+
+local function WrapNodes(mapID, recs, mmSet)
+	local sig = ""
+	for _, k in ipairs(M.LAYERS) do
+		sig = sig .. (mmSet[k] ~= false and "1" or "0")
+	end
+	if cluMap == mapID and cluN == #recs and cluSig == sig then
+		return cluList
+	end
+	cluMap, cluN, cluSig, cluList = mapID, #recs, sig, {}
+	for _, nd in ipairs(recs) do
+		if mmSet[nd.kind] ~= false then
+			local nn, ww = nd.n, nd.w
+			if not (nn and ww) and nd.x and nd.y then
+				nn, ww = GM.WorldPos(mapID, nd.x, nd.y)
+			end
+			if nn and ww then
+				cluList[#cluList + 1] = { nd = nd, n = nn, w = ww }
+			end
+		end
+	end
+	return cluList
 end
 
 local function clear()
@@ -250,11 +315,12 @@ local function Update()
 			-- sign flip like the TOPLEFT-space map pane uses
 			pcall(t.SetRotation, t, atan2(dy, dx))
 		end
-		t:SetVertexColor(0.4, 0.85, 1.0, 0.85)
+		t:SetVertexColor(0.4, 0.85, 1.0, 0.85 * oaZ)
 	end
 
 	-- hunt-zone discs under everything
 	local mmSet = mm()
+	local oaZ = M.AlphaZone()
 	for _, zn in ipairs(G.ZoneList(mapID) or {}) do
 		local zc = G.ZoneCat and G.ZoneCat(zn) or zn.kind
 		if zn.n and zn.w and mmSet[zc] ~= false then
@@ -267,11 +333,11 @@ local function Update()
 				local d = put("zone")
 				d:SetSize(dia, dia)
 				d:SetPoint("CENTER", host, "CENTER", px, py)
-				d:SetVertexColor(col[1], col[2], col[3], 0.12)
+				d:SetVertexColor(col[1], col[2], col[3], 0.12 * oaZ)
 				local rg = put("ring")
 				rg:SetSize(dia + 3, dia + 3)
 				rg:SetPoint("CENTER", host, "CENTER", px, py)
-				rg:SetVertexColor(col[1], col[2], col[3], 0.45)
+				rg:SetVertexColor(col[1], col[2], col[3], 0.45 * oaZ)
 			end
 		end
 	end
@@ -297,28 +363,58 @@ local function Update()
 				local s = put("stop")
 				s:SetSize(7, 7)
 				s:SetPoint("CENTER", host, "CENTER", a.px, a.py)
-				s:SetVertexColor(0.4, 0.85, 1.0, 0.9)
+				s:SetVertexColor(0.4, 0.85, 1.0, 0.9 * oaZ)
 			end
 		end
 	end
 
-	-- node pins on top: dark edge + kind-colored dot
-	for _, nd in ipairs(G.NodeList(mapID) or {}) do
-		if nd.n and nd.w and mmSet[nd.kind] ~= false
-			and math.abs(nd.n - n) < radius * 2
-			and math.abs(nd.w - w) < radius * 2 then
-			local u, v, px, py = uv(nd.w, nd.n)
-			if u * u + v * v <= CLIP2 then
-				local col = G.KindCol and G.KindCol(nd.kind)
-					or G.KIND_COLOR[nd.kind] or { 1, 1, 1 }
-				local edge = put("edge")
-				edge:SetSize(11, 11)
-				edge:SetPoint("CENTER", host, "CENTER", px, py)
-				edge:SetVertexColor(0, 0, 0, 0.8)
-				local dot = put("node")
-				dot:SetSize(8, 8)
-				dot:SetPoint("CENTER", host, "CENTER", px, py)
-				dot:SetVertexColor(col[1], col[2], col[3], 0.95)
+	-- node clusters on top: same Gatherer-style merge the world
+	-- map runs, in world-yard space. Off-view clusters pin to the
+	-- rim (the radar edge) so recorded spawns keep pointing at
+	-- themselves; empty = plain kind dot when no icon resolves
+	local oaN = M.AlphaNode()
+	if oaN > 0 and GM.GatherMap and GM.GatherMap.Cluster then
+		local recs = WrapNodes(mapID, G.NodeList(mapID) or {}, mmSet)
+		for _, c in ipairs(GM.GatherMap.Cluster(recs,
+				function(r) return r.w, r.n end, 70)) do
+			local u, v, px, py = uv(c.x, c.y)
+			local rr = u * u + v * v
+			local a = oaN
+			if rr > CLIP2 then
+				local s = sqrt(CLIP2 / rr) * 0.96
+				u, v = u * s, v * s
+				px, py = u * hw, -v * hh
+				a = a * 0.65   -- rim pins sit back a touch
+			end
+			local rep = c.nodes[1].nd
+			local col = G.KindCol and G.KindCol(rep.kind)
+				or G.KIND_COLOR[rep.kind] or { 1, 1, 1 }
+			-- same dim rule as the world map: every member inside
+			-- the learned respawn window → faded
+			local dimAll = true
+			for _, r in ipairs(c.nodes) do
+				local resp = G.RespawnSec
+					and G.RespawnSec(mapID, r.nd.kind) or 300
+				if not (r.nd.last
+					and (time() - r.nd.last) < resp * 0.8) then
+					dimAll = false break
+				end
+			end
+			if dimAll then a = a * 0.35 end
+			local sz = min(16, 10 + 2 * sqrt(c.n))
+			local ic = put("icon")
+			ic:SetSize(sz, sz)
+			ic:SetPoint("CENTER", host, "CENTER", px, py)
+			local tex = IconTex(G.NodeIconID
+				and G.NodeIconID(rep))
+			if tex then ic:SetTexture(tex) else ic:SetTexture(DISC) end
+			ic:SetVertexColor(col[1], col[2], col[3], a)
+			if c.n > 1 then
+				local b = putStr("badge")
+				b:SetPoint("CENTER", host, "CENTER",
+					px, py - sz / 2 - 4)
+				b:SetText(tostring(c.n))
+				b:SetTextColor(col[1], col[2], col[3], a)
 			end
 		end
 	end

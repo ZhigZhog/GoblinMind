@@ -519,7 +519,7 @@ local function Build()
 	-- leaving UISpecialFrames pointing at a plain table (IsShown crash)
 	local f = GM.Widgets.Window({
 		name = "GoblinMindSettingsFrame", title = "SETTINGS",
-		w = 620, h = 960, x = -60, y = 10, tab = "settings",
+		w = 620, h = 986, x = -60, y = 10, tab = "settings",
 	})
 	ui.frame = f
 
@@ -797,31 +797,42 @@ local function Build()
 	-- colors. Same mm table the layer toggles write — colors flow
 	-- through G.KindCol so rows, labels, discs, and blobs all
 	-- honor a pick
-	local ov = Panel(f, 10, -794, 600, 92, "GATHERING · MAP OVERLAY")
+	local ov = Panel(f, 10, -794, 600, 118, "GATHERING · MAP OVERLAY")
 	if GM.GatherMinimap and GM.Gather then
-		RowAt(ov, "OPACITY", 12, 26)
-		ui.ovSegs = {}
+		-- two opacity channels: zone blobs/borders/farm icons vs
+		-- node spawn clusters — settings persist separately
 		local steps = { 0.25, 0.5, 0.75, 1 }
-		local function paintAlpha()
-			local cur = GM.GatherMinimap.Alpha()
-			for i, s in ipairs(steps) do
-				W.PaintSeg(ui.ovSegs[i],
-					math.abs(cur - s) < 0.01)
+		local function segRow(label, y, get, set)
+			RowAt(ov, label, 12, y)
+			local segs = {}
+			local function paint()
+				local cur = get()
+				for i, s in ipairs(steps) do
+					W.PaintSeg(segs[i],
+						math.abs(cur - s) < 0.01)
+				end
 			end
+			for i, s in ipairs(steps) do
+				local seg = W.Segment(ov,
+					format("%d%%", s * 100), 52, 18)
+				seg:SetPoint("TOPLEFT",
+					116 + (i - 1) * 56, -(y - 2))
+				seg:SetScript("OnClick", function()
+					set(s) paint()
+				end)
+				segs[i] = seg
+			end
+			paint()
+			return segs
 		end
-		for i, s in ipairs(steps) do
-			local seg = W.Segment(ov,
-				format("%d%%", s * 100), 52, 18)
-			seg:SetPoint("TOPLEFT", 116 + (i - 1) * 56, -24)
-			seg:SetScript("OnClick", function()
-				GM.GatherMinimap.SetAlpha(s)
-				paintAlpha()
-			end)
-			ui.ovSegs[i] = seg
-		end
-		paintAlpha()
+		ui.ovSegsZ = segRow("ZONES", 26,
+			GM.GatherMinimap.AlphaZone,
+			GM.GatherMinimap.SetAlphaZone)
+		ui.ovSegsN = segRow("NODES", 50,
+			GM.GatherMinimap.AlphaNode,
+			GM.GatherMinimap.SetAlphaNode)
 
-		RowAt(ov, "FILL COLORS", 12, 56)
+		RowAt(ov, "FILL COLORS", 12, 80)
 		ui.ovSwatch = {}
 		-- click = pick; right-click = back to the builtin color
 		local kinds = { "herb", "mine", "skin", "hunt", "cloth",
@@ -867,7 +878,7 @@ local function Build()
 			local x = 116 + (i - 1) * 82
 			local sw = CreateFrame("Button", nil, ov)
 			sw:SetSize(16, 16)
-			sw:SetPoint("TOPLEFT", x, -54)
+			sw:SetPoint("TOPLEFT", x, -78)
 			GM.Panel(sw, "contHigh")
 			sw:RegisterForClicks("LeftButtonUp",
 				"RightButtonUp")
@@ -886,7 +897,7 @@ local function Build()
 			end)
 			local lbl = GM.MakeFontString(ov, GM.FONT, 9,
 				"textDim")
-			lbl:SetPoint("TOPLEFT", x + 20, -58)
+			lbl:SetPoint("TOPLEFT", x + 20, -82)
 			lbl:SetText(GM.Gather.KindLabel(k))
 			ui.ovSwatch[k] = sw
 			paintSwatch(k)
@@ -897,7 +908,7 @@ local function Build()
 	-- entry point to the shared importer (GM.Import.Mount — the same
 	-- row list the onboarding wizard shows). Panel itself only
 	-- reports what detection sees; the window does the work
-	local imp = Panel(f, 10, -892, 600, 60,
+	local imp = Panel(f, 10, -918, 600, 60,
 		"IMPORT FROM OTHER ADDONS")
 	ui.impScan = CreateFrame("Button", nil, imp)
 	ui.impScan:SetSize(110, 22)

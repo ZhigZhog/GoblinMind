@@ -249,6 +249,9 @@ local function Cluster(nodes, xy, thresh)
 	end
 	return out
 end
+-- shared proximity merge — GatherMinimap clusters in world-yard
+-- space with the same routine instead of a second merge
+M.Cluster = Cluster
 
 -- ======================== shared scenes ========================
 -- every map object renders through these — world-map overlay and
@@ -451,8 +454,11 @@ function M.Refresh()
 	local L = Layer(draw)
 	L:clear()
 	local w, h = canvas:GetWidth() or 1, canvas:GetHeight() or 1
-	-- overlay opacity master (settings → GoblinMindGather.mm.alpha)
-	local oa = GM.GatherMinimap and GM.GatherMinimap.Alpha() or 1
+	-- overlay opacity per family (settings → GoblinMindGather.mm):
+	-- zones covers fills/borders/farm icons/tags/route/marks,
+	-- nodes covers spawn cluster icons and badges
+	local oaZ = GM.GatherMinimap and GM.GatherMinimap.AlphaZone() or 1
+	local oaN = GM.GatherMinimap and GM.GatherMinimap.AlphaNode() or 1
 	-- record -> normalized map coords on the displayed frame;
 	-- n,w-only records project, everything else fails nil
 	local function RecXY(p)
@@ -537,10 +543,10 @@ function M.Refresh()
 					or tostring(floor(gpm)))
 			ZoneScene(L, zn, RecXY, w, h, {
 				col = col,
-				fillA = 0.22 * oa, ringA = 0.85 * oa,
+				fillA = 0.22 * oaZ, ringA = 0.85 * oaZ,
 				ringPx = 3,
 				iconID = G.ZoneIconID and G.ZoneIconID(zn),
-				iconA = 0.95 * oa,
+				iconA = 0.95 * oaZ,
 				tag = label,
 				mapID = map,
 				rPx = function(yd)
@@ -578,7 +584,7 @@ function M.Refresh()
 		local match = not tid or tHit
 		ClusterScene(L, c, w, h, {
 			a = (dimAll and 0.35 or (match and 0.95 or 0.3))
-				* oa,
+				* oaN,
 			shrink = not match,
 			tid = tid,
 			mapID = map,
@@ -591,7 +597,7 @@ function M.Refresh()
 	local r = run and run.route or M.RouteFor(map)
 	local stops = run and run.stops or (r and r.stops)
 	if stops and #stops > 1 then
-		RouteScene(L, stops, RecXY, w, h, 0.8 * oa)
+		RouteScene(L, stops, RecXY, w, h, 0.8 * oaZ)
 		local s = run and run.stops[run.idx]
 		local sx, sy = s and RecXY(s)
 		if sx then
