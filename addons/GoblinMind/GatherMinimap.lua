@@ -408,9 +408,9 @@ local function Update()
 				end
 			end
 			if dimAll then a = a * 0.35 end
-			-- pinned icons shrink too — an edge of full-size
-			-- squares still leaks into the play area
-			local sz = min(16, 10 + 2 * sqrt(c.n))
+			-- Questie-icon scale, same as the world map — pinned
+			-- icons shrink another notch so the rim stays quiet
+			local sz = min(13, 8 + 1.5 * sqrt(c.n))
 				* (pinned and 0.7 or 1)
 			local ic = put("icon")
 			ic:SetSize(sz, sz)

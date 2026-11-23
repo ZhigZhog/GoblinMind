@@ -397,8 +397,10 @@ local function ClusterScene(L, c, w, h, st)
 		end
 	end
 	local a = st.a or 1
-	local sz = min(30, 12 + 5 * sqrt(c.n))
-	if st.shrink then sz = min(sz, 10) end
+	-- Questie-icon scale: a lone spawn reads ~12px like a quest
+	-- marker, and only dense clusters push toward 20
+	local sz = min(20, 10 + 3 * sqrt(c.n))
+	if st.shrink then sz = min(sz, 8) end
 	local x, y = c.x * w, c.y * h
 	L:icon(x, y, sz, ItemIcon(best), col[1], col[2], col[3], a)
 	if c.n > 1 then
