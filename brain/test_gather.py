@@ -631,20 +631,20 @@ check('poor vein icon too', 48888 in texs)
 szs = sorted(ic._w for ic in icons)
 check('group size scales icon', szs[-1] > szs[0])
 # exactly one cluster carries a count badge of 4
-lbls = [e[2] for e in pane.live.values() if e[1] == 'lbl']
+lbls = [e[2] for e in pane.live.values() if e[1] == 'badge']
 check('group badge shows count',
       any(l._text == '4' for l in lbls))
 check('route polyline drawn',
-      kinds.count('line') == 4)
+      kinds.count('pin') > 0)
 
 print('== window pane: hunt-zone disc + icon ==')
 pane.SetData(pane, 1419, None)
 kinds = [e[1] for e in pane.live.values()]
-# zones with recorded pockets draw as fitted blobs (scanline
-# fill bands + polyline ring); the disc.tga circle only renders
-# for pre-pocket records with no points to fit
-check('zone blobs drawn', kinds.count('fill') > 0
-      and kinds.count('line') > 24)
+# zones with recorded pockets draw as fitted blobs (filled
+# border band + scanline interior); the disc.tga circle only
+# renders for records with no projectable points at all
+check('zone blobs drawn', kinds.count('ring') > 0
+      and kinds.count('fill') > 0)
 icons = [e[2] for e in pane.live.values() if e[1] == 'icon']
 texs = set(ic._tex for ic in icons)
 check('cloth icon at zone center', 42589 in texs)

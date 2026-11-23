@@ -13,9 +13,6 @@ local G -- GM.Gather, resolved lazily (file order)
 
 local floor, sqrt, cos, sin = math.floor, math.sqrt,
 	math.cos, math.sin
--- atan2 exists on WoW's Lua 5.1-derived runtime; newer hosts (the
--- harness) only have two-arg atan
-local atan2 = math.atan2 or function(y, x) return math.atan(y, x) end
 
 -- canvas lookup: modern frames expose GetCanvas() (the frame
 -- MapWise attaches its terrain layer to); older keep a
@@ -87,138 +84,21 @@ local function CurrentMap()
 	end
 end
 
--- ======================== pooled primitives ========================
+-- ======================== pooled layer ========================
 
--- pools hold idle objects; `live` holds what the last pass drew —
--- refresh hides live, returns it to the pools, then redraws
-local pinPool, linePool, circPool = {}, {}, {}
-local iconPool, lblPool = {}, {}
-local live = {}
-
+-- all world-map drawing goes through a W.MapLayer on the host —
+-- the same primitive set the window pane uses, so every map
+-- object is identical across surfaces. Recreated whenever the
+-- host frame is (canvas swap)
+local worldML
 local function Reclaim()
-	for _, o in ipairs(live) do
-		o:Hide()
-		o:SetParent(nil)
-	end
-	wipe(live)
+	if worldML then worldML:clear() end
 end
-
-local function PutPin(canvas)
-	local t = tremove(pinPool)
-	if not t then
-		t = canvas:CreateTexture(nil, "OVERLAY")
-		t:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+local function Layer(draw)
+	if not worldML or worldML.host ~= draw then
+		worldML = GM.Widgets.MapLayer(draw)
 	end
-	t:SetParent(canvas)
-	t:Show()
-	live[#live + 1] = t
-	return t
-end
-
-local function PutLine(canvas)
-	local t = tremove(linePool)
-	if not t then
-		t = canvas:CreateTexture(nil, "OVERLAY", nil, 1)
-		t:SetTexture("Interface\\BUTTONS\\WHITE8X8")
-	end
-	t:SetParent(canvas)
-	t:Show()
-	live[#live + 1] = t
-	return t
-end
-
-local function PutZone(canvas)
-	local c = tremove(circPool)
-	if not c then
-		c = { fill = canvas:CreateTexture(nil, "OVERLAY") }
-		-- vendored soft circle — SetMaskTexture no-ops on this
-		-- client and left a square halo over the map; the TGA
-		-- carries its own alpha edge (same fix as the pane discs)
-		c.fill:SetTexture(
-			"Interface\\AddOns\\GoblinMind\\Media\\disc.tga")
-		-- Montserrat like the mod's own rows — map tags share the
-		-- UI's font/case/color contract, not GameFont's
-		c.label = GM.MakeFontString(canvas, GM.FONT, 10, "text")
-	end
-	c.fill:SetParent(canvas)
-	c.fill:Show()
-	c.label:SetParent(canvas)
-	c.label:Show()
-	live[#live + 1] = c.fill
-	live[#live + 1] = c.label
-	return c
-end
-
--- node icons sit above fills (sublevel 0) and lines (1); count
--- badges ride the same strata as zone labels
-local function PutIcon(canvas)
-	local t = tremove(iconPool)
-	if not t then
-		t = canvas:CreateTexture(nil, "OVERLAY", nil, 2)
-	end
-	t:SetParent(canvas)
-	t:Show()
-	live[#live + 1] = t
-	return t
-end
-
-local function PutLbl(canvas)
-	local l = tremove(lblPool)
-	if not l then
-		l = GM.MakeFontString(canvas, GM.FONT, 9, "text")
-	end
-	l:SetParent(canvas)
-	l:Show()
-	live[#live + 1] = l
-	return l
-end
-
--- ======================== draw helpers ========================
-
-local function DrawPin(canvas, x, y, r, g, b, a)
-	local t = PutPin(canvas)
-	t:SetSize(8, 8)
-	t:ClearAllPoints()
-	t:SetPoint("CENTER", canvas, "TOPLEFT", x, -y)
-	t:SetVertexColor(r, g, b, a or 1)
-end
-
--- axis-free segment: center + rotation on a white texture
-local function DrawLine(canvas, x1, y1, x2, y2, r, g, b, a, wd)
-	local dx, dy = x2 - x1, y2 - y1
-	local len = sqrt(dx * dx + dy * dy)
-	if len < 2 then return end
-	local t = PutLine(canvas)
-	t:SetSize(len, wd or 2)
-	t:ClearAllPoints()
-	t:SetPoint("CENTER", canvas, "TOPLEFT",
-		(x1 + x2) / 2, -(y1 + y2) / 2)
-	if t.SetRotation then
-		pcall(t.SetRotation, t, atan2(-dy, dx))
-	end
-	t:SetVertexColor(r, g, b, a or 0.9)
-end
-
-local function DrawZone(canvas, x, y, rPx, r, g, b, label, oa)
-	oa = oa or 1
-	local c = PutZone(canvas)
-	c.fill:SetSize(rPx * 2, rPx * 2)
-	c.fill:ClearAllPoints()
-	c.fill:SetPoint("CENTER", canvas, "TOPLEFT", x, -y)
-	c.fill:SetVertexColor(r, g, b, 0.22 * oa)
-	c.label:ClearAllPoints()
-	c.label:SetPoint("CENTER", canvas, "TOPLEFT", x, -y)
-	c.label:SetText(label or "")
-	-- ring from segments — always available, masks or not
-	local seg = 24
-	for i = 1, seg do
-		local a0 = (i - 1) / seg * 6.2831853
-		local a1 = i / seg * 6.2831853
-		DrawLine(canvas,
-			x + cos(a0) * rPx, y + sin(a0) * rPx,
-			x + cos(a1) * rPx, y + sin(a1) * rPx,
-			r, g, b, 0.85 * oa, 3)
-	end
+	return worldML
 end
 
 
@@ -248,11 +128,12 @@ end
 local OUTLINE_SEG, POCKET_PAD_YD, ZONE_MIN_YD = 16, 35, 45
 
 -- support-function fit over pocket px points: farthest projection
--- per direction around the centroid, padded + floored, Chaikin-
--- smoothed twice into a bezier ring. Shared by the world-map
--- overlay and the window pane — returns poly + centroid, or nil
--- when there aren't enough pockets to fit around
-local function ZonePoly(pts, pad, minR)
+-- per direction around the centroid, padded + floored + capped
+-- (maxR keeps legacy mega-camps inside the same display bound the
+-- disc path clamps to), Chaikin-smoothed twice into a bezier ring.
+-- Shared by the world-map overlay and the window pane — returns
+-- poly + centroid, or nil when there aren't enough pockets
+local function ZonePoly(pts, pad, minR, maxR)
 	if #pts < 3 then return nil end
 	local cx, cy = 0, 0
 	for _, p in ipairs(pts) do cx, cy = cx + p.x, cy + p.y end
@@ -266,8 +147,10 @@ local function ZonePoly(pts, pad, minR)
 			local proj = (p.x - cx) * dx + (p.y - cy) * dy
 			if proj > d then d = proj end
 		end
-		poly[#poly + 1] = { x = cx + dx * (d + pad),
-			y = cy + dy * (d + pad) }
+		local ext = d + pad
+		if maxR and ext > maxR then ext = maxR end
+		poly[#poly + 1] = { x = cx + dx * ext,
+			y = cy + dy * ext }
 	end
 	for _ = 1, 2 do
 		local out = {}
@@ -311,45 +194,6 @@ local function ZonePts(zn, recXY, w, h, rPx)
 		end
 	end
 	return pts
-end
-
-local function DrawZoneFit(canvas, zn, RecXY, w, h, r, g, b, label,
-		oa)
-	local pts = ZonePts(zn, RecXY, w, h,
-		function(yd) return YdToPx(canvas, yd) end)
-	local poly, cx, cy = ZonePoly(pts,
-		YdToPx(canvas, POCKET_PAD_YD), YdToPx(canvas, ZONE_MIN_YD))
-	if not poly then return false end
-	oa = oa or 1
-	-- W.PolyFill does the scanline interior — pooled via PutPin
-	GM.Widgets.PolyFill(canvas, poly, 7, r, g, b, 0.18 * oa,
-		function() return PutPin(canvas) end)
-	local c = PutZone(canvas)
-	c.fill:Hide()
-	c.label:ClearAllPoints()
-	c.label:SetPoint("CENTER", canvas, "TOPLEFT", cx, -cy)
-	c.label:SetText(label or "")
-	for i = 1, #poly do
-		local a, b = poly[i], poly[i % #poly + 1]
-		DrawLine(canvas, a.x, a.y, b.x, b.y,
-			r, g, b, 0.85 * oa, 3)
-	end
-	return true
-end
-
--- ======================== refresh ========================
-
--- remember the freshest solved route per map so the overlay draws
--- without re-running the solver every frame
-local lastRoutes = {}
-function M.NoteRoute(r)
-	if r and r.map then lastRoutes[r.map] = r end
-end
-function M.RouteFor(map)
-	return lastRoutes[map]
-end
-function M.ClearRoute(map)
-	lastRoutes[map] = nil
 end
 
 local function ItemIcon(id)
@@ -406,6 +250,103 @@ local function Cluster(nodes, xy, thresh)
 	return out
 end
 
+-- ======================== shared scenes ========================
+-- every map object renders through these — world-map overlay and
+-- window pane both call them with per-surface style, so a camp,
+-- cluster, route, or mark looks the same on every map
+--
+-- zone object: fitted blob (solid border band + translucent
+-- interior) or disc fallback, farm icon at the centroid,
+-- optional stats tag beneath. st = {
+--   col = {r,g,b}, fillA, ringA, ringPx, sel,
+--   iconID (item), iconA, iconSz, tag, tagDY,
+--   rPx = fn(yd) -> px }
+local function ZoneScene(L, zn, prj, w, h, st)
+	local zx, zy = prj(zn)
+	if not zx then return end
+	G = G or GM.Gather
+	local col = st.col
+	local pts = ZonePts(zn, prj, w, h, st.rPx)
+	local poly, cx, cy = ZonePoly(pts,
+		st.rPx(POCKET_PAD_YD), st.rPx(ZONE_MIN_YD),
+		st.rPx(ZONE_DRAW_MAX_YD))
+	if poly then
+		L:blob(poly, cx, cy, col[1], col[2], col[3],
+			st.fillA, st.ringA, st.ringPx, st.sel)
+	else
+		cx, cy = zx * w, zy * h
+		local rPx = max(10, st.rPx(DispR(zn)))
+		-- disc pair: rim + interior — the same border-band
+		-- trick the blob uses, so the fallback reads the same
+		L:disc(cx, cy, rPx, col[1], col[2], col[3], st.ringA)
+		L:disc(cx, cy, max(4, rPx - (st.ringPx or 3)),
+			col[1], col[2], col[3], st.fillA)
+	end
+	if st.iconID then
+		L:icon(cx, cy, st.iconSz or 18, ItemIcon(st.iconID),
+			col[1], col[2], col[3], st.iconA or 1)
+	end
+	if st.tag then L:tag(cx, cy + (st.tagDY or 15), st.tag) end
+	return cx, cy
+end
+
+-- Gatherer-style cluster: best-drop item art sized by group with
+-- a count badge beneath. st = { a, shrink, tid } — tid swaps the
+-- icon to the target's own and marks the cluster a producer
+local function ClusterScene(L, c, w, h, st)
+	G = G or GM.Gather
+	local rep = c.nodes[1]
+	local col = G.KindCol and G.KindCol(rep.kind)
+		or G.KIND_COLOR[rep.kind] or { 1, 1, 1 }
+	local best
+	for _, nd in ipairs(c.nodes) do
+		best = best or (G.NodeIconID and G.NodeIconID(nd))
+		if st.tid and G.NodeTargets
+			and G.NodeTargets(nd, st.tid) then
+			best = st.tid
+		end
+	end
+	local a = st.a or 1
+	local sz = min(30, 12 + 5 * sqrt(c.n))
+	if st.shrink then sz = min(sz, 10) end
+	local x, y = c.x * w, c.y * h
+	L:icon(x, y, sz, ItemIcon(best), col[1], col[2], col[3], a)
+	if c.n > 1 then
+		L:badge(x, y + sz / 2 + 6, tostring(c.n),
+			col[1], col[2], col[3], a)
+	end
+end
+
+-- route loop: dashed polyline (rotation-free — the world-map
+-- canvas drops rotated textures on this client)
+local function RouteScene(L, stops, prj, w, h, a)
+	for i = 1, #stops do
+		local p, q = stops[i], stops[i % #stops + 1]
+		local ax, ay = prj(p)
+		local bx, by = prj(q)
+		if ax and bx then
+			L:dots(ax * w, ay * h, bx * w, by * h,
+				0.4, 0.85, 1.0, a or 0.85)
+		end
+	end
+end
+
+-- ======================== refresh ========================
+
+-- remember the freshest solved route per map so the overlay draws
+-- without re-running the solver every frame
+local lastRoutes = {}
+function M.NoteRoute(r)
+	if r and r.map then lastRoutes[r.map] = r end
+end
+function M.RouteFor(map)
+	return lastRoutes[map]
+end
+function M.ClearRoute(map)
+	lastRoutes[map] = nil
+end
+
+
 function M.Refresh()
 	G = G or GM.Gather
 	if not MapShown() or not G then
@@ -417,7 +358,8 @@ function M.Refresh()
 	local map = CurrentMap()
 	if not map then Reclaim() return end
 	local draw = Host(canvas)
-	Reclaim()
+	local L = Layer(draw)
+	L:clear()
 	local w, h = canvas:GetWidth() or 1, canvas:GetHeight() or 1
 	-- overlay opacity master (settings → GoblinMindGather.mm.alpha)
 	local oa = GM.GatherMinimap and GM.GatherMinimap.Alpha() or 1
@@ -464,16 +406,7 @@ function M.Refresh()
 			end
 			if x and x >= 0 and x <= 1
 				and y and y >= 0 and y <= 1 then
-				local mk = PutZone(draw)
-				mk.fill:SetSize(22, 22)
-				mk.fill:ClearAllPoints()
-				mk.fill:SetPoint("CENTER", draw, "TOPLEFT",
-					x * w, -(y * h))
-				mk.fill:SetVertexColor(r, g, b, 0.6 * oa)
-				mk.label:ClearAllPoints()
-				mk.label:SetPoint("CENTER", draw, "TOPLEFT",
-					x * w, -(y * h))
-				mk.label:SetText(tostring(n))
+				L:mark(x * w, y * h, n, r, g, b)
 			end
 		end
 		for m, list in pairs(db.nodes or {}) do
@@ -485,18 +418,17 @@ function M.Refresh()
 		return
 	end
 
-	-- hunt zones first (under the pins): fitted blob + stats.
-	-- Label = dominant landmark (ZonePlace) + display category —
-	-- the raw record kind is always "hunt"/"skin", never the
-	-- cloth/meat/mine family the camp actually farms. A landmark
-	-- equal to the map's own name adds nothing — drop it
+	-- hunt zones first (under the pins): fitted blob + farm icon
+	-- + stats tag. Label = dominant landmark (ZonePlace) +
+	-- display category — the raw record kind is always
+	-- "hunt"/"skin", never the cloth/meat/mine family the camp
+	-- actually farms. A landmark equal to the map's own name adds
+	-- nothing — drop it
 	local mapName = G.ZoneName and G.ZoneName(map)
 	for _, zn in ipairs(G.ZoneList(map) or {}) do
 		-- a bad record can't kill the overlay pass — one zone's
 		-- draw failing must not take every later zone/pin with it
 		pcall(function()
-			local x, y = RecXY(zn)
-			if not x then return end
 			local zc = G.ZoneCat and G.ZoneCat(zn) or zn.kind
 			local col = G.KindCol and G.KindCol(zc)
 				or G.KIND_COLOR[zc] or { 1, 1, 1 }
@@ -513,12 +445,17 @@ function M.Refresh()
 				GM.MoneyShort
 					and GM.MoneyShort(floor(gpm))
 					or tostring(floor(gpm)))
-			if not DrawZoneFit(draw, zn, RecXY, w, h,
-				col[1], col[2], col[3], label, oa) then
-				DrawZone(draw, x * w, y * h,
-					YdToPx(draw, DispR(zn)),
-					col[1], col[2], col[3], label, oa)
-			end
+			ZoneScene(L, zn, RecXY, w, h, {
+				col = col,
+				fillA = 0.22 * oa, ringA = 0.85 * oa,
+				ringPx = 3,
+				iconID = G.ZoneIconID and G.ZoneIconID(zn),
+				iconA = 0.95 * oa,
+				tag = label,
+				rPx = function(yd)
+					return YdToPx(draw, yd)
+				end,
+			})
 		end)
 	end
 
@@ -526,7 +463,8 @@ function M.Refresh()
 	-- merge into one spawn icon (best drop's item art) sized and
 	-- badged by group; plain colored pin when the client can't
 	-- resolve an icon. Dim when every member is inside the
-	-- learned respawn window
+	-- learned respawn window; a set target dims non-producers
+	local tid = G.TargetID and G.TargetID()
 	local nodes = {}
 	for _, nd in ipairs(G.NodeList(map) or {}) do
 		if RecXY(nd) then nodes[#nodes + 1] = nd end
@@ -534,40 +472,25 @@ function M.Refresh()
 	local upy = nodes[1] and UnitsPerYard(map, nodes[1])
 		or (1 / 1500)
 	for _, c in ipairs(Cluster(nodes, RecXY, 70 * upy)) do
-		local rep = c.nodes[1]
-		local col = G.KindCol and G.KindCol(rep.kind)
-			or G.KIND_COLOR[rep.kind] or { 1, 1, 1 }
-		local best, dimAll = nil, true
+		local dimAll, tHit = true, nil
 		for _, nd in ipairs(c.nodes) do
-			best = best or (G.NodeIconID and G.NodeIconID(nd))
 			local resp = G.RespawnSec(map, nd.kind)
 			if not (nd.last
 				and (time() - nd.last) < resp * 0.8) then
 				dimAll = false
 			end
+			if tid and G.NodeTargets
+				and G.NodeTargets(nd, tid) then
+				tHit = true
+			end
 		end
-		local a = (dimAll and 0.35 or 0.95) * oa
-		local x, y = c.x * w, c.y * h
-		local fid = ItemIcon(best)
-		if fid then
-			local ic = PutIcon(draw)
-			local sz = min(26, 14 + 4 * sqrt(c.n))
-			ic:SetTexture(fid)
-			ic:SetVertexColor(1, 1, 1, a)
-			ic:SetSize(sz, sz)
-			ic:ClearAllPoints()
-			ic:SetPoint("CENTER", draw, "TOPLEFT", x, -y)
-		else
-			DrawPin(draw, x, y, col[1], col[2], col[3], a)
-		end
-		if c.n > 1 then
-			local l = PutLbl(draw)
-			l:ClearAllPoints()
-			l:SetPoint("CENTER", draw, "TOPLEFT", x,
-				-(y + (fid and 14 or 8)))
-			l:SetText(tostring(c.n))
-			l:SetTextColor(col[1], col[2], col[3], a)
-		end
+		local match = not tid or tHit
+		ClusterScene(L, c, w, h, {
+			a = (dimAll and 0.35 or (match and 0.95 or 0.3))
+				* oa,
+			shrink = not match,
+			tid = tid,
+		})
 	end
 
 	-- route polyline: the active run if one's going, else the last
@@ -576,20 +499,11 @@ function M.Refresh()
 	local r = run and run.route or M.RouteFor(map)
 	local stops = run and run.stops or (r and r.stops)
 	if stops and #stops > 1 then
-		for i = 1, #stops do
-			local a, b = stops[i], stops[i % #stops + 1]
-			local ax, ay = RecXY(a)
-			local bx, by = RecXY(b)
-			if ax and bx then
-				DrawLine(draw, ax * w, ay * h,
-					bx * w, by * h,
-					0.4, 0.85, 1.0, 0.8 * oa)
-			end
-		end
+		RouteScene(L, stops, RecXY, w, h, 0.8 * oa)
 		local s = run and run.stops[run.idx]
 		local sx, sy = s and RecXY(s)
 		if sx then
-			DrawPin(draw, sx * w, sy * h,
+			L:pin(sx * w, sy * h, 8,
 				0.4, 0.85, 1.0, 1 * oa)
 		end
 	end
@@ -730,9 +644,6 @@ end
 function M.CreatePane(parent, w)
 	local pane = CreateFrame("Frame", nil, parent)
 	pane:SetWidth(w)
-	pane.live = {}
-	pane.pool = { tile = {}, exptile = {}, disc = {}, line = {},
-		icon = {}, lbl = {}, medal = {}, fill = {} }
 
 	-- every drawable lives on a scroll child: a ScrollFrame is the
 	-- only hard clip rect textures get, and edge-anchored icons,
@@ -756,67 +667,13 @@ function M.CreatePane(parent, w)
 	end
 	pane._inner = inner
 
-	local function put(kind)
-		local t = tremove(pane.pool[kind])
-		if not t then
-			if kind == "lbl" then
-				t = inner:CreateFontString(nil, "OVERLAY",
-					"GameFontHighlightSmall")
-			elseif kind == "tile" then
-				t = inner:CreateTexture(nil, "BACKGROUND")
-			elseif kind == "exptile" then
-				-- explored terrain sits over the parchment base,
-				-- under every overlay
-				t = inner:CreateTexture(nil, "ARTWORK", nil, -1)
-			elseif kind == "disc" then
-				t = inner:CreateTexture(nil, "OVERLAY")
-				-- vendored soft circle — SetMaskTexture either
-				-- doesn't exist here or silently fails, leaving a
-				-- square halo; the TGA carries its own alpha edge
-				t:SetTexture(
-					"Interface\\AddOns\\GoblinMind\\Media\\disc.tga")
-			elseif kind == "fill" then
-				-- scanline-fill bands — sit under rings/icons
-				t = inner:CreateTexture(nil, "OVERLAY", nil, -1)
-				t:SetTexture("Interface\\BUTTONS\\WHITE8X8")
-			elseif kind == "line" then
-				t = inner:CreateTexture(nil, "OVERLAY", nil, 1)
-				t:SetTexture("Interface\\BUTTONS\\WHITE8X8")
-			elseif kind == "medal" then
-				t = inner:CreateTexture(nil, "OVERLAY", nil, 3)
-				t:SetTexture(
-					"Interface\\AddOns\\GoblinMind\\Media\\ring.tga")
-			else -- icon
-				t = inner:CreateTexture(nil, "OVERLAY", nil, 2)
-			end
-		end
-		t:ClearAllPoints()
-		t:Show()
-		pane.live[#pane.live + 1] = { kind, t }
-		return t
-	end
-
-	local function line(x1, y1, x2, y2, r, g, b, a, wd)
-		local dx, dy = x2 - x1, y2 - y1
-		local len = sqrt(dx * dx + dy * dy)
-		if len < 2 then return end
-		local t = put("line")
-		t:SetSize(len, wd or 2)
-		t:SetPoint("CENTER", inner, "TOPLEFT",
-			(x1 + x2) / 2, -(y1 + y2) / 2)
-		if t.SetRotation then
-			pcall(t.SetRotation, t, atan2(-dy, dx))
-		end
-		t:SetVertexColor(r, g, b, a or 0.9)
-	end
-
-	local function clear()
-		for _, e in ipairs(pane.live) do
-			e[2]:Hide()
-			pane.pool[e[1]][#pane.pool[e[1]] + 1] = e[2]
-		end
-		wipe(pane.live)
-	end
+	-- same pooled layer the world map draws through — every map
+	-- object is the same primitives at the same sublevels. The
+	-- tables stay exposed on the pane for introspection/tests
+	local L = GM.Widgets.MapLayer(inner)
+	pane.live, pane.pool = L.live, L.pool
+	local put = L.put
+	local function clear() L:clear() end
 	pane.Clear = clear
 
 	-- art tiles cover a TOPLEFT-anchored rect sized to the art's own
@@ -1079,78 +936,28 @@ function M.CreatePane(parent, w)
 				and (not filter or zc == filter) then
 				local match = not tid or G.ZoneTargets(zn, tid)
 				-- the selected row's camp pops: brighter fill/ring
-				-- plus an outer accent outline
+				-- plus an outer accent band
 				local isSel = sel and sel.zone == zn
 				local col = G.KindCol and G.KindCol(zc)
 					or G.KIND_COLOR[zc] or { 1, 1, 1 }
-				local px, py = x * w, y * h
-				-- same fitted blob the world map draws: support
-				-- function over the camp's pockets, Chaikin-smoothed,
-				-- scanline-filled. <3 pockets keeps the plain disc
-				local pts = ZonePts(zn,
+				ZoneScene(L, zn,
 					function(p) return MapXY(p, mapID) end,
-					w, h, function(yd) return yd * upy * w end)
-				local poly, cx, cy = ZonePoly(pts,
-					POCKET_PAD_YD * upy * w, ZONE_MIN_YD * upy * w)
-				if poly then
-					GM.Widgets.PolyFill(inner, poly, 6,
-						col[1], col[2], col[3],
-						isSel and 0.3 or (match and 0.16 or 0.05),
-						function() return put("fill") end)
-					for i = 1, #poly do
-						local a, b = poly[i], poly[i % #poly + 1]
-						line(a.x, a.y, b.x, b.y,
-							col[1], col[2], col[3],
-							isSel and 0.95 or (match and 0.5 or 0.15))
-						if isSel then
-							local vx, vy = a.x - cx, a.y - cy
-							local wx, wy = b.x - cx, b.y - cy
-							local vl = sqrt(vx * vx + vy * vy) or 1
-							local wl = sqrt(wx * wx + wy * wy) or 1
-							line(a.x + vx / vl * 4,
-								a.y + vy / vl * 4,
-								b.x + wx / wl * 4,
-								b.y + wy / wl * 4,
-								1, 0.82, 0.1, 0.85)
-						end
-					end
-				else
-					local rPx = max(10, DispR(zn) * upy * w)
-					local d = put("disc")
-					d:SetSize(rPx * 2, rPx * 2)
-					d:SetPoint("CENTER", inner, "TOPLEFT", px, -py)
-					d:SetVertexColor(col[1], col[2], col[3],
-						isSel and 0.3 or (match and 0.16 or 0.05))
-					local seg = 24
-					for i = 1, seg do
-						local a0 = (i - 1) / seg * 6.2831853
-						local a1 = i / seg * 6.2831853
-						line(px + cos(a0) * rPx, py + sin(a0) * rPx,
-							px + cos(a1) * rPx, py + sin(a1) * rPx,
-							col[1], col[2], col[3],
-							isSel and 0.95 or (match and 0.5 or 0.15))
-						if isSel then
-							line(px + cos(a0) * (rPx + 4),
-								py + sin(a0) * (rPx + 4),
-								px + cos(a1) * (rPx + 4),
-								py + sin(a1) * (rPx + 4),
-								1, 0.82, 0.1, 0.85)
-						end
-					end
-				end
-				local ic = put("icon")
-				local fid = ItemIcon(G.ZoneIconID(zn))
-				if fid then
-					ic:SetTexture(fid)
-					ic:SetVertexColor(1, 1, 1,
-						(match or isSel) and 1 or 0.3)
-				else
-					ic:SetTexture("Interface\\BUTTONS\\WHITE8X8")
-					ic:SetVertexColor(col[1], col[2], col[3],
-						(match or isSel) and 0.9 or 0.3)
-				end
-				ic:SetSize(isSel and 24 or 18, isSel and 24 or 18)
-				ic:SetPoint("CENTER", inner, "TOPLEFT", px, -py)
+					w, h, {
+						col = col,
+						fillA = isSel and 0.3
+							or (match and 0.18 or 0.06),
+						ringA = isSel and 0.95
+							or (match and 0.55 or 0.15),
+						ringPx = 2.5,
+						sel = isSel,
+						iconID = G.ZoneIconID
+							and G.ZoneIconID(zn),
+						iconA = (match or isSel) and 1 or 0.3,
+						iconSz = isSel and 24 or 18,
+						rPx = function(yd)
+							return yd * upy * w
+						end,
+					})
 			end
 		end
 
@@ -1168,36 +975,16 @@ function M.CreatePane(parent, w)
 		local clusters = Cluster(drawable,
 			function(nd) return MapXY(nd, mapID) end, 70 * upy)
 		for _, c in ipairs(clusters) do
-			local rep = c.nodes[1]
-			local col = G.KIND_COLOR[rep.kind] or { 1, 1, 1 }
-			local best, tHit
+			local tHit
 			for _, nd in ipairs(c.nodes) do
 				if tid and G.NodeTargets(nd, tid) then tHit = true end
-				best = best or G.NodeIconID(nd)
 			end
 			local match = not tid or tHit
-			if tHit then best = tid end
-			local sz = math.min(30, 12 + 5 * sqrt(c.n))
-			if not match then sz = math.min(sz, 10) end
-			local ic = put("icon")
-			local fid = ItemIcon(best)
-			if fid then
-				ic:SetTexture(fid)
-				ic:SetVertexColor(1, 1, 1, match and 1 or 0.25)
-			else
-				ic:SetTexture("Interface\\BUTTONS\\WHITE8X8")
-				ic:SetVertexColor(col[1], col[2], col[3],
-					match and 0.95 or 0.3)
-			end
-			ic:SetSize(sz, sz)
-			ic:SetPoint("CENTER", inner, "TOPLEFT",
-				c.x * w, -c.y * h)
-			if c.n > 1 then
-				local l = put("lbl")
-				l:SetPoint("TOP", ic, "BOTTOM", 0, -1)
-				l:SetText(tostring(c.n))
-				l:SetTextColor(col[1], col[2], col[3])
-			end
+			ClusterScene(L, c, w, h, {
+				a = match and 1 or 0.25,
+				shrink = not match,
+				tid = tid,
+			})
 		end
 
 		-- route polyline through its stops
@@ -1220,18 +1007,13 @@ function M.CreatePane(parent, w)
 		local selLoop = sel and sel.stops and stops == sel.stops
 		if stops and #stops > 1
 			and (not filter or loopKind == filter) then
-			for i = 1, #stops do
-				local a, b = stops[i], stops[i % #stops + 1]
-				local ax, ay = MapXY(a, mapID)
-				local bx, by = MapXY(b, mapID)
-				if ax and bx
-					and ax > -0.02 and ax < 1.02
-					and bx > -0.02 and bx < 1.02 then
-					line(ax * w, ay * h, bx * w, by * h,
-						0.4, 0.85, 1.0, selLoop and 1 or 0.85,
-						selLoop and 4 or 2)
+			RouteScene(L, stops, function(p)
+				local px, py = MapXY(p, mapID)
+				if px and px > -0.02 and px < 1.02
+					and py > -0.02 and py < 1.02 then
+					return px, py
 				end
-			end
+			end, w, h, selLoop and 1 or 0.85)
 		end
 		end -- not worldy
 
@@ -1246,25 +1028,10 @@ function M.CreatePane(parent, w)
 			for _, m in ipairs(marks) do
 				if m.x and m.x > -0.02 and m.x < 1.02
 					and m.y > -0.02 and m.y < 1.02 then
-					local px, py = m.x * w, m.y * h
 					local mc = m.medal and MEDAL[m.medal]
 						or { 0.55, 0.6, 0.55 }
-					local d = put("disc")
-					d:SetSize(22, 22)
-					d:SetPoint("CENTER", inner, "TOPLEFT",
-						px, -py)
-					d:SetVertexColor(0.02, 0.03, 0.02, 0.85)
-					local rg = put("medal")
-					rg:SetSize(25, 25)
-					rg:SetPoint("CENTER", inner, "TOPLEFT",
-						px, -py)
-					rg:SetVertexColor(mc[1], mc[2], mc[3],
-						m.medal and 0.95 or 0.4)
-					local l = put("lbl")
-					l:SetPoint("CENTER", inner, "TOPLEFT",
-						px, -py)
-					l:SetText(tostring(m.count))
-					l:SetTextColor(mc[1], mc[2], mc[3], 1)
+					L:mark(m.x * w, m.y * h, m.count,
+						mc[1], mc[2], mc[3], m.medal)
 				end
 			end
 		end

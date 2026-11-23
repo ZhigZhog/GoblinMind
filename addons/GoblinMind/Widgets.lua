@@ -258,6 +258,184 @@ function W.PolyFill(canvas, poly, step, r, g, b, a, put)
 	end
 end
 
+-- pooled map-draw layer shared by the world-map overlay host and
+-- the gather window's map pane — one primitive set at fixed
+-- sublevels so a blob/icon/route is the same object on every map.
+-- Sublevels ride high in OVERLAY: MapWise's own pins sit in the
+-- same frame-level band as our host, and low-sublevel textures
+-- lose the ordering there. Fontstring kinds (tag/badge) always
+-- paint above every texture in the layer.
+--   ring(3) blob borders · disc/fill(4) interiors + count discs
+--   pin/line(5) route dots + fallback pins · icon(6) · medal(7)
+function W.MapLayer(host)
+	local L = { host = host, live = {}, pool = {} }
+	local sqrt = math.sqrt
+	local atan2 = math.atan2
+		or function(y, x) return math.atan(y, x) end
+
+	local function put(kind)
+		local pool = L.pool[kind]
+		if not pool then pool = {} L.pool[kind] = pool end
+		local t = tremove(pool)
+		if not t then
+			if kind == "tag" then
+				t = GM.MakeFontString(host, GM.FONT, 10, "text")
+			elseif kind == "badge" then
+				t = GM.MakeFontString(host, GM.FONT, 9, "text")
+			elseif kind == "tile" then
+				t = host:CreateTexture(nil, "BACKGROUND")
+			elseif kind == "exptile" then
+				t = host:CreateTexture(nil, "ARTWORK", nil, -1)
+			elseif kind == "ring" then
+				t = host:CreateTexture(nil, "OVERLAY", nil, 3)
+				t:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+			elseif kind == "disc" then
+				t = host:CreateTexture(nil, "OVERLAY", nil, 4)
+				t:SetTexture("Interface\\AddOns\\GoblinMind"
+					.. "\\Media\\disc.tga")
+			elseif kind == "fill" then
+				t = host:CreateTexture(nil, "OVERLAY", nil, 4)
+				t:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+			elseif kind == "pin" or kind == "line" then
+				t = host:CreateTexture(nil, "OVERLAY", nil, 5)
+				t:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+			elseif kind == "medal" then
+				t = host:CreateTexture(nil, "OVERLAY", nil, 7)
+				t:SetTexture("Interface\\AddOns\\GoblinMind"
+					.. "\\Media\\ring.tga")
+			else -- icon
+				t = host:CreateTexture(nil, "OVERLAY", nil, 6)
+			end
+		end
+		t:ClearAllPoints()
+		t:Show()
+		L.live[#L.live + 1] = { kind, t }
+		return t
+	end
+	L.put = put
+
+	function L:clear()
+		for _, e in ipairs(self.live) do
+			e[2]:Hide()
+			local p = self.pool[e[1]]
+			p[#p + 1] = e[2]
+		end
+		wipe(self.live)
+	end
+
+	function L:pin(x, y, sz, r, g, b, a)
+		local t = put("pin")
+		t:SetSize(sz or 8, sz or 8)
+		t:SetPoint("CENTER", self.host, "TOPLEFT", x, -y)
+		t:SetVertexColor(r, g, b, a or 1)
+	end
+
+	-- rotated segment — only safe inside our own windows; the
+	-- world-map canvas drops rotated textures on this client
+	function L:line(x1, y1, x2, y2, r, g, b, a, wd)
+		local dx, dy = x2 - x1, y2 - y1
+		local len = sqrt(dx * dx + dy * dy)
+		if len < 2 then return end
+		local t = put("line")
+		t:SetSize(len, wd or 2)
+		t:SetPoint("CENTER", self.host, "TOPLEFT",
+			(x1 + x2) / 2, -(y1 + y2) / 2)
+		if t.SetRotation then
+			pcall(t.SetRotation, t, atan2(-dy, dx))
+		end
+		t:SetVertexColor(r, g, b, a or 0.9)
+	end
+
+	-- dashed segment from square dots — rotation-free, so it
+	-- survives the world-map canvas where :line() does not
+	function L:dots(x1, y1, x2, y2, r, g, b, a, sz, gap)
+		local dx, dy = x2 - x1, y2 - y1
+		local len = sqrt(dx * dx + dy * dy)
+		if len < 1 then return end
+		sz = sz or 4
+		local n = math.max(1, math.floor(len / (gap or 9)))
+		for i = 0, n do
+			self:pin(x1 + dx * i / n, y1 + dy * i / n,
+				sz, r, g, b, a or 1)
+		end
+	end
+
+	function L:disc(x, y, rPx, r, g, b, a)
+		local t = put("disc")
+		t:SetSize(rPx * 2, rPx * 2)
+		t:SetPoint("CENTER", self.host, "TOPLEFT", x, -y)
+		t:SetVertexColor(r, g, b, a or 1)
+	end
+
+	-- item art when fid resolves, kind-tinted square when not —
+	-- one primitive so callers never branch on icon availability
+	function L:icon(x, y, sz, fid, r, g, b, a)
+		local t = put("icon")
+		if fid then
+			t:SetTexture(fid)
+			t:SetVertexColor(1, 1, 1, a or 1)
+		else
+			t:SetTexture("Interface\\BUTTONS\\WHITE8X8")
+			t:SetVertexColor(r or 1, g or 1, b or 1, a or 1)
+		end
+		t:SetSize(sz, sz)
+		t:SetPoint("CENTER", self.host, "TOPLEFT", x, -y)
+	end
+
+	function L:badge(x, y, text, r, g, b, a)
+		local l = put("badge")
+		l:SetPoint("CENTER", self.host, "TOPLEFT", x, -y)
+		l:SetText(text)
+		l:SetTextColor(r or 1, g or 1, b or 1, a or 1)
+	end
+
+	function L:tag(x, y, text)
+		local l = put("tag")
+		l:SetPoint("CENTER", self.host, "TOPLEFT", x, -y)
+		l:SetText(text or "")
+	end
+
+	-- Stellaris-style blob: the border is a FILLED band, not a
+	-- ring of rotated segments — outer poly in ring color, an
+	-- inner copy shrunk ringPx toward the centroid in the interior
+	-- tint, leaving a uniform rim. sel adds a gold rim 3px out
+	function L:blob(poly, cx, cy, r, g, b, fillA, ringA, ringPx, sel)
+		ringPx = ringPx or 3
+		local function offset(d)
+			local out = {}
+			for i, p in ipairs(poly) do
+				local dx, dy = p.x - cx, p.y - cy
+				local len = sqrt(dx * dx + dy * dy)
+				local s = len > 0 and (len + d) / len or 1
+				out[i] = { x = cx + dx * s, y = cy + dy * s }
+			end
+			return out
+		end
+		if sel then
+			W.PolyFill(self.host, offset(ringPx + 3), 6,
+				1, 0.82, 0.1, 0.9,
+				function() return put("ring") end)
+		end
+		W.PolyFill(self.host, poly, 6, r, g, b, ringA,
+			function() return put("ring") end)
+		W.PolyFill(self.host, offset(-ringPx), 6, r, g, b, fillA,
+			function() return put("fill") end)
+	end
+
+	-- continent summary mark: dark count disc + ring + number —
+	-- medal tiers ring bright in their color, plain marks dim
+	function L:mark(x, y, count, r, g, b, medal)
+		self:disc(x, y, 11, 0.02, 0.03, 0.02, 0.85)
+		local rg = put("medal")
+		rg:SetSize(25, 25)
+		rg:SetPoint("CENTER", self.host, "TOPLEFT", x, -y)
+		rg:SetVertexColor(r, g, b, medal and 0.95 or 0.4)
+		self:badge(x, y, tostring(count), r, g, b, 1)
+	end
+
+	return L
+end
+
 -- full-height column panel with title (+count fs at top right). topY
 -- positions under the toolbar row — CraftingUI uses -52, OpsUI -34.
 -- Was two near-identical Panel()s; p.titleFs and p.count are both set
