@@ -690,6 +690,8 @@ for _, id in ipairs({
 	774, 818, 11370, 11382, 1206, 1210, 1529, 1705, 2770, 2771,
 	2772, 2775, 2776, 2835, 2836, 2838, 3340, 3858, 3864, 7909,
 	7910, 7911, 7912, 10620, 12361, 12364, 12365, 12799, 12800,
+	-- Forever customs observed in GatherLite loot data:
+	249391, 249425,  -- Pyrite, Bauxite
 }) do CAT_ID[id] = "ore" end
 for id in pairs(HERB_ITEMS) do CAT_ID[id] = "herb" end
 for _, id in ipairs({
@@ -723,6 +725,13 @@ function G.ItemCat(id)
 	local c = catCache[id]
 	if c ~= nil then return c or nil end
 	c = CAT_ID[id]
+	if not c then
+		-- learned families: ids a gather window taught us (Forever
+		-- customs like Bauxite have no static entry and may report
+		-- an unmapped subtype)
+		local sv = GoblinMindGather
+		c = sv and sv.itemCats and sv.itemCats[id]
+	end
 	if not c and GetItemInfo then
 		-- itemSubType is index 7 on both classic and modern
 		-- GetItemInfo shapes
@@ -735,4 +744,18 @@ function G.ItemCat(id)
 	end
 	catCache[id] = c or false
 	return c
+end
+
+-- a gather window's unknown items inherit the verdict: the first
+-- Mithril+Bauxite tap classifies through the mithril, then Bauxite
+-- stays learned so a solo tap is still a node, not a corpse.
+-- Persists in the gather SV; static entries never overwrite.
+function G.LearnCat(id, cat)
+	if not (id and cat) or CAT_ID[id] then return end
+	local sv = GoblinMindGather
+	if not sv then return end
+	sv.itemCats = sv.itemCats or {}
+	if sv.itemCats[id] == cat then return end
+	sv.itemCats[id] = cat
+	catCache[id] = cat
 end

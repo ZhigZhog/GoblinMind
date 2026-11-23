@@ -1009,6 +1009,15 @@ Primary data = the in-house book feed below.
     `UnitPosition` → (north,west); north = +y screen, west = +x.
     `minimapZoom` cvar MATCHING `GetMinimapZoom()` = outdoor zoom
     table (mismatch = indoor — the check inverts easily).
+  - **Forever custom items have no family entry** — itemID
+    space ~249k (e.g., 249391 Pyrite, 249425 Bauxite). The loot
+    window verdict can't require EVERY item to classify:
+    unknowns ride the majority family (cloth/flesh still
+    hard-veto), then `GM.Gathering.LearnCat` persists them to
+    `GoblinMindGather.itemCats` so solo taps classify later.
+    GatherLite import also learns families from the node's
+    `type` tag. `ItemCat` order: static CAT_ID → learned →
+    GetItemInfo subtype.
   - **MapWise terrain index** (`MapWiseAPI.TerrainIndex`):
     `maps[uiMapID] = {set, areaIx}` for ZONES only — continents
     (1414/1415) aren't keyed; resolve their set via the map's

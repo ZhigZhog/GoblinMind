@@ -817,7 +817,20 @@ local function GLImportOne(e, kind)
 			items[id] = (items[id] or 0) + (l.count or 1)
 		end
 	end
-	if items then UpdateYield(YieldRec(nd.name or kind), items) end
+	if items then
+		UpdateYield(YieldRec(nd.name or kind), items)
+		-- GatherLite tags the node type — an unmapped custom id
+		-- riding a mining node IS ore; learn it once here
+		local fam = kind == "mine" and "ore" or "herb"
+		if GM.Gathering.LearnCat then
+			local IC = GM.Gathering.ItemCat
+			for id in pairs(items) do
+				if not (IC and IC(id)) then
+					GM.Gathering.LearnCat(id, fam)
+				end
+			end
+		end
+	end
 	return #(db.nodes[e.mapID] or {}) > before and "new" or "merged"
 end
 
@@ -1667,22 +1680,41 @@ local SKIN_TAIL_S = 4
 local function WindowKind(items, mob)
 	local IC = GM.Gathering and GM.Gathering.ItemCat
 	if not (IC and items) then return nil end
-	local cat
+	local cat, unknown
 	for id in pairs(items) do
 		local c = IC(id)
-		if c == "cloth" or c == "flesh" then c = nil end
-		if not c or (cat and c ~= cat) then return nil end
-		cat = c
+		-- cloth/flesh hard-veto — corpse cargo can never be a node
+		-- tap. Unclassified items ride the window's verdict instead
+		-- of vetoing it: a Mithril+Bauxite window is still a vein
+		-- even though Bauxite has no family entry
+		if c == "cloth" or c == "flesh" then return nil end
+		if c then
+			if cat and c ~= cat then return nil end
+			cat = c
+		else
+			unknown = unknown or {}
+			unknown[#unknown + 1] = id
+		end
 	end
 	if not cat then return nil end
+	local kind
 	if cat == "leather" then
-		if lastKill and (not mob or mob == lastKill.mob)
-			and GetTime() - lastKill.t <= SKIN_TAIL_S then
-			return "skin"
+		if not (lastKill and (not mob or mob == lastKill.mob)
+			and GetTime() - lastKill.t <= SKIN_TAIL_S) then
+			return nil
 		end
-		return nil
+		kind = "skin"
+	else
+		kind = cat == "ore" and "mine" or cat
 	end
-	return cat == "ore" and "mine" or cat
+	-- accepted window: teach the unknowns this family so a later
+	-- solo drop of the same custom item classifies on its own
+	if unknown and GM.Gathering.LearnCat then
+		for _, id in ipairs(unknown) do
+			GM.Gathering.LearnCat(id, cat)
+		end
+	end
+	return kind
 end
 
 -- name an unarmed gather tap by its contents: a window of Iron
@@ -1701,7 +1733,10 @@ local function NodeNameFor(items)
 			end
 			if has then hit = hit + 1 else miss = miss + 1 end
 		end
-		local score = hit - miss
+		-- unmodeled drops (customs like Bauxite) shouldn't blank
+		-- the name: half-weight misses so a vein still names
+		-- itself off the items it DOES share with the DB
+		local score = hit - miss * 0.5
 		if hit > 0 and score > (bs or 0) then
 			best, bs = name, score
 		end

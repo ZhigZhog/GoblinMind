@@ -125,10 +125,15 @@ GM.Cmd = function() end
 -- classifier the loot attribution uses
 GM.Gathering = GM.Gathering or {}
 local _CAT = { [765]="herb", [2447]="herb", [2770]="ore",
-	[2772]="ore", [2838]="ore", [774]="ore", [2318]="leather",
-	[5784]="leather", [5785]="leather", [2589]="cloth",
-	[12184]="flesh" }
+	[2772]="ore", [2838]="ore", [774]="ore", [3858]="ore",
+	[2318]="leather", [5784]="leather", [5785]="leather",
+	[2589]="cloth", [12184]="flesh" }
 GM.Gathering.ItemCat = function(id) return _CAT[id] end
+GM.Gathering.LearnCat = function(id, cat)
+	GoblinMindGather.itemCats = GoblinMindGather.itemCats or {}
+	GoblinMindGather.itemCats[id] = cat
+	_CAT[id] = cat
+end
 ''')
 
 # map-projection helpers: the harness skips Core.lua, so pull the
@@ -1045,6 +1050,51 @@ ys = [pt[5] for r in regs for pt in r._pts.values()
 check('foreign-continent records culled',
       xs and all(0 <= x <= 1000 for x in xs)
       and all(-500 <= y <= 0 for y in ys))
+
+
+print('== custom-ore window: unknown item rides the verdict ==')
+lua.execute(r'''
+	_POS.n, _POS.w = 6100, 6100
+	SetLoot({ { name = "Mithril Ore", qty = 4,
+	          link = "|Hitem:3858::::::::|h[Mithril Ore]|h" },
+	        { name = "Bauxite", qty = 1,
+	          link = "|Hitem:249425::::::::|h[Bauxite]|h" } })
+''')
+ev('LOOT_OPENED')
+nds = [nd for nd in g.GoblinMindGather.nodes[1419].values()
+       if nd.n == 6100]
+check('mithril+bauxite window recorded a mine node',
+      len(nds) == 1 and nds[0].kind == 'mine')
+check('bauxite learned as ore family',
+      g.GoblinMindGather.itemCats[249425] == 'ore')
+ym = g.GoblinMindGather.yields
+yk = next((k for k in ym.keys()
+          if ym[k]['items']
+          and 249425 in ym[k]['items'].keys()), None)
+check('bauxite kept as a yield',
+      yk is not None and ym[yk]['items'][249425] == 1)
+
+lua.execute(r'''
+	_POS.n, _POS.w = 6200, 6200
+	SetLoot({ { name = "Bauxite", qty = 2,
+	          link = "|Hitem:249425::::::::|h[Bauxite]|h" } })
+''')
+ev('LOOT_OPENED')
+nds2 = [nd for nd in g.GoblinMindGather.nodes[1419].values()
+        if nd.n == 6200]
+check('solo bauxite tap still records a node',
+      len(nds2) == 1 and nds2[0].kind == 'mine')
+
+print('== unknown-only window: still not a gather ==')
+lua.execute(r'''
+	_POS.n, _POS.w = 6300, 6300
+	SetLoot({ { name = "Strange Dust", qty = 1,
+	          link = "|Hitem:999988::::::::|h[Strange Dust]|h" } })
+''')
+ev('LOOT_OPENED')
+nds3 = [nd for nd in g.GoblinMindGather.nodes[1419].values()
+        if nd.n == 6300]
+check('all-unknown window is not a node', len(nds3) == 0)
 
 
 print()
