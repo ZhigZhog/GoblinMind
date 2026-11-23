@@ -1745,6 +1745,7 @@ end
 -- etiquette the proposal prescribes.
 local nav = {}
 local run -- active route instance (declared early: NavDiag reads it)
+local tick -- arrival ticker (declared early: StartRoute shows it)
 
 -- the waypoint only renders in the 3D world while the client's
 -- in-game navigation display is on — MapWise's
@@ -2154,7 +2155,7 @@ function G.ClearData()
 end
 
 -- arrival check + lap timing, 4x/sec while a route runs
-local tick = CreateFrame("Frame")
+tick = CreateFrame("Frame")
 tick:Hide()
 tick.acc = 0
 tick:SetScript("OnUpdate", function(_, dt)
