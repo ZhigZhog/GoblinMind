@@ -255,6 +255,88 @@ end
 -- window pane both call them with per-surface style, so a camp,
 -- cluster, route, or mark looks the same on every map
 --
+-- GoblinMind-flavored tooltips ride the same objects: money line
+-- first, then identity, then the observed drop table — built
+-- fresh on each hover so prices/rates are live
+local function ZoneTip(zn, mapID)
+	return function(tip)
+		local G = GM.Gather
+		local zc = G.ZoneCat and G.ZoneCat(zn) or zn.kind
+		local gpm = G.ZoneEV(zn) * G.ZoneRate(zn)
+		tip:AddLine(GM.MoneyShort(floor(gpm)) .. "/min"
+			.. GM.CC("textDim") .. " · " .. (zn.kills or 0)
+			.. " kills · " .. #(zn.pockets or {})
+			.. " pockets|r")
+		local place = G.ZonePlace and G.ZonePlace(zn)
+		tip:AddLine((G.KindHex and G.KindHex(zc) or "")
+			.. (G.KindLabel and G.KindLabel(zc) or zc)
+			.. "|r" .. (place and (" · " .. place) or ""))
+		local mobs = G.ZoneMobs and G.ZoneMobs(zn)
+		if mobs then
+			tip:AddLine(GM.CC("secondary") .. mobs .. "|r")
+		end
+		local rows = G.ZoneDropRows and G.ZoneDropRows(zn)
+		if rows and rows[1] and GM.Widgets then
+			for _, s in ipairs(GM.Widgets.DropLines(rows, {
+				max = 6,
+				target = G.TargetID and G.TargetID() })) do
+				tip:AddLine(s)
+			end
+		end
+	end
+end
+
+local function ClusterTip(c, mapID)
+	return function(tip)
+		local G = GM.Gather
+		local rep = c.nodes[1]
+		-- money first: observed expected value of one spawn
+		local ev, dimAll = 0, true
+		for _, nd in ipairs(c.nodes) do
+			ev = ev + (G.NodeEV and G.NodeEV(nd) or 0)
+			local resp = G.RespawnSec(mapID, nd.kind)
+			if not (nd.last
+				and (time() - nd.last) < resp * 0.8) then
+				dimAll = false
+			end
+		end
+		tip:AddLine("EV ≈ " .. GM.MoneyShort(floor(ev / c.n))
+			.. GM.CC("textDim") .. " / spawn|r")
+		local order, tally = {}, {}
+		for _, nd in ipairs(c.nodes) do
+			local nm = nd.name
+				or (G.KindLabel and G.KindLabel(nd.kind))
+				or nd.kind
+			if not tally[nm] then order[#order + 1] = nm end
+			tally[nm] = (tally[nm] or 0) + 1
+		end
+		local names
+		for _, nm in ipairs(order) do
+			names = (names and names .. " · " or "") .. nm
+				.. (tally[nm] > 1 and (" ×" .. tally[nm]) or "")
+		end
+		tip:AddLine((G.KindHex and G.KindHex(rep.kind) or "")
+			.. (G.KindLabel and G.KindLabel(rep.kind)
+				or rep.kind) .. "|r  " .. (names or ""))
+		tip:AddLine(GM.CC("secondary") .. c.n
+			.. (c.n == 1 and " node" or " nodes")
+			.. " · respawn ~"
+			.. G.SecondsText(G.RespawnSec(mapID, rep.kind))
+			.. (dimAll and " · depleted" or "") .. "|r")
+		-- drops from the dominant member's observed table
+		local rows = G.DropRows
+			and G.DropRows(rep.name or rep.kind)
+		if rows and rows[1] and GM.Widgets then
+			for _, s in ipairs(GM.Widgets.DropLines(rows, {
+				max = 6,
+				target = G.TargetID and G.TargetID() })) do
+				tip:AddLine(s)
+			end
+		end
+	end
+end
+
+
 -- zone object: fitted blob (solid border band + translucent
 -- interior) or disc fallback, farm icon at the centroid,
 -- optional stats tag beneath. st = {
@@ -283,8 +365,13 @@ local function ZoneScene(L, zn, prj, w, h, st)
 			col[1], col[2], col[3], st.fillA)
 	end
 	if st.iconID then
-		L:icon(cx, cy, st.iconSz or 18, ItemIcon(st.iconID),
+		local sz = st.iconSz or 18
+		L:icon(cx, cy, sz, ItemIcon(st.iconID),
 			col[1], col[2], col[3], st.iconA or 1)
+		if st.tip ~= false then
+			L:hot(cx, cy, sz + 6, sz + 6,
+				ZoneTip(zn, st.mapID))
+		end
 	end
 	if st.tag then L:tag(cx, cy + (st.tagDY or 15), st.tag) end
 	return cx, cy
@@ -314,6 +401,9 @@ local function ClusterScene(L, c, w, h, st)
 	if c.n > 1 then
 		L:badge(x, y + sz / 2 + 6, tostring(c.n),
 			col[1], col[2], col[3], a)
+	end
+	if st.tip ~= false then
+		L:hot(x, y, sz + 6, sz + 6, ClusterTip(c, st.mapID))
 	end
 end
 
@@ -452,6 +542,7 @@ function M.Refresh()
 				iconID = G.ZoneIconID and G.ZoneIconID(zn),
 				iconA = 0.95 * oa,
 				tag = label,
+				mapID = map,
 				rPx = function(yd)
 					return YdToPx(draw, yd)
 				end,
@@ -490,6 +581,7 @@ function M.Refresh()
 				* oa,
 			shrink = not match,
 			tid = tid,
+			mapID = map,
 		})
 	end
 
@@ -954,6 +1046,7 @@ function M.CreatePane(parent, w)
 							and G.ZoneIconID(zn),
 						iconA = (match or isSel) and 1 or 0.3,
 						iconSz = isSel and 24 or 18,
+						mapID = mapID,
 						rPx = function(yd)
 							return yd * upy * w
 						end,
@@ -984,6 +1077,7 @@ function M.CreatePane(parent, w)
 				a = match and 1 or 0.25,
 				shrink = not match,
 				tid = tid,
+				mapID = mapID,
 			})
 		end
 

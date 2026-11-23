@@ -303,6 +303,20 @@ function W.MapLayer(host)
 				t = host:CreateTexture(nil, "OVERLAY", nil, 7)
 				t:SetTexture("Interface\\AddOns\\GoblinMind"
 					.. "\\Media\\ring.tga")
+			elseif kind == "hot" then
+				-- invisible mouse catcher — textures can't take
+				-- scripts, so hover regions are real Buttons that
+				-- ask their _tipFn to fill GameTooltip on enter
+				t = CreateFrame("Button", nil, host)
+				t:SetScript("OnEnter", function(s)
+					if not s._tipFn then return end
+					GameTooltip:SetOwner(s, "ANCHOR_RIGHT")
+					s._tipFn(GameTooltip)
+					GameTooltip:Show()
+				end)
+				t:SetScript("OnLeave", function()
+					GameTooltip:Hide()
+				end)
 			else -- icon
 				t = host:CreateTexture(nil, "OVERLAY", nil, 6)
 			end
@@ -393,6 +407,17 @@ function W.MapLayer(host)
 		local l = put("tag")
 		l:SetPoint("CENTER", self.host, "TOPLEFT", x, -y)
 		l:SetText(text or "")
+	end
+
+	-- invisible hover region: fn(GameTooltip) fills and shows it
+	-- on enter. Kept tight to its object so the map's own pins
+	-- and drags keep working everywhere else
+	function L:hot(x, y, w, h, fn)
+		if not fn then return end
+		local b = put("hot")
+		b:SetSize(w or 16, h or 16)
+		b:SetPoint("CENTER", self.host, "TOPLEFT", x, -y)
+		b._tipFn = fn
 	end
 
 	-- Stellaris-style blob: the border is a FILLED band, not a

@@ -673,6 +673,7 @@ end
 
 G.ZoneRate = ZoneRate
 G.ZoneEV = ZoneEV
+G.NodeEV = NodeEV
 
 -- wall-clock truth: total looted value over the session gaps.
 -- Gaps past SESSION_GAP are a real break (not respawn/competition
