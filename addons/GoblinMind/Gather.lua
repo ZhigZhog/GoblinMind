@@ -828,10 +828,14 @@ function G.ZoneSusEV(zn)
 	return ev
 end
 
--- display item for a node/zone: the most valuable thing it drops.
+-- display item for a node/zone: what the farm IS, not the jackpot
+-- it lucked into — the kind's own produce family (registry cats)
+-- picked by drop frequency, so a thorium vein reads as Thorium
+-- Ore, not the 1% Star Ruby that out-values it per unit
 -- itemIDs picked for guaranteed presence on this client
 local KIND_ICON_ITEM = {
 	herb = 765, mine = 2770, skin = 2318, cloth = 2589,
+	fish = 6359,
 }
 local function BestYieldItem(items)
 	local best, bv
@@ -845,13 +849,48 @@ local function BestYieldItem(items)
 	end
 	return best
 end
+local function ProduceItem(kind, rec)
+	local def = G.KindDefs and G.KindDefs[kind]
+	local IC = GM.Gathering and GM.Gathering.ItemCat
+	local items = rec and rec.items
+	if not (def and def.cats and IC and items) then return nil end
+	local fam = {}
+	for _, c in ipairs(def.cats) do fam[c] = true end
+	local hits = rec.hits or {}
+	local best, bh, bv
+	for id, qty in pairs(items) do
+		if not ItemLottery(id) and fam[IC(id)] then
+			local h = hits[id] or 0
+			local v = (ItemVal(id) or 0) * qty
+			if h > (bh or -1) or (h == bh and v > (bv or 0)) then
+				best, bh, bv = id, h, v
+			end
+		end
+	end
+	return best
+end
+-- icon picks memoize on the data epoch — minimap ticks call these
+-- per cluster at 8Hz and the answer only changes on a mutation
+local iconMemo = {}
 function G.NodeIconID(nd)
+	local m = iconMemo[nd]
+	if m and m.v == dataV then return m.id end
 	local y = db.yields and db.yields[nd.name or nd.kind]
-	return (y and BestYieldItem(y.items))
+	local id = ProduceItem(nd.kind, y)
+		or (y and BestYieldItem(y.items))
 		or KIND_ICON_ITEM[nd.kind]
+	iconMemo[nd] = { v = dataV, id = id }
+	return id
 end
 function G.ZoneIconID(zn)
-	return BestYieldItem(zn.items) or KIND_ICON_ITEM[zn.kind]
+	local m = iconMemo[zn]
+	if m and m.v == dataV then return m.id end
+	local id = ProduceItem(
+			(G.ZoneCat and G.ZoneCat(zn)) or zn.kind, zn)
+		or BestYieldItem(zn.items)
+		or KIND_ICON_ITEM[zn.kind]
+	iconMemo[zn] = { v = dataV, id = id }
+	return id
 end
 
 -- ======================== target ========================
