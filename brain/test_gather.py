@@ -1097,6 +1097,37 @@ nds3 = [nd for nd in g.GoblinMindGather.nodes[1419].values()
 check('all-unknown window is not a node', len(nds3) == 0)
 
 
+print('== save/load route round-trip ==')
+# issue: in-game SAVE printed "route saved" but LOAD answered
+# "no saved route" — prove the db.saved -> LoadRoute match
+lua.execute(r'''
+	GoblinMindGather.saved = nil
+''')
+if r:
+    ok = lua.eval('GM.Gather.SaveRoute')(r)
+    check('SaveRoute accepts a solved route', ok is not None)
+    r3 = lua.eval('GM.Gather.LoadRoute')(1420, 'mine')
+    check('LoadRoute finds the same-map saved route',
+          r3 is not None and r3.map == 1420 and r3.kind == 'mine')
+    r4 = lua.eval('GM.Gather.LoadRoute')(1420, 'herb')
+    check('wrong-kind load correctly misses', r4 is None)
+    r5 = lua.eval('GM.Gather.LoadRoute')(1419, 'mine')
+    check('wrong-map load correctly misses', r5 is None)
+    # a kind-less saved record (poisoned/stale) must still be
+    # findable — a nil kind should not hide it from unfiltered
+    # loads, and kind-pinned loads should not match it
+    lua.execute(r'''
+		GoblinMindGather.saved["1420:?"] = {
+			map = 1420, stops = { { x = 0.1, y = 0.1, map = 1420 },
+				{ x = 0.2, y = 0.2, map = 1420 } },
+			gpm = 1,
+		}
+	''')
+    r6 = lua.eval('GM.Gather.LoadRoute')(1420, 'mine')
+    check('kind-less stale record loses to the real one',
+          r6 is not None and r6.kind == 'mine')
+
+
 print()
 fails = [n for n, ok in CHECKS if not ok]
 if fails:

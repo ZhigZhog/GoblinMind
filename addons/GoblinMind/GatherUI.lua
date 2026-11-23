@@ -876,17 +876,40 @@ local function Toggle()
 			"survives reloads, keyed to this map.",
 		})
 		ui.load = Btn(ui, 70, "LOAD", function()
-			local p = ui.mapSel or ui.zoneFilter or GM.Gather.CurrentMap()
-			local r = p and GM.Gather.LoadRoute(p, ui.kindFilter)
+			local kind = ui.kindFilter
+			-- same "best in scope" ladder BUILD uses: the pane's
+			-- map first, then the zone filter, then every saved
+			-- loop the continent scope admits — a save under a
+			-- sibling map used to read "no saved route" while the
+			-- record sat one scope level down
+			local r = GM.Gather.LoadRoute(
+				ui.mapSel or ui.zoneFilter or GM.Gather.CurrentMap(),
+				kind)
+			if not r and ui.zoneFilter then
+				r = GM.Gather.LoadRoute(ui.zoneFilter, kind)
+			end
+			if not r then
+				for _, s in pairs(GoblinMindGather.saved or {}) do
+					if (not kind or s.kind == kind)
+						and (not ui.contFilter
+							or s.map == ui.contFilter.id
+							or ContLabel(MapContinent(s.map))
+								== ui.contFilter.label)
+						and (not r or (s.gpm or 0) > (r.gpm or 0)) then
+						r = s
+					end
+				end
+				if r and GM.GatherMap then GM.GatherMap.NoteRoute(r) end
+			end
 			if r then
-				ui.mapSel = r.map
+				if r.map then SetZoneFilter(r.map) end
 				GM.Gather.StartRoute(r)
 				GM.Print(GM.CC("accent") .. "route loaded|r — "
 					.. tostring(r.zoneName or GM.Gather.ZoneName(r.map))
 					.. ", " .. #r.stops .. " stops")
 			else
 				GM.Print(GM.CC("textDim")
-					.. "no saved route for this map|r")
+					.. "no saved route in scope|r")
 			end
 			Refresh()
 		end)
