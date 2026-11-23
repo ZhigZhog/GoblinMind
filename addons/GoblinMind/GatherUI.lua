@@ -335,7 +335,9 @@ local function DetailLines(r)
 	return lines
 end
 
-local function Refresh()
+-- lite skips the map-pane rebuild — the solve pump streams route
+-- rows in through OnRouteSolved and only the list needs repainting
+local function Refresh(lite)
 	if not ui or not ui:IsShown() then return end
 	local tid = GM.Gather.TargetID()
 	local rows = {}
@@ -487,7 +489,7 @@ local function Refresh()
 	end
 	if tid then ui.targetSlot:SetItem(tid)
 	else ui.targetSlot:Clear() end
-	DrawPane()
+	if not lite then DrawPane() end
 end
 
 -- item name / link / raw id -> itemID, using the client's own item
@@ -1224,7 +1226,15 @@ function UI.Toggle()
 	Toggle()
 end
 
+local solvedHooked
 function UI.Show()
+	-- this file loads before Gather.lua — hook the solve pump's
+	-- stream callback here, once, at first show
+	if not solvedHooked and GM.Gather
+		and GM.Gather.OnRouteSolved then
+		solvedHooked = true
+		GM.Gather.OnRouteSolved(function() Refresh(true) end)
+	end
 	if not ui then Toggle() return end
 	ui:Show()
 	Refresh()

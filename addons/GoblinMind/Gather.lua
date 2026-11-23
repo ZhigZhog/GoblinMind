@@ -250,6 +250,17 @@ function G.RespawnSec(map, kind)
 		or RESPAWN_PRIOR
 end
 
+-- derived-data epoch: every record mutation bumps it so solved
+-- routes and merged-zone caches invalidate without bookkeeping
+-- per consumer. Target changes don't bump — no solved row reads
+-- db.target (targeted zone rows rebuild fresh every call).
+local dataV = 0
+local function Bump() dataV = dataV + 1 end
+
+-- ms clock for solver budgets — debugprofilestop where present
+local PerfNow = debugprofilestop
+	or function() return GetTime() * 1000 end
+
 local function MergeNode(p, kind, name, opt)
 	local list = NodeList(p.map)
 	if not list then return nil end
@@ -268,6 +279,7 @@ local function MergeNode(p, kind, name, opt)
 				nd.hits = (nd.hits or 0) + 1
 				if stamp then nd.last = now end
 				if name then nd.name = name end
+				Bump()
 				return nd
 			end
 		end
@@ -279,6 +291,7 @@ local function MergeNode(p, kind, name, opt)
 	}
 	if stamp then nd.last = now end
 	tinsert(list, nd)
+	Bump()
 	return nd
 end
 
@@ -287,6 +300,7 @@ end
 -- `cnt`, NOT `n` — `n` is already the north-coord field on every
 -- position record
 local function UpdateYield(rec, items, tail)
+	Bump()
 	rec.items = rec.items or {}
 	rec.hits = rec.hits or {}
 	for id, qty in pairs(items) do
@@ -484,6 +498,7 @@ local function CoalesceZones()
 						end
 					end
 					again = true
+					Bump()
 					break
 				end
 			end
@@ -986,6 +1001,7 @@ function G.ImportGatherLite()
 			end
 		end
 	end
+	if stats.wiped > 0 then Bump() end
 	if sv then
 		for cat, list in pairs(sv) do
 			local kind = GL_KIND[cat]
@@ -1110,7 +1126,10 @@ local function RouteStats(order, pts, evs, ctx)
 	return gpm, lapSec, travel, ev * avail
 end
 
-local function TwoOpt(order, pts)
+-- 2-opt is the only superlinear pass per loop — bound it by the
+-- solve's shared deadline so a huge imported field degrades to the
+-- nearest-neighbor order instead of stalling the frame
+local function TwoOpt(order, pts, deadline)
 	local n = #order
 	local function leg(i, j)
 		return DistYd(pts[order[i]], pts[order[j]]) or 1e9
@@ -1118,6 +1137,7 @@ local function TwoOpt(order, pts)
 	local improved = true
 	local passes = 0
 	while improved and passes < 10 do
+		if deadline and PerfNow() > deadline then return end
 		improved, passes = false, passes + 1
 		for i = 1, n - 2 do
 			for j = i + 2, n do
@@ -1157,7 +1177,7 @@ local function BuildLoop(set, pts, evs, ctx)
 		used[best] = true
 		cur = best
 	end
-	TwoOpt(order, pts)
+	TwoOpt(order, pts, ctx.deadline)
 	local gpm, lapSec, yards, evEff = RouteStats(order, pts, evs, ctx)
 	return {
 		order = order, gpm = gpm, lapSec = lapSec,
@@ -1197,11 +1217,84 @@ local function Components(pts)
 	return out
 end
 
+-- ======================== solve cache ========================
+-- SolveRoute is a TSP over every node on a map — hundreds of
+-- imported spawns cost seconds. Results key on dataV; misses and
+-- TTL-expired entries queue into a pump solving ONE job per frame
+-- tick, so Leaderboard (and window open) never blocks on the
+-- solver. G.OnRouteSolved listeners repaint as rows stream in.
+local SolveNow -- fwd: the wrapper below needs the real solver
+local solveCache = {}
+local SOLVE_TTL = 120 -- s; prices move without record writes
+local solveQ, solveSeen, solveCbs = {}, {}, {}
+local solvePump, lastCb
+
+-- a solve's inputs, not just its epoch: respawn/speed/contention
+-- can change without a record write (learned bounds, settings)
+local function SolveKey(map, kind)
+	return tostring(map) .. "|" .. kind .. "|" .. dataV .. "|"
+		.. (db.speedIx or 2) .. "|" .. (db.contIx or 1) .. "|"
+		.. tostring(G.RespawnSec(map, kind) or 0)
+end
+
+function G.OnRouteSolved(cb)
+	solveCbs[#solveCbs + 1] = cb
+end
+
+local function EnqueueSolve(map, kind)
+	local key = tostring(map) .. ":" .. kind
+	if solveSeen[key] then return end
+	solveSeen[key] = true
+	solveQ[#solveQ + 1] = { map = map, kind = kind, key = key }
+	if solvePump then solvePump:Show() end
+end
+
+solvePump = CreateFrame("Frame")
+solvePump:Hide()
+solvePump:SetScript("OnUpdate", function()
+	local job = tremove(solveQ)
+	if not job then solvePump:Hide() return end
+	solveSeen[job.key] = nil
+	G.SolveRoute(job.map, job.kind) -- writes through the cache
+	local now = GetTime()
+	-- stream the repaint: at most 4/s while draining, always on
+	-- the last job so the final set lands promptly
+	if #solveQ == 0 or now - (lastCb or 0) > 0.25 then
+		lastCb = now
+		for _, cb in ipairs(solveCbs) do pcall(cb) end
+	end
+end)
+
+-- non-blocking read for the leaderboard: cache hit or enqueue —
+-- the row simply isn't there until the pump lands it. Slightly
+-- stale results still serve (a row beats a gap) while a fresh
+-- solve queues behind them
+local function SolveCached(map, kind)
+	local e = solveCache[SolveKey(map, kind)]
+	if not e or GetTime() - e.t >= SOLVE_TTL then
+		EnqueueSolve(map, kind)
+	end
+	return e and e.r
+end
+
+-- the synchronous entry point (BUILD button, pump, tests): serve
+-- a fresh cache hit, else solve now and write through
+function G.SolveRoute(map, kind)
+	local key = SolveKey(map, kind)
+	local e = solveCache[key]
+	if e and GetTime() - e.t < SOLVE_TTL then
+		return e.r
+	end
+	local r = SolveNow(map, kind)
+	solveCache[key] = { t = GetTime(), r = r }
+	return r
+end
+
 -- pick the loop (possibly a sub-pocket of the zone) with the best
 -- steady-state GPM under the given transport speed + learned
 -- respawn. Stops in the result are node record refs — they survive
 -- a later Solve without index remapping.
-function G.SolveRoute(map, kind)
+function SolveNow(map, kind)
 	local list = NodeList(map)
 	if not list then return nil end
 	local pts, evs = {}, {}
@@ -1228,6 +1321,9 @@ function G.SolveRoute(map, kind)
 	local ctx = {
 		speed = G.SPEEDS[db.speedIx or 2].yps,
 		respawn = G.RespawnSec(map, kind),
+		-- 200ms cap per solve: candidate loops share the budget, so
+		-- 30 scattered pockets can't each burn their own
+		deadline = PerfNow() + 200,
 	}
 
 	-- candidate sets: every component alone, greedy merges while
@@ -1490,18 +1586,26 @@ function G.ZoneCat(zn)
 		or best or zn.kind
 end
 
+-- zone-merge pass is O(camps²) — run it once per data version,
+-- not once per leaderboard rebuild
+local coalV
 function G.Leaderboard()
+	if coalV ~= dataV then
+		CoalesceZones()
+		coalV = dataV
+	end
 	local rows = {}
-	for map, list in pairs(db.nodes or {}) do
-		for _, kind in ipairs({ "herb", "mine" }) do
-			local r = G.SolveRoute(map, kind)
+	-- node kinds from the registry: cached hits render now,
+	-- misses stream in via the solve pump (OnRouteSolved)
+	for map in pairs(db.nodes or {}) do
+		for kind in pairs(G.NODE_KINDS) do
+			local r = SolveCached(map, kind)
 			if r then
 				r.zoneName = G.ZoneName(map)
 				tinsert(rows, r)
 			end
 		end
 	end
-	CoalesceZones()
 	for map, list in pairs(db.zones or {}) do
 		for _, zn in ipairs(list) do
 			local rate = ZoneRate(zn)
@@ -1713,6 +1817,7 @@ end
 
 -- full wipe: nodes/zones/yields/respawns/journal/saved routes
 function G.ClearData()
+	Bump()
 	wipe(db.nodes)
 	wipe(db.zones)
 	wipe(db.yields)
