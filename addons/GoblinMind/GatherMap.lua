@@ -194,6 +194,7 @@ local function DrawZone(canvas, x, y, rPx, r, g, b, label)
 	end
 end
 
+
 -- zone radii are yards — convert through the same normalized-unit
 -- scale DistYd's fallback uses so the disc covers the modeled area
 local function YdToPx(canvas, yd)
@@ -207,6 +208,78 @@ end
 local ZONE_DRAW_MAX_YD = 220
 local function DispR(zn)
 	return min(zn.r or 60, ZONE_DRAW_MAX_YD)
+end
+
+-- fitted camp boundary: sample the pocket set's support function
+-- (farthest pocket projection per direction) so the outline hugs
+-- the farm's real spread per-direction instead of the enclosing
+-- circle a single radius forces. Chaikin corner-cutting twice is
+-- a quadratic-bezier ring — WoW has no curve primitive, but
+-- segments through the smoothed points read as one. Fill comes
+-- from a soft disc per pocket — the shaded area is the actual
+-- kill coverage, not a guess around it
+local OUTLINE_SEG, POCKET_PAD_YD, ZONE_MIN_YD = 16, 35, 45
+
+local function DrawZoneFit(canvas, zn, RecXY, w, h, r, g, b, label)
+	local pts = {}
+	for _, pk in ipairs(zn.pockets or {}) do
+		local px, py = RecXY(pk)
+		if px and px >= -0.05 and px <= 1.05
+			and py >= -0.05 and py <= 1.05 then
+			pts[#pts + 1] = { x = px * w, y = py * h }
+		end
+	end
+	-- pocket centroid anchors the fit (zn.x is the FIRST kill,
+	-- not the middle); need a real cluster to fit around
+	if #pts < 3 then return false end
+	local cx, cy = 0, 0
+	for _, p in ipairs(pts) do cx, cy = cx + p.x, cy + p.y end
+	cx, cy = cx / #pts, cy / #pts
+	local pad = YdToPx(canvas, POCKET_PAD_YD)
+	local minR = YdToPx(canvas, ZONE_MIN_YD)
+	local poly = {}
+	for i = 0, OUTLINE_SEG - 1 do
+		local a = i / OUTLINE_SEG * 6.2831853
+		local dx, dy = cos(a), -sin(a)
+		local d = minR
+		for _, p in ipairs(pts) do
+			local proj = (p.x - cx) * dx + (p.y - cy) * dy
+			if proj > d then d = proj end
+		end
+		poly[#poly + 1] = { x = cx + dx * (d + pad),
+			y = cy + dy * (d + pad) }
+	end
+	for _ = 1, 2 do
+		local out = {}
+		for i = 1, #poly do
+			local a, b = poly[i], poly[i % #poly + 1]
+			out[#out + 1] = { x = a.x * 0.75 + b.x * 0.25,
+				y = a.y * 0.75 + b.y * 0.25 }
+			out[#out + 1] = { x = a.x * 0.25 + b.x * 0.75,
+				y = a.y * 0.25 + b.y * 0.75 }
+		end
+		poly = out
+	end
+	-- fill: soft disc per pocket — union reads as the farmed area
+	local frPx = YdToPx(canvas, 50)
+	for _, p in ipairs(pts) do
+		local c = PutZone(canvas)
+		c.fill:SetSize(frPx * 2, frPx * 2)
+		c.fill:ClearAllPoints()
+		c.fill:SetPoint("CENTER", canvas, "TOPLEFT", p.x, -p.y)
+		c.fill:SetVertexColor(r, g, b, 0.12)
+		c.label:SetText("")
+	end
+	local c = PutZone(canvas)
+	c.fill:Hide()
+	c.label:ClearAllPoints()
+	c.label:SetPoint("CENTER", canvas, "TOPLEFT", cx, -cy)
+	c.label:SetText(label or "")
+	for i = 1, #poly do
+		local a, b = poly[i], poly[i % #poly + 1]
+		DrawLine(canvas, a.x, a.y, b.x, b.y, r, g, b, 0.7)
+	end
+	return true
 end
 
 -- ======================== refresh ========================
@@ -301,26 +374,32 @@ function M.Refresh()
 		return
 	end
 
-	-- hunt zones first (under the pins): translucent disc + stats.
+	-- hunt zones first (under the pins): fitted blob + stats.
 	-- Label = dominant landmark (ZonePlace) + display category —
 	-- the raw record kind is always "hunt"/"skin", never the
-	-- cloth/meat/mine family the camp actually farms
+	-- cloth/meat/mine family the camp actually farms. A landmark
+	-- equal to the map's own name adds nothing — drop it
+	local mapName = G.ZoneName and G.ZoneName(map)
 	for _, zn in ipairs(G.ZoneList(map) or {}) do
 		local x, y = RecXY(zn)
 		if x then
 			local zc = G.ZoneCat and G.ZoneCat(zn) or zn.kind
 			local col = G.KIND_COLOR[zc] or { 1, 1, 1 }
 			local place = G.ZonePlace and G.ZonePlace(zn)
+			if place == mapName then place = nil end
 			local gpm = G.ZoneEV(zn) * G.ZoneRate(zn)
-			DrawZone(draw, x * w, y * h,
-				YdToPx(draw, DispR(zn)),
-				col[1], col[2], col[3],
-				format("%s · %s kills · %s/min",
-					place and (place .. " · " .. zc) or zc,
-					zn.kills or 0,
-					GM.MoneyShort
-						and GM.MoneyShort(floor(gpm))
-						or tostring(floor(gpm))))
+			local label = format("%s · %s kills · %s/min",
+				place and (place .. " · " .. zc) or zc,
+				zn.kills or 0,
+				GM.MoneyShort
+					and GM.MoneyShort(floor(gpm))
+					or tostring(floor(gpm)))
+			if not DrawZoneFit(draw, zn, RecXY, w, h,
+				col[1], col[2], col[3], label) then
+				DrawZone(draw, x * w, y * h,
+					YdToPx(draw, DispR(zn)),
+					col[1], col[2], col[3], label)
+			end
 		end
 	end
 
