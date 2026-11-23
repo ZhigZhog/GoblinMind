@@ -354,7 +354,7 @@ local function ClusterTip(c, mapID)
 		local ev, dimAll = 0, true
 		for _, nd in ipairs(c.nodes) do
 			ev = ev + (G.NodeEV and G.NodeEV(nd) or 0)
-			local resp = G.RespawnSec(mapID, nd.kind)
+			local resp = G.RespawnSec(mapID, nd.kind) or 300
 			if not (nd.last
 				and (time() - nd.last) < resp * 0.8) then
 				dimAll = false
@@ -381,7 +381,7 @@ local function ClusterTip(c, mapID)
 		tip:AddLine(GM.CC("secondary") .. c.n
 			.. (c.n == 1 and " node" or " nodes")
 			.. " · respawn ~"
-			.. G.SecondsText(G.RespawnSec(mapID, rep.kind))
+			.. G.SecondsText(G.RespawnSec(mapID, rep.kind) or 300)
 			.. (dimAll and " · depleted" or "") .. "|r")
 		-- drops from the dominant member's observed table
 		local rows = G.DropRows
@@ -659,9 +659,14 @@ function M.Refresh()
 	local upy = nodes[1] and UnitsPerYard(map, nodes[1])
 		or (1 / 1500)
 	for _, c in ipairs(Cluster(nodes, RecXY, 70 * upy)) do
+		-- one bad record used to kill every later cluster — a
+		-- respawn-less map's depleted record arithmetic-errored and
+		-- the whole draw died mid-pass ("icons fading"): pairs()
+		-- order meant a different crash point every tick
+		pcall(function()
 		local dimAll, tHit = true, nil
 		for _, nd in ipairs(c.nodes) do
-			local resp = G.RespawnSec(map, nd.kind)
+			local resp = G.RespawnSec(map, nd.kind) or 300
 			if not (nd.last
 				and (time() - nd.last) < resp * 0.8) then
 				dimAll = false
@@ -679,6 +684,7 @@ function M.Refresh()
 			tid = tid,
 			mapID = map,
 		})
+		end)
 	end
 
 	-- route polyline: the active run if one's going, else the last
