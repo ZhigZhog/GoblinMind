@@ -249,6 +249,38 @@ local function Cluster(nodes, xy, thresh)
 	end
 	return out
 end
+-- normalized map coords for a record; projects world->map for
+-- records captured before the map projection resolved (harness
+-- data, early-login casts). x,y is only trusted in the map frame
+-- it was projected for — Forever resolves one place to several
+-- mapIDs, so records stored under a different ID reproject world
+-- coords (custom zones reporting as Tanaris, Riverglades, ...)
+local function MapXY(p, mapID)
+	if p.x and p.y and (not p.map or p.map == mapID) then
+		return p.x, p.y
+	end
+	if p.n and p.w then
+		local mx, my = GM.MapPos(p.c or 0, p.n, p.w, mapID)
+		if mx and mx >= 0 and mx <= 1 then
+			if not p.map or p.map == mapID then
+				p.x, p.y = mx, my
+			end
+			return mx, my
+		end
+	end
+	-- x,y-only foreign record: hop through its own map frame
+	if p.x and p.y and p.map and p.map ~= mapID then
+		local n, w, c = GM.WorldPos(p.map, p.x, p.y)
+		if n then
+			return GM.MapPos(c or 0, n, w, mapID)
+		end
+		return -- proven foreign: raw x,y would draw in the wrong spot
+	end
+	-- fall back to the raw stored coords only when the frame can't
+	-- be proven foreign
+	if p.x and p.y then return p.x, p.y end
+end
+
 -- shared proximity merge — GatherMinimap clusters in world-yard
 -- space with the same routine instead of a second merge
 M.Cluster = Cluster
@@ -510,56 +542,31 @@ function M.Refresh()
 	local oaZ = GM.GatherMinimap and GM.GatherMinimap.AlphaZone() or 1
 	local oaN = GM.GatherMinimap and GM.GatherMinimap.AlphaNode() or 1
 	-- record -> normalized map coords on the displayed frame;
-	-- n,w-only records project, everything else fails nil
+	-- cross-mapID records reproject via the shared MapXY
 	local function RecXY(p)
-		if p.x and p.y then return p.x, p.y end
-		if p.n and p.w then
-			local x, y = GM.MapPos(p.c or 0, p.n, p.w, map)
-			if x and x >= 0 and x <= 1
-				and y >= 0 and y <= 1 then
-				return x, y
-			end
+		local x, y = MapXY(p, map)
+		if x and x >= -0.02 and x <= 1.02
+			and y and y >= -0.02 and y <= 1.02 then
+			return x, y
 		end
 	end
 
-	-- continent/world view: child-zone geometry projects at the
-	-- wrong scale — a count disc per record-bearing zone, same
-	-- summary model the window pane uses (no ring segments:
-	-- 24/zone on a 1s ticker would paint thousands of lines)
+	-- continent/world view: one mark per zone SLOT (record mapIDs
+	-- roll up under their display ancestor — Forever stores one
+	-- place under several IDs), medal-ringed by best gpm — the
+	-- same ZoneMarks the window pane draws
 	if M.IsWorldy(map) then
-		local db = GoblinMindGather or {}
-		local function mark(m, list, r, g, b, n)
-			local rec = list[1]
-			if not rec then return end
-			local sn, sw, cnt, c = 0, 0, 0, nil
-			for _, p in ipairs(list) do
-				if p.n and p.w then
-					sn, sw, cnt = sn + p.n, sw + p.w, cnt + 1
-					c = c or (p.c ~= 0 and p.c or nil)
-				end
-			end
-			local x, y
-			if cnt > 0 then
-				x, y = GM.MapPos(c or 0, sn / cnt, sw / cnt, map)
-			elseif rec.x then
-				-- x,y-only list (imports): hop through world yards —
-				-- rec.x is normalized to m, not to the continent
-				local n2, w2, c2 = GM.WorldPos(m, rec.x, rec.y)
-				if n2 then
-					x, y = GM.MapPos(c2 or rec.c or 0,
-						n2, w2, map)
-				end
-			end
-			if x and x >= 0 and x <= 1
-				and y and y >= 0 and y <= 1 then
-				L:mark(x * w, y * h, n, r, g, b)
-			end
-		end
-		for m, list in pairs(db.nodes or {}) do
-			mark(m, list, 0.4, 0.85, 1.0, #list)
-		end
-		for m, list in pairs(db.zones or {}) do
-			mark(m, list, 0.95, 0.8, 0.3, #list)
+		local MEDAL = {
+			{ 1.0, 0.84, 0.27 },   -- gold
+			{ 0.82, 0.84, 0.9 },   -- silver
+			{ 0.82, 0.53, 0.22 },  -- bronze
+		}
+		for _, m in ipairs(M.ZoneMarks(map,
+			G.Leaderboard and G.Leaderboard() or {})) do
+			local mc = m.medal and MEDAL[m.medal]
+				or { 0.55, 0.6, 0.55 }
+			L:mark(m.x * w, m.y * h, m.count,
+				mc[1], mc[2], mc[3], m.medal)
 		end
 		return
 	end
@@ -571,7 +578,11 @@ function M.Refresh()
 	-- actually farms. A landmark equal to the map's own name adds
 	-- nothing — drop it
 	local mapName = G.ZoneName and G.ZoneName(map)
-	for _, zn in ipairs(G.ZoneList(map) or {}) do
+	-- every record landing on the displayed map, whatever mapID
+	-- the client stored it under (custom zones, Riverglades, ...)
+	for _, zl in pairs(GoblinMindGather.zones or {}) do
+	for _, zn in ipairs(zl) do
+		if RecXY(zn) then
 		-- a bad record can't kill the overlay pass — one zone's
 		-- draw failing must not take every later zone/pin with it
 		pcall(function()
@@ -604,6 +615,8 @@ function M.Refresh()
 				end,
 			})
 		end)
+		end
+	end
 	end
 
 	-- node pins: Gatherer-style stacking — records within ~70yd
@@ -613,8 +626,10 @@ function M.Refresh()
 	-- learned respawn window; a set target dims non-producers
 	local tid = G.TargetID and G.TargetID()
 	local nodes = {}
-	for _, nd in ipairs(G.NodeList(map) or {}) do
-		if RecXY(nd) then nodes[#nodes + 1] = nd end
+	for _, list in pairs(GoblinMindGather.nodes or {}) do
+		for _, nd in ipairs(list) do
+			if RecXY(nd) then nodes[#nodes + 1] = nd end
+		end
 	end
 	local upy = nodes[1] and UnitsPerYard(map, nodes[1])
 		or (1 / 1500)
@@ -683,28 +698,103 @@ function M.IsWorldy(mapID)
 	return ok and info and info.parentMapID == 947
 end
 
-local function MapXY(p, mapID)
-	-- cached x,y is only valid in the map frame it was projected
-	-- for — a record merged from a different mapID must reproject
-	-- its world coords instead (cross-map zone merging)
-	if p.x and p.y and (not p.map or p.map == mapID) then
-		return p.x, p.y
+-- the record map's slot on the displayed map: the ancestor
+-- directly UNDER display. A zone under a continent -> the zone;
+-- anything on the world view -> its continent (or the topmost
+-- known ancestor on thin-hierarchy clients). One mark per slot —
+-- Forever stores a single place under several mapIDs
+function M.MapUnder(m, display)
+	if not (m and display) or m == display then return nil end
+	local GetInfo = C_Map and C_Map.GetMapInfo
+	if not GetInfo then return m end -- thin client: own slot
+	local cur = m
+	for _ = 1, 8 do
+		local ok, info = pcall(GetInfo, cur)
+		if not ok or not info then break end
+		local p = info.parentMapID
+		if p == display then return cur end
+		if not p or p == 0 or p == cur then break end
+		cur = p
 	end
-	if p.n and p.w then
-		local mx, my = GM.MapPos(p.c or 0, p.n, p.w, mapID)
-		if mx and mx >= 0 and mx <= 1 then
-			if not p.map or p.map == mapID then
-				p.x, p.y = mx, my
-			end
-			return mx, my
-		end
-	end
-	-- fall back to the raw stored coords only when the frame can't
-	-- be proven foreign
-	if p.x and p.y then return p.x, p.y end
+	-- walk couldn't prove a slot: the world view rolls up to the
+	-- topmost ancestor; deeper views fall back to the map itself —
+	-- off-continent groups simply centroid out of bounds
+	return display == 947 and cur or m
 end
 
-
+-- grouped per-zone marks for a continent/world display: camps +
+-- solved-route rows rolled up to their zone slot, centroided over
+-- every record map inside it, medal-ranked by best gpm. The
+-- world-map overlay and the window pane draw the same marks
+local function MarkAccum(e, m, p)
+	if p.n and p.w then
+		e.sn, e.sw, e.n = (e.sn or 0) + p.n,
+			(e.sw or 0) + p.w, (e.n or 0) + 1
+		if not e.c and p.c and p.c ~= 0 then e.c = p.c end
+	elseif p.x and p.y and not e.xy then
+		e.xy = { m = m, x = p.x, y = p.y }
+	end
+end
+function M.ZoneMarks(display, rows)
+	local groups, mapGrp = {}, {}
+	local function grpOf(m)
+		local g = mapGrp[m]
+		if g == nil then
+			g = M.MapUnder(m, display) or false
+			mapGrp[m] = g
+		end
+		return g or nil
+	end
+	for _, r in ipairs(rows or {}) do
+		if r.map and not r.mob then
+			local z = grpOf(r.map)
+			if z then
+				local e = groups[z]
+				if not e then e = { count = 0, gpm = 0 }
+					groups[z] = e end
+				e.count = e.count + 1
+				if (r.gpm or 0) > e.gpm then e.gpm = r.gpm end
+			end
+		end
+	end
+	local db = GoblinMindGather or {}
+	for m, list in pairs(db.nodes or {}) do
+		local e = grpOf(m) and groups[grpOf(m)]
+		if e then
+			for _, p in ipairs(list) do MarkAccum(e, m, p) end
+		end
+	end
+	for m, list in pairs(db.zones or {}) do
+		local e = grpOf(m) and groups[grpOf(m)]
+		if e then
+			for _, p in ipairs(list) do MarkAccum(e, m, p) end
+		end
+	end
+	local out = {}
+	for _, e in pairs(groups) do
+		local x, y
+		if (e.n or 0) > 0 then
+			x, y = GM.MapPos(e.c or 0, e.sn / e.n,
+				e.sw / e.n, display)
+		elseif e.xy then
+			local n, w, c = GM.WorldPos(e.xy.m, e.xy.x, e.xy.y)
+			if n then
+				x, y = GM.MapPos(c or 0, n, w, display)
+			end
+		end
+		if x and x >= -0.02 and x <= 1.02
+			and y and y >= -0.02 and y <= 1.02 then
+			out[#out + 1] = { x = x, y = y,
+				count = e.count, gpm = e.gpm }
+		end
+	end
+	table.sort(out, function(a, b)
+		return (a.gpm or 0) > (b.gpm or 0) end)
+	for i, mm in ipairs(out) do
+		if i <= 3 and (mm.gpm or 0) > 0 then mm.medal = i end
+	end
+	return out
+end
 
 -- MapWise terrain path: MapWiseAPI exposes the addon's whole
 -- table — TerrainIndex holds world-terrain tile fileIDs
@@ -1059,8 +1149,24 @@ function M.CreatePane(parent, w)
 		end
 		if not G then return end
 
-		local zones = G.ZoneList(mapID) or {}
-		local nodes = G.NodeList(mapID) or {}
+		-- every record that projects into the displayed frame —
+		-- Forever stores one place under several mapIDs, so the
+		-- exact-key lists miss cross-map records that draw fine
+		local zones, nodes = {}, {}
+		for _, list in pairs(GoblinMindGather.zones or {}) do
+			for _, zn in ipairs(list) do
+				if MapXY(zn, mapID) then
+					zones[#zones + 1] = zn
+				end
+			end
+		end
+		for _, list in pairs(GoblinMindGather.nodes or {}) do
+			for _, nd in ipairs(list) do
+				if MapXY(nd, mapID) then
+					nodes[#nodes + 1] = nd
+				end
+			end
+		end
 		local ref = nodes[1] or zones[1]
 		local upy = UnitsPerYard(mapID, ref)
 		local tid = G.TargetID and G.TargetID()

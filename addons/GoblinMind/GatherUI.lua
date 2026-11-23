@@ -89,89 +89,16 @@ local function PaneMap()
 	for k in pairs(GoblinMindGather.zones or {}) do return k end
 end
 
--- is map m a descendant of the displayed map? zones sit one
--- level under continents; the world map takes every zone
-local function MapChildOf(m, display)
-	if display == 947 then
-		return not (GM.GatherMap.IsWorldy
-			and GM.GatherMap.IsWorldy(m))
-	end
-	local GetInfo = C_Map and C_Map.GetMapInfo
-	if not GetInfo then return false end
-	local cur = m
-	for _ = 1, 8 do
-		local ok, info = pcall(GetInfo, cur)
-		if not ok or not info or not info.parentMapID
-			or info.parentMapID == cur then
-			return false
-		end
-		if info.parentMapID == display then return true end
-		cur = info.parentMapID
-	end
-	return false
-end
-
--- a zone's marker spot on the continent/world map: record
--- centroid in world yards projected into the display frame;
--- x,y-only records (imports) convert through world pos
-local function ZoneCentroid(m, displayMap)
-	local sn, sw, n, c = 0, 0, 0, nil
-	local xy
-	for _, list in ipairs({ GoblinMindGather.nodes[m],
-		GoblinMindGather.zones[m] }) do
-		for _, rec in ipairs(list or {}) do
-			if rec.n and rec.w then
-				sn, sw, n = sn + rec.n, sw + rec.w, n + 1
-				c = c or (rec.c ~= 0 and rec.c or nil)
-			elseif rec.x and rec.y then
-				xy = xy or rec
-			end
-		end
-	end
-	if n == 0 and xy then
-		local pn, pw = GM.WorldPos(m, xy.x, xy.y)
-		if pn then sn, sw, n = pn, pw, 1 end
-	end
-	if n == 0 then return nil end
-	local x, y = GM.MapPos(c or 0, sn / n, sw / n, displayMap)
-	if x and x >= 0 and x <= 1 then
-		return x, y
-	end
-end
-
 -- per-zone summary marks for the continent/world view:
--- camps + solvable routes per record-bearing child zone,
--- ranked by best GPM for the medal tier
+-- camps + solvable routes rolled up to the zone slot on the
+-- display map (one mark per zone — Forever stores a single
+-- place under several mapIDs), medal-ranked by best GPM.
+-- Implementation is shared with the world-map overlay
 local function ZoneMarks(displayMap, rows)
-	local byMap = {}
-	for _, r in ipairs(rows or {}) do
-		if r.map and not r.mob then
-			local e = byMap[r.map]
-			if not e then
-				e = { camps = 0, routes = 0, gpm = 0 }
-				byMap[r.map] = e
-			end
-			if r.area then e.camps = e.camps + 1
-			else e.routes = e.routes + 1 end
-			if (r.gpm or 0) > e.gpm then e.gpm = r.gpm end
-		end
+	if not (GM.GatherMap and GM.GatherMap.ZoneMarks) then
+		return {}
 	end
-	local marks = {}
-	for m, e in pairs(byMap) do
-		if m ~= displayMap and MapChildOf(m, displayMap) then
-			local x, y = ZoneCentroid(m, displayMap)
-			if x then
-				marks[#marks + 1] = { x = x, y = y,
-					count = e.camps + e.routes, gpm = e.gpm }
-			end
-		end
-	end
-	table.sort(marks, function(a, b)
-		return (a.gpm or 0) > (b.gpm or 0) end)
-	for i, m in ipairs(marks) do
-		if i <= 3 and (m.gpm or 0) > 0 then m.medal = i end
-	end
-	return marks
+	return GM.GatherMap.ZoneMarks(displayMap, rows)
 end
 
 local function DrawPane()

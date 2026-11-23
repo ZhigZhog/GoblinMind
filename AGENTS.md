@@ -1061,5 +1061,30 @@ Primary data = the in-house book feed below.
     Continent/world mapIDs (`IsWorldy`: 947 or parent==947) get
     per-zone count discs projected through `GM.MapPos` — never
     child-zone geometry at continent scale.
+  - **One place, several mapIDs**: Forever resolves the same spot
+    to different mapIDs (a Riverglades beach reporting as Tanaris).
+    Records store their own `map` frame; `x,y` is ONLY valid when
+    `p.map == displayMap` — surfaces must iterate every record
+    list and projection-filter (`MapXY(p, display)`: x,y same-map
+    fast path → `n,w` project → `WorldPos` hop for foreign x,y),
+    never `db.nodes[map]`/`G.ZoneList(map)` key-reads. Continent
+    marks roll up by `M.MapUnder` = ancestor directly under the
+    display map, then `M.ZoneMarks(display, rows)` (shared world
+    map + pane) — one mark per zone slot, medal top-3 GPM.
+  - **Solve cache/stream**: `G.SolveRoute` is a TSP — cached by
+    `SolveKey` (map|kind|dataV|speedIx|contIx|respawn), 120s TTL.
+    `dataV` bumps on record mutation (MergeNode/UpdateYield/
+    coalesce/import wipe/ClearData); `SetTarget` deliberately
+    doesn't (no solved row reads db.target). `Leaderboard` uses
+    non-blocking `SolveCached` — misses queue a 1-job/frame pump,
+    `G.OnRouteSolved` cbs repaint (4/s throttle + on drain);
+    2-opt shares a 200ms per-solve deadline (degrades to NN).
+  - **Kind registry**: one `G.RegisterKind` def drives casts,
+    item-family verdicts (corpse/tailKill/keepArm), GatherLite
+    import cats, node-vs-area, colors/labels, layer toggles, and
+    route gating. `G.KindDefs[id].cats` feeds icon picks
+    (`ProduceItem` = family item by drop hits — a vein icons as
+    its ore, not a 1% gem; `StaticProduce` covers unlooted
+    imports via Gathering.nodes).
 - Not yet registered on the Codebase Map (project started 2026-11-11,
   post-closure).

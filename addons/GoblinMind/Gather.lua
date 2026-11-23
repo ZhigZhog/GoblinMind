@@ -344,7 +344,9 @@ local function MergePocket(zn, p)
 		if d and d <= (bd or POCKET_YD) then best, bd = pk, d end
 	end
 	if not best then
-		best = { map = zn.map,
+		-- the pocket's x,y frame is the KILL's map, not the
+		-- zone's — cross-map merging mislabels it otherwise
+		best = { map = p.map or zn.map,
 			x = p.x, y = p.y, n = p.n, w = p.w, c = p.c }
 		tinsert(zn.pockets, best)
 	end
