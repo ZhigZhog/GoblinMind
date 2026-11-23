@@ -1157,40 +1157,8 @@ function M.CreatePane(parent, w)
 					tostring(lay ~= nil),
 					tostring(lay and lay.tileWidth))
 			end
-			if records and lay and lay.tileWidth
-				and lay.tileWidth > 0 then
-				local explored
-				if C_MapExplorationInfo
-					and C_MapExplorationInfo
-						.GetExploredMapTextures then
-					local okE, exps = pcall(
-						C_MapExplorationInfo
-							.GetExploredMapTextures, mapID)
-					if okE and exps and exps[1] then
-						explored = {}
-						for _, e in ipairs(exps) do
-							explored[format(
-								"%d:%d:%d:%d",
-								e.textureWidth or 0,
-								e.textureHeight or 0,
-								e.offsetX or 0,
-								e.offsetY or 0)] = true
-						end
-						local e1 = exps[1]
-						note("explored=%d e[1] w=%s h=%s ox=%s oy=%s",
-							#exps,
-							tostring(e1.textureWidth),
-							tostring(e1.textureHeight),
-							tostring(e1.offsetX),
-							tostring(e1.offsetY))
-					else
-						note("explored empty: ok=%s n=%d",
-							tostring(okE),
-							okE and exps and #exps or 0)
-					end
-				else
-					note("no C_MapExplorationInfo API")
-				end
+			if lay and lay.tileWidth and lay.tileWidth > 0 then
+				local tileH = lay.tileHeight or lay.tileWidth
 				local pw = w / (lay.layerWidth or 1002)
 				local ph = h / (lay.layerHeight or 668)
 				-- partial edge tiles live in power-of-two
@@ -1201,81 +1169,134 @@ function M.CreatePane(parent, w)
 					while s < px do s = s * 2 end
 					return s
 				end
-				local keys = {}
-				for key in pairs(records) do keys[#keys + 1] = key end
-				table.sort(keys)
-				local match, skipped = 0, 0
-				for _, key in ipairs(keys) do
-					if not explored or explored[key] then
-						match = match + 1
-						local rw, rh, ox, oy = key:match(
-							"^(%d+):(%d+):(%d+):(%d+)$")
-						rw, rh, ox, oy = tonumber(rw), tonumber(rh),
-							tonumber(ox), tonumber(oy)
-						if rw and rw > 0 then
-							local files = {}
-							for id in records[key]:gmatch("%d+") do
-								files[#files + 1] = tonumber(id)
-							end
-							local cols = math.ceil(rw / lay.tileWidth)
-							local rows = math.ceil(rh / lay.tileHeight)
-							for row = 0, rows - 1 do
-								for col = 0, cols - 1 do
-									local fid = files[
-										row * cols + col + 1]
-									if fid then
-										local tw2 = min(
-											lay.tileWidth,
-											rw - col
-												* lay.tileWidth)
-										local th2 = min(
-											lay.tileHeight,
-											rh - row
-												* lay.tileHeight)
-										local t = put("exptile")
-										local okS, loaded =
-											pcall(t.SetTexture, t,
-												fid, "CLAMP",
-												"CLAMP",
-												"TRILINEAR")
-										if not okS then
-											okS, loaded = pcall(
-												t.SetTexture, t, fid)
-										end
-										if okS and loaded ~= false then
-											t:SetTexCoord(0,
-												tw2 / fsize(
-													tw2,
-													lay.tileWidth),
-												0,
-												th2 / fsize(
-													th2,
-													lay.tileHeight))
-											t:SetSize(tw2 * pw,
-												th2 * ph)
-											t:SetPoint("TOPLEFT",
-												inner, "TOPLEFT",
-												(ox + col
-													* lay.tileWidth)
-													* pw,
-												-(oy + row
-													* lay.tileHeight)
-													* ph)
-											haveArt = true
-										else
-											t:Hide()
-										end
-									end
+				-- one grid-draw for both explored shapes: a rect's
+				-- files lay out row-major over tile cells
+				local function drawRect(rw, rh, ox, oy, files)
+					local drew = 0
+					local cols = math.ceil(rw / lay.tileWidth)
+					local rows = math.ceil(rh / tileH)
+					for row = 0, rows - 1 do
+						for col = 0, cols - 1 do
+							local fid = files[
+								row * cols + col + 1]
+							if fid then
+								local tw2 = min(lay.tileWidth,
+									rw - col * lay.tileWidth)
+								local th2 = min(tileH,
+									rh - row * tileH)
+								local t = put("exptile")
+								if setfile(t, fid) then
+									t:SetTexCoord(0,
+										tw2 / fsize(tw2,
+											lay.tileWidth),
+										0, th2 / fsize(th2, tileH))
+									t:SetSize(tw2 * pw, th2 * ph)
+									t:SetPoint("TOPLEFT", inner,
+										"TOPLEFT",
+										(ox + col
+											* lay.tileWidth) * pw,
+										-(oy + row * tileH) * ph)
+									haveArt = true
+									drew = drew + 1
+								else
+									t:Hide()
 								end
 							end
 						end
-					else
-						skipped = skipped + 1
+					end
+					return drew
+				end
+				-- modern shape: an explored entry carries its own
+				-- fileDataIDs — draw it directly. classic shape:
+				-- the entry is a bare rect that only keys leatrix
+				local exps
+				if C_MapExplorationInfo
+					and C_MapExplorationInfo
+						.GetExploredMapTextures then
+					local okE, r = pcall(
+						C_MapExplorationInfo
+							.GetExploredMapTextures, mapID)
+					if okE then exps = r end
+				end
+				local filed, unfiled = 0
+				if exps and exps[1] then
+					local e1 = exps[1]
+					note("explored=%d e[1] w=%s h=%s ox=%s "
+						.. "oy=%s files=%s", #exps,
+						tostring(e1.textureWidth),
+						tostring(e1.textureHeight),
+						tostring(e1.offsetX),
+						tostring(e1.offsetY),
+						tostring(type(e1.fileDataIDs) == "table"
+							and #e1.fileDataIDs))
+					unfiled = {}
+					for _, e in ipairs(exps) do
+						if type(e.fileDataIDs) == "table"
+							and e.fileDataIDs[1]
+							and (e.textureWidth or 0) > 0 then
+							filed = filed + drawRect(
+								e.textureWidth, e.textureHeight,
+								e.offsetX or 0, e.offsetY or 0,
+								e.fileDataIDs)
+						else
+							unfiled[format("%d:%d:%d:%d",
+								e.textureWidth or 0,
+								e.textureHeight or 0,
+								e.offsetX or 0,
+								e.offsetY or 0)] = true
+						end
+					end
+					if not next(unfiled) then unfiled = nil end
+					note("explored: %d filed tiles, unfiled=%s",
+						filed, tostring(unfiled ~= nil))
+				else
+					note("explored absent/empty — data gap, "
+						.. "leatrix draws its full set")
+				end
+				-- leatrix key-matching for rects the API didn't
+				-- self-describe; skipped entirely when every
+				-- explored rect already drew from fileDataIDs
+				if records
+					and (not exps or not exps[1] or unfiled) then
+					local keys = {}
+					for key in pairs(records) do
+						keys[#keys + 1] = key
+					end
+					table.sort(keys)
+					local function keyed(k)
+						local rw, rh, ox, oy = k:match(
+							"^(%d+):(%d+):(%d+):(%d+)$")
+						rw, rh, ox, oy = tonumber(rw), tonumber(rh),
+							tonumber(ox), tonumber(oy)
+						if not rw or rw <= 0 then return end
+						local files = {}
+						for id in records[k]:gmatch("%d+") do
+							files[#files + 1] = tonumber(id)
+						end
+						drawRect(rw, rh, ox, oy, files)
+					end
+					local match, skipped = 0, 0
+					for _, key in ipairs(keys) do
+						if not unfiled or unfiled[key] then
+							match = match + 1
+							keyed(key)
+						else
+							skipped = skipped + 1
+						end
+					end
+					note("leatrix keys: %d match, %d skipped "
+						.. "(unfiled=%s)", match, skipped,
+						tostring(unfiled ~= nil))
+					-- the API answered but zero keys resolved —
+					-- its rect shape doesn't match this client's
+					-- dataset (tile vs record granularity). Same
+					-- policy as a missing list: draw the records
+					if match == 0 and skipped > 0 and filed == 0 then
+						for _, key in ipairs(keys) do keyed(key) end
+						note("shape mismatch — drew all %d keys",
+							#keys)
 					end
 				end
-				note("leatrix keys: %d match, %d skipped "
-					.. "(explored=%s)", match, skipped,
-					tostring(explored ~= nil))
 			end
 		end
 		note("done: tiles att=%d ok=%d bad=%d haveArt=%s "
