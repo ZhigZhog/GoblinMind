@@ -1193,10 +1193,13 @@ local function Toggle()
 
 		ui.hint = GM.MakeFontString(ui, GM.FONT, 9, "textDim")
 		ui.hint:SetPoint("BOTTOMLEFT", 12, 10)
+		-- bound to the left column — the line used to run under
+		-- the map panel, whose bg clips it mid-word
+		ui.hint:SetWidth(566)
+		ui.hint:SetWordWrap(false)
 		ui.hint:SetText(
-			"click = inspect · double-click a route to run/stop · "
-			.. "click a zone for a waypoint · "
-			.. "gather casts and cloth/skin loot record automatically")
+			"click = inspect · double-click route = run · "
+			.. "click zone = waypoint · loot records automatically")
 	end
 	if ui:IsShown() then
 		ui:Hide()

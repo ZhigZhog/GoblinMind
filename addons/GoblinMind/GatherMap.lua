@@ -535,15 +535,22 @@ function M.CreatePane(parent, w)
 	-- every drawable lives on a scroll child: a ScrollFrame is the
 	-- only hard clip rect textures get, and edge-anchored icons,
 	-- ring segments, and camp discs would otherwise bleed past the
-	-- pane onto the window chrome (the "overlap")
+	-- pane onto the window chrome (the "overlap"). Forever widget
+	-- APIs can exist but silently no-op (SetMaskTexture's trick) —
+	-- verify the child actually attached before trusting the clip,
+	-- and let SetClipsChildren back it up either way
 	local inner = pane
 	local clip = CreateFrame("ScrollFrame", nil, pane)
 	clip:SetAllPoints()
 	clip:EnableMouse(false)
 	local sc = CreateFrame("Frame", nil, clip)
 	if clip.SetScrollChild then
-		clip:SetScrollChild(sc)
-		inner = sc
+		pcall(clip.SetScrollChild, clip, sc)
+		local okG, child = pcall(clip.GetScrollChild, clip)
+		if okG and child == sc then inner = sc end
+	end
+	if inner == pane and pane.SetClipsChildren then
+		pane:SetClipsChildren(true)
 	end
 	pane._inner = inner
 
@@ -634,9 +641,12 @@ function M.CreatePane(parent, w)
 		if not self._fixedH then self:SetHeight(h) end
 		self._dw, self._dh = w, floor(h)
 		-- the scroll child carries every drawable at the draw
-		-- rect's size; the clip frame crops anything past it
+		-- rect's size; the clip frame crops anything past it.
+		-- When inner IS the pane (no clip API), SetSize would
+		-- override the anchored height and stretch the map frame
+		-- over the legend strip below
 		local inner = self._inner or self
-		inner:SetSize(w, h)
+		if inner ~= self then inner:SetSize(w, h) end
 
 		local haveArt = false
 		-- terrain beats parchment: real ground tiles via
