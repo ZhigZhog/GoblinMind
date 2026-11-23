@@ -257,14 +257,21 @@ function SU.Refresh()
 		local row, h = ui.rows[i], hits[i + ui.scroll]
 		if h then
 			row:Show()
-			row:SetItem(h.itemID)
+			row:SetItem({ itemID = h.itemID, name = h.name })
 			local flags = GM.Intel and GM.Intel.FlagsFor(h)
-			row.name:SetText((GM.ItemName(h.itemID) or h.name
-				or ("item " .. (h.itemID or "?")))
+			local nm = GM.ItemName(h.itemID)
+				or (h.name and h.name ~= "" and h.name)
+				or ("item " .. (h.itemID or "?"))
+			row.name:SetText(nm
 				.. (flags and (" " .. GM.CC("warn") .. flags .. "|r") or "")
 				.. (h._n and h._n > 1
 					and GM.CC("textDim") .. " ×" .. h._n .. "|r" or ""))
-			row.name:SetTextColor(GM.NameColor(h.itemID))
+			-- unresolvable ids get no client quality — read it off
+			-- the link's cnIQ tag instead of falling back to plain
+			local q = GM.ItemQuality(h.itemID)
+				or GM.LinkQuality(h.link)
+			local qr, qg, qb = GM.QualityColor(q)
+			row.name:SetTextColor(qr or GM.RGB("text"))
 			row.qty:SetText("×" .. (h.qty or 1))
 			-- live ask data wins once armed; snapshot fields otherwise
 			local live = h.live or {}

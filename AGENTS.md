@@ -689,6 +689,14 @@ Primary data = the in-house book feed below.
       table (`price`, `stackCount`, `numAvailable`, `hasExtendedCost`) —
       the global `GetMerchantItemInfo` doesn't exist. `GetItemInfo`
       isn't a global either — always `C_Item.GetItemInfo`.
+    - `GetItemInfo`/`GetItemIcon` can return `""` (truthy!) instead
+      of nil for unresolvable ids — `"" or fallback` yields the
+      empty string and rows render blank. `GM.ItemName`/`ItemIcon`
+      treat `""` as unresolved; check `v == ""` in new item-API
+      wrappers. Item LINKS still carry display data the client DB
+      lacks (`|Hitem:249425|h[Bauxite]|h`): `GM.LinkName`/
+      `GM.LinkQuality` (`|cnIQN:` prefix) are the fallback for
+      Forever customs — always carry `link` on browse/scan rows.
   - **Frame names must never equal a SavedVariable name**: SVs load at
     ADDON_LOADED (after files run) and OVERWRITE the frame global —
     `UISpecialFrames` then resolves to a plain table and Blizzard's

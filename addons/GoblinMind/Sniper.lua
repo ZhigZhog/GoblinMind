@@ -96,6 +96,8 @@ function N.Collect(rows)
 			fresh[#fresh + 1] = {
 				itemID = r.id, qty = r.qty, unit = r.unit, key = r.key,
 				bid = r.bid, tl = r.tl, tlex = r.tlex,
+				link = r.link, -- carries name+quality when the item
+				-- DB can't resolve the id (Forever customs)
 			}
 		end
 	end
@@ -125,8 +127,11 @@ function N.Collect(rows)
 			c.cap = cap
 			c.pct = m and m > 0 and (c.unit / m * 100) or nil
 			-- don't freeze "item N" here — SniperUI re-resolves
-			-- live once the async item data lands
-			c.name = GetInfo and GetInfo(c.itemID)
+			-- live once the async item data lands. The link's own
+			-- [name] is the fallback for ids the client DB can't
+			-- resolve at all ("" counts as unresolved on Forever)
+			local nm = GetInfo and GetInfo(c.itemID)
+			c.name = (nm and nm ~= "" and nm) or GM.LinkName(c.link)
 			c.hit = true
 			N.hits[#N.hits + 1] = c
 		end

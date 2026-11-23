@@ -1149,6 +1149,10 @@ end
 function GM.ItemName(id)
 	if not id then return end
 	local n = GetInfo and GetInfo(id)
+	-- Forever can hand back "" instead of nil for unresolvable
+	-- ids — "" is truthy and poisons every `or fallback` chain
+	-- downstream (blank sniper rows)
+	if n == "" then n = nil end
 	if not n then ReqOnce(id) end
 	return n
 end
@@ -1156,6 +1160,7 @@ end
 function GM.ItemIcon(id)
 	if not id then return end
 	local icon = GetIcon and GetIcon(id)
+	if icon == "" or icon == 0 then icon = nil end
 	if not icon then ReqOnce(id) end
 	return icon
 end
@@ -1169,6 +1174,19 @@ function GM.ItemQuality(id)
 	local q = GetInfo and select(3, GetInfo(id))
 	if not q then ReqOnce(id) end
 	return q
+end
+
+-- quality straight off a link's |cnIQN: prefix — item links carry
+-- their own display data, which is all we have for items the
+-- client's DB can't resolve (Forever customs like 249425)
+function GM.LinkQuality(link)
+	local q = link and link:match("|cnIQ(%d+):")
+	return q and tonumber(q) or nil
+end
+
+-- display name straight off a link — [Name] inside the |h|h brackets
+function GM.LinkName(link)
+	return link and link:match("%[(.-)%]") or nil
 end
 
 -- rarity rgb for a FontString; nil -> caller's fallback
