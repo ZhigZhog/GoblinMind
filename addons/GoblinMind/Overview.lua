@@ -370,7 +370,8 @@ function OV.RefreshChart()
 	-- window-filtered samples + stats pass
 	local cutoff = WIN_SECS[ui.chartWin or "ALL"]
 	cutoff = cutoff and (time() - cutoff) or -math.huge
-	local hist, tMin, tMax, vMax = {}, math.huge, 0, 0
+	local hist, tMin, tMax, vMin, vMax =
+		{}, math.huge, 0, math.huge, 0
 	local n, st, sv, stt, stv = 0, 0, 0, 0, 0
 	for _, p in ipairs(GM.db.wealthHist or {}) do
 		if p.t >= cutoff then
@@ -379,6 +380,7 @@ function OV.RefreshChart()
 			if p.t > tMax then tMax = p.t end
 			local wv = (p.g or 0) + (p.a or 0)
 			if wv > vMax then vMax = wv end
+			if wv < vMin then vMin = wv end
 			n = n + 1; st = st + p.t; sv = sv + wv
 			stt = stt + p.t * p.t; stv = stv + p.t * wv
 		end
@@ -449,6 +451,19 @@ function OV.RefreshChart()
 	ui.chartMsg:SetText("")
 	tMax = math.max(tMax, tMin + 600)
 
+	-- normalize the Y range to the sample band + padding: a
+	-- 0-pinned axis compresses the line into a ceiling sliver once
+	-- wealth sits well above zero, and the dips eat the rest.
+	-- lo floors at 0 (wealth can't go negative); the minimum pad
+	-- keeps a flat line from zooming to a hairline.
+	local pad = math.max((vMax - vMin) * 0.08, vMax * 0.02, 100)
+	local lo = math.max(0, vMin - pad)
+	local hi = vMax + pad
+	local vspan = hi - lo
+	local function wy(v)
+		return gy + (v - lo) / vspan * h
+	end
+
 	-- gridlines at ¼-steps with right-justified money labels in the
 	-- gutter — the only scale anchor the plot needs
 	local function AxisLabel(txt, x, y, anchor)
@@ -463,9 +478,8 @@ function OV.RefreshChart()
 		local y = gy + h * i / 4
 		tinsert(ui.art, Line(chart, gx, y, gx + w, y,
 			i == 0 and "outlineVar" or "outline", 1))
-		if i > 0 then
-			AxisLabel(GM.Money(vMax * i / 4), gx - 4, y - 4, "BOTTOMRIGHT")
-		end
+		AxisLabel(GM.Money(lo + vspan * i / 4),
+			gx - 4, y - 4, "BOTTOMRIGHT")
 	end
 	AxisLabel(date("%H:%M", tMin), gx, 4)
 	AxisLabel(date("%H:%M", tMax), gx + w, 4, "BOTTOMRIGHT")
@@ -478,8 +492,8 @@ function OV.RefreshChart()
 	local px, pgy, pwv
 	for _, p in ipairs(hist) do
 		local x = gx + (p.t - tMin) / (tMax - tMin) * w
-		local yg = gy + (p.g or 0) / vMax * h
-		local yw = gy + ((p.g or 0) + (p.a or 0)) / vMax * h
+		local yg = math.max(gy, wy(p.g or 0))
+		local yw = math.min(gy + h, wy((p.g or 0) + (p.a or 0)))
 		if px and pwv > pgy then
 			local band = chart:CreateTexture(nil, "BACKGROUND")
 			band:SetPoint("BOTTOMLEFT", chart, "BOTTOMLEFT", px, pgy)
@@ -494,7 +508,7 @@ function OV.RefreshChart()
 	px, pwv = nil, nil
 	for _, p in ipairs(hist) do
 		local x = gx + (p.t - tMin) / (tMax - tMin) * w
-		local yw = gy + ((p.g or 0) + (p.a or 0)) / vMax * h
+		local yw = wy((p.g or 0) + (p.a or 0))
 		if px then
 			tinsert(ui.art, Line(chart, px, pwv, x, pwv, "accent"))
 			if yw ~= pwv then
@@ -507,10 +521,11 @@ function OV.RefreshChart()
 	-- the line and the number can never disagree
 	if slopeOK then
 		local function vy(t)
-			return math.max(0, math.min(vMax, mv + slope * (t - mt)))
+			return math.max(lo,
+				math.min(hi, mv + slope * (t - mt)))
 		end
-		local ya = gy + vy(tMin) / vMax * h
-		local yb = gy + vy(tMax) / vMax * h
+		local ya = wy(vy(tMin))
+		local yb = wy(vy(tMax))
 		for i = 0, 12, 2 do -- dashed: every other seventh
 			local xa = gx + w * i / 14
 			local xb = gx + w * (i + 1) / 14
