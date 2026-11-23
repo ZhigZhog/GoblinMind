@@ -437,8 +437,16 @@ function W.PopupMenu(btn, entries, opts)
 	end)
 	Paint()
 	m:SetSize(w + 4, 4 + vis * 18)
+	-- TOPRIGHT grows the menu left of the button — flip when that
+	-- would underflow the screen edge; the clamp is the hard guard
 	m:ClearAllPoints()
-	m:SetPoint("TOPRIGHT", btn, "BOTTOMRIGHT", 0, -2)
+	local br = btn and btn:GetRight() or 0
+	if br - (w + 4) < 0 then
+		m:SetPoint("TOPLEFT", btn, "BOTTOMLEFT", 0, -2)
+	else
+		m:SetPoint("TOPRIGHT", btn, "BOTTOMRIGHT", 0, -2)
+	end
+	m:SetClampedToScreen(true)
 	m.btn = btn
 	m:Show()
 	m.catcher:Show()

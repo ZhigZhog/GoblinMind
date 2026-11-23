@@ -710,8 +710,18 @@ local function OpenZoneMenu(btn)
 		Paint()
 	end)
 	Paint()
+	-- TOPRIGHT extends the menu LEFT of the button — a multi-column
+	-- menu overflows the screen's left edge when the window sits
+	-- near it. Flip to grow right when the left edge would
+	-- underflow; SetClampedToScreen is the hard guard either way
 	m:ClearAllPoints()
-	m:SetPoint("TOPRIGHT", btn, "BOTTOMRIGHT", 0, -2)
+	local br = btn:GetRight() or 0
+	if br - width < 0 then
+		m:SetPoint("TOPLEFT", btn, "BOTTOMLEFT", 0, -2)
+	else
+		m:SetPoint("TOPRIGHT", btn, "BOTTOMRIGHT", 0, -2)
+	end
+	m:SetClampedToScreen(true)
 	m:Show()
 	m.catcher:Show()
 end
