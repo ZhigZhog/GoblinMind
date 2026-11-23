@@ -65,6 +65,7 @@ Primary data = the in-house book feed below.
   `max(book t, realmAge)`. This is what the user meant by "backend =
   source of truth when most current, active full scan = authority
   when current."
+- **MapWise world-map overlays**: draw on `WorldMapFrame:GetCanvas()` in a host frame, but do NOT use a fixed `canvas+N` level — MapWise re-levels `ForeverAtlasTerrainLayer` dynamically (`max(canvas+2, exploration+1)`, ~510+) in `Map.lua`'s layer refresh. Read the terrain layer's `GetFrameLevel()` each refresh and sit at `+1`; a fixed offset ends up under opaque terrain (the "overlays work on minimap, invisible on world map" bug, fixed in 33fc576).
 - **Panel header collisions**: `ColPanel`/`Panel` put a `count`
   fontstring at TOPRIGHT — anything else anchored TOPRIGHT (paging
   buttons, a title repositioned to share a search row) sits ON it.
