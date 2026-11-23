@@ -130,8 +130,11 @@ function N.Collect(rows)
 			-- live once the async item data lands. The link's own
 			-- [name] is the fallback for ids the client DB can't
 			-- resolve at all ("" counts as unresolved on Forever)
-			local nm = GetInfo and GetInfo(c.itemID)
-			c.name = (nm and nm ~= "" and nm) or GM.LinkName(c.link)
+			local ok, nm = pcall(function()
+				return GetInfo and GetInfo(c.itemID) end)
+			nm = ok and nm or nil
+			c.name = (type(nm) == "string" and nm ~= "" and nm)
+				or GM.LinkName(c.link)
 			c.hit = true
 			N.hits[#N.hits + 1] = c
 		end

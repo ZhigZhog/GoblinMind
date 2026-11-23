@@ -1152,10 +1152,12 @@ function W.ColumnRow(parent, opts)
 			id and GM.ItemIcon and GM.ItemIcon(id)
 			or "Interface\\Icons\\INV_Misc_QuestionMark")
 		local nm = type(d) == "table" and d.name or nil
-		row.name:SetText((nm and nm ~= "" and nm)
+		row.name:SetText((type(nm) == "string" and nm ~= "" and nm)
 			or (id and GM.ItemNameOr(id)) or "")
-		row.name:SetTextColor(id and GM.NameColor(id)
-			or GM.RGB("text"))
+		-- `a and X or Y` truncates to one arg — SetTextColor needs
+		-- the full triple so pick the source, not the expression
+		if id then row.name:SetTextColor(GM.NameColor(id))
+		else row.name:SetTextColor(GM.RGB("text")) end
 	end
 	-- zebra parity lives on the row so reordered pools repaint right
 	function row:SetZebra(i)

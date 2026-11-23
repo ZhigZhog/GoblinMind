@@ -253,14 +253,16 @@ function SU.Refresh()
 	ui.scroll = math.min(ui.scroll or 0, maxScroll)
 	W.ScrollText(ui.count, ui.scroll, VISIBLE, #hits)
 
-	for i = 1, VISIBLE do
-		local row, h = ui.rows[i], hits[i + ui.scroll]
-		if h then
-			row:Show()
+	-- one bad hit must never kill the feed — paint each row in a
+	-- pcall (the same rule the hit eval uses: a field the client
+	-- can't resolve must hide its row, not every row after it)
+	local function PaintRow(row, h)
+		row:Show()
 			row:SetItem({ itemID = h.itemID, name = h.name })
 			local flags = GM.Intel and GM.Intel.FlagsFor(h)
 			local nm = GM.ItemName(h.itemID)
-				or (h.name and h.name ~= "" and h.name)
+				or (type(h.name) == "string" and h.name ~= ""
+					and h.name)
 				or ("item " .. (h.itemID or "?"))
 			row.name:SetText(nm
 				.. (flags and (" " .. GM.CC("warn") .. flags .. "|r") or "")
@@ -271,7 +273,10 @@ function SU.Refresh()
 			local q = GM.ItemQuality(h.itemID)
 				or GM.LinkQuality(h.link)
 			local qr, qg, qb = GM.QualityColor(q)
-			row.name:SetTextColor(qr or GM.RGB("text"))
+			-- `qr or GM.RGB("text")` truncates the RGB triple to
+			-- one arg — SetTextColor throws and kills the repaint
+			if qr then row.name:SetTextColor(qr, qg, qb)
+			else row.name:SetTextColor(GM.RGB("text")) end
 			row.qty:SetText("×" .. (h.qty or 1))
 			-- live ask data wins once armed; snapshot fields otherwise
 			local live = h.live or {}
@@ -334,6 +339,13 @@ function SU.Refresh()
 					SU.Refresh()
 				end)
 			end)
+	end
+
+	for i = 1, VISIBLE do
+		local row, h = ui.rows[i], hits[i + ui.scroll]
+		if h then
+			-- a row that throws hides itself — the feed survives
+			if not pcall(PaintRow, row, h) then row:Hide() end
 		else
 			row:Hide()
 		end

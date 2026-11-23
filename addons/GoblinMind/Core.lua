@@ -1148,19 +1148,29 @@ end
 
 function GM.ItemName(id)
 	if not id then return end
-	local n = GetInfo and GetInfo(id)
-	-- Forever can hand back "" instead of nil for unresolvable
-	-- ids — "" is truthy and poisons every `or fallback` chain
-	-- downstream (blank sniper rows)
-	if n == "" then n = nil end
+	-- unresolvable ids can THROW on Forever, not just return nil
+	local ok, n = pcall(function() return GetInfo and GetInfo(id) end)
+	n = ok and n or nil
+	-- only a real name string is a result: "" (truthy, poisons
+	-- `or` chains) and tables/numbers (SetText fodder — Forever's
+	-- custom ids return whatever shape they like) both fail
+	if type(n) ~= "string" or n == "" then n = nil end
 	if not n then ReqOnce(id) end
 	return n
 end
 
 function GM.ItemIcon(id)
 	if not id then return end
-	local icon = GetIcon and GetIcon(id)
-	if icon == "" or icon == 0 then icon = nil end
+	local ok, icon = pcall(function()
+		return GetIcon and GetIcon(id) end)
+	icon = ok and icon or nil
+	-- valid answers are a fileID number or a texture path —
+	-- everything else (0, "", table) means unresolved
+	if type(icon) ~= "number" and type(icon) ~= "string" then
+		icon = nil
+	elseif icon == "" or icon == 0 then
+		icon = nil
+	end
 	if not icon then ReqOnce(id) end
 	return icon
 end
@@ -1171,7 +1181,10 @@ end
 
 function GM.ItemQuality(id)
 	if not id then return end
-	local q = GetInfo and select(3, GetInfo(id))
+	local ok, q = pcall(function()
+		return GetInfo and select(3, GetInfo(id)) end)
+	q = ok and q or nil
+	if type(q) ~= "number" then q = nil end
 	if not q then ReqOnce(id) end
 	return q
 end
