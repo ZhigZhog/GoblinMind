@@ -176,12 +176,7 @@ end
 -- surfaces run it in map-fraction space) — same routine either way
 local cluMap, cluN, cluSig, cluList
 
-local function IconTex(id)
-	if id and C_Item and C_Item.GetItemIconByID then
-		local ok, t = pcall(C_Item.GetItemIconByID, id)
-		if ok and t then return t end
-	end
-end
+
 
 local function WrapNodes(mapID, recs, mmSet)
 	local sig = ""
@@ -346,7 +341,7 @@ local function Update()
 	local clipC = { x = hw, y = hh, r = hw * 0.9 }
 	for _, zl in pairs(GoblinMindGather.zones or {}) do
 	for _, zn in ipairs(zl) do
-		local zc = G.ZoneCat and G.ZoneCat(zn) or zn.kind
+		local zc = G.ZoneCat(zn)
 		local znN, znW = zn.n, zn.w
 		if not (znN and znW) and zn.x and zn.y and zn.map then
 			znN, znW = GM.WorldPos(zn.map, zn.x, zn.y)
@@ -359,8 +354,7 @@ local function Update()
 				local rPx = function(yd)
 					return yd / radius * hw
 				end
-				local col = G.KindCol and G.KindCol(zc)
-					or G.KIND_COLOR[zc] or { 1, 1, 1 }
+				local col = G.KindCol(zc)
 				-- TOPLEFT-px pocket points for the shared fit —
 				-- own-frame x,y hops through WorldPos like the
 				-- map surfaces' MapXY does
@@ -418,7 +412,7 @@ local function Update()
 						end, clipC)
 					-- farm icon at the centroid, like the
 					-- world map's camp widget
-					local it = IconTex(G.ZoneIconID
+					local it = GM.ItemIcon(G.ZoneIconID
 						and G.ZoneIconID(zn))
 					if it then
 						local ic = put("icon")
@@ -488,16 +482,12 @@ local function Update()
 				px, py = u * hw, -v * hh
 			end
 			local rep = c.nodes[1].nd
-			local col = G.KindCol and G.KindCol(rep.kind)
-				or G.KIND_COLOR[rep.kind] or { 1, 1, 1 }
+			local col = G.KindCol(rep.kind)
 			-- same dim rule as the world map: every member inside
 			-- the learned respawn window → faded
 			local dimAll = true
 			for _, r in ipairs(c.nodes) do
-				local resp = G.RespawnSec
-					and G.RespawnSec(mapID, r.nd.kind) or 300
-				if not (r.nd.last
-					and (time() - r.nd.last) < resp * 0.8) then
+				if not G.NodeDepleted(r.nd, mapID) then
 					dimAll = false break
 				end
 			end
@@ -509,7 +499,7 @@ local function Update()
 			local ic = put("icon")
 			ic:SetSize(sz, sz)
 			ic:SetPoint("CENTER", host, "CENTER", px, py)
-			local tex = IconTex(G.NodeIconID
+			local tex = GM.ItemIcon(G.NodeIconID
 				and G.NodeIconID(rep))
 			-- same rule as MapLayer's icon: real item art stays
 			-- natural, the kind tint is only for the fallback disc

@@ -180,8 +180,7 @@ local function ZonePts(zn, recXY, w, h, rPx)
 	local pts = {}
 	for _, pk in ipairs(zn.pockets or {}) do
 		local px, py = recXY(pk)
-		if px and px >= -0.05 and px <= 1.05
-			and py >= -0.05 and py <= 1.05 then
+		if M.OnFrame(px, py, 0.05) then
 			pts[#pts + 1] = { x = px * w, y = py * h }
 		end
 	end
@@ -203,17 +202,7 @@ local function ZonePts(zn, recXY, w, h, rPx)
 	return pts
 end
 
-local function ItemIcon(id)
-	if not id then return nil end
-	if C_Item and C_Item.GetItemIconByID then
-		local ok, ic = pcall(C_Item.GetItemIconByID, id)
-		if ok and ic then return ic end
-	end
-	if GetItemIcon then
-		local ok, ic = pcall(GetItemIcon, id)
-		if ok and ic then return ic end
-	end
-end
+
 
 -- map-units per yard near (n,w): project two points a known world
 -- distance apart and measure. Fallback matches the world map's
@@ -307,6 +296,16 @@ local function MapXY(p, mapID)
 	if p.x and p.y then return p.x, p.y end
 end
 
+-- normalized coords on (or a hair off) the displayed canvas.
+-- The bleed margin keeps edge pins from clipping mid-draw;
+-- pockets get a wider one since they're just fit input
+local FRAME_M = 0.02
+function M.OnFrame(x, y, m)
+	m = m or FRAME_M
+	return x and y and x >= -m and x <= 1 + m
+		and y >= -m and y <= 1 + m
+end
+
 -- shared proximity merge — GatherMinimap clusters in world-yard
 -- space with the same routine instead of a second merge
 M.Cluster = Cluster
@@ -328,16 +327,15 @@ M.ZONE_DRAW_MAX_YD = ZONE_DRAW_MAX_YD
 local function ZoneTip(zn, mapID)
 	return function(tip)
 		local G = GM.Gather
-		local zc = G.ZoneCat and G.ZoneCat(zn) or zn.kind
-		local gpm = G.ZoneEV(zn) * G.ZoneRate(zn)
+		local zc = G.ZoneCat(zn)
+		local gpm = G.ZoneGPM(zn)
 		tip:AddLine(GM.MoneyShort(floor(gpm)) .. "/min"
 			.. GM.CC("textDim") .. " · " .. (zn.kills or 0)
 			.. " kills · " .. #(zn.pockets or {})
 			.. " pockets|r")
 		local place = G.ZonePlace and G.ZonePlace(zn)
-		tip:AddLine((G.KindHex and G.KindHex(zc) or "")
-			.. (G.KindLabel and G.KindLabel(zc) or zc)
-			.. "|r" .. (place and (" · " .. place) or ""))
+		tip:AddLine(G.KindTag(zc)
+			.. (place and (" · " .. place) or ""))
 		local mobs = G.ZoneMobs and G.ZoneMobs(zn)
 		if mobs then
 			tip:AddLine(GM.CC("secondary") .. mobs .. "|r")
@@ -361,9 +359,7 @@ local function ClusterTip(c, mapID)
 		local ev, dimAll = 0, true
 		for _, nd in ipairs(c.nodes) do
 			ev = ev + (G.NodeEV and G.NodeEV(nd) or 0)
-			local resp = G.RespawnSec(mapID, nd.kind) or 300
-			if not (nd.last
-				and (time() - nd.last) < resp * 0.8) then
+			if not G.NodeDepleted(nd, mapID) then
 				dimAll = false
 			end
 		end
@@ -371,9 +367,7 @@ local function ClusterTip(c, mapID)
 			.. GM.CC("textDim") .. " / spawn|r")
 		local order, tally = {}, {}
 		for _, nd in ipairs(c.nodes) do
-			local nm = nd.name
-				or (G.KindLabel and G.KindLabel(nd.kind))
-				or nd.kind
+			local nm = nd.name or G.KindLabel(nd.kind)
 			if not tally[nm] then order[#order + 1] = nm end
 			tally[nm] = (tally[nm] or 0) + 1
 		end
@@ -382,13 +376,11 @@ local function ClusterTip(c, mapID)
 			names = (names and names .. " · " or "") .. nm
 				.. (tally[nm] > 1 and (" ×" .. tally[nm]) or "")
 		end
-		tip:AddLine((G.KindHex and G.KindHex(rep.kind) or "")
-			.. (G.KindLabel and G.KindLabel(rep.kind)
-				or rep.kind) .. "|r  " .. (names or ""))
+		tip:AddLine(G.KindTag(rep.kind) .. "  " .. (names or ""))
 		tip:AddLine(GM.CC("secondary") .. c.n
 			.. (c.n == 1 and " node" or " nodes")
 			.. " · respawn ~"
-			.. G.SecondsText(G.RespawnSec(mapID, rep.kind) or 300)
+			.. G.SecondsText(G.RespawnSec(mapID, rep.kind))
 			.. (dimAll and " · depleted" or "") .. "|r")
 		-- drops from the dominant member's observed table
 		local rows = G.DropRows
@@ -433,7 +425,7 @@ local function ZoneScene(L, zn, prj, w, h, st)
 	end
 	if st.iconID then
 		local sz = st.iconSz or 18
-		L:icon(cx, cy, sz, ItemIcon(st.iconID),
+		L:icon(cx, cy, sz, GM.ItemIcon(st.iconID),
 			col[1], col[2], col[3], st.iconA or 1)
 		if st.tip ~= false then
 			L:hot(cx, cy, sz + 6, sz + 6,
@@ -450,8 +442,7 @@ end
 local function ClusterScene(L, c, w, h, st)
 	G = G or GM.Gather
 	local rep = c.nodes[1]
-	local col = G.KindCol and G.KindCol(rep.kind)
-		or G.KIND_COLOR[rep.kind] or { 1, 1, 1 }
+	local col = G.KindCol(rep.kind)
 	local best
 	for _, nd in ipairs(c.nodes) do
 		best = best or (G.NodeIconID and G.NodeIconID(nd))
@@ -466,7 +457,7 @@ local function ClusterScene(L, c, w, h, st)
 	local sz = min(20, 10 + 3 * sqrt(c.n))
 	if st.shrink then sz = min(sz, 8) end
 	local x, y = c.x * w, c.y * h
-	L:icon(x, y, sz, ItemIcon(best), col[1], col[2], col[3], a)
+	L:icon(x, y, sz, GM.ItemIcon(best), col[1], col[2], col[3], a)
 	if c.n > 1 then
 		L:badge(x, y + sz / 2 + 6, tostring(c.n),
 			col[1], col[2], col[3], a)
@@ -484,9 +475,7 @@ local function RouteTip(r)
 		local G = GM.Gather
 		tip:AddLine("≈ " .. GM.MoneyShort(floor(r.gpm or 0))
 			.. "/min" .. GM.CC("textDim") .. " expected|r")
-		tip:AddLine((G.KindHex and G.KindHex(r.kind) or "")
-			.. (G.KindLabel and G.KindLabel(r.kind)
-				or "ROUTE") .. "|r loop · " .. #r.stops
+		tip:AddLine(G.KindTag(r.kind) .. " loop · " .. #r.stops
 			.. " stops" .. (r.running and " · active" or ""))
 		if r.evLoop then
 			tip:AddLine(GM.MoneyShort(floor(r.evLoop)) .. "/lap"
@@ -577,10 +566,7 @@ function M.Refresh()
 	-- cross-mapID records reproject via the shared MapXY
 	local function RecXY(p)
 		local x, y = MapXY(p, map)
-		if x and x >= -0.02 and x <= 1.02
-			and y and y >= -0.02 and y <= 1.02 then
-			return x, y
-		end
+		if M.OnFrame(x, y) then return x, y end
 	end
 
 	-- continent/world view: one mark per zone SLOT (record mapIDs
@@ -618,17 +604,15 @@ function M.Refresh()
 		-- a bad record can't kill the overlay pass — one zone's
 		-- draw failing must not take every later zone/pin with it
 		pcall(function()
-			local zc = G.ZoneCat and G.ZoneCat(zn) or zn.kind
-			local col = G.KindCol and G.KindCol(zc)
-				or G.KIND_COLOR[zc] or { 1, 1, 1 }
+			local zc = G.ZoneCat(zn)
+			local col = G.KindCol(zc)
 			local place = G.ZonePlace and G.ZonePlace(zn)
 			if place == mapName then place = nil end
-			local gpm = G.ZoneEV(zn) * G.ZoneRate(zn)
+			local gpm = G.ZoneGPM(zn)
 			-- same tag contract as the mod's rows: kind-colored
 			-- UPPERCASE label, then stats in text color
-			local label = format("%s%s|r%s · %s kills · %s/min",
-				G.KindHex and G.KindHex(zc) or "",
-				G.KindLabel and G.KindLabel(zc) or zc,
+			local label = format("%s%s · %s kills · %s/min",
+				G.KindTag(zc),
 				place and ("  " .. place) or "",
 				zn.kills or 0,
 				GM.MoneyShort
@@ -673,9 +657,7 @@ function M.Refresh()
 		pcall(function()
 		local dimAll, tHit = true, nil
 		for _, nd in ipairs(c.nodes) do
-			local resp = G.RespawnSec(map, nd.kind) or 300
-			if not (nd.last
-				and (time() - nd.last) < resp * 0.8) then
+			if not G.NodeDepleted(nd, map) then
 				dimAll = false
 			end
 			if tid and G.NodeTargets
@@ -726,38 +708,62 @@ local abs = math.abs
 -- data, early-login casts)
 -- continent scale: the world map or its direct children
 -- (continents). Child-zone geometry projects onto them at the
--- wrong size — they get summary marks instead of overlays
+-- wrong size — they get summary marks instead of overlays.
+-- Memoized: the check runs every refresh tick
+local worldyCache = {}
 function M.IsWorldy(mapID)
 	if not mapID then return false end
-	if mapID == 947 then return true end
-	local GetInfo = C_Map and C_Map.GetMapInfo
-	if not GetInfo then return false end
-	local ok, info = pcall(GetInfo, mapID)
-	return ok and info and info.parentMapID == 947
+	local hit = worldyCache[mapID]
+	if hit ~= nil then return hit end
+	local wy = false
+	if mapID == 947 then
+		wy = true
+	else
+		local GetInfo = C_Map and C_Map.GetMapInfo
+		if GetInfo then
+			local ok, info = pcall(GetInfo, mapID)
+			wy = ok and info and info.parentMapID == 947
+				or false
+		end
+	end
+	worldyCache[mapID] = wy
+	return wy
 end
 
 -- the record map's slot on the displayed map: the ancestor
 -- directly UNDER display. A zone under a continent -> the zone;
 -- anything on the world view -> its continent (or the topmost
 -- known ancestor on thin-hierarchy clients). One mark per slot —
--- Forever stores a single place under several mapIDs
+-- Forever stores a single place under several mapIDs. The
+-- hierarchy is immutable per session, so the 8-hop GetInfo walk
+-- memoizes — ZoneMarks asks per record map every refresh tick
+local underCache = {}
 function M.MapUnder(m, display)
 	if not (m and display) or m == display then return nil end
+	local key = m .. "|" .. display
+	local hit = underCache[key]
+	if hit ~= nil then return hit or nil end
+	local slot
 	local GetInfo = C_Map and C_Map.GetMapInfo
-	if not GetInfo then return m end -- thin client: own slot
-	local cur = m
-	for _ = 1, 8 do
-		local ok, info = pcall(GetInfo, cur)
-		if not ok or not info then break end
-		local p = info.parentMapID
-		if p == display then return cur end
-		if not p or p == 0 or p == cur then break end
-		cur = p
+	if not GetInfo then
+		slot = m -- thin client: own slot
+	else
+		local cur = m
+		for _ = 1, 8 do
+			local ok, info = pcall(GetInfo, cur)
+			if not ok or not info then break end
+			local p = info.parentMapID
+			if p == display then slot = cur break end
+			if not p or p == 0 or p == cur then break end
+			cur = p
+		end
+		-- walk couldn't prove a slot: the world view rolls up to
+		-- the topmost ancestor; deeper views fall back to the map
+		-- itself — off-continent groups centroid out of bounds
+		slot = slot or (display == 947 and cur or m)
 	end
-	-- walk couldn't prove a slot: the world view rolls up to the
-	-- topmost ancestor; deeper views fall back to the map itself —
-	-- off-continent groups simply centroid out of bounds
-	return display == 947 and cur or m
+	underCache[key] = slot or false
+	return slot
 end
 
 -- grouped per-zone marks for a continent/world display: camps +
@@ -820,8 +826,7 @@ function M.ZoneMarks(display, rows)
 				x, y = GM.MapPos(c or 0, n, w, display)
 			end
 		end
-		if x and x >= -0.02 and x <= 1.02
-			and y and y >= -0.02 and y <= 1.02 then
+		if M.OnFrame(x, y) then
 			out[#out + 1] = { x = x, y = y,
 				count = e.count, gpm = e.gpm }
 		end
@@ -1220,10 +1225,9 @@ function M.CreatePane(parent, w)
 		-- pane into the list column
 		if not worldy then
 		for _, zn in ipairs(zones) do
-			local zc = G.ZoneCat and G.ZoneCat(zn) or zn.kind
+			local zc = G.ZoneCat(zn)
 			local x, y = MapXY(zn, mapID)
-			if x and x > -0.02 and x < 1.02
-				and y > -0.02 and y < 1.02
+			if M.OnFrame(x, y)
 				-- the category filter isolates the overlay —
 				-- non-matching camps drop off the map entirely
 				and (not filter or zc == filter) then
@@ -1231,8 +1235,7 @@ function M.CreatePane(parent, w)
 				-- the selected row's camp pops: brighter fill/ring
 				-- plus an outer accent band
 				local isSel = sel and sel.zone == zn
-				local col = G.KindCol and G.KindCol(zc)
-					or G.KIND_COLOR[zc] or { 1, 1, 1 }
+				local col = G.KindCol(zc)
 				ZoneScene(L, zn,
 					function(p) return MapXY(p, mapID) end,
 					w, h, {
@@ -1260,8 +1263,7 @@ function M.CreatePane(parent, w)
 		local drawable = {}
 		for _, nd in ipairs(nodes) do
 			local x, y = MapXY(nd, mapID)
-			if x and x > -0.02 and x < 1.02
-				and y > -0.02 and y < 1.02
+			if M.OnFrame(x, y)
 				and (not filter or nd.kind == filter) then
 				drawable[#drawable + 1] = nd
 			end
@@ -1269,13 +1271,17 @@ function M.CreatePane(parent, w)
 		local clusters = Cluster(drawable,
 			function(nd) return MapXY(nd, mapID) end, 70 * upy)
 		for _, c in ipairs(clusters) do
-			local tHit
+			local tHit, dimAll = nil, true
 			for _, nd in ipairs(c.nodes) do
 				if tid and G.NodeTargets(nd, tid) then tHit = true end
+				if not G.NodeDepleted(nd, mapID) then
+					dimAll = false
+				end
 			end
 			local match = not tid or tHit
 			ClusterScene(L, c, w, h, {
-				a = match and 1 or 0.25,
+				-- same depletion dim as the world map
+				a = dimAll and 0.35 or (match and 1 or 0.25),
 				shrink = not match,
 				tid = tid,
 				mapID = mapID,
@@ -1304,10 +1310,7 @@ function M.CreatePane(parent, w)
 			and (not filter or loopKind == filter) then
 			RouteScene(L, stops, function(p)
 				local px, py = MapXY(p, mapID)
-				if px and px > -0.02 and px < 1.02
-					and py > -0.02 and py < 1.02 then
-					return px, py
-				end
+				if M.OnFrame(px, py) then return px, py end
 			end, w, h, selLoop and 1 or 0.85,
 				r and RouteTip(r))
 		end

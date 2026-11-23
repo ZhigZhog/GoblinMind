@@ -141,6 +141,11 @@ function G.KindHex(k)
 	return format("|cff%02x%02x%02x",
 		floor(c[1] * 255), floor(c[2] * 255), floor(c[3] * 255))
 end
+-- hex-wrapped UPPERCASE label — the tag form every surface uses;
+-- callers concatenate after it so it carries its own |r
+function G.KindTag(k)
+	return G.KindHex(k) .. G.KindLabel(k) .. "|r"
+end
 
 local WINDOW_SEC = 3        -- gather cast -> loot attribution window
 local NODE_MERGE_YD = 14    -- one record ≈ one spawn point: routes
@@ -248,6 +253,16 @@ end
 function G.RespawnSec(map, kind)
 	return db.resp and db.resp[map] and db.resp[map][kind]
 		or RESPAWN_PRIOR
+end
+
+-- inside the learned respawn window → the spawn is down, dim it.
+-- All dim checks route here: the depletion arithmetic lived in
+-- three draw paths once and drifted apart (one guarded respawn,
+-- two didn't)
+function G.NodeDepleted(nd, map)
+	if not nd.last then return false end
+	return (time() - nd.last)
+		< G.RespawnSec(map, nd.kind) * 0.8
 end
 
 -- derived-data epoch: every record mutation bumps it so solved
@@ -751,6 +766,13 @@ G.ZoneRate = ZoneRate
 G.ZoneEV = ZoneEV
 G.NodeEV = NodeEV
 
+-- headline camp money rate: value/kill x kills/min. The tag and
+-- every tooltip that quotes camp GPM reads through this so the
+-- formula can't drift across surfaces
+function G.ZoneGPM(zn)
+	return ZoneEV(zn) * ZoneRate(zn)
+end
+
 -- wall-clock truth: total looted value over the session gaps.
 -- Gaps past SESSION_GAP are a real break (not respawn/competition
 -- dead time) and don't count toward the session. This is the
@@ -909,8 +931,7 @@ end
 function G.ZoneIconID(zn)
 	local m = iconMemo[zn]
 	if m and m.v == dataV then return m.id end
-	local id = ProduceItem(
-			(G.ZoneCat and G.ZoneCat(zn)) or zn.kind, zn)
+	local id = ProduceItem(G.ZoneCat(zn), zn)
 		or BestYieldItem(zn.items)
 		or KIND_ICON_ITEM[zn.kind]
 	iconMemo[zn] = { v = dataV, id = id }
@@ -1297,7 +1318,7 @@ local solvePump, lastCb
 local function SolveKey(map, kind)
 	return tostring(map) .. "|" .. kind .. "|" .. dataV .. "|"
 		.. (db.speedIx or 2) .. "|" .. (db.contIx or 1) .. "|"
-		.. tostring(G.RespawnSec(map, kind) or 0)
+		.. tostring(G.RespawnSec(map, kind))
 end
 
 function G.OnRouteSolved(cb)

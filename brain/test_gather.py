@@ -174,6 +174,8 @@ C_Map.GetMapArtLayerTextures = function(m, li)
 	         1007, 1008, 1009, 1010, 1011, 1012 }
 end
 function GetItemIcon(id) return 40000 + id end
+-- Core.lua isn't loaded; the maps route icons through GM.ItemIcon
+GM.ItemIcon = function(id) return id and GetItemIcon(id) end
 ''')
 
 # load Gather.lua with the addon vararg contract

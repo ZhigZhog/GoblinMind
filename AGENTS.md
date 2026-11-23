@@ -1056,8 +1056,14 @@ Primary data = the in-house book feed below.
     WorldMapFrame hosting MapWise's terrain layer at
     `canvas:GetFrameLevel()+2` — textures on the bare frame (or
     raw canvas) render UNDER it, invisibly. `GatherMap.M.Refresh`
-    parents a dedicated host frame at `+6` (above terrain, below
-    interactive pins) and anchors normalized*pixel coords to it.
+    parents a dedicated host frame and re-levels it EVERY refresh
+    above the TOPMOST canvas child (walk `canvas:GetChildren()`,
+    exclude the host itself) — MapWise re-levels its terrain,
+    Reveal-fog, and explored-tile frames dynamically past ~510, so
+    chasing `ForeverAtlasTerrainLayer` by name loses the race:
+    explored zones painted detail tiles over our icons while
+    parchment showed them (the "inverse zones" bug). Do not go
+    back to a named-layer or fixed-offset level.
     Continent/world mapIDs (`IsWorldy`: 947 or parent==947) get
     per-zone count discs projected through `GM.MapPos` — never
     child-zone geometry at continent scale.

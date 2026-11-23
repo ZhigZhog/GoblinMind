@@ -675,7 +675,7 @@ local function FilterEntries()
 		end } }
 	for _, k in ipairs(KindOrder()) do
 		e[#e + 1] = {
-			label = KindColor(k) .. KindLabel(k) .. "|r",
+			label = GM.Gather.KindTag(k),
 			checked = ui.kindFilter == k,
 			cb = function()
 				ui.kindFilter = k ui.scroll = 0 Refresh()
