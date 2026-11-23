@@ -1087,14 +1087,17 @@ function M.CreatePane(parent, w)
 				end
 			end
 		end
-		-- explored-art overlay over the parchment: the client's
-		-- own overlay tiles via the vendored Leatrix dataset
-		-- (MapRevealData[artID]["w:h:ox:oy"] -> tile fileIDs).
+		-- explored-art overlay: the client's own reveal tiles via
+		-- the vendored Leatrix dataset (MapRevealData[artID]
+		-- ["w:h:ox:oy"] -> tile fileIDs). Draws over WHICHEVER base
+		-- we laid down — gating it on `not terrain` meant any map
+		-- with MapWise ground tiles lost its revealed detail
+		-- entirely (the "missing revealed tiles" pane bug).
 		-- Gated by GetExploredMapTextures rects when the API
 		-- answers — exact current-state like the default map UI;
 		-- an absent/empty explored list is a custom-zone data gap,
 		-- so the full set draws rather than a bare parchment.
-		if not terrain then
+		do
 			local artID = C_Map and C_Map.GetMapArtID
 				and C_Map.GetMapArtID(mapID)
 			local records = artID and GM.MapRevealData
