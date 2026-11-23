@@ -59,6 +59,25 @@ G.KIND_COLOR = {
 	cloth = { 0.85, 0.85, 0.95 }, -- legacy zone rows
 	cook = { 0.95, 0.55, 0.55 },
 }
+-- shared display surface: UPPERCASE tag + kind color. KindCol
+-- checks the settings override (GoblinMindGather.mm.col) first —
+-- row tags, map labels, and disc fills all read through it so
+-- one color pick applies everywhere
+G.KIND_LABEL = { herb = "HERB", mine = "MINE", hunt = "HUNT",
+	skin = "SKIN", cloth = "CLOTH", cook = "COOK" }
+function G.KindLabel(k)
+	return G.KIND_LABEL[k] or k
+end
+function G.KindCol(k)
+	local ov = GM.GatherMinimap and GM.GatherMinimap.Color(k)
+	return ov or G.KIND_COLOR[k] or { 1, 1, 1 }
+end
+function G.KindHex(k)
+	local c = G.KindCol(k)
+	return format("|cff%02x%02x%02x",
+		floor(c[1] * 255), floor(c[2] * 255), floor(c[3] * 255))
+end
+
 G.KINDS = { "herb", "mine", "skin", "hunt", "cloth" }
 -- node kinds build routes; area kinds build zones
 G.NODE_KINDS = { herb = true, mine = true }

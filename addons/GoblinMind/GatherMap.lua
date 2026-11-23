@@ -135,8 +135,9 @@ local function PutZone(canvas)
 		-- carries its own alpha edge (same fix as the pane discs)
 		c.fill:SetTexture(
 			"Interface\\AddOns\\GoblinMind\\Media\\disc.tga")
-		c.label = canvas:CreateFontString(nil, "OVERLAY",
-			"GameFontHighlightSmall")
+		-- Montserrat like the mod's own rows — map tags share the
+		-- UI's font/case/color contract, not GameFont's
+		c.label = GM.MakeFontString(canvas, GM.FONT, 10, "text")
 	end
 	c.fill:SetParent(canvas)
 	c.fill:Show()
@@ -173,12 +174,13 @@ local function DrawLine(canvas, x1, y1, x2, y2, r, g, b, a, wd)
 	t:SetVertexColor(r, g, b, a or 0.9)
 end
 
-local function DrawZone(canvas, x, y, rPx, r, g, b, label)
+local function DrawZone(canvas, x, y, rPx, r, g, b, label, oa)
+	oa = oa or 1
 	local c = PutZone(canvas)
 	c.fill:SetSize(rPx * 2, rPx * 2)
 	c.fill:ClearAllPoints()
 	c.fill:SetPoint("CENTER", canvas, "TOPLEFT", x, -y)
-	c.fill:SetVertexColor(r, g, b, 0.22)
+	c.fill:SetVertexColor(r, g, b, 0.22 * oa)
 	c.label:ClearAllPoints()
 	c.label:SetPoint("CENTER", canvas, "TOPLEFT", x, -y)
 	c.label:SetText(label or "")
@@ -190,7 +192,7 @@ local function DrawZone(canvas, x, y, rPx, r, g, b, label)
 		DrawLine(canvas,
 			x + cos(a0) * rPx, y + sin(a0) * rPx,
 			x + cos(a1) * rPx, y + sin(a1) * rPx,
-			r, g, b, 0.85, 3)
+			r, g, b, 0.85 * oa, 3)
 	end
 end
 
@@ -220,23 +222,16 @@ end
 -- kill coverage, not a guess around it
 local OUTLINE_SEG, POCKET_PAD_YD, ZONE_MIN_YD = 16, 35, 45
 
-local function DrawZoneFit(canvas, zn, RecXY, w, h, r, g, b, label)
-	local pts = {}
-	for _, pk in ipairs(zn.pockets or {}) do
-		local px, py = RecXY(pk)
-		if px and px >= -0.05 and px <= 1.05
-			and py >= -0.05 and py <= 1.05 then
-			pts[#pts + 1] = { x = px * w, y = py * h }
-		end
-	end
-	-- pocket centroid anchors the fit (zn.x is the FIRST kill,
-	-- not the middle); need a real cluster to fit around
-	if #pts < 3 then return false end
+-- support-function fit over pocket px points: farthest projection
+-- per direction around the centroid, padded + floored, Chaikin-
+-- smoothed twice into a bezier ring. Shared by the world-map
+-- overlay and the window pane — returns poly + centroid, or nil
+-- when there aren't enough pockets to fit around
+local function ZonePoly(pts, pad, minR)
+	if #pts < 3 then return nil end
 	local cx, cy = 0, 0
 	for _, p in ipairs(pts) do cx, cy = cx + p.x, cy + p.y end
 	cx, cy = cx / #pts, cy / #pts
-	local pad = YdToPx(canvas, POCKET_PAD_YD)
-	local minR = YdToPx(canvas, ZONE_MIN_YD)
 	local poly = {}
 	for i = 0, OUTLINE_SEG - 1 do
 		local a = i / OUTLINE_SEG * 6.2831853
@@ -260,37 +255,28 @@ local function DrawZoneFit(canvas, zn, RecXY, w, h, r, g, b, label)
 		end
 		poly = out
 	end
-	-- fill: scanline bands across the smoothed polygon — each
-	-- band's left/right edge crossings bound one rect, so the
-	-- shaded area is the true blob shape (not a dot union, and
-	-- no fan-convergence bright spot). The polygon is
-	-- star-shaped around the centroid so a band crosses twice
-	local ymin, ymax = 1e9, -1e9
-	for _, p in ipairs(poly) do
-		if p.y < ymin then ymin = p.y end
-		if p.y > ymax then ymax = p.y end
-	end
-	local step = 7
-	for y = ymin + step / 2, ymax, step do
-		local xl, xr = 1e9, -1e9
-		for i = 1, #poly do
-			local a, b = poly[i], poly[i % #poly + 1]
-			if (a.y <= y) ~= (b.y <= y) then
-				local t = (y - a.y) / (b.y - a.y)
-				local xi = a.x + t * (b.x - a.x)
-				if xi < xl then xl = xi end
-				if xi > xr then xr = xi end
-			end
-		end
-		if xl < xr then
-			local t = PutPin(canvas)
-			t:SetSize(xr - xl, step + 0.5)
-			t:ClearAllPoints()
-			t:SetPoint("TOPLEFT", canvas, "TOPLEFT", xl,
-				-(y - step / 2))
-			t:SetVertexColor(r, g, b, 0.18)
+	return poly, cx, cy
+end
+
+local function DrawZoneFit(canvas, zn, RecXY, w, h, r, g, b, label,
+		oa)
+	local pts = {}
+	for _, pk in ipairs(zn.pockets or {}) do
+		local px, py = RecXY(pk)
+		if px and px >= -0.05 and px <= 1.05
+			and py >= -0.05 and py <= 1.05 then
+			pts[#pts + 1] = { x = px * w, y = py * h }
 		end
 	end
+	-- pocket centroid anchors the fit (zn.x is the FIRST kill,
+	-- not the middle); need a real cluster to fit around
+	local poly, cx, cy = ZonePoly(pts,
+		YdToPx(canvas, POCKET_PAD_YD), YdToPx(canvas, ZONE_MIN_YD))
+	if not poly then return false end
+	oa = oa or 1
+	-- W.PolyFill does the scanline interior — pooled via PutPin
+	GM.Widgets.PolyFill(canvas, poly, 7, r, g, b, 0.18 * oa,
+		function() return PutPin(canvas) end)
 	local c = PutZone(canvas)
 	c.fill:Hide()
 	c.label:ClearAllPoints()
@@ -298,7 +284,8 @@ local function DrawZoneFit(canvas, zn, RecXY, w, h, r, g, b, label)
 	c.label:SetText(label or "")
 	for i = 1, #poly do
 		local a, b = poly[i], poly[i % #poly + 1]
-		DrawLine(canvas, a.x, a.y, b.x, b.y, r, g, b, 0.85, 3)
+		DrawLine(canvas, a.x, a.y, b.x, b.y,
+			r, g, b, 0.85 * oa, 3)
 	end
 	return true
 end
@@ -331,6 +318,8 @@ function M.Refresh()
 	local draw = Host(canvas)
 	Reclaim()
 	local w, h = canvas:GetWidth() or 1, canvas:GetHeight() or 1
+	-- overlay opacity master (settings → GoblinMindGather.mm.alpha)
+	local oa = GM.GatherMinimap and GM.GatherMinimap.Alpha() or 1
 	-- record -> normalized map coords on the displayed frame;
 	-- n,w-only records project, everything else fails nil
 	local function RecXY(p)
@@ -379,7 +368,7 @@ function M.Refresh()
 				mk.fill:ClearAllPoints()
 				mk.fill:SetPoint("CENTER", draw, "TOPLEFT",
 					x * w, -(y * h))
-				mk.fill:SetVertexColor(r, g, b, 0.6)
+				mk.fill:SetVertexColor(r, g, b, 0.6 * oa)
 				mk.label:ClearAllPoints()
 				mk.label:SetPoint("CENTER", draw, "TOPLEFT",
 					x * w, -(y * h))
@@ -408,21 +397,26 @@ function M.Refresh()
 			local x, y = RecXY(zn)
 			if not x then return end
 			local zc = G.ZoneCat and G.ZoneCat(zn) or zn.kind
-			local col = G.KIND_COLOR[zc] or { 1, 1, 1 }
+			local col = G.KindCol and G.KindCol(zc)
+				or G.KIND_COLOR[zc] or { 1, 1, 1 }
 			local place = G.ZonePlace and G.ZonePlace(zn)
 			if place == mapName then place = nil end
 			local gpm = G.ZoneEV(zn) * G.ZoneRate(zn)
-			local label = format("%s · %s kills · %s/min",
-				place and (place .. " · " .. zc) or zc,
+			-- same tag contract as the mod's rows: kind-colored
+			-- UPPERCASE label, then stats in text color
+			local label = format("%s%s|r%s · %s kills · %s/min",
+				G.KindHex and G.KindHex(zc) or "",
+				G.KindLabel and G.KindLabel(zc) or zc,
+				place and ("  " .. place) or "",
 				zn.kills or 0,
 				GM.MoneyShort
 					and GM.MoneyShort(floor(gpm))
 					or tostring(floor(gpm)))
 			if not DrawZoneFit(draw, zn, RecXY, w, h,
-				col[1], col[2], col[3], label) then
+				col[1], col[2], col[3], label, oa) then
 				DrawZone(draw, x * w, y * h,
 					YdToPx(draw, DispR(zn)),
-					col[1], col[2], col[3], label)
+					col[1], col[2], col[3], label, oa)
 			end
 		end)
 	end
@@ -431,12 +425,14 @@ function M.Refresh()
 	for _, nd in ipairs(G.NodeList(map) or {}) do
 		local x, y = RecXY(nd)
 		if x then
-			local col = G.KIND_COLOR[nd.kind] or { 1, 1, 1 }
+			local col = G.KindCol and G.KindCol(nd.kind)
+				or G.KIND_COLOR[nd.kind] or { 1, 1, 1 }
 			local resp = G.RespawnSec(map, nd.kind)
 			local dim = nd.last
 				and (time() - nd.last) < resp * 0.8
 			DrawPin(draw, x * w, y * h,
-				col[1], col[2], col[3], dim and 0.35 or 0.95)
+				col[1], col[2], col[3],
+				(dim and 0.35 or 0.95) * oa)
 		end
 	end
 
@@ -453,14 +449,14 @@ function M.Refresh()
 			if ax and bx then
 				DrawLine(draw, ax * w, ay * h,
 					bx * w, by * h,
-					0.4, 0.85, 1.0, 0.8)
+					0.4, 0.85, 1.0, 0.8 * oa)
 			end
 		end
 		local s = run and run.stops[run.idx]
 		local sx, sy = s and RecXY(s)
 		if sx then
 			DrawPin(draw, sx * w, sy * h,
-				0.4, 0.85, 1.0, 1)
+				0.4, 0.85, 1.0, 1 * oa)
 		end
 	end
 end
@@ -696,6 +692,10 @@ function M.CreatePane(parent, w)
 				-- square halo; the TGA carries its own alpha edge
 				t:SetTexture(
 					"Interface\\AddOns\\GoblinMind\\Media\\disc.tga")
+			elseif kind == "fill" then
+				-- scanline-fill bands — sit under rings/icons
+				t = inner:CreateTexture(nil, "OVERLAY", nil, -1)
+				t:SetTexture("Interface\\BUTTONS\\WHITE8X8")
 			elseif kind == "line" then
 				t = inner:CreateTexture(nil, "OVERLAY", nil, 1)
 				t:SetTexture("Interface\\BUTTONS\\WHITE8X8")
@@ -998,28 +998,65 @@ function M.CreatePane(parent, w)
 				-- the selected row's camp pops: brighter fill/ring
 				-- plus an outer accent outline
 				local isSel = sel and sel.zone == zn
-				local col = G.KIND_COLOR[zc] or { 1, 1, 1 }
-				local rPx = max(10, DispR(zn) * upy * w)
+				local col = G.KindCol and G.KindCol(zc)
+					or G.KIND_COLOR[zc] or { 1, 1, 1 }
 				local px, py = x * w, y * h
-				local d = put("disc")
-				d:SetSize(rPx * 2, rPx * 2)
-				d:SetPoint("CENTER", inner, "TOPLEFT", px, -py)
-				d:SetVertexColor(col[1], col[2], col[3],
-					isSel and 0.3 or (match and 0.16 or 0.05))
-				local seg = 24
-				for i = 1, seg do
-					local a0 = (i - 1) / seg * 6.2831853
-					local a1 = i / seg * 6.2831853
-					line(px + cos(a0) * rPx, py + sin(a0) * rPx,
-						px + cos(a1) * rPx, py + sin(a1) * rPx,
+				-- same fitted blob the world map draws: support
+				-- function over the camp's pockets, Chaikin-smoothed,
+				-- scanline-filled. <3 pockets keeps the plain disc
+				local pts = {}
+				for _, pk in ipairs(zn.pockets or {}) do
+					local kx, ky = MapXY(pk, mapID)
+					if kx then
+						pts[#pts + 1] = { x = kx * w, y = ky * h }
+					end
+				end
+				local poly, cx, cy = ZonePoly(pts,
+					POCKET_PAD_YD * upy * w, ZONE_MIN_YD * upy * w)
+				if poly then
+					GM.Widgets.PolyFill(inner, poly, 6,
 						col[1], col[2], col[3],
-						isSel and 0.95 or (match and 0.5 or 0.15))
-					if isSel then
-						line(px + cos(a0) * (rPx + 4),
-							py + sin(a0) * (rPx + 4),
-							px + cos(a1) * (rPx + 4),
-							py + sin(a1) * (rPx + 4),
-							1, 0.82, 0.1, 0.85)
+						isSel and 0.3 or (match and 0.16 or 0.05),
+						function() return put("fill") end)
+					for i = 1, #poly do
+						local a, b = poly[i], poly[i % #poly + 1]
+						line(a.x, a.y, b.x, b.y,
+							col[1], col[2], col[3],
+							isSel and 0.95 or (match and 0.5 or 0.15))
+						if isSel then
+							local vx, vy = a.x - cx, a.y - cy
+							local wx, wy = b.x - cx, b.y - cy
+							local vl = sqrt(vx * vx + vy * vy) or 1
+							local wl = sqrt(wx * wx + wy * wy) or 1
+							line(a.x + vx / vl * 4,
+								a.y + vy / vl * 4,
+								b.x + wx / wl * 4,
+								b.y + wy / wl * 4,
+								1, 0.82, 0.1, 0.85)
+						end
+					end
+				else
+					local rPx = max(10, DispR(zn) * upy * w)
+					local d = put("disc")
+					d:SetSize(rPx * 2, rPx * 2)
+					d:SetPoint("CENTER", inner, "TOPLEFT", px, -py)
+					d:SetVertexColor(col[1], col[2], col[3],
+						isSel and 0.3 or (match and 0.16 or 0.05))
+					local seg = 24
+					for i = 1, seg do
+						local a0 = (i - 1) / seg * 6.2831853
+						local a1 = i / seg * 6.2831853
+						line(px + cos(a0) * rPx, py + sin(a0) * rPx,
+							px + cos(a1) * rPx, py + sin(a1) * rPx,
+							col[1], col[2], col[3],
+							isSel and 0.95 or (match and 0.5 or 0.15))
+						if isSel then
+							line(px + cos(a0) * (rPx + 4),
+								py + sin(a0) * (rPx + 4),
+								px + cos(a1) * (rPx + 4),
+								py + sin(a1) * (rPx + 4),
+								1, 0.82, 0.1, 0.85)
+						end
 					end
 				end
 				local ic = put("icon")

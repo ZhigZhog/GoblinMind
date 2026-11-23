@@ -50,6 +50,23 @@ end
 function M.Set(k, on)
 	mm()[k] = on and true or false
 end
+-- world-map overlay opacity + per-kind fill colors ride the same
+-- mm settings table — one persistence surface for all map layers
+function M.Alpha()
+	return mm().alpha or 1
+end
+function M.SetAlpha(v)
+	mm().alpha = tonumber(v) or 1
+end
+function M.Color(k)
+	local c = mm().col
+	return c and c[k]
+end
+function M.SetColor(k, r, g, b)
+	local t = mm()
+	t.col = t.col or {}
+	if r then t.col[k] = { r, g, b } else t.col[k] = nil end
+end
 function M.Count()
 	local n = 0
 	for _, k in ipairs(M.LAYERS) do
@@ -244,7 +261,8 @@ local function Update()
 			local u, v, px, py = uv(zn.w, zn.n)
 			local rN = (zn.r or 150) / radius
 			if sqrt(u * u + v * v) - rN <= 0.9 then
-				local col = G.KIND_COLOR[zc] or { 1, 1, 1 }
+				local col = G.KindCol and G.KindCol(zc)
+					or G.KIND_COLOR[zc] or { 1, 1, 1 }
 				local dia = rN * 2 * hw
 				local d = put("zone")
 				d:SetSize(dia, dia)
@@ -291,7 +309,8 @@ local function Update()
 			and math.abs(nd.w - w) < radius * 2 then
 			local u, v, px, py = uv(nd.w, nd.n)
 			if u * u + v * v <= CLIP2 then
-				local col = G.KIND_COLOR[nd.kind] or { 1, 1, 1 }
+				local col = G.KindCol and G.KindCol(nd.kind)
+					or G.KIND_COLOR[nd.kind] or { 1, 1, 1 }
 				local edge = put("edge")
 				edge:SetSize(11, 11)
 				edge:SetPoint("CENTER", host, "CENTER", px, py)

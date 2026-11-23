@@ -120,6 +120,13 @@ end
 -- command API lives in Core.lua, which this harness doesn't load
 GM.CMDS = {}
 GM.Cmd = function() end
+-- Theme.lua isn't loaded either — GatherMap's zone labels use the
+-- shared font factory; stub it to the plain CreateFontString path
+GM.MakeFontString = function(parent, template, size, colorKey)
+	local fs = parent:CreateFontString(nil, "OVERLAY")
+	function fs:SetTextColor() end
+	return fs
+end
 
 -- Gathering.lua isn't loaded here — stub just the item->family
 -- classifier the loot attribution uses
@@ -143,6 +150,17 @@ seg = core.split(
     '-- ===================== map projection =====================',
     1)[1]
 lua.execute(seg)
+
+# same trick for the scanline fill — GatherMap's zone blobs call
+# the real W.PolyFill (Widget table gets replaced later for
+# DropLines, so reattach PolyFill after that stub too)
+wd = open('addons/GoblinMind/Widgets.lua', encoding='utf-8').read()
+polyfill = 'function W.PolyFill' + wd.split(
+    'function W.PolyFill', 1)[1].split(
+    '-- full-height column panel', 1)[0]
+lua.execute('GM.Widgets = GM.Widgets or {}\nlocal W = GM.Widgets\n'
+            + polyfill)
+_PF_SRC = polyfill
 
 # map art + item icons for the window pane
 lua.execute(r'''
@@ -386,6 +404,9 @@ lua.execute('''GM.Widgets = { DropLines = function(rows, opts)
 ITEM_DB[12184] = { name = "Raptor Flesh",
     link = "|Hitem:12184|h[Raptor Flesh]|h" }
 ''')
+# the stub table above wiped PolyFill — reattach the real one
+lua.execute('GM.Widgets = GM.Widgets or {}\nlocal W = GM.Widgets\n'
+            + _PF_SRC)
 lines = list(G.DropLines('Young Raptor').values())
 check('drops block emitted', any('drops' in l for l in lines))
 check('flesh row with observed pct',

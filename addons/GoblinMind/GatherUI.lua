@@ -16,15 +16,15 @@ local ui
 local ROWS = 24              -- row-button pool; ~21 show at once
 local KIND_ORDER = { "herb", "mine", "skin", "hunt", "cloth", "cook" }
 
+-- shared tag helpers live on Gather (G.KindLabel/G.KindHex) —
+-- world-map labels read the same table so tags match in case
+-- and color, including the settings color overrides
 local function KindLabel(k)
-	return ({ herb = "HERB", mine = "MINE", hunt = "HUNT",
-		skin = "SKIN", cloth = "CLOTH", cook = "COOK" })[k] or k
+	return GM.Gather.KindLabel(k)
 end
 
 local function KindColor(k)
-	local c = GM.Gather.KIND_COLOR[k] or { 1, 1, 1 }
-	return format("|cff%02x%02x%02x",
-		floor(c[1] * 255), floor(c[2] * 255), floor(c[3] * 255))
+	return GM.Gather.KindHex(k)
 end
 
 local function RowText(r)

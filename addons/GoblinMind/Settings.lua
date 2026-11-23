@@ -519,7 +519,7 @@ local function Build()
 	-- leaving UISpecialFrames pointing at a plain table (IsShown crash)
 	local f = GM.Widgets.Window({
 		name = "GoblinMindSettingsFrame", title = "SETTINGS",
-		w = 620, h = 802, x = -60, y = 10, tab = "settings",
+		w = 620, h = 894, x = -60, y = 10, tab = "settings",
 	})
 	ui.frame = f
 
@@ -790,6 +790,106 @@ local function Build()
 				function(v) GM.GatherMinimap.Set(k, v) end)
 			seg:SetPoint("TOPLEFT", 12 + col * 148 + 64, -24 - r * 24)
 			ui.mmLayers[i] = seg
+		end
+	end
+
+	-- world-map overlay: master opacity + per-farm-type fill
+	-- colors. Same mm table the layer toggles write — colors flow
+	-- through G.KindCol so rows, labels, discs, and blobs all
+	-- honor a pick
+	local ov = Panel(f, 10, -794, 600, 92, "GATHERING · MAP OVERLAY")
+	if GM.GatherMinimap and GM.Gather then
+		RowAt(ov, "OPACITY", 12, 26)
+		ui.ovSegs = {}
+		local steps = { 0.25, 0.5, 0.75, 1 }
+		local function paintAlpha()
+			local cur = GM.GatherMinimap.Alpha()
+			for i, s in ipairs(steps) do
+				W.PaintSeg(ui.ovSegs[i],
+					math.abs(cur - s) < 0.01)
+			end
+		end
+		for i, s in ipairs(steps) do
+			local seg = W.Segment(ov,
+				format("%d%%", s * 100), 52, 18)
+			seg:SetPoint("TOPLEFT", 116 + (i - 1) * 56, -24)
+			seg:SetScript("OnClick", function()
+				GM.GatherMinimap.SetAlpha(s)
+				paintAlpha()
+			end)
+			ui.ovSegs[i] = seg
+		end
+		paintAlpha()
+
+		RowAt(ov, "FILL COLORS", 12, 56)
+		ui.ovSwatch = {}
+		-- click = pick; right-click = back to the builtin color
+		local kinds = { "herb", "mine", "skin", "hunt", "cloth",
+			"cook" }
+		local function paintSwatch(k)
+			local c = GM.Gather.KindCol(k)
+			ui.ovSwatch[k]._gmBg:SetColorTexture(
+				c[1], c[2], c[3])
+		end
+		local function pick(k)
+			local cur = GM.Gather.KindCol(k)
+			local function apply(r, g, b)
+				GM.GatherMinimap.SetColor(k, r, g, b)
+				paintSwatch(k)
+			end
+			local CPF = ColorPickerFrame
+			if not CPF then return end
+			if CPF.SetupColorPickerAndShow then
+				CPF:SetupColorPickerAndShow({
+					r = cur[1], g = cur[2], b = cur[3],
+					swatchFunc = function()
+						apply(CPF:GetColorRGB())
+					end,
+					cancelFunc = function(prev)
+						apply(prev.r, prev.g, prev.b)
+					end,
+				})
+			else
+				CPF.func = function()
+					apply(CPF:GetColorRGB())
+				end
+				CPF.cancelFunc = function(prev)
+					apply(prev.r, prev.g, prev.b)
+				end
+				CPF.previousValues = {
+					r = cur[1], g = cur[2], b = cur[3],
+				}
+				CPF:SetColorRGB(cur[1], cur[2], cur[3])
+				CPF:Show()
+			end
+		end
+		for i, k in ipairs(kinds) do
+			local x = 116 + (i - 1) * 82
+			local sw = CreateFrame("Button", nil, ov)
+			sw:SetSize(16, 16)
+			sw:SetPoint("TOPLEFT", x, -54)
+			GM.Panel(sw, "contHigh")
+			sw:RegisterForClicks("LeftButtonUp",
+				"RightButtonUp")
+			sw:SetScript("OnClick", function(_, btn)
+				if btn == "RightButton" then
+					GM.GatherMinimap.SetColor(k)
+					paintSwatch(k)
+				else pick(k) end
+			end)
+			W.Tip(sw, function()
+				return {
+					(GM.Gather.KindLabel(k)) .. " fill",
+					"click = pick a color",
+					"right-click = default",
+				}
+			end)
+			local lbl = GM.MakeFontString(ov, GM.FONT, 9,
+				"textDim")
+			lbl:SetPoint("TOPLEFT", x + 20, -58)
+			lbl:SetText(GM.Gather.KindLabel(k))
+			ui.ovSwatch[k] = sw
+			paintSwatch(k)
 		end
 	end
 

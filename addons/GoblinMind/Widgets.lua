@@ -222,6 +222,42 @@ function W.PaintSeg(b, selected)
 	b.text:SetTextColor(GM.RGB(selected and "accent" or "textDim"))
 end
 
+-- scanline fill of a polygon: each horizontal band lays one pooled
+-- rect between its left/right outline crossings, so the shaded
+-- area IS the shape — unified Stellaris-style blob, not a dot
+-- union or a fan with a bright center. poly = { {x=px, y=px} }
+-- with screen-y down; put() yields a fresh WHITE8X8 texture the
+-- caller pools/reclaims. Star-shaped outlines cross each band
+-- exactly twice — that's the support-function fit contract.
+function W.PolyFill(canvas, poly, step, r, g, b, a, put)
+	local ymin, ymax = 1e9, -1e9
+	for _, p in ipairs(poly) do
+		if p.y < ymin then ymin = p.y end
+		if p.y > ymax then ymax = p.y end
+	end
+	step = step or 7
+	for y = ymin + step / 2, ymax, step do
+		local xl, xr
+		for i = 1, #poly do
+			local q, s = poly[i], poly[i % #poly + 1]
+			if (q.y <= y) ~= (s.y <= y) then
+				local xi = q.x + (y - q.y) / (s.y - q.y)
+					* (s.x - q.x)
+				if not xl or xi < xl then xl = xi end
+				if not xr or xi > xr then xr = xi end
+			end
+		end
+		if xl and xr and xl < xr then
+			local t = put()
+			t:SetSize(xr - xl, step + 0.5)
+			t:ClearAllPoints()
+			t:SetPoint("TOPLEFT", canvas, "TOPLEFT", xl,
+				-(y - step / 2))
+			t:SetVertexColor(r, g, b, a or 1)
+		end
+	end
+end
+
 -- full-height column panel with title (+count fs at top right). topY
 -- positions under the toolbar row — CraftingUI uses -52, OpsUI -34.
 -- Was two near-identical Panel()s; p.titleFs and p.count are both set
