@@ -121,7 +121,10 @@ function B.BagSlots()
 end
 
 local function BankOpen()
-	return BankFrame and BankFrame:IsShown()
+	-- same Forever custom-bank rule as BankUI: the BANKFRAME_*
+	-- event flag is authoritative, the native frame a fallback
+	return GM.bankOpen or (BankFrame and BankFrame:IsShown())
+		or nil
 end
 
 -- GetOpsForPath merges defaults into every group — ops only apply where

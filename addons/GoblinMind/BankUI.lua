@@ -30,8 +30,13 @@ local Btn = W.Btn
 
 local Tip = GM.Widgets.Tip
 
+-- Forever's bank is a custom frame ("Zhig Zhog's Bank") — the
+-- native BankFrame never shows even though BANKFRAME_OPENED
+-- fired. The event-driven flag is the authority; IsShown is the
+-- fallback for clients where the native frame does back the bank
 local function BankOpen()
-	return BankFrame and BankFrame:IsShown()
+	return GM.bankOpen or (BankFrame and BankFrame:IsShown())
+		or nil
 end
 
 -- warehousing op hint for a row: "keep N in bags" / "→ bank"
@@ -171,16 +176,7 @@ local function Build()
 	ui.summary:SetJustifyH("LEFT")
 	ui.summary:SetWordWrap(false)
 
-	local blizz = Btn(f, 84, "BLIZZARD UI", function()
-		ui.wantDefault = true
-		f:Hide() -- OnHide → Restore: native frame returns, session stays
-	end)
-	blizz:SetPoint("TOPRIGHT", -28, -34)
-	Tip(blizz, function()
-		return { "Blizzard default UI",
-			"Brings the default bank frame back and hides this",
-			"window. The GOBLINMIND button on that frame switches back." }
-	end)
+
 
 	-- panes
 	ui.lp = MakePane(f, 320, "BAGS → deposit")
@@ -296,8 +292,12 @@ pcall(f.RegisterEvent, f, "BANKFRAME_OPENED")
 pcall(f.RegisterEvent, f, "BANKFRAME_CLOSED")
 f:SetScript("OnEvent", function(_, e)
 	if e == "BANKFRAME_OPENED" then
+		GM.bankOpen = true
 		BU.OnBankOpen()
-	elseif ui and ui.frame then
-		ui.frame:Hide()
+	else
+		GM.bankOpen = nil
+		if ui and ui.frame then
+			ui.frame:Hide()
+		end
 	end
 end)
