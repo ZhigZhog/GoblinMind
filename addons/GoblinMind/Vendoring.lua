@@ -16,6 +16,9 @@ local UseItem = C_Container and C_Container.UseContainerItem
 local function MerchantOpen()
 	return MerchantFrame and MerchantFrame:IsShown()
 end
+-- the plan executor's vendor gate checks this the same way the
+-- AH gate checks GM.AH.open
+V.MerchantOpen = MerchantOpen
 
 local function MerchantItemID(index)
 	local link = GetMerchantItemLink and GetMerchantItemLink(index)

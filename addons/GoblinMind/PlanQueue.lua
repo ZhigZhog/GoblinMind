@@ -1649,15 +1649,21 @@ function PQ.Refresh()
 				or kind == "buy" and "BUY NEXT" or "EXECUTE NEXT STEP"
 			ui.exec.text:SetText(verb)
 		end
+		-- vendor steps (buy/sell/junk) gate on the merchant frame
+		-- the same way buy/post/cancel gate on GM.AH.open
+		local vendKind = curStep and (curStep.kind == "destroy"
+			or curStep.kind == "vendbuy" or curStep.kind == "vendsell")
+		local merchantOpen = GM.Vendoring and GM.Vendoring.MerchantOpen
+			and GM.Vendoring.MerchantOpen()
 		local moveKind = curStep and (curStep.kind == "note"
 			or curStep.kind == "fetch"
 			or curStep.kind == "move" or curStep.kind == "mail"
-			or curStep.kind == "mailcollect" or curStep.kind == "destroy"
-			or curStep.kind == "vendbuy" or curStep.kind == "vendsell")
+			or curStep.kind == "mailcollect")
 		-- a live quote serializes AH mutations: only its own confirm or
 		-- non-transactional steps may run until it resolves
 		local canExec = pcMatch
 			or moveKind
+			or (vendKind and merchantOpen)
 			or (not pcPending and PQ.stepIndex <= #PQ.plan.steps and GM.AH.open)
 		ui.exec:SetEnabled(canExec)
 		-- honest disabled state: muted fill + label; blocker on line 1
@@ -1666,6 +1672,9 @@ function PQ.Refresh()
 		if pcPending and not pcMatch and not moveKind then
 			ui.summary:SetText(GM.CC("warn")
 				.. "a quote is staged for another item — resolve it in the AH window|r")
+		elseif vendKind and not merchantOpen then
+			ui.summary:SetText(GM.CC("warn")
+				.. "open a merchant to execute|r")
 		elseif not canExec and not GM.AH.open then
 			ui.summary:SetText(GM.CC("warn") .. "open the auction house to execute|r")
 		end
@@ -1682,3 +1691,11 @@ function PQ.Refresh()
 		ui.clear:Hide()
 	end
 end
+
+-- the exec gate's merchant check needs a repaint when the vendor
+-- frame opens/closes — the AH side gets the same refresh free
+-- from AUCTION_HOUSE_SHOW flipping GM.AH.open
+local mev = CreateFrame("Frame")
+pcall(mev.RegisterEvent, mev, "MERCHANT_SHOW")
+pcall(mev.RegisterEvent, mev, "MERCHANT_CLOSED")
+mev:SetScript("OnEvent", function() PQ.Refresh() end)
