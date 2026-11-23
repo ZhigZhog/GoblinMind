@@ -137,9 +137,13 @@ local function PosNW(st, mapID)
 	if st.n and st.w then return st.n, st.w end
 	if st.x and st.y and C_Map and C_Map.GetWorldPosFromMapPos
 		and CreateVector2D then
-		local ok, v = pcall(C_Map.GetWorldPosFromMapPos, mapID,
+			-- returns (worldMapID, position) — v must be the second
+		local ok, _, v = pcall(C_Map.GetWorldPosFromMapPos, mapID,
 			CreateVector2D(st.x, st.y))
-		if ok and v and v.x and v.y then
+		local okV, good = pcall(function()
+			return v and v.x and v.y
+		end)
+		if ok and okV and good then
 			return v.x, v.y
 		end
 	end

@@ -117,15 +117,26 @@ local function ZoneCentroid(m, displayMap)
 	end
 	if n == 0 and xy and C_Map.GetWorldPosFromMapPos
 		and CreateVector2D then
-		local ok, v = pcall(C_Map.GetWorldPosFromMapPos, m,
+		-- returns (worldMapID, position) — v must be the second
+		local ok, _, v = pcall(C_Map.GetWorldPosFromMapPos, m,
 			CreateVector2D(xy.x, xy.y))
-		if ok and v and v.x then sn, sw, n = v.x, v.y, 1 end
+		local okV, good = pcall(function()
+			return v and v.x and v.y
+		end)
+		if ok and okV and good then sn, sw, n = v.x, v.y, 1 end
 	end
 	if n == 0 or not (C_Map and C_Map.GetMapPosFromWorldPos
 		and CreateVector2D) then return nil end
-	local ok, mp = pcall(C_Map.GetMapPosFromWorldPos, c or 0,
+	-- returns (uiMapID, position) — the position is the SECOND
+	-- value; binding it to mp made mp.x index a number and the
+	-- throw froze the pane on the previous map's tiles
+	local ok, _, mp = pcall(C_Map.GetMapPosFromWorldPos, c or 0,
 		CreateVector2D(sn / n, sw / n), displayMap)
-	if ok and mp and mp.x and mp.x >= 0 and mp.x <= 1 then
+	-- protected coords must range-check inside a pcall too
+	local okV, valid = pcall(function()
+		return mp and mp.x and mp.x >= 0 and mp.x <= 1
+	end)
+	if ok and okV and valid then
 		return mp.x, mp.y
 	end
 end
@@ -174,7 +185,10 @@ local function DrawPane()
 	local marks
 	if map and GM.GatherMap.IsWorldy
 		and GM.GatherMap.IsWorldy(map) then
-		marks = ZoneMarks(map, ui._all)
+		-- a marker-calc error must not take the whole refresh
+		-- down — the pane would keep the previous map's tiles
+		local okM, mk = pcall(ZoneMarks, map, ui._all)
+		if okM then marks = mk end
 		ui.mapLegend:SetText(
 			"marker = farm activity · count = camps+routes · "
 			.. "medals = top-3 GPM zones")
@@ -187,6 +201,12 @@ local function DrawPane()
 	if not map then
 		ui.mapLegend:SetText(
 			"no farm data yet — gather nodes or kill mobs to seed")
+	end
+	-- a draw that failed mid-way stashes its error on the pane —
+	-- surface it rather than silently showing stale/empty tiles
+	if ui.pane._err then
+		ui.mapLegend:SetText("map draw error: "
+			.. tostring(ui.pane._err))
 	end
 end
 

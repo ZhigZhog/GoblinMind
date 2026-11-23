@@ -290,7 +290,12 @@ local function MapXY(p, mapID)
 		and CreateVector2D then
 		local ok, _, mp = pcall(C_Map.GetMapPosFromWorldPos,
 			p.c or 0, CreateVector2D(p.n, p.w), mapID)
-		if ok and mp and mp.x and mp.x >= 0 and mp.x <= 1 then
+		-- coords can come back protected: the range check must
+		-- be inside the pcall too or a bad value kills the draw
+		local okV, valid = pcall(function()
+			return mp and mp.x and mp.x >= 0 and mp.x <= 1
+		end)
+		if ok and okV and valid then
 			if not p.map or p.map == mapID then
 				p.x, p.y = mp.x, mp.y
 			end
@@ -312,10 +317,15 @@ local function UnitsPerYard(mapID, p)
 			p.c or 0, CreateVector2D(p.n, p.w), mapID)
 		local okB, _, b = pcall(C_Map.GetMapPosFromWorldPos,
 			p.c or 0, CreateVector2D(p.n + 100, p.w), mapID)
-		if okA and okB and a and b then
-			local d = sqrt((b.x - a.x) ^ 2 + (b.y - a.y) ^ 2)
-			if d and d > 1e-6 then return d / 100 end
-		end
+		-- field access + arithmetic stay inside the pcall: a
+		-- returned position with missing/protected coords used
+		-- to throw here and freeze the pane on the old map
+		local okD, d = pcall(function()
+			return a and b and a.x and b.x and a.y and b.y
+				and sqrt((b.x - a.x) ^ 2 + (b.y - a.y) ^ 2)
+				or nil
+		end)
+		if okD and d and d > 1e-6 then return d / 100 end
 	end
 	return 1 / 1500
 end
@@ -365,12 +375,22 @@ local function TerrainTiles(mapID)
 	if rel then
 		set = rel[1]
 		b = TI.boxes[set] and TI.boxes[set][rel[2]]
-	elseif mapID == 1414 then
-		set = "Kalimdor"
-		b = TI.boxes.Kalimdor and TI.boxes.Kalimdor[0]
-	elseif mapID == 1415 then
-		set = "Azeroth"
-		b = TI.boxes.Azeroth and TI.boxes.Azeroth[0]
+	else
+		-- continent-scale maps aren't in the index — ask which
+		-- world instance the map lives on (survives custom
+		-- continent ids), else the two classic defaults
+		local wid
+		if C_Map and C_Map.GetWorldPosFromMapPos
+			and CreateVector2D then
+			local ok, w = pcall(C_Map.GetWorldPosFromMapPos,
+				mapID, CreateVector2D(0.5, 0.5))
+			if ok and type(w) == "number" then wid = w end
+		end
+		set = ({ [0] = "Azeroth", [1] = "Kalimdor",
+			[2991] = "2991" })[wid]
+			or (mapID == 1414 and "Kalimdor")
+			or (mapID == 1415 and "Azeroth")
+		b = set and TI.boxes[set] and TI.boxes[set][0]
 	end
 	local files, valid = TI.files[set], TI.valid[set]
 	if not (files and valid and b) then return end
@@ -505,17 +525,11 @@ function M.CreatePane(parent, w)
 	-- art tiles cover a TOPLEFT-anchored rect sized to the art's own
 	-- aspect (letterboxed into the pane); overlays map 0-1 coords
 	-- onto the same rect
-	function pane:SetData(mapID, route, sel, filter, marks)
-		self._mapID, self._route, self._sel, self._filter,
-			self._marks = mapID, route, sel, filter, marks
-		if self._drawing then return end
-		self._drawing = true
+	local function draw(self, mapID, route, sel, filter, marks)
 		clear()
 		local G = GM.Gather
 		local w = self:GetWidth()
-		if not (mapID and w and w > 0) then
-			self._drawing = nil return
-		end
+		if not (mapID and w and w > 0) then return end
 
 		local aspect = 1.5 -- fallback when the art API is missing
 		if C_Map and C_Map.GetMapArtLayers then
@@ -737,9 +751,7 @@ function M.CreatePane(parent, w)
 			t:SetVertexColor(0.04, 0.06, 0.05, 1)
 			t:SetAllPoints()
 		end
-		if not G then
-			self._drawing = nil return
-		end
+		if not G then return end
 
 		local zones = G.ZoneList(mapID) or {}
 		local nodes = G.NodeList(mapID) or {}
@@ -922,7 +934,23 @@ function M.CreatePane(parent, w)
 				end
 			end
 		end
+	end
+
+	-- the draw is wrapped: a mid-draw error used to leave
+	-- _drawing latched and the pane frozen on the previous map's
+	-- tiles forever (the "Eastern Kingdoms shows Kalimdor" bug).
+	-- Now the flag always clears and the error is stashed where
+	-- the host can surface it instead of failing silently
+	function pane:SetData(mapID, route, sel, filter, marks)
+		self._mapID, self._route, self._sel, self._filter,
+			self._marks = mapID, route, sel, filter, marks
+		if self._drawing then return end
+		self._drawing = true
+		local ok, err = xpcall(draw, function(e)
+			return tostring(e)
+		end, self, mapID, route, sel, filter, marks)
 		self._drawing = nil
+		self._err = ok and nil or err
 	end
 
 	-- anchored (_fixedH) panes resolve their real size after the

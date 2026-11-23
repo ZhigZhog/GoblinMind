@@ -118,9 +118,14 @@ local function PosNow()
 				local okP, mid, mpos = pcall(
 					C_Map.GetMapPosFromWorldPos, c,
 					CreateVector2D(n, w), mapID)
-				if okP and mpos and mpos.x and mpos.y
-					and mpos.x >= 0 and mpos.x <= 1
-					and mpos.y >= 0 and mpos.y <= 1 then
+				-- coord reads + range checks inside a pcall: a
+				-- protected value must not kill recording
+				local okV, good = pcall(function()
+					return mpos and mpos.x and mpos.y
+						and mpos.x >= 0 and mpos.x <= 1
+						and mpos.y >= 0 and mpos.y <= 1
+				end)
+				if okP and okV and good then
 					p.x, p.y = mpos.x, mpos.y
 				end
 			end

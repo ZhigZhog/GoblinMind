@@ -651,6 +651,27 @@ check('non-producing zone discs faint',
       all(d._col[4] <= 0.06 for d in discs))
 G.SetTarget(None)
 
+print('== window pane: draw error cannot freeze the pane ==')
+# the EK-stale-terrain bug: a mid-draw throw left _drawing latched
+# so every later SetData early-returned on the old map's tiles.
+# Force a throw inside the draw, prove the flag resets, the error
+# is stashed, and the next draw still renders.
+lua.execute('''
+	GM.Gather._ZL = GM.Gather.ZoneList
+	GM.Gather.ZoneList = function() error("sim draw boom") end
+''')
+pane.SetData(pane, 1419, None)
+check('draw error clears _drawing', not pane._drawing)
+check('draw error stashed on pane', bool(pane._err))
+lua.execute('''
+	GM.Gather.ZoneList = GM.Gather._ZL
+	GM.Gather._ZL = nil
+''')
+pane.SetData(pane, 1419, None)
+kinds = [e[1] for e in pane.live.values()]
+check('next draw still renders after error',
+      kinds.count('disc') == 2 and not pane._err)
+
 print('== GatherLite import ==')
 # stub the SV + the runtime API. Two personal mining points ~21yd
 # apart (tighter than the 40yd live-merge, wider than the 8yd
