@@ -1100,7 +1100,35 @@ function M.CreatePane(parent, w)
 		do
 			local artID = C_Map and C_Map.GetMapArtID
 				and C_Map.GetMapArtID(mapID)
-			local records = artID and GM.MapRevealData
+			-- MapWise's own RevealData wins when present: its
+			-- fileIDs come from THIS client's DB2 (the Leatrix
+			-- set carries classic-era ids that may not exist on
+			-- Forever — SetTexture fails quietly and the overlay
+			-- was invisible). Rows are already normalized:
+			-- {fileID, ox, oy, w, h, tcRight, tcBottom}
+			local mw = MapWiseAPI and MapWiseAPI.RevealData
+				and MapWiseAPI.RevealData[artID]
+			if mw then
+				for _, row in ipairs(mw) do
+					local t = put("exptile")
+					local okS, loaded = pcall(t.SetTexture, t,
+						row[1], "CLAMP", "CLAMP", "TRILINEAR")
+					if not okS then
+						okS, loaded = pcall(t.SetTexture, t, row[1])
+					end
+					if okS and loaded ~= false then
+						t:SetTexCoord(0, row[6], 0, row[7])
+						t:SetSize(row[4] * w, row[5] * h)
+						t:SetPoint("TOPLEFT", inner, "TOPLEFT",
+							row[2] * w, -row[3] * h)
+						haveArt = true
+					else
+						t:Hide()
+					end
+				end
+			end
+			local records = (not mw) and artID
+				and GM.MapRevealData
 				and GM.MapRevealData[artID]
 			local okL2, lay2 = pcall(C_Map.GetMapArtLayers, mapID)
 			local lay = okL2 and lay2 and lay2[1]
