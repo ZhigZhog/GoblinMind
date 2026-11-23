@@ -1744,6 +1744,7 @@ end
 -- restore on release only if nothing else touched it — the MapWise
 -- etiquette the proposal prescribes.
 local nav = {}
+local run -- active route instance (declared early: NavDiag reads it)
 
 -- the waypoint only renders in the 3D world while the client's
 -- in-game navigation display is on — MapWise's
@@ -1833,6 +1834,68 @@ function G.PointAt(p)
 	return nil
 end
 
+-- /goblin navdebug — dump the entire navigation chain: which
+-- APIs this client actually has, the cvar, the waypoint slot,
+-- tracking state, and our own ownership flags. The 3D marker
+-- needs every link; this names the missing one
+function G.NavDiag()
+	local d = { ours = nav.ours, cvarOwned = nav.cvarOwned,
+		run = run ~= nil }
+	local function has(t, n)
+		return t and type(t[n]) == "function"
+	end
+	d.api = {
+		C_Navigation = C_Navigation ~= nil,
+		navGetFrame = has(C_Navigation, "GetFrame"),
+		navScreenPos = has(C_Navigation,
+			"HasValidScreenPosition"),
+		SetUserWaypoint = has(C_Map, "SetUserWaypoint"),
+		GetUserWaypoint = has(C_Map, "GetUserWaypoint"),
+		CanSetOnMap = has(C_Map, "CanSetUserWaypointOnMap"),
+		SuperTrackSet = has(C_SuperTrack,
+			"SetSuperTrackedUserWaypoint"),
+		SuperTrackIs = has(C_SuperTrack,
+			"IsSuperTrackingUserWaypoint"),
+		UiMapPoint = UiMapPoint ~= nil
+			and type(UiMapPoint.CreateFromCoordinates)
+				== "function",
+	}
+	local get = C_CVar and C_CVar.GetCVar or GetCVar
+	if type(get) == "function" then
+		d.cvar = get("showInGameNavigation")
+	end
+	if d.api.GetUserWaypoint then
+		local ok, p = pcall(C_Map.GetUserWaypoint)
+		if ok and p then
+			d.wp = {
+				map = p.uiMapID,
+				x = p.position and p.position.GetXY
+					and p.position:GetXY(),
+			}
+		elseif ok then
+			d.wp = "nil"
+		else
+			d.wp = "err:" .. tostring(p)
+		end
+	end
+	if d.api.SuperTrackIs then
+		local ok, v = pcall(
+			C_SuperTrack.IsSuperTrackingUserWaypoint)
+		d.tracking = ok and v or ("err:" .. tostring(v))
+	end
+	if C_Navigation and C_Navigation.GetTargetState then
+		local ok, v = pcall(C_Navigation.GetTargetState)
+		d.navState = ok and v or ("err:" .. tostring(v))
+	end
+	if C_Navigation
+		and C_Navigation.HasValidScreenPosition then
+		local ok, v = pcall(
+			C_Navigation.HasValidScreenPosition)
+		d.navScreen = ok and v or ("err:" .. tostring(v))
+	end
+	return d
+end
+
 -- waypoint the stop nearest the player — the MapWise
 -- checkpoint-chase: you join a loop where it's closest, not at
 -- stop 1. Returns the winning index (falls back to 1)
@@ -1856,8 +1919,6 @@ end
 -- active loop: stop refs (survive later solves), index, arrival
 -- stamps for lap timing. A full observed lap beats the model —
 -- folded into lapObs so the next GPM is measured, not guessed.
-local run
-
 function G.StartRoute(r)
 	if not r or not r.stops or #r.stops < 2 then return end
 	-- join at the nearest stop — it's a loop, any entry is the
@@ -2413,6 +2474,34 @@ GM.Cmd({ "gatherlog", "farmlog" }, function(arg)
 			e.k and (" k=" .. e.k) or ""))
 	end
 end, true)
+
+GM.Cmd("navdebug", function()
+	local d = G.NavDiag and G.NavDiag()
+	if not d then
+		GM.Print("navdebug: no diag yet")
+		return
+	end
+	GM.Print("--- nav trace ---")
+	local parts = {}
+	for k, v in pairs(d.api) do
+		parts[#parts + 1] = k .. "="
+			.. tostring(v and 1 or 0)
+	end
+	table.sort(parts)
+	GM.Print("api: " .. table.concat(parts, " "))
+	GM.Print("cvar showInGameNavigation=" .. tostring(d.cvar)
+		.. " tracking=" .. tostring(d.tracking)
+		.. " navState=" .. tostring(d.navState)
+		.. " navScreen=" .. tostring(d.navScreen))
+	local wp = d.wp
+	GM.Print("waypoint=" .. (type(wp) == "table"
+		and format("%s @ %.4f,%.4f",
+			tostring(wp.map), wp.x or -1, wp.y or -1)
+		or tostring(wp)))
+	GM.Print("ours=" .. tostring(d.ours)
+		.. " cvarOwned=" .. tostring(d.cvarOwned)
+		.. " running=" .. tostring(d.run))
+end, { help = "dump the navigation chain state" })
 
 GM.Cmd({ "gather", "farm" }, function() GM.GatherUI.Toggle() end,
 	{ prefix = true, help = "gather window" })
