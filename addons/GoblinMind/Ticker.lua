@@ -32,7 +32,7 @@ local SPEED     = 36   -- px/s marquee rate
 local GAP       = 30   -- px between cells
 local REFRESH   = 20   -- s between price repaints
 local MAX_ITEMS = 24
-local BAR_H     = 22
+local BAR_H     = 13   -- xp/rep-bar slim
 
 local bar, sf, child
 local cells = {}
@@ -40,8 +40,12 @@ local off, lastPaint, dirty = 0, 0, true
 local oneW = 0 -- width of one watchlist pass — the wrap distance
 
 local function Store()
-	GM.db.ticker = GM.db.ticker or { on = false, items = {} }
-	return GM.db.ticker
+	local st = GM.db.ticker
+	if not st then st = {} GM.db.ticker = st end
+	if st.items == nil then st.items = {} end
+	if st.alpha == nil then st.alpha = 70 end   -- resting dim, % opacity
+	if st.hover == nil then st.hover = 100 end  -- lit under the cursor
+	return st
 end
 local function Items() return Store().items end
 
@@ -79,7 +83,7 @@ local function Build()
 	if #ids == 0 then
 		child:SetSize(1, BAR_H)
 		if not child.hint then
-			child.hint = GM.MakeFontString(child, GM.FONT, 9, "textDim")
+			child.hint = GM.MakeFontString(child, GM.FONT, 8, "textDim")
 			child.hint:SetPoint("LEFT", 4, 0)
 		end
 		child.hint:SetText("drop items on the tape"
@@ -97,7 +101,7 @@ local function Build()
 		for _, id in ipairs(ids) do
 			local cell = CreateFrame("Button", nil, child)
 			cell.id = id
-			local fs = GM.MakeFontString(cell, GM.FONT, 9, "text")
+			local fs = GM.MakeFontString(cell, GM.FONT, 8, "text")
 			fs:SetPoint("LEFT", 5, 0)
 			fs:SetWordWrap(false)
 			fs:SetText(CellText(id))
@@ -105,6 +109,7 @@ local function Build()
 			cell:SetSize(ceil(fs:GetStringWidth()) + 10, BAR_H)
 			cell:SetPoint("LEFT", totalW, 0)
 			totalW = totalW + cell:GetWidth() + GAP
+			cell:EnableMouse(not Store().click)
 			cell:RegisterForClicks("LeftButtonUp", "RightButtonUp")
 			cell:SetScript("OnClick", function(_, btn)
 				if btn == "RightButton" then
@@ -204,9 +209,23 @@ local function Restore()
 	end
 end
 
+local function ApplyLook()
+	if not bar then return end
+	local st = Store()
+	-- click-through kills every mouse channel on the tape —
+	-- hover detection too, so it rests at its idle dim
+	local mouse = not st.click
+	bar:EnableMouse(mouse)
+	sf:EnableMouse(mouse)
+	bar._brand:EnableMouse(mouse)
+	for _, c in ipairs(cells) do c:EnableMouse(mouse) end
+	if st.click then bar:SetAlpha(st.alpha / 100) end
+	bar:SetShown(st.on)
+end
+
 local function BuildBar()
 	bar = CreateFrame("Frame", "GoblinMindTicker", UIParent)
-	bar:SetFrameStrata("MEDIUM")
+	bar:SetFrameStrata("HIGH") -- above the HUD like an xp-bar strip
 	bar:SetSize(math.max(400, floor(UIParent:GetWidth() or 1024)), BAR_H)
 	GM.Panel(bar, "contMedium")
 	if GM.ChromePanel then GM.ChromePanel(bar) end
@@ -228,8 +247,10 @@ local function BuildBar()
 	local bf = GM.MakeFontString(brand, GM.FONT_BOLD, 8, "accent")
 	bf:SetPoint("CENTER")
 	bf:SetText("TICKER")
+	bar._brand = brand
 	brand:RegisterForDrag("LeftButton")
 	brand:SetScript("OnDragStart", function()
+		if Store().locked then return end
 		-- collapse the edge-docked two-point anchor to one so the
 		-- bar can move freely without a width fight
 		local w, l, t = bar:GetWidth(), bar:GetLeft(), bar:GetTop()
@@ -252,8 +273,8 @@ local function BuildBar()
 			GM.CC("accent") .. "market tape|r",
 			"drop items to add · right-click removes",
 			"left-click targets · hover pauses the scroll",
-			"drag this tag to move the bar",
-			"/goblin ticker — hide · add/del · clear · reset",
+			"drag this tag to move · /goblin ticker lock",
+			"dim <idle> [hover] · mouse = click-through",
 		}
 	end)
 
@@ -272,9 +293,17 @@ local function BuildBar()
 	sf:SetScript("OnUpdate", function(_, dt)
 		if dirty then dirty = nil Build() end
 		if GetTime() - lastPaint > REFRESH then PaintCells() end
-		if oneW > sf:GetWidth() and not bar._hover then
+		local st = Store()
+		local over = not st.click and bar:IsMouseOver()
+		if oneW > sf:GetWidth() and not over then
 			off = (off + SPEED * dt) % oneW
 			sf:SetHorizontalScroll(off)
+		end
+		-- ease toward the target dim — resting alpha vs hover alpha
+		local want = (over and st.hover or st.alpha) / 100
+		local a = bar:GetAlpha()
+		if a ~= want then
+			bar:SetAlpha(a + (want - a) * math.min(1, dt * 12))
 		end
 	end)
 end
@@ -283,12 +312,12 @@ function GM.TickerInit()
 	if bar then return end
 	BuildBar()
 	Restore()
-	bar:SetShown(Store().on and true or false)
+	local st = Store()
+	bar:SetAlpha(st.alpha / 100)
+	ApplyLook()
 end
 
-function T.Apply()
-	if bar then bar:SetShown(Store().on) end
-end
+function T.Apply() ApplyLook() end
 
 -- ============ book repaint + slash ============
 
@@ -312,6 +341,30 @@ GM.Cmd({ "ticker", "tape" }, function(arg, msg)
 		end
 		if verb == "add" then T.Add(id)
 		elseif not T.Del(id) then GM.Print("not on the tape") end
+	elseif verb == "lock" or verb == "unlock" then
+		local st = Store()
+		st.locked = verb == "lock" and not st.locked
+		GM.Print("ticker " .. (st.locked and "locked" or "unlocked"))
+	elseif verb == "dim" then
+		local st = Store()
+		local a, b = arg:match("^%S+%s+(%d+)%s*(%d*)")
+		if not a then
+			GM.Print("ticker dim <idle 0-100> [hover 0-100]"
+				.. " — now " .. st.alpha .. "/" .. st.hover)
+			return
+		end
+		st.alpha = math.min(100, tonumber(a))
+		if b ~= "" then st.hover = math.min(100, tonumber(b)) end
+		GM.Print("ticker dim " .. st.alpha
+			.. "% · hover " .. st.hover .. "%")
+	elseif verb == "mouse" or verb == "click"
+		or verb == "passthrough" then
+		local st = Store()
+		st.click = not st.click
+		ApplyLook()
+		GM.Print("ticker " .. (st.click
+			and "click-through — the tape ignores the mouse"
+			or "interactive"))
 	elseif verb == "clear" then
 		wipe(Items())
 		RebuildSoon()
@@ -326,7 +379,8 @@ GM.Cmd({ "ticker", "tape" }, function(arg, msg)
 		end
 		if #Items() == 0 then GM.Print("tape is empty") end
 	else
-		GM.Print("ticker — on/off · add/del [link] · clear · reset · list")
+		GM.Print("ticker — on/off · add/del [link] · lock · dim ·"
+			.. " mouse · clear · reset · list")
 	end
 end, { prefix = true,
-	help = "market tape — add/del [link] · clear · reset" })
+	help = "market tape — add/del · lock · dim · mouse · reset" })
