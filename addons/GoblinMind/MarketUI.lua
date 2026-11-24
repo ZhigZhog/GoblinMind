@@ -76,21 +76,33 @@ end
 -- the same ladder analysis the book pass runs, so targeted scans
 -- feed marks, wall history, and the suspect table too
 
+-- which book flag is holding the query — visible in the busy text
+-- so a permanently stuck latch reports itself instead of a dead pane
+local function BusyText()
+	local f = GM.AH.wantBook and "replicate"
+		or GM.AH.collecting and "collect"
+		or GM.AH.browse and "browse"
+	return f and ("book " .. f .. " in flight…") or "scan busy…"
+end
+
 local function ScanAsks()
 	if not M.itemID then return end
-	if GM.AH.Busy and GM.AH.Busy() then
-		-- latch once per busy stretch, then poll until the book pass
-		-- drains — SendSearchQuery is refused while a replicate
-		-- collect or browse build is in flight. Before the retry the
-		-- latch just stayed set forever ("scan busy…" for the session)
+	-- askWait is a TIMESTAMP, not a bool: past 90s the busy flags
+	-- themselves are suspect (a dead collect chain leaves
+	-- 'collecting' set forever) — try the query anyway; a refused
+	-- SendSearchQuery costs nothing vs a permanently dead pane
+	local stale = M.askWait and GetTime() - M.askWait > 90
+	if GM.AH.Busy and GM.AH.Busy() and not stale then
 		if not M.askWait then
-			M.askWait = true
+			M.askWait = GetTime()
 			local id = M.itemID
 			local function retry()
 				if not M.askWait or M.itemID ~= id or not GM.AH.open then
 					return
 				end
-				if GM.AH.Busy and GM.AH.Busy() then GM.After(2, retry)
+				if GM.AH.Busy and GM.AH.Busy()
+					and GetTime() - M.askWait < 90 then
+					GM.After(2, retry)
 				else ScanAsks() end
 			end
 			GM.After(2, retry)
@@ -298,7 +310,7 @@ local function DrawDepth()
 	local asks = M.asks
 	if not (asks and #asks > 0) then
 		ch.title:SetText("DEPTH")
-		ch.msg:SetText(M.itemID and (M.askWait and "scan busy — waiting"
+		ch.msg:SetText(M.itemID and (M.askWait and BusyText()
 			or M.asks and "no asks listed" or "scanning asks…")
 			or "no item targeted")
 		return
@@ -388,7 +400,7 @@ local function RefreshAskBook()
 	local maxScroll = math.max(0, #asks - ASK_VIS)
 	M.askScroll = math.min(M.askScroll or 0, maxScroll)
 	W.ScrollText(mp.abCount, M.askScroll, ASK_VIS, #asks)
-	mp.abEmpty:SetText(M.itemID and (M.askWait and "scan busy…"
+	mp.abEmpty:SetText(M.itemID and (M.askWait and BusyText()
 		or (not M.asks and "scanning…") or "no asks")
 		or "")
 	mp.abEmpty:SetShown(#asks == 0)
