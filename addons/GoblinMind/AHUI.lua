@@ -570,7 +570,10 @@ local function Build()
 	ui.askRows = {}
 	for i = 1, ASK_VISIBLE do
 		local row = CreateFrame("Button", nil, rp)
-		row:SetSize(328, ROW_H - 2)
+		-- rows span pane-width minus the 8px inset each side —
+		-- the pane widened under fill, so bare pane bg showed under
+		-- the BUY button's overhang as a dead black strip
+		row:SetSize(344, ROW_H - 2)
 		row:SetPoint("TOPLEFT", 8, -22 - ((i - 1) * ROW_H))
 		row.bg = row:CreateTexture(nil, "BACKGROUND")
 		row.bg:SetAllPoints()
