@@ -288,10 +288,13 @@ function S.BuyRow(row)
 	local d = row.data
 	if not d or d.header then return end
 	if d.recipeID then S.QueueRow(row) return end
-	-- a staged quote for this item is live → this click is the confirm
+	-- a staged quote for this item is live → this click is the
+	-- confirm — but only once the quote actually landed; firing
+	-- ConfirmCommoditiesPurchase at nothing gets refused
 	local pc = GM.AH.pendingConfirm
 	if pc and pc.itemID == d.itemID then
-		GM.AH.Execute({ kind = "confirm" })
+		if pc.quote then GM.AH.Execute({ kind = "confirm" })
+		else GM.Print(GM.CC("textDim") .. "quote still in flight…|r") end
 		return
 	end
 	if d.id then
@@ -311,12 +314,19 @@ function S.BuyHit(h)
 		return
 	end
 	-- commodity hits stage a quote — the next click confirms it, but
-	-- only if the pending quote still belongs to this hit
+	-- only once a quote actually LANDED. Confirming a pendingConfirm
+	-- with no quote fires ConfirmCommoditiesPurchase at a staged
+	-- purchase that doesn't exist server-side — the client refuses
+	-- and the row looked "bought" on a failed purchase
 	if h.state == "staged" then
 		local pc = GM.AH.pendingConfirm
-		if pc and pc.itemID == h.itemID then
+		if pc and pc.itemID == h.itemID and pc.quote then
 			GM.AH.Execute({ kind = "confirm" })
+			-- done when the server confirms — PURCHASE_FAILED and
+			-- PRICE_UNAVAILABLE revive the row via QuoteDied
 			h.done = true
+		elseif pc and pc.itemID == h.itemID then
+			GM.Print(GM.CC("textDim") .. "quote still in flight…|r")
 		else
 			h.state = nil -- quote died or was replaced — rescan
 		end
@@ -435,7 +445,14 @@ function S.BidHit(h)
 				bid = cheapest.bid, minBid = cheapest.minBid,
 				tl = cheapest.tl }
 			h.state = "ready"
-			GM.Print(GM.CC("textDim") .. "bid armed — click the row to place +1c|r")
+			if cheapest.id then
+				GM.Print(GM.CC("textDim") .. "bid armed — click the row to place +1c|r")
+			else
+				-- aggregate rows have no bid endpoint — don't arm a
+				-- +1c that can never fire
+				h.wantBid = nil
+				GM.Print(GM.CC("textDim") .. "aggregate row — no bid path, click buys out|r")
+			end
 		else
 			GM.Print(format("sniper: %s gone", h.name or h.itemID))
 			h.done = true
@@ -455,6 +472,9 @@ function S.QuoteDied(itemID)
 	for _, h in ipairs(hits) do
 		if h.state == "staged" and (not itemID or h.itemID == itemID) then
 			h.state = nil
+			-- the confirm click marked it bought before the server
+			-- answered — a refused purchase means put the row back
+			h.done = nil
 			h.quoteDead = true
 		end
 	end

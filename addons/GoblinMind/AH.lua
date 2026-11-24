@@ -176,8 +176,12 @@ f:SetScript("OnEvent", function(_, event, ...)
 		end
 		RefreshUIs()
 	elseif event == "COMMODITY_PURCHASE_FAILED" then
+		local pc = GM.AH.pendingConfirm
 		GM.AH.pendingConfirm = nil
 		GM.Print(GM.CC("err") .. "commodity purchase failed|r")
+		if GM.Shopping and GM.Shopping.QuoteDied then
+			GM.Shopping.QuoteDied(pc and pc.itemID)
+		end
 		RefreshUIs()
 	elseif event == "COMMODITY_PURCHASE_SUCCEEDED" then
 		local pc = GM.AH.pendingConfirm
