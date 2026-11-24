@@ -643,8 +643,8 @@ function MU.Build(f, ahui)
 
 	-- ===== ASK BOOK pane =====
 	local ab = CreateFrame("Frame", nil, mp)
-	ab:SetSize(394, 144)
-	ab:SetPoint("TOPRIGHT", 0, -140)
+	ab:SetSize(402, 144)
+	ab:SetPoint("TOPLEFT", 374, -140)
 	GM.Panel(ab, "contLowest")
 	mp.abHead = GM.MakeFontString(ab, GM.FONT_BOLD, 10, "secondary")
 	mp.abHead:SetPoint("TOPLEFT", 8, -5)
@@ -723,7 +723,7 @@ function MU.Build(f, ahui)
 
 	-- ===== NUMBERS pane =====
 	local np = CreateFrame("Frame", nil, mp)
-	np:SetSize(200, 96)
+	np:SetSize(197, 96)
 	np:SetPoint("TOPLEFT", 374, -290)
 	GM.Panel(np, "contLowest")
 	local nh = GM.MakeFontString(np, GM.FONT_BOLD, 10, "secondary")
@@ -748,8 +748,8 @@ function MU.Build(f, ahui)
 
 	-- ===== INTEL pane =====
 	local ip = CreateFrame("Frame", nil, mp)
-	ip:SetSize(200, 96)
-	ip:SetPoint("TOPRIGHT", 0, -290)
+	ip:SetSize(197, 96)
+	ip:SetPoint("TOPLEFT", 579, -290)
 	GM.Panel(ip, "contLowest")
 	local ih = GM.MakeFontString(ip, GM.FONT_BOLD, 10, "secondary")
 	ih:SetPoint("TOPLEFT", 8, -5) ih:SetText("INTEL")
@@ -757,7 +757,7 @@ function MU.Build(f, ahui)
 	for i = 1, 6 do
 		local fs = GM.MakeFontString(ip, GM.FONT, 9, "text")
 		fs:SetPoint("TOPLEFT", 8, -16 - (i - 1) * 13)
-		fs:SetWidth(184)
+		fs:SetWidth(180)
 		fs:SetJustifyH("LEFT") fs:SetWordWrap(false)
 		mp.intelRows[i] = fs
 	end
