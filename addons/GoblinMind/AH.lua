@@ -281,6 +281,7 @@ function GM.AH.CollectCommodityAsks(itemID)
 				own = (r.containsOwnerItem or r.isOwned) or nil })
 		end
 	end
+	GM.AH.MergeOwnAsks(asks, GM.AH.scanItemKey)
 	table.sort(asks, function(a, b) return a.unit < b.unit end)
 	GM.AH.asks = asks
 	if GM.AH.onScanDone then GM.AH.onScanDone(asks) end
@@ -329,12 +330,39 @@ function GM.AH.CollectItemAsks()
 			end
 		end
 	end
+	GM.AH.MergeOwnAsks(asks, key)
 	table.sort(asks, function(a, b) return a.unit < b.unit end)
 	GM.AH.asks = asks
 	if GM.AH.onScanDone then GM.AH.onScanDone(asks) end
 end
 
--- === Shared book: one ReplicateItems pass feeds everything ===
+-- Forever's item search can omit our own listings — merge them back
+-- from the owned snapshot (deduped by auctionID, no-op when the API
+-- already returns them). Without this a sole-variant poster sees an
+-- empty ladder and the solver reports "no asks listed" with their
+-- own auction up. suffix match is exact: a variant scan must not
+-- pull own listings of a different "of X".
+function GM.AH.MergeOwnAsks(asks, key)
+	if not (key and key.itemID and GM.Inventory
+		and GM.Inventory.auctions) then return end
+	local have = {}
+	for _, a in ipairs(asks) do
+		if a.id then have[a.id] = true end
+		if a.own then return end -- API already answers own rows
+	end
+	local suffix = key.itemSuffix or 0
+	for _, a in pairs(GM.Inventory.auctions) do
+		local k = a.itemKey
+		if a.itemID == key.itemID and a.buyout
+			and (k and (k.itemSuffix or 0) or 0) == suffix
+			and not (a.aid and have[a.aid]) then
+			tinsert(asks, { id = a.aid, qty = a.qty or 1,
+				unit = a.buyout, total = a.buyout * (a.qty or 1),
+				own = true, seller = UnitName("player"),
+				link = a.itemLink })
+		end
+	end
+end
 -- book[itemID] = { mb = cheapest unit incl. ours, mbx = cheapest unit
 -- excluding ours, sup = units listed, n = auctions }. Subscribers get
 -- the raw per-listing rows too (sniper diffs those).
