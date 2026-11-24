@@ -32,7 +32,13 @@ local function Build()
 	ui.frame = f
 
 	-- toolbar (refresh + plan + summary go under flow at the end)
-	local refresh = Btn(f, 66, "REFRESH", DU.Refresh)
+	local refresh = Btn(f, 66, "REFRESH", function()
+		if GM.Destroying.demo then
+			GM.Print(GM.CC("textDim") .. "demo data active — "
+				.. "/goblin destroydemo to clear|r")
+		end
+		DU.Refresh()
+	end)
 	local plan = Btn(f, 90, "SCAN → PLAN", function()
 		GM.Destroying.Scan()
 	end)
@@ -148,10 +154,11 @@ function DU.Refresh()
 		if r.action == "de" then nDe = nDe + 1 end
 	end
 	local mOpen = MerchantFrame and MerchantFrame:IsShown()
-	ui.summary:SetText(format("%d item%s · %d DE / %d sell · best destroy %s%s",
+	ui.summary:SetText(format("%d item%s · %d DE / %d sell · best destroy %s%s%s",
 		#rows, #rows == 1 and "" or "s", nDe, #rows - nDe,
 		GM.Money(totDv),
-		not mOpen and GM.CC("warn") .. " · merchant closed|r" or ""))
+		not mOpen and GM.CC("warn") .. " · merchant closed|r" or "",
+		GM.Destroying.demo and GM.CC("warn") .. " · DEMO|r" or ""))
 	ui.empty:SetText("nothing worth destroying — threshold + market checked")
 	ui.empty:SetShown(#rows == 0)
 	local maxScroll = math.max(0, #rows - VISIBLE)
