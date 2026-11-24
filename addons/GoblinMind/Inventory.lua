@@ -18,6 +18,8 @@ local auctionCache = {}   -- [fp] = {fp, aid, idx, itemID, qty, buyout, tLeft, a
 local aidIndex = {}       -- [raw auctionID or enum index] = fp — resolves
                           -- cancel callers' raw ids back to their entry
 local recentCancels = {}  -- [fp or raw id] = time()
+local soldMarks = {}      -- [fp] = time() — ERR_AUCTION_SOLD marks
+                          -- survive until the enum drops the row
 local ownedPrimed = false -- first refresh just populates — everything
                           -- would look "new" otherwise
 local emptyArmed = false  -- empty snapshots must repeat before vanish
@@ -105,6 +107,41 @@ function GM.Inventory.OwnedAt() return lastOwnedAt end
 -- snapshot deliberately doesn't set it, so "not in the table" reads
 -- as never-asked, not as canceled
 function GM.Inventory.OwnedPrimed() return ownedPrimed end
+
+-- "A buyer has been found for your auction of X" — the mark only
+-- carries the item NAME, so it resolves against the cached rows by
+-- name. Exact match first (variant links carry "of X"), prefix
+-- either way covers base-name vs variant-name pairs.
+function GM.Inventory.MarkSold(name)
+	if not name or name == "" then return end
+	local t, marked = time(), 0
+	for fp, e in pairs(auctionCache) do
+		local en = e.name or (GM.ItemName and GM.ItemName(e.itemID))
+		if en and (en == name
+			or en:sub(1, #name) == name
+			or name:sub(1, #en) == en) then
+			soldMarks[fp] = t
+			e.sold = true
+			if GM.Inventory.auctions[fp] then
+				GM.Inventory.auctions[fp].sold = true
+			end
+			marked = marked + 1
+		end
+	end
+	if marked > 0 then
+		-- pull a fresh snapshot so the delta engine ledgers the sell
+		-- sooner — and repaint the surfaces that render the mark
+		GM.After(1, GM.Inventory.QueryOwned)
+		if GM.MyAuctions and GM.MyAuctions.Refresh then
+			GM.MyAuctions.Refresh()
+		end
+		if GM.AHUI and GM.AHUI.Refresh then GM.AHUI.Refresh() end
+		if GM.PlanQueue and GM.PlanQueue.Refresh then
+			GM.PlanQueue.Refresh()
+		end
+	end
+	return marked
+end
 
 -- total buyout value of currently listed auctions (last snapshot —
 -- stale between AH visits, rebased whenever the enum answers)
@@ -286,6 +323,13 @@ function GM.Inventory.RefreshOwned()
 	local t = time()
 	for key, t0 in pairs(recentCancels) do
 		if t - t0 > 300 then recentCancels[key] = nil end
+	end
+	-- sold marks ride the cache: the buyer-found message lands before
+	-- the enum drops the row, so the mark has to survive refreshes —
+	-- and die with the row (or on a stale-mark timeout)
+	for fp, e in pairs(now) do e.sold = soldMarks[fp] or nil end
+	for fp, t0 in pairs(soldMarks) do
+		if not now[fp] or t - t0 > 600 then soldMarks[fp] = nil end
 	end
 	-- fingerprint delta: more listings at an fp than cached = posts,
 	-- fewer = sells/expires — identical twins stay distinguishable by
@@ -632,6 +676,7 @@ function GM.Inventory.MineRows()
 				qty = (a.qty or 1) * (a.n or 1),
 				unit = a.buyout, tLeft = remain,
 				mkt = mkt, cheap = cheap, undercut = undercut,
+				sold = a.sold,
 				name = a.name or GM.ItemName(a.itemID)
 					or ("item " .. a.itemID),
 			}

@@ -1563,7 +1563,9 @@ function AU.Refresh()
 				row.unit:SetText(r.unit and GM.Money(r.unit) .. "/ea" or "—")
 				row.lot:SetText(r.unit and GM.Money(r.unit * (r.qty or 1)) or "—")
 				row.mkt:SetText(r.mkt and (GM.Money(r.mkt) .. "/ea") or "no market")
-				if r.undercut then
+				if r.sold then
+					row.stat:SetText(GM.CC("pos") .. "SOLD|r")
+				elseif r.undercut then
 					row.stat:SetText(GM.CC("warn") .. "UNDERCUT|r"
 						.. (r.cheap and (" @ " .. GM.Money(r.cheap)) or ""))
 				elseif r.cheap == nil then

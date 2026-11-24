@@ -173,8 +173,22 @@ f:SetScript("OnEvent", function(_, event, ...)
 		end
 	elseif event == "CHAT_MSG_SYSTEM" then
 		local msg = ...
-		if msg and GM.AH.open and (msg:find("auction") or msg:find("bid")) then
-			GM.Print(GM.CC("textDim") .. tostring(msg) .. "|r")
+		if msg then
+			-- buyer-found: the message carries only the item name —
+			-- mark the owned row SOLD and pull a fresh snapshot so the
+			-- delta engine ledgers it. Deformat the client string so
+			-- non-enUS clients still match.
+			local pat = ERR_AUCTION_SOLD and ("^" ..
+				ERR_AUCTION_SOLD:gsub("([%.%(%)%[%]%+%-%?%^%$%*%%])", "%%%1")
+					:gsub("%%%%s", "(.+)"):gsub("%%%%d", "(%%d+)") .. "$")
+			local nm = (pat and msg:match(pat))
+				or msg:match("buyer has been found for your auction of (.+)")
+			if nm then
+				GM.Inventory.MarkSold((nm:gsub("%s*%.%s*$", "")))
+			end
+			if GM.AH.open and (msg:find("auction") or msg:find("bid")) then
+				GM.Print(GM.CC("textDim") .. tostring(msg) .. "|r")
+			end
 		end
 	elseif event == "CHAT_MSG_MONEY" then
 		-- loose parse: sum g/s/c quantities anywhere in the message

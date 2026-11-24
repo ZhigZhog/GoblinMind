@@ -225,7 +225,7 @@ local function BuildUI()
 		ui.treeRows[i] = row
 	end
 	ui.newBox = EditBox(treeP, 172)
-	ui.newBox:SetPoint("BOTTOMLEFT", 6, 30)
+	ui.newBox:SetPoint("BOTTOMLEFT", 6, 52)
 	ui.newBox:SetText(NEWG_LBL)
 	ui.newBox:SetTextColor(GM.RGB("textDim"))
 	ui.newBox:SetScript("OnEditFocusGained", function(self)
@@ -235,7 +235,7 @@ local function BuildUI()
 		end
 	end)
 	local addG = Btn(treeP, "+", 18, 18)
-	addG:SetPoint("BOTTOMLEFT", 6, 8)
+	addG:SetPoint("BOTTOMLEFT", 6, 30)
 	addG:SetScript("OnClick", function()
 		local v = strtrim(ui.newBox:GetText() or "")
 		if v == "" or v == NEWG_LBL then return end
@@ -244,7 +244,7 @@ local function BuildUI()
 		ui.newBox:SetText("")
 		GU.Refresh()
 	end)
-	local renG = Btn(treeP, "REN", 28, 18)
+	local renG = Btn(treeP, "REN", 32, 18)
 	renG:SetPoint("LEFT", addG, "RIGHT", 2, 0)
 	renG:SetScript("OnClick", function()
 		local v = strtrim(ui.newBox:GetText() or "")
@@ -254,7 +254,9 @@ local function BuildUI()
 		ui.newBox:SetText("")
 		GU.Refresh()
 	end)
-	local delG = Btn(treeP, "DEL", 28, 18)
+	-- wide enough for the armed "SURE?" label — it used to squeeze
+	-- into DEL's box and read "S…"
+	local delG = Btn(treeP, "DEL", 44, 18)
 	delG:SetPoint("LEFT", renG, "RIGHT", 2, 0)
 	delG:SetScript("OnClick", function(self)
 		if not ui.editPath or ui.editPath == "Base Group" then return end
@@ -272,7 +274,7 @@ local function BuildUI()
 	Tip(delG, function() return { "Delete group",
 		"Removes the group + subgroups; items become ungrouped",
 		"Click twice to confirm" } end)
-	local protG = Btn(treeP, "PROT", 32, 18)
+	local protG = Btn(treeP, "PROT", 36, 18)
 	protG:SetPoint("LEFT", delG, "RIGHT", 2, 0)
 	protG:SetScript("OnClick", function()
 		if not ui.editPath then return end
@@ -532,13 +534,15 @@ local function BuildUI()
 		if mode == "export" then d.eb:SetFocus() d.eb:HighlightText() end
 	end
 
-	local impG = Btn(treeP, "IMP", 28, 18)
-	impG:SetPoint("LEFT", protG, "RIGHT", 2, 0)
+	-- transfer ops get their own bottom row — six buttons never
+	-- fitted the 186px column on one line and read "R… D… P…"
+	local impG = Btn(treeP, "IMP", 34, 18)
+	impG:SetPoint("BOTTOMLEFT", 6, 8)
 	impG:SetScript("OnClick", function() ShowXfer("import") end)
 	Tip(impG, function() return { "Import groups",
 		"TSM exports, group: lists, or bare item ids",
 		"paste → IMPORT" } end)
-	local expG = Btn(treeP, "EXP", 28, 18)
+	local expG = Btn(treeP, "EXP", 34, 18)
 	expG:SetPoint("LEFT", impG, "RIGHT", 2, 0)
 	expG:SetScript("OnClick", function() ShowXfer("export") end)
 	Tip(expG, function() return { "Export groups",

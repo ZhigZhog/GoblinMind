@@ -429,9 +429,6 @@ local function Build()
 	local u = GM.ui
 	if u then
 		local slot = CreateFrame("Frame", nil, f)
-		ui.sendBar:SetParent(slot)
-		ui.sendBar:ClearAllPoints()
-		ui.sendBar:SetPoint("TOPLEFT", slot)
 		ui.openAllBtn:SetParent(slot)
 		ui.openAllBtn:ClearAllPoints()
 		ui.openAllBtn:SetPoint("LEFT", slot)
@@ -442,6 +439,11 @@ local function Build()
 		bar:Add(u:Adopt(tabHost), { width = 186, height = 20 })
 		bar:Add(u:Adopt(scan), { width = 88, height = 20 })
 		bar:Add(u:Adopt(slot), { width = "fill", height = 20 })
+		-- the send controls never fitted the toolbar strip (~380px of
+		-- fields vs ~250px of slot — SEND/CLEAR ran off the window
+		-- edge). They get their own send-only row under the toolbar
+		ui.sendBarNode = u:Adopt(ui.sendBar)
+		root:Add(ui.sendBarNode, { width = "fill", height = 20 })
 		ui.compNode = u:Adopt(comp)
 		root:Add(ui.compNode, { width = "fill", height = 112 })
 		root:Add(u:Adopt(hdr), { width = "fill", height = 16 })
@@ -594,7 +596,11 @@ function MU.Refresh()
 	if not ui then return end
 	local open = MailOpen()
 	ui.pageTabs.set(ui.page)
-	ui.sendBar:SetShown(ui.page == "send")
+	if ui.sendBarNode then
+		ui.sendBarNode:SetVisible(ui.page == "send")
+	else
+		ui.sendBar:SetShown(ui.page == "send")
+	end
 	ui.openAllBtn:SetShown(ui.page == "inbox")
 	-- layout swap: the compose strip pushes the list down on SEND.
 	-- Under GoblinUI the comp node collapses and the fill host
