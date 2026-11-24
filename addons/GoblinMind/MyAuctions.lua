@@ -39,7 +39,6 @@ local function Build()
 	for i, p in ipairs({ { "POSTED", "posted" }, { "BAGS", "bags" } }) do
 		local b = CreateFrame("Button", nil, f)
 		b:SetSize(58, 16)
-		b:SetPoint("TOPLEFT", 12 + (i - 1) * 62, -34)
 		GM.Panel(b, "contLowest")
 		b.text = GM.MakeFontString(b, GM.FONT_BOLD, 9, "textDim")
 		b.text:SetPoint("CENTER")
@@ -58,7 +57,6 @@ local function Build()
 		GM.Inventory.QueryOwned()
 		GM.After(0.5, MA.Refresh)
 	end)
-	refresh:SetPoint("TOPLEFT", 136, -32)
 	local post = Btn(f, 78, "POST SCAN", function()
 		if ui.page == "bags" then
 			GM.Auctioning.PostScan(ui.include)
@@ -66,16 +64,12 @@ local function Build()
 			GM.Auctioning.PostScan()
 		end
 	end)
-	post:SetPoint("LEFT", refresh, "RIGHT", 6, 0)
 	ui.summary = GM.MakeFontString(f, GM.FONT, 9, "textDim")
-	ui.summary:SetPoint("LEFT", post, "RIGHT", 12, 0)
 	ui.summary:SetJustifyH("LEFT")
 
 	-- column header + scroll host (BAGS page only — POSTED builds its
 	-- own headers into the two panes below)
 	local hdr = CreateFrame("Frame", nil, f)
-	hdr:SetSize(776, 16)
-	hdr:SetPoint("TOPLEFT", 12, -60)
 	ui.summary:SetWidth(320)
 	ui.summary:SetJustifyH("LEFT")
 	ui.summary:SetWordWrap(false)
@@ -89,8 +83,6 @@ local function Build()
 	ui.count:SetPoint("RIGHT", -2, 0)
 
 	local host = CreateFrame("Frame", nil, f)
-	host:SetSize(776, VISIBLE * ROW_H + 4)
-	host:SetPoint("TOPLEFT", 12, -78)
 	if host.SetClipsChildren then host:SetClipsChildren(true) end
 	host:EnableMouseWheel(true)
 	host:SetScript("OnMouseWheel", function(_, d)
@@ -104,8 +96,6 @@ local function Build()
 	-- our bids underneath (776 wide, 6 rows per pane)
 	local PANE_H = 22 + MINE_VISIBLE * ROW_H + 8
 	local fp = CreateFrame("Frame", nil, f)
-	fp:SetSize(776, PANE_H)
-	fp:SetPoint("TOPLEFT", 12, -62)
 	GM.Panel(fp, "contLowest")
 	fp:EnableMouseWheel(true)
 	fp:SetScript("OnMouseWheel", function(_, d)
@@ -181,8 +171,6 @@ local function Build()
 	ui.fEmpty:SetPoint("CENTER", 0, -10)
 
 	local bp = CreateFrame("Frame", nil, f)
-	bp:SetSize(776, PANE_H)
-	bp:SetPoint("TOPLEFT", fp, "BOTTOMLEFT", 0, -8)
 	GM.Panel(bp, "contLowest")
 	bp:EnableMouseWheel(true)
 	bp:SetScript("OnMouseWheel", function(_, d)
@@ -305,11 +293,48 @@ local function Build()
 	ui.empty:SetText("no auctions posted — POST SCAN lists bags by group ops")
 
 	ui.foot = GM.MakeFontString(f, GM.FONT, 9, "textDim")
-	ui.foot:SetPoint("BOTTOMLEFT", 14, 10)
 	ui.foot:SetWidth(400)
 	ui.foot:SetJustifyH("LEFT")
 	ui.foot:SetWordWrap(false)
 	ui.foot:SetText("log view — snapshot refreshes at the AH")
+
+	-- ============ layout wiring ============
+	-- toolbar Row (segs / REFRESH / POST SCAN / summary), then two
+	-- mutually-exclusive page hosts: posted = fp+bp column, bags =
+	-- header + scroll host. Refresh swaps node visibility.
+	local u = GM.ui
+	local root = u:AttachRoot(f, {
+		direction = "column", gap = "sm",
+		pad = { top = 32, right = 12, bottom = 10, left = 12 },
+	})
+	local bar = u:Row(root, { gap = "sm" })
+	root:Add(bar, { height = 18 })
+	local function Bar(fr, w, h)
+		h = h or 16
+		bar:Add(u:Adopt(fr, { width = w, height = h }),
+			{ width = w, height = h, align = "center" })
+	end
+	Bar(ui.segs[1], 58) Bar(ui.segs[2], 58)
+	Bar(refresh, 66, 18) Bar(post, 78, 18)
+	bar:Add(u:Adopt(ui.summary, { width = 320, height = 14 }),
+		{ width = "fill", height = 14, align = "center" })
+
+	ui.postedPage = u:Column(root, { gap = 8 })
+	root:Add(ui.postedPage, { height = "fill" })
+	ui.postedPage:Add(u:Adopt(fp, { width = 776, height = PANE_H }),
+		{ height = PANE_H })
+	ui.postedPage:Add(u:Adopt(bp, { width = 776, height = PANE_H }),
+		{ height = PANE_H })
+
+	ui.bagsPage = u:Column(root, { gap = "sm" })
+	root:Add(ui.bagsPage, { height = "fill" })
+	ui.bagsPage:Add(u:Adopt(hdr, { width = 776, height = 16 }),
+		{ height = 16 })
+	ui.bagsPage:Add(u:Adopt(host, { width = 776,
+		height = VISIBLE * ROW_H + 4 }), { height = "fill" })
+
+	root:Add(u:Adopt(ui.foot, { width = 400, height = 12 }),
+		{ height = 12 })
 end
 
 -- ============ data ============
@@ -329,10 +354,10 @@ function MA.Refresh()
 	-- needs ~446 — size the frame to the page so neither sits on a
 	-- dead band of empty chrome
 	ui.frame:SetHeight(posted and 456 or 462)
-	ui.fp:SetShown(posted)
-	ui.bp:SetShown(posted)
-	ui.host:SetShown(not posted)
-	ui.hdr:SetShown(not posted)
+	-- page hosts collapse through node visibility — hidden pages
+	-- release their layout space instead of just hiding frames
+	ui.postedPage:SetVisible(posted)
+	ui.bagsPage:SetVisible(not posted)
 	if not posted then
 		for i, fs in ipairs(ui.hdrFs) do
 			local c = BAGS_COLS[i]
