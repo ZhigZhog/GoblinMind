@@ -238,8 +238,16 @@ function GM.Inventory.RefreshOwned()
 			local e = {
 				itemID = id,
 				-- keep the API key: suffixed variants scan/post/cancel
-				-- under their exact itemKey, never the suffix-0 base
-				itemKey = info.itemKey,
+				-- under their exact itemKey, never the suffix-0 base.
+				-- itemLink is the fallback key source on clients whose
+				-- owned rows don't carry itemKey, and doubles as the
+				-- variant-aware display name ("Banded Girdle of X")
+				itemKey = info.itemKey
+					or (GM.AH.ItemKeyFromLink
+						and GM.AH.ItemKeyFromLink(info.itemLink)),
+				itemLink = info.itemLink,
+				name = info.itemLink and info.itemLink:match("%[(.-)%]")
+					or nil,
 				qty = info.quantity or 1,
 				-- per-ITEM buyout (Forever convention — not lot total)
 				buyout = info.buyoutAmount or info.bidAmount,
@@ -365,13 +373,19 @@ function GM.Inventory.DumpOwned()
 			local keys = {}
 			for k in pairs(info) do keys[#keys + 1] = tostring(k) end
 			table.sort(keys)
+			local ik = info.itemKey
 			GM.Print(format("  [%d] id=%s aid=%s qty=%s buyout=%s bid=%s status=%s tLeft=%s",
 				i,
-				tostring(info.itemKey and info.itemKey.itemID or info.itemID),
+				tostring(ik and ik.itemID or info.itemID),
 				tostring(info.auctionID or info.auctionId),
 				tostring(info.quantity), tostring(info.buyoutAmount),
 				tostring(info.bidAmount), tostring(info.status),
 				tostring(info.timeLeftSeconds)))
+			GM.Print(format("      itemKey: id=%s suf=%s lvl=%s pet=%s · link=%s",
+				tostring(ik and ik.itemID), tostring(ik and ik.itemSuffix),
+				tostring(ik and ik.itemLevel),
+				tostring(ik and ik.battlePetSpeciesID),
+				info.itemLink and info.itemLink:sub(1, 60) or "nil"))
 			GM.Print("      keys: " .. table.concat(keys, ","))
 		else
 			GM.Print(format("  [%d] <error>", i))
@@ -469,6 +483,9 @@ local function EnumerateBids()
 			b.itemID = b.itemID
 				or (info.itemKey and info.itemKey.itemID)
 			b.itemKey = b.itemKey or info.itemKey
+				or (GM.AH.ItemKeyFromLink
+					and GM.AH.ItemKeyFromLink(info.itemLink))
+			b.itemLink = b.itemLink or info.itemLink
 			b.qty = info.quantity or b.qty or 1
 			b.curBid = info.bidAmount or info.requiredBid or b.curBid
 			b.ourBid = b.ourBid or b.curBid
@@ -506,15 +523,37 @@ function GM.Inventory.MineRows()
 	for fp, a in pairs(auctionCache) do
 		if a.itemID then
 			local mkt = GM.Price("dbmarket", a.itemID)
-			-- mbx through the resolver: live book when it's freshest,
-			-- mesh beacon when newer still, emitted row otherwise
-			local e0 = GM.ItemEntry(a.itemID)
-			local cheap = e0 and e0.mbx ~= math.huge and e0.mbx
-			-- undercut claims someone beats us NOW — only a live
-			-- source (fresh book or mesh beacon) can say that; a
-			-- stale emit mbx flags phantom undercuts on sole listings
-			local live = e0 and (e0._src == "mesh" or (e0._src == "book"
-				and GM.AH.BookLive and GM.AH.BookLive()))
+			local cheap, live
+			if a.itemKey and (a.itemKey.itemSuffix or 0) ~= 0 then
+				-- variants are separate markets: the itemID-wide mbx
+				-- mixes every "of X" into one min that says nothing
+				-- about THIS suffix. Only a same-variant ladder (the
+				-- last targeted scan under the matching key) can prove
+				-- undercut — anything else is a false alarm
+				local sk = GM.AH.scanItemKey
+				if sk and sk.itemID == a.itemID
+					and (sk.itemSuffix or 0) == a.itemKey.itemSuffix
+					and GM.AH.asks then
+					for _, ask in ipairs(GM.AH.asks) do
+						if not ask.own and ask.unit then
+							cheap = ask.unit break
+						end
+					end
+					live = true -- a scan result is live by definition
+				end
+			else
+				-- mbx through the resolver: live book when it's
+				-- freshest, mesh beacon when newer still, emitted row
+				-- otherwise
+				local e0 = GM.ItemEntry(a.itemID)
+				cheap = e0 and e0.mbx ~= math.huge and e0.mbx
+				-- undercut claims someone beats us NOW — only a live
+				-- source (fresh book or mesh beacon) can say that; a
+				-- stale emit mbx flags phantom undercuts on sole
+				-- listings
+				live = e0 and (e0._src == "mesh" or (e0._src == "book"
+					and GM.AH.BookLive and GM.AH.BookLive()))
+			end
 			local undercut = live and cheap and a.buyout
 				and cheap < a.buyout or nil
 			-- tLeft is remaining-seconds at capture — rebase it or the
@@ -525,11 +564,12 @@ function GM.Inventory.MineRows()
 				-- fp-keyed cache: hand cancel the real auctionID when
 				-- the snapshot had one, else the enumeration index
 				aid = a.aid or a.idx or fp,
-				id = a.itemID, key = a.itemKey,
+				id = a.itemID, key = a.itemKey, link = a.itemLink,
 				qty = (a.qty or 1) * (a.n or 1),
 				unit = a.buyout, tLeft = remain,
 				mkt = mkt, cheap = cheap, undercut = undercut,
-				name = GM.ItemName(a.itemID) or ("item " .. a.itemID),
+				name = a.name or GM.ItemName(a.itemID)
+					or ("item " .. a.itemID),
 			}
 		end
 	end
@@ -550,7 +590,7 @@ function GM.Inventory.BidRows()
 				and (b.at + b.tl - time()) or b.tl
 			rows[#rows + 1] = {
 				aid = aid, id = b.itemID, key = b.itemKey,
-				qty = b.qty or 1,
+				link = b.itemLink, qty = b.qty or 1,
 				ourBid = b.ourBid, curBid = b.curBid or b.ourBid,
 				buyout = b.buyout, status = b.status or "winning",
 				remain = remain,

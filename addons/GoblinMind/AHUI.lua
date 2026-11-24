@@ -268,12 +268,12 @@ end
 -- it and rescans while the AH is open). A live chat editbox keeps
 -- the native insert-link priority; other modifiers keep Blizzard's
 -- chain (ctrl=dressup etc.) via ModifiedItemClick.
-local function RowModClick(id)
+local function RowModClick(id, link, key)
 	if IsShiftKeyDown() then
 		local chat = ChatEdit_GetActiveWindow
 			and ChatEdit_GetActiveWindow()
 		if not (chat and chat:IsShown()) then
-			GM.TargetItem(id)
+			GM.TargetItem(id, link, key)
 			return
 		end
 	end
@@ -1454,7 +1454,7 @@ function AU.Refresh()
 				local sel = r
 				row:SetScript("OnClick", function()
 					if IsModifiedClick() then
-						if sel.id then RowModClick(sel.id) end
+						if sel.id then RowModClick(sel.id, nil, sel.key) end
 						return
 					end
 					ui.askScroll = 0
@@ -1583,8 +1583,8 @@ function AU.Refresh()
 				end)
 				row:SetScript("OnClick", function()
 					if not r.id then return end
-					if IsModifiedClick() then RowModClick(r.id)
-					else GM.TargetItem(r.id, nil, r.key) end
+					if IsModifiedClick() then RowModClick(r.id, r.link, r.key)
+					else GM.TargetItem(r.id, r.link, r.key) end
 				end)
 			else
 				row:Hide()
@@ -1633,8 +1633,8 @@ function AU.Refresh()
 				end
 				row:SetScript("OnClick", function()
 					if not r.id then return end
-					if IsModifiedClick() then RowModClick(r.id)
-					else GM.TargetItem(r.id, nil, r.key) end
+					if IsModifiedClick() then RowModClick(r.id, r.link, r.key)
+					else GM.TargetItem(r.id, r.link, r.key) end
 				end)
 			else
 				row:Hide()

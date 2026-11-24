@@ -151,7 +151,11 @@ end
 
 function MU.SetItem(id, link, key)
 	if not id then return end
+	-- same id under a different suffix is a different market — the
+	-- cached ladder belongs to the old variant's key
 	local changed = M.itemID ~= id
+		or (M.itemKey and M.itemKey.itemSuffix or 0)
+			~= (key and key.itemSuffix or 0)
 	M.itemID, M.itemLink, M.itemKey = id, link, key
 	if changed then
 		M.asks, M.askT, M.askTries, M.askWait = nil, nil, nil, nil
