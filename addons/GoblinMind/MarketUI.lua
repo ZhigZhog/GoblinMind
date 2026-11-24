@@ -469,7 +469,7 @@ local function RefreshPlan()
 	local steps = plan and plan.steps
 	local total = steps and #steps or 0
 	local idx = plan and GM.PlanQueue.stepIndex or 0
-	local armed = idx <= total and steps[idx]
+	local armed = steps and idx <= total and steps[idx]
 	if plan and plan.mode and plan.mode ~= "postscan"
 		and plan.mode ~= "cancelscan" and plan.mode ~= "shopscan" then
 		mp.pHead:SetText("PLAN — " .. plan.mode)
