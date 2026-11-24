@@ -1146,6 +1146,12 @@ function GM.AH.Execute(step)
 		GM.Inventory.recentCancels[step.auctionID] = time()
 		local a = GM.Inventory.OwnedByKey
 			and GM.Inventory.OwnedByKey(step.auctionID)
+		-- already gone (canceled in Blizzard's UI) and a live enum has
+		-- answered this session — the step just completes
+		if not a and GM.Inventory.OwnedPrimed
+			and GM.Inventory.OwnedPrimed() then
+			return true
+		end
 		local now = time()
 		for k, c in pairs(cancelLedger) do
 			if now - (c.t or 0) > 600 then cancelLedger[k] = nil end
@@ -1177,48 +1183,19 @@ function GM.AH.Execute(step)
 			if a.fp then GM.Inventory.recentCancels[a.fp] = now end
 			GM.Ledger.Add("cancel", a.itemID, a.qty, a.buyout)
 		end
-		-- Forever's CancelAuction may follow the classic contract —
-		-- owner-list INDEX, not auctionID. An auctionID where an index
-		-- belongs is an out-of-range no-op (no error, listing stays).
-		-- Try the id first; re-enumerate and retry by fresh index if
-		-- the listing survives.
+		-- CancelAuction is PROTECTED on Forever — the call throws the
+		-- client-side "Interface action failed" block, never reaches
+		-- the server. Fire it anyway (some build may take it), then
+		-- keep the step armed: the real completion is the listing
+		-- vanishing from the owned snapshot — cancel it in the
+		-- BLIZZARD UI auctions tab, the plan advances on the enum.
 		local cancelFn = C_AuctionHouse.CancelAuction or CancelAuction
-		local attemptT = time()
-		if cancelFn then
-			local ok, err = pcall(cancelFn, step.auctionID)
-			if not ok then
-				GM.Print(GM.CC("err") .. "cancel(aid) failed: "
-					.. tostring(err) .. "|r")
-			end
-		else
-			GM.Print(GM.CC("err") .. "no CancelAuction API on this client|r")
-		end
-		local aid = step.auctionID
+		if cancelFn then pcall(cancelFn, step.auctionID) end
 		GM.Inventory.QueryOwned()
-		GM.After(3, function()
-			-- only trust a snapshot taken AFTER the attempt — an
-			-- index read off a stale enum could belong to a different
-			-- listing now (positions shift once something cancels)
-			local fresh = GM.Inventory.OwnedAt
-				and GM.Inventory.OwnedAt() or 0
-			local e = GM.Inventory.OwnedByKey
-				and GM.Inventory.OwnedByKey(aid)
-			if fresh <= attemptT then
-				GM.Inventory.QueryOwned() -- enum still pending
-			elseif e and e.idx and cancelFn then
-				-- listing survived the id call — index semantics
-				local ok, err = pcall(cancelFn, e.idx)
-				if not ok then
-					GM.Print(GM.CC("err") .. "cancel(idx) failed: "
-						.. tostring(err) .. "|r")
-				end
-				GM.After(2, GM.Inventory.QueryOwned)
-			elseif e then
-				GM.Print(GM.CC("warn") .. "cancel did not take — "
-					.. "listing still active|r")
-			end
-		end)
-		return true
+		GM.Print(GM.CC("warn") .. "cancel is protected here — cancel it "
+			.. "in the BLIZZARD UI auctions tab; the plan advances when "
+			.. "the listing clears|r")
+		return false
 	end
 end
 

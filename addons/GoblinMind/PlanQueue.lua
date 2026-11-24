@@ -1126,6 +1126,31 @@ function PQ.ExecuteNext()
 	PQ.Refresh()
 end
 
+-- A cancel step armed against a protected CancelAuction completes
+-- when the OWNED snapshot loses the listing — the user canceled in
+-- Blizzard's UI (or a call landed anyway). Same advance + rescan as
+-- a successful Execute; hooked from Inventory.RefreshOwned.
+function PQ.OnOwnedRefresh()
+	local plan = PQ.plan
+	if not (plan and plan.steps) then return end
+	local step = plan.steps[PQ.stepIndex]
+	if not (step and step.kind == "cancel" and step.auctionID) then
+		return
+	end
+	if GM.Inventory.OwnedByKey
+		and GM.Inventory.OwnedByKey(step.auctionID) then
+		return -- still listed
+	end
+	PQ.stepIndex = PQ.stepIndex + 1
+	if not plan.mode then
+		local p = plan
+		GM.After(1.0, function()
+			if PQ.plan == p then PQ.Rescan() end
+		end)
+	end
+	PQ.Refresh()
+end
+
 -- Skips the current step — for when the player decides not to do a buyout.
 -- Aborts a staged commodity purchase (the quote expires server-side).
 -- The staged-quote commodity flow produced nothing — splice the per-lot

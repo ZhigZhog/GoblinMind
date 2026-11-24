@@ -101,6 +101,11 @@ local lastOwnedAt -- unix time of the last live snapshot (or of the
 
 function GM.Inventory.OwnedAt() return lastOwnedAt end
 
+-- true only after a LIVE enum this session — LoadOwned's rehydrated
+-- snapshot deliberately doesn't set it, so "not in the table" reads
+-- as never-asked, not as canceled
+function GM.Inventory.OwnedPrimed() return ownedPrimed end
+
 -- total buyout value of currently listed auctions (last snapshot —
 -- stale between AH visits, rebased whenever the enum answers)
 function GM.Inventory.PostedValue()
@@ -345,6 +350,11 @@ function GM.Inventory.RefreshOwned()
 	local cb = GM.Inventory.onOwned
 	GM.Inventory.onOwned = nil
 	if cb then cb() end
+	-- plan steps waiting on a manual cancel watch every snapshot —
+	-- the listing vanishing is the step's completion signal
+	if GM.PlanQueue and GM.PlanQueue.OnOwnedRefresh then
+		GM.PlanQueue.OnOwnedRefresh()
+	end
 end
 
 -- Forever's QueryOwnedAuctions takes a sorts table (TSM passes
