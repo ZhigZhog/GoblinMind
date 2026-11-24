@@ -104,8 +104,6 @@ local function Build()
 	-- scrollable multiline editbox carrying the diagnostics block
 	local scroll = CreateFrame("ScrollFrame", nil, f,
 		"UIPanelScrollFrameTemplate")
-	scroll:SetPoint("TOPLEFT", 10, -50)
-	scroll:SetPoint("BOTTOMRIGHT", -30, 44)
 	GM.Panel(scroll, "contLowest")
 	local eb = CreateFrame("EditBox", nil, scroll)
 	eb:SetMultiLine(true)
@@ -121,7 +119,6 @@ local function Build()
 		eb:SetFocus()
 		eb:HighlightText()
 	end)
-	copy:SetPoint("BOTTOMLEFT", 12, 10)
 	local shot = Btn(f, 100, "SCREENSHOT", function()
 		-- Screenshot is protected on this client — a pcall can't shield
 		-- a protection block (it trips ADDON_ACTION_BLOCKED, not a Lua
@@ -137,7 +134,6 @@ local function Build()
 		GM.Print(ok and "screenshot saved to WoW\\Screenshots"
 			or "press PrintScreen — saves to WoW\\Screenshots")
 	end)
-	shot:SetPoint("LEFT", copy, "RIGHT", 8, 0)
 
 	-- stage into SavedVariables — the brain watcher picks it up on
 	-- the next /reload and files it to GitHub. Title comes from the
@@ -169,7 +165,6 @@ local function Build()
 				.. "seen — it'll upload once the app is running "
 				.. "(see setup step 4, /goblin backend)|r" or ""))
 	end)
-	file:SetPoint("LEFT", shot, "RIGHT", 8, 0)
 
 	-- the link itself, selectable — most clients can't launch a
 	-- browser from Lua, so copy-out is the reliable path; LaunchURL
@@ -194,9 +189,25 @@ local function Build()
 		urlBox:SetFocus()
 		urlBox:HighlightText()
 	end)
-	issues:SetPoint("LEFT", file, "RIGHT", 8, 0)
-	urlBox:SetPoint("LEFT", issues, "RIGHT", 8, 0)
-	urlBox:SetPoint("BOTTOM", copy, "BOTTOM", 0, 0)
+
+	-- ============ layout wiring ============
+	-- scroll region fills; the action row sits on the bottom edge —
+	-- title, hint, and close stay hand-anchored chrome
+	local u = GM.ui
+	local root = u:AttachRoot(f, {
+		direction = "column", gap = "sm",
+		pad = { top = 50, right = 10, bottom = 44, left = 10 },
+	})
+	root:Add(u:Adopt(scroll, { width = 600, height = 300 }),
+		{ width = "fill", height = "fill" })
+	local btns = u:Row(root, { gap = "sm" })
+	root:Add(btns, { height = 20 })
+	local function BtmBtn(fr, w, h)
+		btns:Add(u:Adopt(fr, { width = w, height = h or 20 }),
+			{ width = w, height = h or 20, align = "center" })
+	end
+	BtmBtn(copy, 90) BtmBtn(shot, 100) BtmBtn(file, 96)
+	BtmBtn(issues, 82) BtmBtn(urlBox, 196, 18)
 end
 
 function BR.Show()
