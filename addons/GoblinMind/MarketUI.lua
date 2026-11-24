@@ -401,7 +401,8 @@ local NUM_FIELDS = {
 local function RefreshNumbers()
 	local entry = M.itemID and GM.ItemEntry(M.itemID)
 	for i, f in ipairs(NUM_FIELDS) do
-		local lab, val = mp.numRows[i]
+		local r = mp.numRows[i]
+		local lab, val = r[1], r[2]
 		lab:SetText(f[1])
 		local v = entry and f[2](entry)
 		val:SetText(v ~= nil and tostring(v) or "—")
