@@ -319,19 +319,37 @@ local function Build()
 	bar:Add(u:Adopt(ui.summary, { width = 320, height = 14 }),
 		{ width = "fill", height = 14, align = "center" })
 
+	-- scroll-position affordance: ▲/▼ at the host's edges, shown
+	-- only when more rows exist in that direction
+	local function ScrollHints(hostFr)
+		local up = GM.MakeFontString(hostFr, GM.FONT_BOLD, 10, "accent")
+		up:SetPoint("TOPRIGHT", -4, -2)
+		up:SetText("▲")
+		local dn = GM.MakeFontString(hostFr, GM.FONT_BOLD, 10, "accent")
+		dn:SetPoint("BOTTOMRIGHT", -4, 2)
+		dn:SetText("▼")
+		return up, dn
+	end
+	ui.fUp, ui.fDn = ScrollHints(fp)
+	ui.bUp, ui.bDn = ScrollHints(bp)
+	ui.gUp, ui.gDn = ScrollHints(host)
+
+	-- explicit heights everywhere — two fill siblings would split
+	-- the page space while both are visible at first arrange
 	ui.postedPage = u:Column(root, { gap = 8 })
-	root:Add(ui.postedPage, { height = "fill" })
+	root:Add(ui.postedPage, { height = PANE_H * 2 + 8 })
 	ui.postedPage:Add(u:Adopt(fp, { width = 776, height = PANE_H }),
 		{ height = PANE_H })
 	ui.postedPage:Add(u:Adopt(bp, { width = 776, height = PANE_H }),
 		{ height = PANE_H })
 
 	ui.bagsPage = u:Column(root, { gap = "sm" })
-	root:Add(ui.bagsPage, { height = "fill" })
+	root:Add(ui.bagsPage, { height = 16 + 4 + VISIBLE * ROW_H + 4 })
 	ui.bagsPage:Add(u:Adopt(hdr, { width = 776, height = 16 }),
 		{ height = 16 })
 	ui.bagsPage:Add(u:Adopt(host, { width = 776,
-		height = VISIBLE * ROW_H + 4 }), { height = "fill" })
+		height = VISIBLE * ROW_H + 4 }),
+		{ height = VISIBLE * ROW_H + 4 })
 
 	root:Add(u:Adopt(ui.foot, { width = 400, height = 12 }),
 		{ height = 12 })
@@ -384,6 +402,8 @@ function MA.RefreshPosted()
 	ui.fEmpty:SetShown(#rows == 0)
 	local maxScroll = math.max(0, #rows - #ui.mRows)
 	ui.scroll = math.min(ui.scroll or 0, maxScroll)
+	ui.fUp:SetShown(ui.scroll > 0)
+	ui.fDn:SetShown(ui.scroll < maxScroll)
 	W.ScrollText(ui.mCount, ui.scroll, #ui.mRows, #rows)
 	local uc, totalVal = 0, 0
 	for _, r in ipairs(rows) do
@@ -441,6 +461,8 @@ function MA.RefreshPosted()
 	ui.bEmpty:SetShown(#bids == 0)
 	local bMax = math.max(0, #bids - #ui.bRows)
 	ui.bidScroll = math.min(ui.bidScroll or 0, bMax)
+	ui.bUp:SetShown(ui.bidScroll > 0)
+	ui.bDn:SetShown(ui.bidScroll < bMax)
 	W.ScrollText(ui.bCount, ui.bidScroll, #ui.bRows, #bids)
 	for i = 1, #ui.bRows do
 		local row, r = ui.bRows[i], bids[i + ui.bidScroll]
@@ -536,6 +558,8 @@ function MA.RefreshBags()
 	ui.foot:SetText("checks include in POST SCAN · verdicts use the shared book when <5m old")
 	local maxScroll = math.max(0, #rows - VISIBLE)
 	ui.bagScroll = math.min(ui.bagScroll or 0, maxScroll)
+	ui.gUp:SetShown(ui.bagScroll > 0)
+	ui.gDn:SetShown(ui.bagScroll < maxScroll)
 	W.ScrollText(ui.count, ui.bagScroll, VISIBLE, #rows)
 	for i = 1, VISIBLE do
 		local row = ui.bagRows[i]
