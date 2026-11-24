@@ -72,11 +72,11 @@ local function Build()
 			h = ROW_H - 2, w = 588, icon = 18, nameW = 180,
 			cols = {
 				{ key = "qty", x = 208, w = 26 },
-				{ key = "dv", x = 240, color = "accent" },
-				{ key = "proc", x = 310, color = "textDim" },
-				{ key = "mkt", x = 375, color = "textDim" },
+				{ key = "dv", x = 240, w = 66, color = "accent" },
+				{ key = "proc", x = 310, w = 61, color = "textDim" },
+				{ key = "mkt", x = 375, w = 45, color = "textDim" },
 				{ key = "gain", x = 424, w = 58, color = "pos" },
-				{ key = "group", x = 488, w = 56, color = "textDim",
+				{ key = "group", x = 488, w = 42, color = "textDim",
 					size = 9 },
 			},
 		})
