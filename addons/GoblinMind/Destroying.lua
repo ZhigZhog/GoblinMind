@@ -150,6 +150,7 @@ end
 -- ungrouped items. Rows carry full context for the results window
 -- AND the plan emitter — sorted by gain over market, desc.
 function D.Candidates()
+	if D.demo then return D.demo end
 	local totals = {}
 	for _, s in ipairs(GM.Banking.BagSlots()) do
 		if s.itemID then
@@ -174,6 +175,31 @@ function D.Candidates()
 	end
 	table.sort(rows, function(a, b) return (a.gain or 0) > (b.gain or 0) end)
 	return rows
+end
+
+-- /goblin destroydemo — fabricated candidates so the results window
+-- can be verified without qualifying bags or an enchanting toon.
+-- Visual only: SELL still runs FindStack on the real bags, so demo
+-- rows arm to "SELL?" and SellOne reports nothing left.
+local DEMO_ITEMS = {
+	2996, 2840, 2318, 2770, 1206, 818, 1210, 2589,
+	4306, 2321, 774, 765, 2771, 2772, 2319,
+}
+function D.SeedDemo()
+	local rows = {}
+	for i, id in ipairs(DEMO_ITEMS) do
+		local vendor = VendorSell(id) or (5000 + i * 3737)
+		local mkt = math.floor(vendor * (0.4 + (i % 3) * 0.15))
+		local proc = i % 2 == 0 and math.floor(vendor * 1.6) or nil
+		local dv = (proc and proc > vendor) and proc or vendor
+		tinsert(rows, { id = id, qty = 1 + (i * 7) % 17,
+			dv = dv, mkt = mkt, vendor = vendor, proc = proc,
+			gain = dv - mkt,
+			group = i % 3 == 0 and "Base Group" or "demo",
+			name = GM.ItemName(id) })
+	end
+	table.sort(rows, function(a, b) return (a.gain or 0) > (b.gain or 0) end)
+	D.demo = rows
 end
 
 function D.Scan()

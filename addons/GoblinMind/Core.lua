@@ -558,6 +558,17 @@ Cmd("bankdebug", function()
 	GM.Print("bank debug " .. (GM.Banking.debug and "ON" or "off"))
 end, true)
 Cmd("destroy", function() GM.DestroyingUI.Toggle() end, true)
+Cmd("destroydemo", function()
+	if GM.Destroying.demo then
+		GM.Destroying.demo = nil
+		GM.Print("destroy demo data cleared")
+		GM.DestroyingUI.Refresh()
+	else
+		GM.Destroying.SeedDemo()
+		GM.Print("destroy demo data seeded — /goblin destroydemo to clear")
+		GM.DestroyingUI.Show()
+	end
+end)
 Cmd({ "sett", "options" }, function() GM.Settings.Toggle() end, true)
 Cmd({ "ledger", "overview" }, function() GM.Overview.Toggle() end, true)
 Cmd("ah", function() GM.AHUI.Toggle() end)

@@ -125,7 +125,7 @@ end
 
 local function Build()
 	if ui then return end
-	ui = {}
+	ui = { mode = S.mode } -- nil → shop labels over craft rows
 	local f, title = GM.Widgets.Window({
 		name = "GoblinMindMarketUI", title = "GOBLINMIND MARKET",
 		w = 680, h = 436, x = 100, tab = "market",
@@ -184,7 +184,7 @@ local function Build()
 	local u = GM.ui
 	local root = u:AttachRoot(f, {
 		direction = "column", gap = "sm",
-		pad = { top = 32, right = 10, bottom = 8, left = 10 },
+		pad = { top = 32, right = 10, bottom = 4, left = 10 },
 	})
 	local modes = u:Row(root, { gap = "sm" })
 	root:Add(modes, { height = 18 })
@@ -201,7 +201,7 @@ local function Build()
 	root:Add(u:Adopt(ui.list, { width = 660, height = ROWS * 24 + 8 }),
 		{ height = "fill" })
 	local footRow = u:Row(root, {})
-	root:Add(footRow, { height = 14 })
+	root:Add(footRow, { height = 18 })
 	footRow:Add(u:Adopt(foot, { width = 560, height = 12 }),
 		{ width = "fill", height = 12, align = "center" })
 	footRow:Add(u:Adopt(ui.action, { width = 80, height = 16 }),
