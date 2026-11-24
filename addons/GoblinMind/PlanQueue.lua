@@ -217,13 +217,10 @@ local function Build()
 	-- window-specific actions only
 	ui.postScan = TitleBtn("POST SCAN", 84, function() GM.Auctioning.PostScan() end,
 		"Scan bag items for posting")
-	ui.postScan:SetPoint("TOPLEFT", frame, "TOPLEFT", PAD, -30)
 	ui.cancelScan = TitleBtn("CANCEL SCAN", 104, function() GM.Auctioning.CancelScan() end,
 		"Scan own auctions for undercuts")
-	ui.cancelScan:SetPoint("LEFT", ui.postScan, "RIGHT", 8, 0)
 	ui.fullScan = TitleBtn("FULL SCAN", 84, function() GM.AH.FullScan() end,
 		"Refresh the full AH book")
-	ui.fullScan:SetPoint("LEFT", ui.cancelScan, "RIGHT", 8, 0)
 
 	ui.age = GM.MakeFontString(frame, GM.FONT, 10, "textDim")
 	ui.age:SetWidth(200)
@@ -260,14 +257,10 @@ local function Build()
 		hint = "drop item here · shift-click one · /goblin [link]",
 		onItem = function(id, link) GM.TargetItem(id, link) end,
 	})
-	ui.item:SetPoint("TOPLEFT", PAD, -64)
 	ui.icon, ui.iconBtn = ui.item.icon, ui.item.iconBtn
 
 	-- Trend chart region
 	ui.chart = CreateFrame("Frame", nil, frame)
-	ui.chart:SetPoint("TOPLEFT", PAD, -128)
-	ui.chart:SetWidth(LEFT_W)
-	ui.chart:SetHeight(150)
 	GM.Panel(ui.chart, "contLowest")
 	if GM.ChromePanel then GM.ChromePanel(ui.chart) end
 	ui.chart.title = GM.MakeFontString(ui.chart, GM.FONT_MED, 10, "primary")
@@ -292,9 +285,6 @@ local function Build()
 	-- Steps header
 	ui.header = CreateFrame("Frame", nil, frame)
 	local header = ui.header
-	header:SetPoint("TOPLEFT", PAD, -286)
-	header:SetWidth(LEFT_W)
-	header:SetHeight(18)
 	GM.Panel(header, "contHigh")
 	if GM.ChromePanel then GM.ChromePanel(header, { l = 6, t = 6, r = 6, b = 6 }) end
 	ui.headerCols = {}
@@ -307,9 +297,6 @@ local function Build()
 
 	-- Step rows
 	ui.list = CreateFrame("Frame", nil, frame)
-	ui.list:SetPoint("TOPLEFT", PAD, -306)
-	ui.list:SetWidth(LEFT_W)
-	ui.list:SetHeight(ROWS * 22 + 8)
 	GM.Panel(ui.list, "contLowest")
 	if GM.ChromePanel then GM.ChromePanel(ui.list) end
 	ui.list:EnableMouseWheel(true)
@@ -326,9 +313,6 @@ local function Build()
 	-- ===== right column: grouped stats, full height =====
 	ui.stats = CreateFrame("Frame", nil, frame)
 	local stats = ui.stats
-	stats:SetPoint("TOPRIGHT", -PAD, -64)
-	stats:SetPoint("BOTTOMRIGHT", -PAD, PAD)
-	stats:SetWidth(WIN_W - 2 * PAD - GAP - LEFT_W)
 	GM.Panel(stats, "contLow")
 	if GM.ChromePanel then GM.ChromePanel(stats) end
 	local stTitle = GM.MakeFontString(stats, GM.FONT_MED, 10, "primary")
@@ -338,8 +322,6 @@ local function Build()
 
 	-- Summary strip: verdict-colored left edge + wrapped text
 	ui.sumBar = CreateFrame("Frame", nil, frame)
-	ui.sumBar:SetPoint("BOTTOMLEFT", PAD, 46)
-	ui.sumBar:SetSize(LEFT_W, 42)
 	GM.Panel(ui.sumBar, "contLowest")
 	if GM.ChromePanel then GM.ChromePanel(ui.sumBar, { l = 6, t = 6, r = 6, b = 6 }) end
 	ui.sumEdge = ui.sumBar:CreateTexture(nil, "ARTWORK")
@@ -368,7 +350,6 @@ local function Build()
 	-- buttons align under the left column (the plan table's edge)
 	ui.exec = CreateFrame("Button", nil, frame)
 	ui.exec:SetSize(190, 30)
-	ui.exec:SetPoint("BOTTOMRIGHT", frame, "BOTTOMLEFT", PAD + LEFT_W, 8)
 	GM.Panel(ui.exec, "accent")
 	ui.exec.text = GM.MakeFontString(ui.exec, GM.FONT_BOLD, 12, "contLowest")
 	ui.exec.text:SetPoint("CENTER")
@@ -385,7 +366,6 @@ local function Build()
 
 	ui.rescan = CreateFrame("Button", nil, frame)
 	ui.rescan:SetSize(104, 30)
-	ui.rescan:SetPoint("RIGHT", ui.exec, "LEFT", -GAP, 0)
 	GM.Panel(ui.rescan, "contHigh")
 	ui.rescan.text = GM.MakeFontString(ui.rescan, GM.FONT_MED, 11, "text")
 	ui.rescan.text:SetPoint("CENTER")
@@ -397,7 +377,6 @@ local function Build()
 
 	ui.skip = CreateFrame("Button", nil, frame)
 	ui.skip:SetSize(80, 30)
-	ui.skip:SetPoint("RIGHT", ui.rescan, "LEFT", -GAP, 0)
 	GM.Panel(ui.skip, "contMedium")
 	ui.skip.text = GM.MakeFontString(ui.skip, GM.FONT_MED, 11, "textDim")
 	ui.skip.text:SetPoint("CENTER")
@@ -413,7 +392,6 @@ local function Build()
 
 	ui.clear = CreateFrame("Button", nil, frame)
 	ui.clear:SetSize(64, 30)
-	ui.clear:SetPoint("RIGHT", ui.skip, "LEFT", -GAP, 0)
 	GM.Panel(ui.clear, "contMedium")
 	ui.clear.text = GM.MakeFontString(ui.clear, GM.FONT_MED, 11, "textDim")
 	ui.clear.text:SetPoint("CENTER")
@@ -441,6 +419,56 @@ local function Build()
 		ui.homeRefresh = GM.Dashboard.MountHome(ui.home)
 	end
 	ui.home:Hide()
+
+	-- ============ layout wiring ============
+	-- the title strip, close ×, age text, and rule stay hand-anchored
+	-- chrome; everything below the rule is one managed tree — action
+	-- strip over a main row: left column (item → chart → header →
+	-- list → summary → buttons) + the full-height stats pane
+	local u = GM.ui
+	local root = u:AttachRoot(frame, {
+		direction = "column", gap = "sm",
+		pad = { top = 34, right = PAD, bottom = 8, left = PAD },
+	})
+	local act = u:Row(root, { gap = "sm" })
+	root:Add(act, { height = 22 })
+	local function ActBtn(fr, w)
+		act:Add(u:Adopt(fr, { width = w, height = 22 }),
+			{ width = w, height = 22 })
+	end
+	ActBtn(ui.postScan, 84) ActBtn(ui.cancelScan, 104)
+	ActBtn(ui.fullScan, 84)
+
+	local main = u:Row(root, { gap = "sm" })
+	root:Add(main, { height = "fill" })
+	local left = u:Column(main, { gap = "xs" })
+	main:Add(left, { width = LEFT_W, height = "fill" })
+	local function LeftPanel(fr, h)
+		left:Add(u:Adopt(fr, { width = LEFT_W, height = h }),
+			{ height = h })
+	end
+	LeftPanel(ui.item, 56)
+	LeftPanel(ui.chart, 150)
+	LeftPanel(ui.header, 18)
+	LeftPanel(ui.list, ROWS * 22 + 8)
+	-- the summary strip + action buttons pin to the column's bottom
+	-- edge — a fill leaf eats the slack the fixed panes don't take
+	left:Add(u:Leaf(left), { height = "fill" })
+	LeftPanel(ui.sumBar, 42)
+	local btns = u:Row(left, { gap = "sm", justify = "end" })
+	left:Add(btns, { height = 30 })
+	local function BtmBtn(fr, w)
+		btns:Add(u:Adopt(fr, { width = w, height = 30 }),
+			{ width = w, height = 30 })
+	end
+	BtmBtn(ui.clear, 64) BtmBtn(ui.skip, 80)
+	BtmBtn(ui.rescan, 104) BtmBtn(ui.exec, 190)
+	main:Add(u:Adopt(stats, {
+		width = WIN_W - 2 * PAD - GAP - LEFT_W }),
+		{ width = "fill", height = "fill" })
+	-- the managed subtree was created after the home overlay — it
+	-- wins sibling ordering unless the overlay's level climbs past it
+	ui.home:SetFrameLevel(frame:GetFrameLevel() + 200)
 
 	ui.frame = frame
 	-- CreateFrame defaults to visible — Build is called from scan
