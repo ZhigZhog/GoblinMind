@@ -626,6 +626,31 @@ local function BuildUI()
 	ui.footer:SetPoint("BOTTOMLEFT", 10, 8)
 	ui.footer:SetText("▲ = grants skill-ups (orange optimal · yellow medium · green easy · N = multi) · +N queues suggested")
 
+	-- ============ GoblinUI managed layout ============
+	-- hand-laid: filter toolbar chained LEFT off the search box at
+	-- -32, three ColPanes spanning -52..bottom, footer BOTTOMLEFT.
+	-- As a column: the toolbar becomes one left-packed row, the three
+	-- panes adopt into a fill row (QUEUE absorbs the slack), footer
+	-- pins the bottom edge. Pane innards keep their anchors.
+	local u = GM.ui
+	if u then
+		local root = u:AttachRoot(f, { direction = "column", gap = 6,
+			pad = { top = 30, left = 10, right = 10, bottom = 8 } })
+		local bar = u:Row(root, { gap = 8 })
+		root:Add(bar, { width = "fill", height = 18 })
+		bar:Add(u:Adopt(ui.search), { width = 150, height = 18 })
+		bar:Add(u:Adopt(matsOnly), { width = 104, height = 16 })
+		bar:Add(u:Adopt(skillUp), { width = 96, height = 16 })
+		bar:Add(u:Adopt(canLearn), { width = 82, height = 16 })
+		bar:Add(u:Adopt(blizz), { width = 84, height = 16 })
+		local panes = u:Row(root, { gap = 6 })
+		root:Add(panes, { width = "fill", height = "fill" })
+		panes:Add(u:Adopt(profP), { width = PROF_W, height = "fill" })
+		panes:Add(u:Adopt(recP), { width = REC_W, height = "fill" })
+		panes:Add(u:Adopt(qP), { width = "fill", height = "fill" })
+		root:Add(u:Adopt(ui.footer), { width = "fill", height = 12 })
+	end
+
 	if GM.OnItemInfoLoaded then
 		GM.OnItemInfoLoaded(function()
 			if ui and ui.frame:IsShown() then CU.Refresh() end
