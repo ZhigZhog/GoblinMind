@@ -217,16 +217,23 @@ local function DrawPrice(entry)
 	local volTop = 18 -- supply bars live under the line
 	local function px(x) return padX + x * cw end
 	local function py(v) return base + (v - lo) / (hi - lo) * (top - base) end
+	-- right-gutter labels all justify to the same edge — mb/mkt/
+	-- hi/lo/last pile up when prices are close, so collect them and
+	-- push colliding entries apart instead of overdrawing
+	local axis = {}
+	local function axisLabel(y, str, key, size)
+		axis[#axis + 1] = { y = y, str = str, key = key, size = size or 9 }
+	end
 	-- mkt / mb horizontals (under the candles)
 	if entry and entry.p and entry.p >= lo and entry.p <= hi then
 		local y = py(entry.p)
 		Bar(ch, padX, y, cw, 1, "secondary", 0.6)
-		Label(ch, ch:GetWidth() - 4, y + 2, "mkt", "secondary", 8, "RIGHT")
+		axisLabel(y + 2, "mkt", "secondary", 8)
 	end
 	if entry and entry.mb and entry.mb >= lo and entry.mb <= hi then
 		local y = py(entry.mb)
 		Bar(ch, padX, y, cw, 1, "warn", 0.5)
-		Label(ch, ch:GetWidth() - 4, y + 2, "mb", "warn", 8, "RIGHT")
+		axisLabel(y + 2, "mb", "warn", 8)
 	end
 	if seriesMode then
 		-- OHLC candles — the real tape: each time bucket's open/close
@@ -282,8 +289,7 @@ local function DrawPrice(entry)
 		end
 		local lastB = occ[#occ]
 		Dot(ch, px((lastB - 0.5) / NB), py(cs[lastB].c), 5, "accent")
-		Label(ch, ch:GetWidth() - 4, py(cs[lastB].c) - 5,
-			GM.Money(cs[lastB].c), "text", 10, "RIGHT")
+		axisLabel(py(cs[lastB].c) - 5, GM.Money(cs[lastB].c), "text", 10)
 	else
 		for i = 2, #pts do
 			Segment(ch, px(pts[i - 1].x), py(pts[i - 1].v),
@@ -291,11 +297,21 @@ local function DrawPrice(entry)
 		end
 		local last = pts[#pts]
 		Dot(ch, px(last.x), py(last.v), 5, "accent")
-		Label(ch, ch:GetWidth() - 4, py(last.v) - 5, GM.Money(last.v),
-			"text", 10, "RIGHT")
+		axisLabel(py(last.v) - 5, GM.Money(last.v), "text", 10)
 	end
-	Label(ch, ch:GetWidth() - 4, top + 1, GM.Money(hi), "textDim", 9, "RIGHT")
-	Label(ch, ch:GetWidth() - 4, base + 2, GM.Money(lo), "textDim", 9, "RIGHT")
+	axisLabel(top + 1, GM.Money(hi), "textDim", 9)
+	axisLabel(base + 2, GM.Money(lo), "textDim", 9)
+	-- de-collide: sort by ideal y, then walk down enforcing a 10px
+	-- minimum gap so close prices get stacked labels, not a blob
+	sort(axis, function(a, b) return a.y > b.y end) -- y is bottom-up
+	for i = 2, #axis do
+		if axis[i].y > axis[i - 1].y - 10 then
+			axis[i].y = axis[i - 1].y - 10
+		end
+	end
+	for _, a in ipairs(axis) do
+		Label(ch, ch:GetWidth() - 4, a.y, a.str, a.key, a.size, "RIGHT")
+	end
 	if seriesMode then
 		Label(ch, padX, 4, window >= WEEK and "7d ago"
 			or GM.FmtAge(window) .. " ago", "textDim", 8, "LEFT")
