@@ -355,9 +355,14 @@ function OV.RefreshChart()
 	local gold = GetMoney and GetMoney() or 0
 	local posted = GM.Inventory and GM.Inventory.PostedValue
 		and GM.Inventory.PostedValue() or 0
-	local now = gold + posted
+	local held = GM.Inventory and GM.Inventory.HeldValue
+		and GM.Inventory.HeldValue() or 0
+	local now = gold + posted + held
 	ui.kpiTotal:SetText("TOTAL " .. GM.Money(now))
 	local split = "on hand " .. GM.MoneyShort(gold)
+	if held > 0 then
+		split = split .. " + stock " .. GM.MoneyShort(held)
+	end
 	if posted > 0 then
 		split = split .. " + posted " .. GM.MoneyShort(posted)
 		local at = GM.Inventory.OwnedAt and GM.Inventory.OwnedAt()
@@ -383,7 +388,7 @@ function OV.RefreshChart()
 			hist[#hist + 1] = p
 			if p.t < tMin then tMin = p.t end
 			if p.t > tMax then tMax = p.t end
-			local wv = (p.g or 0) + (p.a or 0)
+			local wv = (p.g or 0) + (p.a or 0) + (p.h or 0)
 			vals[#vals + 1] = wv
 			if wv > vMax then vMax = wv end
 			if wv < vMin then vMin = wv end
@@ -404,6 +409,7 @@ function OV.RefreshChart()
 	local deltaTxt = ""
 	if dayBase then
 		local dv = now - (dayBase.g or 0) - (dayBase.a or 0)
+			- (dayBase.h or 0)
 		deltaTxt = GM.Signed(dv) .. GM.CC("textDim") .. " "
 			.. (dayBase.t >= midnight and "today"
 				or "since " .. date("%H:%M", dayBase.t)) .. "|r"

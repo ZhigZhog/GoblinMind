@@ -282,11 +282,15 @@ function B.Sample()
 	local gold = GetMoney and GetMoney() or 0
 	local posted = GM.Inventory and GM.Inventory.PostedValue
 		and GM.Inventory.PostedValue() or 0
+	-- h: bought-stock-in-bags at cost — a buy moves gold into held
+	-- inventory instead of cratering W (the chart's giant Xs)
+	local held = GM.Inventory and GM.Inventory.HeldValue
+		and GM.Inventory.HeldValue() or 0
 	if #w == 0 or w[#w].g ~= gold or w[#w].a ~= posted
-		or t - w[#w].t > 3600 then
+		or w[#w].h ~= held or t - w[#w].t > 3600 then
 		-- c: the sampler char — wealth is per-char by nature and
 		-- untagged mixing drew alt logins as giant fake dips
-		w[#w + 1] = { t = t, g = gold, a = posted,
+		w[#w + 1] = { t = t, g = gold, a = posted, h = held,
 			c = GM.CharKeyQualified() }
 		if #w > HIST_CAP then tremove(w, 1) end
 	end

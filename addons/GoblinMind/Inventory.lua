@@ -113,6 +113,40 @@ function GM.Inventory.PostedValue()
 	return t
 end
 
+-- units of an item currently listed, from the same snapshot
+function GM.Inventory.PostedQty(itemID)
+	local q = 0
+	for _, a in pairs(auctionCache) do
+		if a.itemID == itemID then
+			q = q + (a.qty or 1) * (a.n or 1)
+		end
+	end
+	return q
+end
+
+-- cost basis of bought stock still held in bags — the third wealth
+-- term. The ledger's paidQ/paidT counts bought-minus-sold stock at
+-- average cost, but posted units still sit inside it and the chart
+-- already values those at buyout in `a`, so the posted share comes
+-- back out. Without this term a buy reads as a wealth collapse
+-- until the item sells — the giant Xs on the wealth chart.
+-- (Vendored/destroyed stock never leaves paidQ; BagCount bounds it.
+-- Bank-only stock isn't reachable — bags are the trading boundary.)
+function GM.Inventory.HeldValue()
+	local st = GM.Ledger and GM.Ledger.db and GM.Ledger.db.itemStats
+	if not st then return 0 end
+	local held = 0
+	for id, s in pairs(st) do
+		local pq, pt = s.paidQ or 0, s.paidT or 0
+		if pq > 0 and pt > 0 then
+			local inBags = math.max(0, pq - GM.Inventory.PostedQty(id))
+			held = held + math.min(inBags, GM.BagCount(id) or 0)
+				* (pt / pq)
+		end
+	end
+	return held
+end
+
 -- persist the owned snapshot so the MINE surfaces are a real log: the
 -- enum only answers at the AH, but the last-known listings should
 -- stay visible between visits (tLeft rebases off the stored `at`)

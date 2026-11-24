@@ -554,9 +554,9 @@ local function Build()
 	GM.Panel(rp, "contLowest")
 	ui.rHead = GM.MakeFontString(rp, GM.FONT_BOLD, 9, "secondary")
 	ui.rHead:SetPoint("TOPLEFT", 8, -6)
-	-- "LISTINGS — <long item name>" must clip before the header's
-	-- QTY box / BUY button / scroll counter on the right
-	ui.rHead:SetWidth(196)
+	-- "LISTINGS — <long item name>" must clip before the scroll
+	-- counter (~x150+) and the QTY box / BUY button on the right
+	ui.rHead:SetWidth(130)
 	ui.rHead:SetJustifyH("LEFT")
 	ui.rCount = GM.MakeFontString(rp, GM.FONT, 9, "textDim")
 	ui.rCount:SetPoint("TOPRIGHT", -166, -7)
