@@ -329,6 +329,15 @@ function S.BuyHit(h)
 				unit = h.live.unit, total = h.live.total, auctionID = h.live.id })
 			h.done = true
 			h.state = nil
+		elseif h.quoteDead then
+			-- the quote API already refused this itemID once — the
+			-- aggregate buy path is dead on this client, don't stage
+			-- another quote that can never land
+			GM.Print(GM.CC("warn") .. format(
+				"sniper: %s is aggregate-only — no buy API here, "
+				.. "grab it in the BLIZZARD UI|r", h.name or h.itemID))
+			h.done = true
+			h.state = nil
 		else
 			local r = GM.AH.Execute({ kind = "buy", itemID = h.itemID, qty = h.qty,
 				unit = h.live.unit, commodity = true })
@@ -398,6 +407,14 @@ function S.BidHit(h)
 		S.Refresh()
 		return
 	end
+	-- a scanned hit with no auctionID is an aggregate row — there is
+	-- no bid endpoint for it. An armed wantBid would dead-end every
+	-- click from here: drop the intent and take the buyout path.
+	if h.state == "ready" and h.live and not h.live.id then
+		h.wantBid = nil
+		S.BuyHit(h)
+		return
+	end
 	-- arm the bid intent even while a BuyHit scan is in flight — its
 	-- completion lands h.live and the next click bids
 	h.wantBid = true
@@ -424,6 +441,21 @@ function S.BidHit(h)
 		end
 		S.Refresh()
 	end)
+end
+
+-- staged-quote death (COMMODITY_PRICE_UNAVAILABLE / quote timeout):
+-- un-stage matching hits so they can't sit on CONFIRM forever, and
+-- flag the itemID — a repeat click then says so instead of staging
+-- another quote that can never land
+function S.QuoteDied(itemID)
+	local hits = GM.Sniper and GM.Sniper.hits
+	if not hits then return end
+	for _, h in ipairs(hits) do
+		if h.state == "staged" and (not itemID or h.itemID == itemID) then
+			h.state = nil
+			h.quoteDead = true
+		end
+	end
 end
 
 -- ============ refresh ============

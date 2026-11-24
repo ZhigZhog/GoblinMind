@@ -53,6 +53,50 @@ for _, evt in ipairs({
 }) do
 	pcall(f.RegisterEvent, f, evt)
 end
+-- === item-vs-commodity dispatch ===
+-- Stackables answer BOTH search endpoints on Forever: item rows carry
+-- auctionID/bid (biddable, per-lot buyout) while commodity rows are
+-- anonymous aggregates with no bid path. The events don't arrive in a
+-- fixed order — the item set must get its window before commodity
+-- rows are allowed through, or a laggy ITEM_SEARCH_RESULTS_UPDATED
+-- hands the job aggregate asks for a listing it could have bid on.
+local function ItemResultCount()
+	return (GM.AH.scanItemKey and C_AuctionHouse.GetNumItemSearchResults
+		and C_AuctionHouse.GetNumItemSearchResults(GM.AH.scanItemKey)) or 0
+end
+local function PollResults(itemID, waited)
+	if GM.AH.scanItemID ~= itemID or GM.AH.scanConsumed then return end
+	if ItemResultCount() > 0 then
+		-- authoritative whenever they exist — the aggregate side of
+		-- the same item is polluted junk (no auctionID, no bid)
+		GM.AH.CollectItemAsks()
+		return
+	end
+	local commN = (C_AuctionHouse.GetNumCommoditySearchResults
+		and C_AuctionHouse.GetNumCommoditySearchResults(itemID)) or 0
+	if GM.AH.itemEvtSeen and commN > 0 then
+		-- item set is FINAL-empty: aggregate rows are the real data
+		GM.AH.CollectCommodityAsks(itemID)
+		return
+	end
+	-- nothing is provably empty until both sides have answered — but
+	-- a non-stackable can't have an aggregate side at all, and the
+	-- commodity event may already have landed for a real one
+	local gi = C_Item and C_Item.GetItemInfo or GetItemInfo
+	local ms = gi and select(8, gi(itemID))
+	if GM.AH.itemEvtSeen and (GM.AH.commEvtSeen or (ms and ms <= 1)) then
+		GM.AH.CollectItemAsks() -- honest empty book
+		return
+	end
+	if waited < 3 then
+		GM.After(0.5, function() PollResults(itemID, waited + 0.5) end)
+		return
+	end
+	-- deadline: partial data beats none
+	if commN > 0 then GM.AH.CollectCommodityAsks(itemID)
+	else GM.AH.CollectItemAsks() end
+end
+
 f:SetScript("OnEvent", function(_, event, ...)
 	if event == "AUCTION_HOUSE_SHOW" then
 		GM.AH.open = true
@@ -107,21 +151,13 @@ f:SetScript("OnEvent", function(_, event, ...)
 		if GM.AH.browse then GM.AH.OnBrowseResults() end
 	elseif event == "COMMODITY_SEARCH_RESULTS_UPDATED" then
 		local itemID = ...
+		GM.AH.commEvtSeen = true
 		if itemID == GM.AH.scanItemID then
-			-- item-search rows are authoritative when they exist; the
-			-- commodity endpoint can return polluted data (2c "lots"
-			-- of a 1-slot bag). Give item results a beat to land, then
-			-- only consume commodity rows if the item query was empty.
-			GM.After(0.5, function()
-				if GM.AH.scanItemID ~= itemID then return end
-				local n = (GM.AH.scanItemKey
-					and C_AuctionHouse.GetNumItemSearchResults
-					and C_AuctionHouse.GetNumItemSearchResults(GM.AH.scanItemKey)) or 0
-				if n == 0 then GM.AH.CollectCommodityAsks(itemID) end
-			end)
+			PollResults(itemID, 0)
 		end
 	elseif event == "ITEM_SEARCH_RESULTS_UPDATED" then
-		if GM.AH.scanItemKey then GM.AH.CollectItemAsks() end
+		GM.AH.itemEvtSeen = true
+		if GM.AH.scanItemID then PollResults(GM.AH.scanItemID, 0) end
 	elseif event == "COMMODITY_PRICE_UPDATED" then
 		-- arg is the quoted total for the staged quantity
 		local totalPrice = select(2, ...)
@@ -131,9 +167,13 @@ f:SetScript("OnEvent", function(_, event, ...)
 			RefreshUIs()
 		end
 	elseif event == "COMMODITY_PRICE_UNAVAILABLE" then
+		local pc = GM.AH.pendingConfirm
 		GM.AH.pendingConfirm = nil
 		GM.Print(GM.CC("warn") .. "no commodity quote — falling back to per-lot buyouts|r")
 		if GM.PlanQueue.CommodityFallback then GM.PlanQueue.CommodityFallback() end
+		if GM.Shopping and GM.Shopping.QuoteDied then
+			GM.Shopping.QuoteDied(pc and pc.itemID)
+		end
 		RefreshUIs()
 	elseif event == "COMMODITY_PURCHASE_FAILED" then
 		GM.AH.pendingConfirm = nil
@@ -233,6 +273,7 @@ function GM.AH.ScanItem(itemID, itemName, done, key)
 	GM.AH.scanItemKey = key or C_AuctionHouse.MakeItemKey(itemID, 0, 0, nil)
 	GM.AH.onScanDone = done
 	GM.AH.asks = nil
+	GM.AH.itemEvtSeen, GM.AH.commEvtSeen, GM.AH.scanConsumed = nil, nil, nil
 	C_AuctionHouse.SendSearchQuery(GM.AH.scanItemKey, EMPTY_SORTS, true)
 end
 
@@ -302,6 +343,7 @@ function GM.AH.CollectCommodityAsks(itemID)
 	GM.AH.MergeOwnAsks(asks, GM.AH.scanItemKey)
 	table.sort(asks, function(a, b) return a.unit < b.unit end)
 	GM.AH.asks = asks
+	GM.AH.scanConsumed = true
 	if GM.AH.onScanDone then GM.AH.onScanDone(asks) end
 end
 
@@ -351,6 +393,7 @@ function GM.AH.CollectItemAsks()
 	GM.AH.MergeOwnAsks(asks, key)
 	table.sort(asks, function(a, b) return a.unit < b.unit end)
 	GM.AH.asks = asks
+	GM.AH.scanConsumed = true
 	if GM.AH.onScanDone then GM.AH.onScanDone(asks) end
 end
 
@@ -613,7 +656,9 @@ function GM.AH.DumpRows(itemID, maxRows)
 	if itemID and C_AuctionHouse.MakeItemKey and C_AuctionHouse.GetItemSearchResultInfo
 		and C_AuctionHouse.SendSearchQuery then
 		local key = C_AuctionHouse.MakeItemKey(itemID, 0, 0, nil)
+		GM.AH.scanItemID = itemID
 		GM.AH.scanItemKey = key
+		GM.AH.itemEvtSeen, GM.AH.commEvtSeen, GM.AH.scanConsumed = nil, nil, nil
 		GM.AH.onScanDone = function()
 			local n = C_AuctionHouse.GetNumItemSearchResults(key) or 0
 			GM.Print(format("item-search results: %d", n))
@@ -1085,6 +1130,9 @@ function GM.AH.Execute(step)
 				GM.AH.pendingConfirm = nil
 				GM.Print(GM.CC("warn") .. "no commodity quote — falling back to per-lot buyouts|r")
 				if GM.PlanQueue.CommodityFallback then GM.PlanQueue.CommodityFallback() end
+				if GM.Shopping and GM.Shopping.QuoteDied then
+					GM.Shopping.QuoteDied(pc.itemID)
+				end
 				RefreshUIs()
 			end
 		end)
