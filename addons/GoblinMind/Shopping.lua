@@ -146,25 +146,17 @@ local function Build()
 	-- mode buttons ride a second row under the title (like the main
 	-- window's action strip) — the title row is title + module tabs
 	ui.shopBtn = TitleBtn("SHOP", 52, function() S.SetMode("shop") end)
-	ui.shopBtn:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -6)
 	ui.snipeBtn = TitleBtn("SNIPER", 60, function()
 		if GM.SniperUI then GM.SniperUI.Toggle() end
 	end)
-	ui.snipeBtn:SetPoint("LEFT", ui.shopBtn, "RIGHT", 6, 0)
 	ui.craftBtn = TitleBtn("CRAFT", 52, function() S.SetMode("craft") end)
-	ui.craftBtn:SetPoint("LEFT", ui.snipeBtn, "RIGHT", 6, 0)
 	-- primary action lives at the bottom-right — the title row is
 	-- title + mode buttons + module tabs, no room for it up there
 	ui.action = TitleBtn("SCAN", 80, function() S.Action() end)
-	ui.action:SetPoint("BOTTOMRIGHT", -10, 6)
 
 	ui.status = GM.MakeFontString(f, GM.FONT, 10, "textDim")
-	ui.status:SetPoint("TOPLEFT", 14, -50)
 
 	local header = CreateFrame("Frame", nil, f)
-	header:SetPoint("TOPLEFT", 10, -68)
-	header:SetPoint("TOPRIGHT", -10, -68)
-	header:SetHeight(18)
 	GM.Panel(header, "contHigh")
 	ui.hdrFs = {}
 	for _, h in ipairs({
@@ -178,16 +170,42 @@ local function Build()
 	end
 
 	ui.list = CreateFrame("Frame", nil, f)
-	ui.list:SetPoint("TOPLEFT", 10, -88)
-	ui.list:SetPoint("TOPRIGHT", -10, -88)
-	ui.list:SetHeight(ROWS * 24 + 8)
 	GM.Panel(ui.list, "contLowest")
 	ui.rows = {}
 	for i = 1, ROWS do ui.rows[i] = BuildRow(ui.list, i) end
 
 	local foot = GM.MakeFontString(f, GM.FONT, 9, "secondary")
-	foot:SetPoint("BOTTOMLEFT", 12, 8)
 	foot:SetText("one protected call per click · items = PlaceBid · commodities = quote → CONFIRM")
+
+	-- ============ layout wiring ============
+	-- mode buttons / status / column header / row list / foot, with
+	-- the SCAN action parked bottom-right; title + module tabs stay
+	-- W.Window chrome
+	local u = GM.ui
+	local root = u:AttachRoot(f, {
+		direction = "column", gap = "sm",
+		pad = { top = 32, right = 10, bottom = 8, left = 10 },
+	})
+	local modes = u:Row(root, { gap = "sm" })
+	root:Add(modes, { height = 18 })
+	local function ModeBtn(b, w)
+		modes:Add(u:Adopt(b, { width = w, height = 16 }),
+			{ width = w, height = 16 })
+	end
+	ModeBtn(ui.shopBtn, 52) ModeBtn(ui.snipeBtn, 60)
+	ModeBtn(ui.craftBtn, 52)
+	root:Add(u:Adopt(ui.status, { width = 640, height = 14 }),
+		{ height = 14 })
+	root:Add(u:Adopt(header, { width = 660, height = 18 }),
+		{ height = 18 })
+	root:Add(u:Adopt(ui.list, { width = 660, height = ROWS * 24 + 8 }),
+		{ height = "fill" })
+	local footRow = u:Row(root, {})
+	root:Add(footRow, { height = 14 })
+	footRow:Add(u:Adopt(foot, { width = 560, height = 12 }),
+		{ width = "fill", height = 12, align = "center" })
+	footRow:Add(u:Adopt(ui.action, { width = 80, height = 16 }),
+		{ width = 80, height = 16, align = "center" })
 end
 
 -- names/icons resolve asynchronously — re-render rows when item data
