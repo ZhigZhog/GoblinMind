@@ -163,24 +163,14 @@ local function Build()
 	local scan = Btn(f, 120, "WAREHOUSING SCAN", function()
 		GM.Banking.WarehousingScan()
 	end)
-	scan:SetPoint("TOPLEFT", 12, -34)
 	Tip(scan, function()
 		return { "Warehousing scan",
 			"Compares bag/bank counts against group warehousing ops",
 			"and pushes the moves into the plan queue." }
 	end)
-	ui.summary = GM.MakeFontString(f, GM.FONT, 9, "textDim")
-	ui.summary:SetPoint("LEFT", scan, "RIGHT", 12, 0)
-	ui.summary:SetJustifyH("LEFT")
-	ui.summary:SetWidth(320)
-	ui.summary:SetJustifyH("LEFT")
-	ui.summary:SetWordWrap(false)
-
-
 
 	-- panes
 	ui.lp = MakePane(f, 320, "BAGS → deposit")
-	ui.lp:SetPoint("TOPLEFT", 12, -62)
 	ui.lp:SetScript("OnMouseWheel", function(_, d)
 		ui.lScroll = math.max(0, ui.lScroll - d * 3)
 		BU.Refresh()
@@ -189,7 +179,6 @@ local function Build()
 	for i = 1, VISIBLE do ui.lrows[i] = MakeRow(ui.lp, i, "→") end
 
 	ui.rp = MakePane(f, 320, "BANK → withdraw")
-	ui.rp:SetPoint("TOPRIGHT", -12, -62)
 	ui.rp:SetScript("OnMouseWheel", function(_, d)
 		ui.rScroll = math.max(0, ui.rScroll - d * 3)
 		BU.Refresh()
@@ -201,6 +190,29 @@ local function Build()
 	ui.foot:SetPoint("BOTTOMLEFT", 14, 10)
 	ui.foot:SetText("one stack per click · moves merge onto matching "
 		.. "partials first · keep N = warehousing op hint")
+
+	-- ============ layout wiring ============
+	-- scan button + fill status over two side-by-side panes that
+	-- split the window width; footer stays anchored below
+	local u = GM.ui
+	local root = u:AttachRoot(f, {
+		direction = "column", gap = "xs",
+		pad = { top = 34, right = 12, bottom = 30, left = 12 },
+	})
+	local bar = u:Row(root, { gap = 6 })
+	root:Add(bar, { height = 22 })
+	bar:Add(u:Adopt(scan, { width = 120, height = 20 }),
+		{ width = 120, height = 20, align = "center" })
+	ui.summary = u:Text(bar, { style = "caption", wrap = false })
+	bar:Add(ui.summary, { width = "fill", align = "center" })
+	local panes = u:Row(root, { gap = "sm" })
+	root:Add(panes, { height = "fill" })
+	panes:Add(u:Adopt(ui.lp, { width = 320,
+		height = VISIBLE * ROW_H + 30 }),
+		{ width = 320, height = "fill" })
+	panes:Add(u:Adopt(ui.rp, { width = 320,
+		height = VISIBLE * ROW_H + 30 }),
+		{ width = "fill", height = "fill" })
 end
 
 -- ============ refresh ============
