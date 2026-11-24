@@ -227,8 +227,10 @@ local function BuildBar()
 	bar = CreateFrame("Frame", "GoblinMindTicker", UIParent)
 	bar:SetFrameStrata("HIGH") -- above the HUD like an xp-bar strip
 	-- one strip among the stock xp/rep bars: centered, ~2/3 screen
-	bar:SetSize(math.max(360, floor((UIParent:GetWidth() or 1024) * 0.62)),
-		BAR_H)
+	local st = Store()
+	bar:SetSize(st.w
+		or math.max(360, floor((UIParent:GetWidth() or 1024) * 0.62)),
+		st.h or BAR_H)
 	GM.Panel(bar, "contMedium")
 	if GM.ChromePanel then GM.ChromePanel(bar) end
 	bar:SetMovable(true)
@@ -320,6 +322,23 @@ function GM.TickerInit()
 end
 
 function T.Apply() ApplyLook() end
+
+-- settings-window surface: raw store for reads, SetDims for the
+-- width/height boxes (nil keeps the current value)
+function T.Opts() return Store() end
+
+function T.SetDims(w, h)
+	local st = Store()
+	if w ~= nil then st.w = w > 0 and w or nil end
+	if h ~= nil then st.h = h > 0 and h or nil end
+	if not bar then return end
+	h = st.h or BAR_H
+	bar:SetHeight(h)
+	bar._brand:SetHeight(h)
+	child:SetHeight(h)
+	for _, c in ipairs(cells) do c:SetHeight(h) end
+	if st.w then bar:SetWidth(st.w) end
+end
 
 -- ============ book repaint + slash ============
 

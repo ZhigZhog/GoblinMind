@@ -520,7 +520,7 @@ local function Build()
 	-- leaving UISpecialFrames pointing at a plain table (IsShown crash)
 	local f = GM.Widgets.Window({
 		name = "GoblinMindSettingsFrame", title = "SETTINGS",
-		w = 620, h = 986, x = -60, y = 10, tab = "settings",
+		w = 620, h = 1078, x = -60, y = 10, tab = "settings",
 	})
 	ui.frame = f
 
@@ -915,7 +915,42 @@ local function Build()
 	-- entry point to the shared importer (GM.Import.Mount — the same
 	-- row list the onboarding wizard shows). Panel itself only
 	-- reports what detection sees; the window does the work
-	local imp = Panel(f, 10, -942, 600, 60,
+	-- ===== TICKER =====
+	local tk = Panel(f, 10, -942, 600, 64, "TICKER TAPE")
+	local function tkStore() return GM.Ticker.Opts() end
+	Row(tk, "Width (px — blank = auto)", 22)
+	ui.tkW = EditBox(tk, 56)
+	ui.tkW:SetPoint("TOPLEFT", 240, -20)
+	ui.tkW:SetScript("OnEnterPressed", function(self)
+		local v = tonumber(self:GetText())
+		GM.Ticker.SetDims(v, nil)
+		self:ClearFocus()
+		S.Refresh()
+	end)
+	Row(tk, "Height (px)", 46)
+	ui.tkH = EditBox(tk, 56)
+	ui.tkH:SetPoint("TOPLEFT", 240, -44)
+	ui.tkH:SetScript("OnEnterPressed", function(self)
+		local v = tonumber(self:GetText())
+		GM.Ticker.SetDims(nil, v)
+		self:ClearFocus()
+		S.Refresh()
+	end)
+	RowAt(tk, "Locked (no drag)", 320, 22)
+	ui.tkLock = BoolSeg(tk,
+		function() return tkStore().locked end,
+		function(v) tkStore().locked = v end)
+	ui.tkLock:SetPoint("TOPLEFT", 500, -20)
+	RowAt(tk, "Click-through", 320, 46)
+	ui.tkClick = BoolSeg(tk,
+		function() return tkStore().click end,
+		function(v)
+			tkStore().click = v
+			GM.Ticker.Apply()
+		end)
+	ui.tkClick:SetPoint("TOPLEFT", 500, -44)
+
+	local imp = Panel(f, 10, -1012, 600, 60,
 		"IMPORT FROM OTHER ADDONS")
 	ui.impScan = CreateFrame("Button", nil, imp)
 	ui.impScan:SetSize(110, 22)
@@ -1007,6 +1042,13 @@ function S.Refresh()
 	end
 	ui.fmt.paint()
 	if ui.detail then ui.detail.paint() end
+	if ui.tkW then
+		local st = GM.Ticker.Opts()
+		ui.tkW:SetText(tostring(st.w or ""))
+		ui.tkH:SetText(tostring(st.h or ""))
+		ui.tkLock.paint()
+		ui.tkClick.paint()
+	end
 	for _, r in ipairs(ui.ttRows or {}) do
 		if r.ctl.paint then r.ctl.paint() end
 	end
