@@ -13,6 +13,7 @@ local Space = internal.Space
 
 local nodeMT = { __index = {} }
 local NodeIdx = nodeMT.__index
+local ZEROPAD = { top = 0, right = 0, bottom = 0, left = 0 }
 
 local function newNode(ctx, kind, frame)
 	return setmetatable({
@@ -167,9 +168,12 @@ end
 function NodeIdx:Add(node, constraints)
 	assertAddable(self, node)
 	local cc = normConstraints(constraints)
-	if cc.width == "auto" and cc.height == "auto"
-		and self.kind == "column" then
-		cc.width = "fill" -- spec: column children default fill×auto
+	-- column children default to width=fill whenever width is
+	-- unspecified — an explicit height must not collapse the row
+	-- to its measured width and starve fill siblings
+	if self.kind == "column"
+		and (not constraints or constraints.width == nil) then
+		cc.width = "fill"
 	end
 	node.constraints = cc
 	node.parent = self
@@ -215,28 +219,37 @@ local function measureNode(node, availW, availH)
 		if node.measure then return node:measure(availW, availH) end
 		return 0, 0
 	end
-	-- container: measure children in ITS content box
-	local pad = node.pad
+	-- container-ish node (scroll viewports arrive here too — no
+	-- pad/gap on them, their content column roots itself)
+	local pad = node.pad or ZEROPAD
 	local iw = math.max(0, (availW or 0) - pad.left - pad.right)
 	local ih = math.max(0, (availH or 0) - pad.top - pad.bottom)
 	local main, cross, n = 0, 0, 0
+	local gap = node.gap or 0
 	local column = node.kind == "column"
 	for _, ch in ipairs(node.children) do
 		if ch.visible then
-			local cw, ch2 = measureNode(ch, iw, ih)
+			local mw, mh = measureNode(ch, iw, ih)
+			local mkey = column and "height" or "width"
+			local cval = ch.constraints[mkey]
+			local nat = column and mh or mw
+			-- numeric constraints are absolute; fill defers to
+			-- weight allocation at min size; auto takes the measure
+			local m = type(cval) == "number" and cval
+				or (cval == "fill"
+					and (ch.constraints[column and "minHeight"
+						or "minWidth"] or 0) or nat)
 			if column then
-				main = main + (ch.constraints.height == "fill"
-					and (ch.constraints.minHeight or 0) or ch2)
-				cross = math.max(cross, cw)
+				main = main + m
+				cross = math.max(cross, mw)
 			else
-				main = main + (ch.constraints.width == "fill"
-					and (ch.constraints.minWidth or 0) or cw)
-				cross = math.max(cross, ch2)
+				main = main + m
+				cross = math.max(cross, mh)
 			end
 			n = n + 1
 		end
 	end
-	if n > 1 then main = main + (n - 1) * node.gap end
+	if n > 1 then main = main + (n - 1) * gap end
 	local w = column and cross or main
 	local h = column and main or cross
 	return w + pad.left + pad.right, h + pad.top + pad.bottom
@@ -298,7 +311,7 @@ local function arrange(node, w, h)
 		return
 	end
 	local column = node.kind == "column"
-	local pad = node.pad
+	local pad = node.pad or ZEROPAD
 	local cw = math.max(0, w - pad.left - pad.right)
 	local ch2 = math.max(0, h - pad.top - pad.bottom)
 	local mainAvail = column and ch2 or cw
@@ -310,7 +323,10 @@ local function arrange(node, w, h)
 			measured[c] = { w = mw, h = mh }
 			local key = column and "height" or "width"
 			if c.constraints[key] ~= "fill" then
-				local m = column and mh or mw
+				-- numeric constraints are absolute; auto takes the
+				-- measured size
+				local m = type(c.constraints[key]) == "number"
+					and c.constraints[key] or (column and mh or mw)
 				m = math.max(c.constraints[column and "minHeight" or "minWidth"] or 0, m)
 				local cap = c.constraints[column and "maxHeight" or "maxWidth"]
 				if cap then m = math.min(cap, m) end
@@ -320,7 +336,7 @@ local function arrange(node, w, h)
 			visN = visN + 1
 		end
 	end
-	local gapSum = visN > 1 and (visN - 1) * node.gap or 0
+	local gapSum = visN > 1 and (visN - 1) * (node.gap or 0) or 0
 	local free = math.max(0, mainAvail - gapSum - fixedSum)
 	local fills = allocFill(node.children, column, free)
 	-- extra space after fill caps follows justify
@@ -360,7 +376,14 @@ local function arrange(node, w, h)
 				column and mainSize or crossSize)
 			arrange(c, column and crossSize or mainSize,
 				column and mainSize or crossSize)
-			origin = origin + mainSize + node.gap
+			-- nested arrange-roots (panel bodies, scroll content)
+			-- flush in the same pass — no first-show frame lag
+			if c._subRoots then
+				for _, sr in ipairs(c._subRoots) do
+					internal.ArrangeRoot(node.ctx, sr)
+				end
+			end
+			origin = origin + mainSize + (node.gap or 0)
 		end
 	end
 end
@@ -442,8 +465,13 @@ function ctxMT:Canvas(parent, opts)
 			return opts.width or 0, opts.height or 0
 		end,
 		onArrange = function(node, w, h)
-			n.contentWidth, n.contentHeight = w, h
-			if opts.onResize then opts.onResize(n, w, h) end
+			-- only on real change: an unconditional callback into a
+			-- repaint that itself invalidates layout is a dirty loop.
+			-- (node IS this leaf — 'n' isn't in scope yet here)
+			if node.contentWidth ~= w or node.contentHeight ~= h then
+				node.contentWidth, node.contentHeight = w, h
+				if opts.onResize then opts.onResize(node, w, h) end
+			end
 		end,
 	})
 	n.content = CreateFrame("Frame", nil, n.frame)
@@ -467,6 +495,7 @@ function ctxMT:Scroll(parent, opts)
 	sf:SetScrollChild(inner.frame)
 	inner.isRoot = true -- its own arrange root
 	inner._arrangeOverride = function() n:UpdateScrollRange() end
+	n._subRoots = { inner }
 	n.content = inner
 	function n:UpdateScrollRange()
 		local w = sf:GetWidth()

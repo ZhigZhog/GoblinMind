@@ -6,6 +6,11 @@ local _, GM = ...
 -- depth, full ask book with intel flags, the numbers dump, and the
 -- merged planner (PQ engine). AH-context plans route here from
 -- PQ.Show; the standalone plan window keeps everything else.
+--
+-- FIRST GoblinUI-converted page (the pilot): the whole pane is a
+-- Column/Row tree — containers own child geometry, no pane can
+-- overlap another. Charts draw inside Canvas nodes; dense panes
+-- carry List/Scroll children.
 -- ================================================================
 
 local AU = GM.AHUI
@@ -13,21 +18,19 @@ local MU = {}
 GM.MarketUI = MU
 
 local W = GM.Widgets
-local Btn = W.Btn
-local Tip = W.Tip
 local tinsert, sort = tinsert, table.sort
 local floor = math.floor
 local format = format
 local GetInfo = C_Item and C_Item.GetItemInfo or GetItemInfo
 
 local ui, mp -- AHUI's ui table + our page container (set by Build)
-local M = {} -- market state: itemID, link, asks, askT, askScroll
+local M = {} -- market state: itemID, link, asks, askT
 MU.M = M
 
-local ROW_H = 24
-local ASK_VIS = 5
+local ASK_ROW_H = 20
 
--- ============ art pool (same primitives as the plan window) ============
+-- ============ art pool (canvas primitives — absolute coords are
+-- legal inside a Canvas node's content frame only) ============
 
 local art = {}
 local function FreeArt()
@@ -123,7 +126,6 @@ local function ScanAsks()
 		if M.itemID ~= id then return end -- retargeted mid-scan
 		M.asks = asks or {}
 		M.askT = GetTime()
-		M.askScroll = 0
 		-- targeted scans feed the same marks + suspect table as the
 		-- book pass — intel accumulates without waiting on full scans
 		if GM.Intel and GM.Intel.AnalyzeItem then
@@ -167,9 +169,8 @@ end
 
 local WEEK = 7 * 86400
 local function DrawPrice(entry)
-	local ch = mp.price
+	local ch = mp.priceContent
 	ch.msg:SetText("")
-	ch.tipLines = nil
 	local pts, seriesMode, window = {}, false, WEEK
 	if M.itemID and GM.History then
 		local s = GM.History.Points(M.itemID, WEEK)
@@ -195,8 +196,8 @@ local function DrawPrice(entry)
 		end
 		if entry.p then tinsert(pts, { x = 0.95, v = entry.p, hot = true }) end
 	end
-	ch.title:SetText(seriesMode and "PRICE · SUPPLY — 7D"
-		or "PRICE REFERENCES")
+	mp.pricePanel:SetTitle(seriesMode and "Price · Supply — 7d"
+		or "Price References")
 	if #pts < 2 then
 		ch.msg:SetText(M.itemID
 			and "trend chart — building a 7-day series"
@@ -305,17 +306,17 @@ end
 -- ============ depth chart ============
 
 local function DrawDepth()
-	local ch = mp.depth
+	local ch = mp.depthContent
 	ch.msg:SetText("")
 	local asks = M.asks
 	if not (asks and #asks > 0) then
-		ch.title:SetText("DEPTH")
+		mp.depthPanel:SetTitle("Depth")
 		ch.msg:SetText(M.itemID and (M.askWait and BusyText()
 			or M.asks and "no asks listed" or "scanning asks…")
 			or "no item targeted")
 		return
 	end
-	ch.title:SetText("DEPTH — cumulative")
+	mp.depthPanel:SetTitle("Depth — Cumulative")
 	local pmin, pmax = asks[1].unit, asks[#asks].unit
 	if pmax <= pmin then pmax = pmin + 1 end
 	local span = pmax - pmin
@@ -362,7 +363,7 @@ local function RefreshHeader()
 	mp.icon:SetTexture(id and GM.ItemIcon(id) or 134400)
 	mp.name:SetText(id and (GM.ItemName(id) or ("item " .. id))
 		or "no item targeted")
-	mp.name:SetTextColor(GM.NameColor(id))
+	mp.name.fontString:SetTextColor(GM.NameColor(id))
 	local entry = id and GM.ItemEntry(id)
 	local chips = {}
 	if entry then
@@ -387,97 +388,91 @@ local function RefreshHeader()
 	mp.slot:SetItem(id, M.itemLink)
 end
 
+-- ask-book row paint, called by the List's bindRow on every
+-- (re)bind — row frames carry their cells, the scroll pool reuses
+-- them; flags re-derive here so suspect state is never stale
+local function BindAskRow(row, a, idx)
+	-- a.solver is recomputed on bind: a book scan can land between
+	-- list updates and flip IsSuspect under a painted row
+	a.solver = a.seller and GM.Intel
+		and GM.Intel.IsSuspect(a.seller) or nil
+	row.bg:SetColorTexture(GM.RGB(idx % 2 == 0
+		and "contMedium" or "contLowest"))
+	row.c1:SetText((a.bait and GM.CC("err") or a.wall and GM.CC("warn")
+		or GM.CC("text")) .. GM.Money(a.unit) .. "|r")
+	row.c2:SetText("×" .. a.qty)
+	local flags = {}
+	if a.own then tinsert(flags, GM.CC("accent") .. "MINE|r") end
+	if a.wall then tinsert(flags, GM.CC("warn") .. "WALL|r") end
+	if a.bait then tinsert(flags, GM.CC("err") .. "BAIT|r") end
+	if a.step then tinsert(flags, GM.CC("warn") .. "STEP|r") end
+	if a.solver then tinsert(flags, GM.CC("err") .. "⚠|r") end
+	-- no seller name (commodity API returns none) — the owner count
+	-- is the honest fallback display
+	local seller = a.seller
+		or (a.nOwners and a.nOwners > 0
+			and (a.nOwners .. (a.nOwners == 1 and " seller" or " sellers")))
+		or "?"
+	row.c3:SetText(seller .. (#flags > 0 and "  " .. table.concat(flags, " ") or ""))
+	row.c4:SetText(a.tl and GM.FmtAge(a.tl) or "")
+	if a.own then row.act:Hide()
+	else
+		row.act:Show()
+		row.act.text:SetText("BUY")
+		row.act:SetScript("OnClick", function()
+			if a.id then
+				GM.AH.Execute({ kind = "buy", itemID = M.itemID,
+					auctionID = a.id, qty = a.qty, unit = a.unit,
+					total = a.total })
+			else
+				GM.AH.Execute({ kind = "buy", commodity = true,
+					itemID = M.itemID, qty = a.qty, unit = a.unit })
+			end
+			MU.Refresh()
+		end)
+	end
+	row.a = a
+end
+
 local function RefreshAskBook()
 	local asks = M.asks or {}
-	-- rows arrive flagged by AnalyzeItem at scan time; suspect state
-	-- can shift between scans (a book scan lands mid-session) — the
-	-- solver flag alone is cheap to keep current on each repaint
-	for _, a in ipairs(asks) do
-		a.solver = a.seller and GM.Intel
-			and GM.Intel.IsSuspect(a.seller) or nil
-	end
-	mp.abHead:SetText("ASK BOOK")
-	local maxScroll = math.max(0, #asks - ASK_VIS)
-	M.askScroll = math.min(M.askScroll or 0, maxScroll)
-	W.ScrollText(mp.abCount, M.askScroll, ASK_VIS, #asks)
+	mp.askPanel:SetTitle("Ask Book")
 	-- scan age rides the count — AUTO's cycle becomes visible: the
 	-- seconds climb to ~60 then reset when the ladder rescans
+	local cnt = #asks > 0 and format("%d lots", #asks) or ""
 	if #asks > 0 and M.askT then
-		mp.abCount:SetText(mp.abCount:GetText() .. GM.CC("textDim")
-			.. " · " .. floor(GetTime() - M.askT) .. "s|r")
+		cnt = cnt .. "  ·  " .. floor(GetTime() - M.askT) .. "s"
 	end
+	mp.askPanel:SetCount(cnt)
 	mp.abEmpty:SetText(M.itemID and (M.askWait and BusyText()
 		or (not M.asks and "scanning…") or "no asks")
 		or "")
 	mp.abEmpty:SetShown(#asks == 0)
-	for i = 1, ASK_VIS do
-		local row, a = mp.askRows[i], asks[i + (M.askScroll or 0)]
-		if a then
-			row:Show()
-			row.c1:SetText((a.bait and GM.CC("err") or a.wall and GM.CC("warn")
-				or GM.CC("text")) .. GM.Money(a.unit) .. "|r")
-			row.c2:SetText("×" .. a.qty)
-			local flags = {}
-			if a.own then tinsert(flags, GM.CC("accent") .. "MINE|r") end
-			if a.wall then tinsert(flags, GM.CC("warn") .. "WALL|r") end
-			if a.bait then tinsert(flags, GM.CC("err") .. "BAIT|r") end
-			if a.step then tinsert(flags, GM.CC("warn") .. "STEP|r") end
-			if a.solver then tinsert(flags, GM.CC("err") .. "⚠|r") end
-			-- no seller name (commodity API returns none) — the
-			-- owner count is the honest fallback display
-			local seller = a.seller
-				or (a.nOwners and a.nOwners > 0
-					and (a.nOwners .. (a.nOwners == 1 and " seller" or " sellers")))
-				or "?"
-			row.c3:SetText(seller .. (#flags > 0 and "  " .. table.concat(flags, " ") or ""))
-			row.c4:SetText(a.tl and GM.FmtAge(a.tl) or "")
-			row.a = a
-			if a.own then row.act:Hide()
-			else
-				row.act:Show()
-				row.act.text:SetText("BUY")
-				row.act:SetScript("OnClick", function()
-					local x = a
-					if x.id then
-						GM.AH.Execute({ kind = "buy", itemID = M.itemID,
-							auctionID = x.id, qty = x.qty, unit = x.unit,
-							total = x.total })
-					else
-						GM.AH.Execute({ kind = "buy", commodity = true,
-							itemID = M.itemID, qty = x.qty, unit = x.unit })
-					end
-					MU.Refresh()
-				end)
-			end
-		else
-			row:Hide()
-		end
-	end
+	mp.askList:SetItems(asks)
 end
 
 local NUM_FIELDS = {
-	{ "mb", function(e) return e.mb and GM.Money(e.mb) end },
-	{ "mbx", function(e) return e.mbx and e.mbx ~= math.huge
-		and GM.Money(e.mbx) or "—" end },
-	{ "mkt", function(e) return e.p and GM.Money(e.p)
-		or e.mkt and GM.Money(e.mkt) end },
-	{ "sup", function(e) return e.sup end },
-	{ "lots", function(e) return e.n end },
-	{ "vel", function(e) return e.vel and
+	{ "mb", "Min buyout", function(e) return e.mb and GM.Money(e.mb) end },
+	{ "mbx", "Min excl. mine", function(e)
+		return e.mbx and e.mbx ~= math.huge
+			and GM.Money(e.mbx) or "—" end },
+	{ "mkt", "Market value", function(e)
+		return e.p and GM.Money(e.p)
+			or e.mkt and GM.Money(e.mkt) end },
+	{ "sup", "Supply", function(e) return e.sup end },
+	{ "lots", "Lots", function(e) return e.n end },
+	{ "vel", "Sales/day", function(e) return e.vel and
 		(GM.VelRate and GM.VelRate(e.vel) or e.vel) .. "/d" end },
-	{ "hist", function(e) return e.hist and GM.Money(e.hist) end },
-	{ "recent", function(e) return e.recent and GM.Money(e.recent) end },
-	{ "rmkt", function(e) return e.rmkt and GM.Money(e.rmkt) end },
-	{ "src", function(e) return e._src or "emit" end },
+	{ "hist", "Historic", function(e) return e.hist and GM.Money(e.hist) end },
+	{ "recent", "Recent", function(e) return e.recent and GM.Money(e.recent) end },
+	{ "rmkt", "Region market", function(e) return e.rmkt and GM.Money(e.rmkt) end },
+	{ "src", "Source", function(e) return e._src or "emit" end },
 }
 local function RefreshNumbers()
 	local entry = M.itemID and GM.ItemEntry(M.itemID)
 	for i, f in ipairs(NUM_FIELDS) do
 		local r = mp.numRows[i]
-		local lab, val = r[1], r[2]
-		lab:SetText(f[1])
-		local v = entry and f[2](entry)
-		val:SetText(v ~= nil and tostring(v) or "—")
+		r.val:SetText(entry and tostring(f[3](entry) or "—") or "—")
 	end
 	if entry then
 		local bAge = GM.AH.BookAge and GM.AH.BookAge()
@@ -500,11 +495,7 @@ end
 
 local function PaintAuto()
 	if not mp then return end
-	local key = AutoItemOn() and "pos" or "textDim"
-	-- GM.RGB is a triple return — pass it straight through so all
-	-- three channels reach SetTextColor (a captured var keeps r only)
-	if mp.autoBtn then mp.autoBtn.text:SetTextColor(GM.RGB(key)) end
-	if mp.auto then mp.auto.t:SetTextColor(GM.RGB(key)) end
+	mp.autoBtn:SetSelected(AutoItemOn())
 end
 
 -- enable = scan NOW, don't wait out the first minute — the visible
@@ -577,14 +568,6 @@ local function RefreshIntel()
 			or "—") .. "|r"
 	end
 	mp.intelText:SetText(table.concat(lines, "\n"))
-	-- grow the scroll child to the wrapped height so the scroll
-	-- range reflects the real content
-	mp.intelChild:SetHeight(math.max(1, mp.intelText:GetStringHeight()))
-	-- content shrank? pull the view back into range quietly
-	local range = mp.intelSf:GetVerticalScrollRange()
-	if mp.intelSf:GetVerticalScroll() > range then
-		mp.intelSf:SetVerticalScroll(range)
-	end
 	PaintAuto()
 end
 
@@ -603,41 +586,37 @@ local function RefreshPlan()
 	local total = steps and #steps or 0
 	local idx = plan and GM.PlanQueue.stepIndex or 0
 	local armed = steps and idx <= total and steps[idx]
+	local showBtns = false
 	if plan and plan.mode and plan.mode ~= "postscan"
 		and plan.mode ~= "cancelscan" and plan.mode ~= "shopscan" then
-		mp.pHead:SetText("PLAN — " .. plan.mode)
+		mp.planPanel:SetTitle("Plan — " .. plan.mode)
 		mp.pArmed:SetText(GM.CC("textDim")
 			.. "runs in the standalone plan window|r")
 		mp.pNext:SetText("")
 		mp.pMore:SetText("")
-		mp.exec:Hide() mp.skip:Hide() mp.rescan:Hide()
-		mp.prog:Hide()
-		return
-	end
-	if not plan or total == 0 or not armed then
-		mp.pHead:SetText("PLAN")
+	elseif not plan or total == 0 or not armed then
+		mp.planPanel:SetTitle("Plan")
 		mp.pArmed:SetText(GM.CC("textDim") ..
 			"no plan — POST/CANCEL/SHOP scans and targeted items route here|r")
 		mp.pNext:SetText("")
 		mp.pMore:SetText("")
-		mp.exec:Hide() mp.skip:Hide() mp.rescan:Hide()
-		mp.prog:Hide()
-		return
+	else
+		showBtns = true
+		mp.planPanel:SetTitle(format("Plan — Step %d/%d%s", idx, total,
+			plan.mode and (" · " .. plan.mode) or ""))
+		mp.pArmed:SetText(GM.CC("accent") .. "▶ " .. StepLabel(armed) .. "|r")
+		mp.pNext:SetText(idx + 1 <= total and GM.CC("textDim")
+			.. "  " .. StepLabel(steps[idx + 1]) .. "|r" or "")
+		mp.pMore:SetText(idx + 2 <= total and GM.CC("textDim")
+			.. format("  …+%d more", total - idx - 1) .. "|r" or "")
+		mp.exec:SetText(GM.AH.pendingConfirm and "Confirm"
+			or GM.PlanQueue.lossConfirm and "Confirm" or "Execute")
+		mp.prog:SetValue(total > 0 and (idx - 1) / total or 0)
 	end
-	mp.pHead:SetText(format("PLAN — step %d/%d%s", idx, total,
-		plan.mode and (" · " .. plan.mode) or ""))
-	mp.pArmed:SetText(GM.CC("accent") .. "▶ " .. StepLabel(armed) .. "|r")
-	mp.pNext:SetText(idx + 1 <= total and GM.CC("textDim")
-		.. "  " .. StepLabel(steps[idx + 1]) .. "|r" or "")
-	mp.pMore:SetText(idx + 2 <= total and GM.CC("textDim")
-		.. format("  …+%d more", total - idx - 1) .. "|r" or "")
-	mp.exec:Show()
-	mp.exec.text:SetText(GM.AH.pendingConfirm and "CONFIRM"
-		or GM.PlanQueue.lossConfirm and "CONFIRM" or "EXECUTE")
-	mp.skip:Show() mp.rescan:Show()
-	mp.prog:Show()
-	local w = (mp.pPane:GetWidth() - 16) * (idx - 1) / math.max(1, total)
-	mp.prog:SetWidth(math.max(2, w))
+	mp.exec:SetVisible(showBtns)
+	mp.skip:SetVisible(showBtns)
+	mp.rescan:SetVisible(showBtns)
+	mp.prog:SetVisible(showBtns)
 end
 
 function MU.Refresh()
@@ -677,7 +656,6 @@ end
 
 -- ============ build ============
 
--- forward refs for Build — locals the click handlers close over
 function MU.Build(f, ahui)
 	if mp then return mp end
 	ui = ahui
@@ -686,209 +664,181 @@ function MU.Build(f, ahui)
 	mp:SetSize(776, 366)
 	mp:Hide()
 
-	-- ===== header (bare, not a pane) =====
-	mp.icon = mp:CreateTexture(nil, "ARTWORK")
-	mp.icon:SetSize(18, 18)
-	mp.icon:SetPoint("TOPLEFT", 8, -2)
-	mp.name = GM.MakeFontString(mp, GM.FONT_BOLD, 13, "text")
-	mp.name:SetPoint("TOPLEFT", 32, -2)
-	mp.name:SetWidth(280)
-	mp.name:SetJustifyH("LEFT")
-	mp.name:SetWordWrap(false)
-	mp.chips = GM.MakeFontString(mp, GM.FONT, 10, "text")
-	mp.chips:SetPoint("TOPLEFT", 32, -19)
-	mp.chips:SetWidth(368)
-	mp.chips:SetJustifyH("LEFT")
-	mp.chips:SetWordWrap(false)
+	local u = GM.ui
+	local L = GM.L
+
+	-- the whole page is one Column: header / price / mid / bottom.
+	-- sibling slots can't overlap — gutters are tokens, not pixels
+	local root = u:AttachRoot(mp, { direction = "column", gap = "sm" })
+
+	-- ===== header =====
+	local header = u:Row(root, { gap = "sm" })
+	root:Add(header, { height = 40 })
+
+	-- item icon (fixed square leaf)
+	local iconN = u:Leaf(header, { measure = function() return 18, 18 end })
+	mp.icon = iconN.frame:CreateTexture(nil, "ARTWORK")
+	mp.icon:SetAllPoints()
+	header:Add(iconN, { width = 18, height = 18, align = "center" })
+
+	-- name + chips column (fill)
+	local nc = u:Column(header, { gap = "hair" })
+	header:Add(nc, { width = "fill" })
+	mp.name = u:Text(nc, { style = "value", wrap = false })
+	nc:Add(mp.name)
+	mp.chips = u:Text(nc, { style = "cellDim", wrap = false })
+	nc:Add(mp.chips)
+
+	-- AUTO toggle — item-scoped ask cadence, lit when on
+	mp.autoBtn = u:Button(header, {
+		text = L("Auto"),
+		variant = "quiet",
+		height = 26,
+		tooltip = "re-scan this item's asks about once a minute",
+		onClick = function() ToggleAuto() end,
+	})
+	header:Add(mp.autoBtn, { width = "auto", align = "center" })
+
+	-- item slot — a host widget wrapped as a leaf; its internals
+	-- stay host-side during the sweep (spec §4.1 host widgets)
 	mp.slot = W.ItemSlot(mp, {
 		icon = 18, w = 300, h = 26, nameSize = 10, subSize = 8,
 		hint = "target — drop · shift-click · [link]",
 		onItem = function(id, link) MU.SetItem(id, link) end,
 	})
-	mp.slot:SetPoint("TOPRIGHT", -8, -2)
-	-- AUTO: item-scoped ask refresh for this page — same preference
-	-- as the intel-pane tag; text goes green when lit
-	mp.autoBtn = Btn(mp, 56, "AUTO", ToggleAuto)
-	mp.autoBtn:SetPoint("TOPRIGHT", mp.slot, "TOPLEFT", -6, -3)
-	mp.autoBtn:SetScript("OnLeave", function()
-		if mp.autoBtn._gmBg then
-			mp.autoBtn._gmBg:SetColorTexture(GM.RGB("contHigh"))
-		end
-		PaintAuto()
-	end)
+	local slotN = u:Leaf(header, {
+		frame = mp.slot,
+		measure = function() return 300, 26 end,
+	})
+	header:Add(slotN, { width = 300, align = "center" })
 
-	-- ===== PRICE pane =====
-	local ch = CreateFrame("Frame", nil, mp)
-	ch:SetSize(776, 100)
-	ch:SetPoint("TOPLEFT", 0, -34)
-	GM.Panel(ch, "contLowest")
-	ch.title = GM.MakeFontString(ch, GM.FONT_BOLD, 10, "secondary")
-	ch.title:SetPoint("TOPLEFT", 8, -4)
-	ch.title:SetText("PRICE")
-	ch.msg = GM.MakeFontString(ch, GM.FONT, 9, "textDim")
-	ch.msg:SetPoint("CENTER", 0, -4)
-	if ch.SetClipsChildren then ch:SetClipsChildren(true) end
-	mp.price = ch
+	-- ===== price pane =====
+	mp.pricePanel = u:Panel(root, { title = L("Price"), slim = true, pad = "xs" })
+	root:Add(mp.pricePanel, { height = 96 })
+	local pc = u:Canvas(mp.pricePanel, {
+		onResize = function()
+			if mp:IsShown() then MU.Refresh() end
+		end,
+	})
+	mp.pricePanel.body:Add(pc, { width = "fill", height = "fill" })
+	mp.priceContent = pc.content
+	mp.priceContent.msg = GM.MakeFontString(pc.content, GM.FONT, 10, "textDim")
+	mp.priceContent.msg:SetPoint("CENTER", 0, 0)
 
-	-- ===== DEPTH pane =====
-	local dp = CreateFrame("Frame", nil, mp)
-	dp:SetSize(366, 144)
-	dp:SetPoint("TOPLEFT", 0, -140)
-	GM.Panel(dp, "contLowest")
-	dp.title = GM.MakeFontString(dp, GM.FONT_BOLD, 10, "secondary")
-	dp.title:SetPoint("TOPLEFT", 8, -4)
-	dp.title:SetText("DEPTH")
-	dp.msg = GM.MakeFontString(dp, GM.FONT, 9, "textDim")
-	dp.msg:SetPoint("CENTER", 0, -4)
-	if dp.SetClipsChildren then dp:SetClipsChildren(true) end
-	mp.depth = dp
+	-- ===== middle row: depth | ask book =====
+	local mid = u:Row(root, { gap = "sm" })
+	root:Add(mid, { height = 118 })
 
-	-- ===== ASK BOOK pane =====
-	local ab = CreateFrame("Frame", nil, mp)
-	ab:SetSize(402, 144)
-	ab:SetPoint("TOPLEFT", 374, -140)
-	GM.Panel(ab, "contLowest")
-	mp.abHead = GM.MakeFontString(ab, GM.FONT_BOLD, 10, "secondary")
-	mp.abHead:SetPoint("TOPLEFT", 8, -5)
-	mp.abHead:SetText("ASK BOOK")
-	mp.abCount = GM.MakeFontString(ab, GM.FONT, 10, "textDim")
-	mp.abCount:SetPoint("TOPRIGHT", -8, -6)
-	ab:EnableMouseWheel(true)
-	ab:SetScript("OnMouseWheel", function(_, d)
-		M.askScroll = math.max(0, (M.askScroll or 0) - d * 2)
-		MU.Refresh()
-	end)
-	mp.askRows = {}
-	for i = 1, ASK_VIS do
-		local row = CreateFrame("Button", nil, ab)
-		row:SetSize(378, ROW_H - 2)
-		row:SetPoint("TOPLEFT", 8, -22 - (i - 1) * ROW_H)
-		row.bg = row:CreateTexture(nil, "BACKGROUND")
-		row.bg:SetAllPoints()
-		row.bg:SetColorTexture(GM.RGB(i % 2 == 0 and "contMedium" or "contLowest"))
-		W.HoverTint(row)
-		row.c1 = GM.MakeFontString(row, GM.FONT, 10, "text")
-		row.c1:SetPoint("LEFT", 6, 0) row.c1:SetWidth(66)
-		row.c1:SetJustifyH("LEFT") row.c1:SetWordWrap(false)
-		row.c2 = GM.MakeFontString(row, GM.FONT, 10, "accent")
-		row.c2:SetPoint("LEFT", 76, 0) row.c2:SetWidth(34)
-		row.c2:SetJustifyH("LEFT") row.c2:SetWordWrap(false)
-		row.c3 = GM.MakeFontString(row, GM.FONT, 10, "text")
-		row.c3:SetPoint("LEFT", 112, 0) row.c3:SetWidth(196)
-		row.c3:SetJustifyH("LEFT") row.c3:SetWordWrap(false)
-		row.c4 = GM.MakeFontString(row, GM.FONT, 9, "textDim")
-		row.c4:SetPoint("LEFT", 310, 0) row.c4:SetWidth(46)
-		row.c4:SetJustifyH("LEFT") row.c4:SetWordWrap(false)
-		local act = CreateFrame("Button", nil, row)
-		act:SetSize(44, 16)
-		act:SetPoint("RIGHT", -2, 0)
-		GM.Panel(act, "contHigh")
-		act.text = GM.MakeFontString(act, GM.FONT_BOLD, 8, "accent")
-		act.text:SetPoint("CENTER")
-		row.act = act
-		mp.askRows[i] = row
-	end
-	mp.abEmpty = GM.MakeFontString(ab, GM.FONT, 10, "textDim")
+	mp.depthPanel = u:Panel(mid, { title = L("Depth"), slim = true, pad = "xs" })
+	mid:Add(mp.depthPanel, { width = 366, height = "fill" })
+	local dc = u:Canvas(mp.depthPanel, {
+		onResize = function()
+			if mp:IsShown() then MU.Refresh() end
+		end,
+	})
+	mp.depthPanel.body:Add(dc, { width = "fill", height = "fill" })
+	mp.depthContent = dc.content
+	mp.depthContent.msg = GM.MakeFontString(dc.content, GM.FONT, 10, "textDim")
+	mp.depthContent.msg:SetPoint("CENTER", 0, 0)
+
+	-- ask book: a real List — pooled rows, scroll owned by the lib
+	mp.askPanel = u:Panel(mid, { title = L("Ask Book"), slim = true, pad = "xs" })
+	mid:Add(mp.askPanel, { width = "fill", height = "fill" })
+	mp.askList = u:List(mp.askPanel, {
+		rowHeight = ASK_ROW_H,
+		makeRow = function(row)
+			local rf = row.frame
+			rf.bg = rf:CreateTexture(nil, "BACKGROUND")
+			rf.bg:SetAllPoints()
+			row.c1 = GM.MakeFontString(rf, GM.FONT, 10, "text")
+			row.c1:SetPoint("LEFT", 6, 0) row.c1:SetWidth(62)
+			row.c1:SetJustifyH("LEFT") row.c1:SetWordWrap(false)
+			row.c2 = GM.MakeFontString(rf, GM.FONT, 10, "accent")
+			row.c2:SetPoint("LEFT", 72, 0) row.c2:SetWidth(34)
+			row.c2:SetJustifyH("LEFT") row.c2:SetWordWrap(false)
+			row.c3 = GM.MakeFontString(rf, GM.FONT, 10, "text")
+			row.c3:SetPoint("LEFT", 108, 0) row.c3:SetWidth(190)
+			row.c3:SetJustifyH("LEFT") row.c3:SetWordWrap(false)
+			row.c4 = GM.MakeFontString(rf, GM.FONT, 9, "textDim")
+			row.c4:SetPoint("LEFT", 300, 0) row.c4:SetWidth(46)
+			row.c4:SetJustifyH("LEFT") row.c4:SetWordWrap(false)
+			local act = CreateFrame("Button", nil, rf)
+			act:SetSize(44, 14)
+			act:SetPoint("RIGHT", -2, 0)
+			GM.Panel(act, "contHigh")
+			act.text = GM.MakeFontString(act, GM.FONT_BOLD, 8, "accent")
+			act.text:SetPoint("CENTER")
+			row.act = act
+			GM.ui:HoverTint(rf, { a = 0.07 })
+		end,
+		bindRow = function(row, a, idx) BindAskRow(row, a, idx) end,
+		keyFn = function(a) return a.id or (a.unit * 1000 + a.qty) end,
+	})
+	mp.askPanel.body:Add(mp.askList, { width = "fill", height = "fill" })
+	mp.abEmpty = GM.MakeFontString(mp.askPanel.frame, GM.FONT, 10, "textDim")
 	mp.abEmpty:SetPoint("CENTER", 0, -8)
 
-	-- ===== PLAN pane =====
-	local pp = CreateFrame("Frame", nil, mp)
-	pp:SetSize(366, 96)
-	pp:SetPoint("TOPLEFT", 0, -290)
-	GM.Panel(pp, "contLowest")
-	mp.pPane = pp
-	mp.pHead = GM.MakeFontString(pp, GM.FONT_BOLD, 10, "secondary")
-	mp.pHead:SetPoint("TOPLEFT", 8, -5)
-	mp.pHead:SetText("PLAN")
-	mp.exec = Btn(pp, 70, "EXECUTE", function() GM.PlanQueue.ExecuteNext() end)
-	mp.exec:SetPoint("TOPRIGHT", -6, -4)
-	mp.exec.text:SetTextColor(GM.RGB("accent"))
-	mp.skip = Btn(pp, 40, "SKIP", function() GM.PlanQueue.SkipStep() end)
-	mp.skip:SetPoint("TOPRIGHT", mp.exec, "TOPLEFT", -4, 0)
-	mp.rescan = Btn(pp, 52, "RESCAN", function() GM.PlanQueue.Rescan() end)
-	mp.rescan:SetPoint("TOPRIGHT", mp.skip, "TOPLEFT", -4, 0)
-	mp.pArmed = GM.MakeFontString(pp, GM.FONT, 10, "text")
-	mp.pArmed:SetPoint("TOPLEFT", 8, -24)
-	mp.pArmed:SetWidth(348)
-	mp.pArmed:SetJustifyH("LEFT") mp.pArmed:SetWordWrap(false)
-	mp.pNext = GM.MakeFontString(pp, GM.FONT, 10, "textDim")
-	mp.pNext:SetPoint("TOPLEFT", 8, -42)
-	mp.pNext:SetWidth(348)
-	mp.pNext:SetJustifyH("LEFT") mp.pNext:SetWordWrap(false)
-	mp.pMore = GM.MakeFontString(pp, GM.FONT, 10, "textDim")
-	mp.pMore:SetPoint("TOPLEFT", 8, -58)
-	mp.pMore:SetJustifyH("LEFT")
-	mp.prog = pp:CreateTexture(nil, "ARTWORK")
-	mp.prog:SetColorTexture(GM.RGB("accent"))
-	mp.prog:SetHeight(3)
-	mp.prog:SetPoint("BOTTOMLEFT", 8, 8)
+	-- ===== bottom row: plan | numbers | intel =====
+	local bot = u:Row(root, { gap = "sm" })
+	root:Add(bot, { height = "fill" })
 
-	-- ===== NUMBERS pane =====
-	local np = CreateFrame("Frame", nil, mp)
-	np:SetSize(197, 96)
-	np:SetPoint("TOPLEFT", 374, -290)
-	GM.Panel(np, "contLowest")
-	local nh = GM.MakeFontString(np, GM.FONT_BOLD, 10, "secondary")
-	nh:SetPoint("TOPLEFT", 8, -5) nh:SetText("NUMBERS")
-	-- two columns of five — a single font-9 column can't hold ten
-	-- fields plus a header in 96px (the rows landed on the foot)
+	mp.planPanel = u:Panel(bot, { title = L("Plan"), slim = true, pad = "xs" })
+	bot:Add(mp.planPanel, { width = 366, height = "fill" })
+	mp.pArmed = u:Text(mp.planPanel, { style = "cell", wrap = false })
+	mp.planPanel.body:Add(mp.pArmed)
+	mp.pNext = u:Text(mp.planPanel, { style = "cellDim", wrap = false })
+	mp.planPanel.body:Add(mp.pNext)
+	mp.pMore = u:Text(mp.planPanel, { style = "cellDim", wrap = false })
+	mp.planPanel.body:Add(mp.pMore)
+	local pBtns = u:Row(mp.planPanel, { gap = "xs", justify = "end" })
+	mp.planPanel.body:Add(pBtns, { height = "auto" })
+	mp.exec = u:Button(pBtns, {
+		text = L("Execute"), variant = "accent", height = 24,
+		onClick = function() GM.PlanQueue.ExecuteNext() end,
+	})
+	pBtns:Add(mp.exec, { width = "auto" })
+	mp.skip = u:Button(pBtns, {
+		text = L("Skip"), variant = "ghost", height = 24,
+		onClick = function() GM.PlanQueue.SkipStep() end,
+	})
+	pBtns:Add(mp.skip, { width = "auto" })
+	mp.rescan = u:Button(pBtns, {
+		text = L("Rescan"), variant = "ghost", height = 24,
+		onClick = function() GM.PlanQueue.Rescan() end,
+	})
+	pBtns:Add(mp.rescan, { width = "auto" })
+	mp.prog = u:Progress(mp.planPanel, { height = 3 })
+	mp.planPanel.body:Add(mp.prog, { width = "fill", height = "auto" })
+
+	-- numbers: ten fields scroll inside the pane — the body column
+	-- holds a Scroll whose content lists label/value rows
+	mp.numPanel = u:Panel(bot, { title = L("Numbers"), slim = true, pad = "xs" })
+	bot:Add(mp.numPanel, { width = 197, height = "fill" })
+	local nsc = u:Scroll(mp.numPanel, { gap = "none" })
+	mp.numPanel.body:Add(nsc, { width = "fill", height = "fill" })
 	mp.numRows = {}
-	for i = 1, #NUM_FIELDS do
-		local col = i <= 5 and 0 or 1
-		local row = (i - 1) % 5
-		local lab = GM.MakeFontString(np, GM.FONT, 9, "textDim")
-		lab:SetPoint("TOPLEFT", 8 + col * 96, -17 - row * 11)
-		lab:SetJustifyH("LEFT")
-		local val = GM.MakeFontString(np, GM.FONT, 9, "text")
-		val:SetPoint("TOPRIGHT", col == 0 and -104 or -8, -17 - row * 11)
-		val:SetJustifyH("RIGHT")
-		mp.numRows[i] = { lab, val }
+	for i, fdef in ipairs(NUM_FIELDS) do
+		local r = u:Row(nsc, { gap = "xs" })
+		nsc.content:Add(r, { height = "auto" })
+		r.lab = u:Text(r, { style = "cellDim", wrap = false })
+		r.lab:SetText(fdef[2])
+		r:Add(r.lab, { width = "fill" })
+		r.val = u:Text(r, { style = "cell", wrap = false, align = "RIGHT" })
+		r:Add(r.val, { width = "auto" })
+		mp.numRows[i] = r
 	end
-	mp.numFoot = GM.MakeFontString(np, GM.FONT, 8, "textDim")
-	mp.numFoot:SetPoint("BOTTOMLEFT", 8, 2)
-	mp.numFoot:SetJustifyH("LEFT")
+	mp.numFoot = u:Text(nsc, { style = "cellDim", wrap = false })
+	nsc.content:Add(mp.numFoot)
 
-	-- ===== INTEL pane =====
-	local ip = CreateFrame("Frame", nil, mp)
-	ip:SetSize(197, 96)
-	ip:SetPoint("TOPLEFT", 579, -290)
-	GM.Panel(ip, "contLowest")
-	local ih = GM.MakeFontString(ip, GM.FONT_BOLD, 10, "secondary")
-	ih:SetPoint("TOPLEFT", 8, -5) ih:SetText("INTEL")
-	-- AUTO: the book-refresh cadence that feeds this pane — green lit
-	mp.auto = CreateFrame("Button", nil, ip)
-	mp.auto:SetSize(42, 12)
-	mp.auto:SetPoint("TOPRIGHT", -5, -3)
-	mp.auto.t = GM.MakeFontString(mp.auto, GM.FONT_BOLD, 8, "textDim")
-	mp.auto.t:SetPoint("CENTER")
-	mp.auto.t:SetText("AUTO")
-	mp.auto:SetScript("OnClick", ToggleAuto)
-	mp.auto:SetScript("OnEnter", function()
-		mp.auto.t:SetTextColor(GM.RGB("text"))
-	end)
-	mp.auto:SetScript("OnLeave", function() MU.Refresh() end)
-	-- scrollable wrapped text — signals run long ("31 step-chain
-	-- asks — algorithmic repricing") and stack up past six rows
-	local sf = CreateFrame("ScrollFrame", nil, ip)
-	sf:SetPoint("TOPLEFT", 6, -16)
-	sf:SetPoint("BOTTOMRIGHT", -6, 4)
-	local child = CreateFrame("Frame", nil, sf)
-	child:SetSize(181, 1)
-	sf:SetScrollChild(child)
-	mp.intelSf = sf
-	mp.intelChild = child
-	mp.intelText = GM.MakeFontString(child, GM.FONT, 9, "text")
-	mp.intelText:SetPoint("TOPLEFT", 2, 0)
-	mp.intelText:SetWidth(177)
-	mp.intelText:SetJustifyH("LEFT")
-	mp.intelText:SetWordWrap(true)
-	ip:EnableMouseWheel(true)
-	ip:SetScript("OnMouseWheel", function(_, d)
-		local max = sf:GetVerticalScrollRange()
-		sf:SetVerticalScroll(math.max(0,
-			math.min(max, sf:GetVerticalScroll() - d * 16)))
-	end)
+	-- intel: wrapped text in a Scroll — signals stack past the pane
+	mp.intelPanel = u:Panel(bot, { title = L("Intel"), slim = true, pad = "xs" })
+	bot:Add(mp.intelPanel, { width = "fill", height = "fill" })
+	local isc = u:Scroll(mp.intelPanel, { gap = "none" })
+	mp.intelPanel.body:Add(isc, { width = "fill", height = "fill" })
+	mp.intelText = u:Text(isc, { style = "cell" })
+	isc.content:Add(mp.intelText, { height = "auto" })
 
+	PaintAuto()
 	return mp
 end
 

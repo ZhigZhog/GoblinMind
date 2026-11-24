@@ -61,8 +61,10 @@ function ctxMT:SetBorder(frame, key, alpha)
 end
 
 -- ============ Panel ============
--- ctx:Panel(parent, {title=, count=, pad=}) -> leaf node with
--- .body (a managed Column arrange-root inside)
+-- ctx:Panel(parent, {title=, pad=, slim=, fill=, border=, gap=})
+-- -> leaf node with .body (a managed Column arrange-root inside).
+-- slim=true drops the header to a 22px strip with a 13px title —
+-- dense data panes that can't spend 44px on a label
 function ctxMT:Panel(parent, opts)
 	opts = opts or {}
 	local self2 = self
@@ -76,10 +78,12 @@ function ctxMT:Panel(parent, opts)
 	end
 
 	local pad = Space(opts.pad ~= nil and opts.pad or "md")
-	local headerH = opts.title and internal.HEADER_H or 0
+	local headerH = 0
+	if opts.title then
+		headerH = opts.slim and 22 or internal.HEADER_H
+	end
 
-	-- header: title text + optional action frames laid out manually
-	-- (fixed geometry inside the panel top strip)
+	-- header: title (left) + count text (right) in a fixed strip
 	if opts.title then
 		local hdr = CreateFrame("Frame", nil, shell)
 		hdr:SetPoint("TOPLEFT", 0, 0)
@@ -88,16 +92,20 @@ function ctxMT:Panel(parent, opts)
 		self:Fill(hdr, "contMedium")
 		local ttl = hdr:CreateFontString(nil, "OVERLAY")
 		ttl:SetPoint("LEFT", pad, 0)
-		ttl:SetFont(self:Font("semibold"), 16 * self.textScale, "")
-		ttl:SetTextColor(self:Color("text"))
+		ttl:SetFont(self:Font("semibold"),
+			(opts.slim and 13 or 16) * self.textScale, "")
+		ttl:SetTextColor(self:Color(opts.slim and "textDim" or "text"))
 		ttl:SetText(opts.title)
+		local cnt = hdr:CreateFontString(nil, "OVERLAY")
+		cnt:SetPoint("RIGHT", -pad, 0)
+		cnt:SetFont(self:Font("regular"),
+			(opts.slim and 13 or 14) * self.textScale, "")
+		cnt:SetTextColor(self:Color("textDim"))
 		cont._header = hdr
 		cont._titleFS = ttl
+		cont._countFS = cnt
 		function cont:SetTitle(t) ttl:SetText(t) end
-		function cont:SetCount(c)
-			ttl:SetFormattedText("%s  |cff%s%s|r", opts.title,
-				self2:Hex("textDim"), c or "")
-		end
+		function cont:SetCount(c) cnt:SetText(c or "") end
 		-- divider under the header
 		local dv = hdr:CreateTexture(nil, "BORDER")
 		dv:SetPoint("BOTTOMLEFT", 0, 0)
@@ -108,21 +116,23 @@ function ctxMT:Panel(parent, opts)
 
 	-- body: managed column inset by pad under the header
 	local body = CreateFrame("Frame", nil, shell)
-	body:SetPoint("TOPLEFT", pad, -(headerH + pad))
+	body:SetPoint("TOPLEFT", pad, -(headerH + (opts.title and 4 or pad)))
 	body:SetPoint("BOTTOMRIGHT", -pad, pad)
 	cont._bodyFrame = body
 
-	-- the managed body is its own arrange root inside the panel
+	-- the managed body is its own arrange root inside the panel;
+	-- registered as a sub-root so it flushes with the parent's pass
 	local inner = self:AttachRoot(body,
 		{ direction = "column", gap = opts.gap or "sm" })
 	cont.body = inner
+	cont._subRoots = { inner }
 
 	-- natural panel height = header + body content + pads
 	function cont:measure(availW)
 		local iw = math.max(0, (availW or 0) - pad * 2)
 		local _, bh = internal.MeasureNode(inner, iw, math.huge)
 		return availW or 0,
-			headerH + pad * 2 + bh + (headerH > 0 and pad or 0)
+			headerH + (opts.title and 4 or 0) + pad * 2 + bh
 	end
 
 	return cont
@@ -227,6 +237,7 @@ function ctxMT:PageTabs(parent, opts)
 	local f = node.frame
 	local row = self:AttachRoot(f,
 		{ direction = "row", gap = "xs", align = "center" })
+	node._subRoots = { row }
 	node._selected = 1
 	node._btns = {}
 
