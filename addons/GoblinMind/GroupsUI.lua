@@ -36,6 +36,10 @@ local FOOTER_DEFAULT = "drag items to assign · Enter saves · Esc discards"
 local WIN_W, WIN_H = 860, 640
 local TREE_ROWS, LIST_ROWS = 22, 20
 
+-- placeholder text the compare sites need identical — one localized
+-- constant, not five driftable literals
+local NEWG_LBL = (GM.L or function(s) return s end)("new group path…")
+
 local function ColPanel(parent, x, w, title)
 	local p = CreateFrame("Frame", nil, parent)
 	p:SetPoint("TOPLEFT", x, 0)
@@ -222,10 +226,10 @@ local function BuildUI()
 	end
 	ui.newBox = EditBox(treeP, 172)
 	ui.newBox:SetPoint("BOTTOMLEFT", 6, 30)
-	ui.newBox:SetText("new group path…")
+	ui.newBox:SetText(NEWG_LBL)
 	ui.newBox:SetTextColor(GM.RGB("textDim"))
 	ui.newBox:SetScript("OnEditFocusGained", function(self)
-		if self:GetText() == "new group path…" then
+		if self:GetText() == NEWG_LBL then
 			self:SetText("")
 			self:SetTextColor(GM.RGB("text"))
 		end
@@ -234,7 +238,7 @@ local function BuildUI()
 	addG:SetPoint("BOTTOMLEFT", 6, 8)
 	addG:SetScript("OnClick", function()
 		local v = strtrim(ui.newBox:GetText() or "")
-		if v == "" or v == "new group path…" then return end
+		if v == "" or v == NEWG_LBL then return end
 		local leaf = GM.Groups.Ensure(v)
 		ui.editPath = leaf
 		ui.newBox:SetText("")
@@ -244,7 +248,7 @@ local function BuildUI()
 	renG:SetPoint("LEFT", addG, "RIGHT", 2, 0)
 	renG:SetScript("OnClick", function()
 		local v = strtrim(ui.newBox:GetText() or "")
-		if v == "" or v == "new group path…" or not ui.editPath then return end
+		if v == "" or v == NEWG_LBL or not ui.editPath then return end
 		GM.Groups.Rename(ui.editPath, v)
 		ui.editPath = v
 		ui.newBox:SetText("")
@@ -815,7 +819,7 @@ end
 local function CatList()
 	if ui.catList and not ui.catDirty then return ui.catList end
 	local q = strtrim((ui.search and ui.search:GetText() or "")):lower()
-	if q == "new group path…" then q = "" end
+	if q == NEWG_LBL then q = "" end
 	local owned = ui.ownedOnly and GM.BagItems() or nil
 	local out = {}
 	if GoblinMindDB and GoblinMindDB.items then

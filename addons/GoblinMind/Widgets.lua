@@ -9,6 +9,18 @@ local _, GM = ...
 GM.Widgets = {}
 local W = GM.Widgets
 
+-- shared localizer pass-through: label/hint/title args flow through
+-- GM.L so every window gets the L() migration without callsite
+-- churn. Strings carrying a | escape (colour codes) or no letters
+-- are data — glyphs, numbers, formatted values — and pass through.
+local function LT(s)
+	if type(s) == "string" and GM.L and s:find("%a")
+		and not s:find("|", 1, true) then
+		return GM.L(s)
+	end
+	return s
+end
+
 local HL_R, HL_G, HL_B = nil
 
 -- paneled action button: contHigh base, contHighest+text on hover
@@ -20,7 +32,7 @@ function W.Btn(parent, w, label, fn)
 	b.text:SetPoint("CENTER")
 	b.text:SetWidth(w - 8)
 	b.text:SetWordWrap(false)
-	b.text:SetText(label)
+	b.text:SetText(LT(label))
 	b:SetScript("OnEnter", function()
 		if b._gmBg then b._gmBg:SetColorTexture(GM.RGB("contHighest")) end
 		b.text:SetTextColor(GM.RGB("text"))
@@ -42,10 +54,11 @@ function W.EditBox(parent, w, hint)
 	eb:SetTextColor(GM.RGB("text"))
 	eb:SetTextInsets(6, 4, 0, 0)
 	GM.Panel(eb, "contLowest")
-	eb:SetText(hint or "")
+	local lh = LT(hint)
+	eb:SetText(lh or "")
 	eb:SetTextColor(GM.RGB(hint and "textDim" or "text"))
 	eb:SetScript("OnEditFocusGained", function()
-		if hint and eb:GetText() == hint then
+		if lh and eb:GetText() == lh then
 			eb:SetText("")
 			eb:SetTextColor(GM.RGB("text"))
 		end
@@ -151,7 +164,7 @@ function W.ActionBtn(parent, label, w, h)
 	b.text:SetPoint("CENTER")
 	b.text:SetWidth(w - 8)
 	b.text:SetWordWrap(false)
-	b.text:SetText(label)
+	b.text:SetText(LT(label))
 	return b
 end
 
@@ -213,7 +226,7 @@ function W.Segment(parent, label, w, h)
 	b.text:SetPoint("CENTER")
 	b.text:SetWidth(w - 8)
 	b.text:SetWordWrap(false)
-	b.text:SetText(label)
+	b.text:SetText(LT(label))
 	return b
 end
 
@@ -537,7 +550,7 @@ function W.ColPanel(parent, x, w, title, topY)
 	p:SetClipsChildren(true)
 	local t = GM.MakeFontString(p, GM.FONT_BOLD, 9, "secondary")
 	t:SetPoint("TOPLEFT", 8, -6)
-	t:SetText(title)
+	t:SetText(LT(title))
 	p.titleFs = t
 	p.count = GM.MakeFontString(p, GM.FONT, 9, "textDim")
 	p.count:SetPoint("TOPRIGHT", -8, -7)
@@ -559,7 +572,7 @@ function W.TitledPanel(f, title)
 	local t = GM.MakeFontString(p, GM.FONT_BOLD, 9, "secondary")
 	t:SetPoint("TOPLEFT", 8, -6)
 	t:SetWordWrap(false)
-	t:SetText(title)
+	t:SetText(LT(title))
 	return p, t
 end
 
@@ -624,7 +637,7 @@ function W.PageTabs(parent, defs, onPick)
 		b.text:SetPoint("CENTER", 0, 2)
 		b.text:SetWidth(52)
 		b.text:SetWordWrap(false)
-		b.text:SetText(label)
+		b.text:SetText(LT(label))
 		b.line = b:CreateTexture(nil, "ARTWORK")
 		b.line:SetSize(44, 2)
 		b.line:SetPoint("BOTTOM", 0, 1)
@@ -721,7 +734,7 @@ function W.PopupMenu(btn, entries, opts)
 			b:SetWidth(w)
 			b:SetPoint("TOPLEFT", 2, -2 - (i - 1) * 18)
 			b.text:SetJustifyH(opts.justify or "LEFT")
-			b.text:SetText(e.label)
+			b.text:SetText(LT(e.label))
 			b.text:SetTextColor(GM.RGB(e.checked and "accent" or "text"))
 			b:SetScript("OnClick", function()
 				m:Hide()
@@ -759,7 +772,7 @@ end
 function W.Chrome(f, name, titleText)
 	local title = GM.MakeFontString(f, GM.FONT_BOLD, 13, "accent")
 	title:SetPoint("TOPLEFT", 12, -10)
-	title:SetText(titleText)
+	title:SetText(LT(titleText))
 	local close = CreateFrame("Button", nil, f)
 	close:SetSize(16, 16)
 	close:SetPoint("TOPRIGHT", -6, -6)
@@ -1018,11 +1031,11 @@ function W.AcctAdd(parent)
 	local hint = GM.MakeFontString(f, GM.FONT, 9, "textDim")
 	hint:SetPoint("LEFT", btn, "RIGHT", 8, 0)
 	hint:SetJustifyH("LEFT")
-	hint:SetText("craft/ah: gold (500 or 10g50s) · save: %")
+	hint:SetText(LT("craft/ah: gold (500 or 10g50s) · save: %"))
 
 	btn:SetScript("OnClick", function()
 		local n = name:GetText()
-		if n == "name" then n = "" end
+		if n == LT("name") then n = "" end
 		local a = amt:GetText()
 		local alloc = addKind == "save"
 			and tonumber((a or ""):gsub("%%", ""))
@@ -1033,7 +1046,7 @@ function W.AcctAdd(parent)
 		if acct then
 			name:SetText("")
 			amt:SetText(addKind == "save" and "30" or "0g")
-			hint:SetText("craft/ah: gold (500 or 10g50s) · save: %")
+			hint:SetText(LT("craft/ah: gold (500 or 10g50s) · save: %"))
 		else
 			hint:SetText(GM.CC("err")
 				.. (addKind == "save" and "need a % (0-100)"
@@ -1087,7 +1100,7 @@ function W.Window(o)
 
 	local title = GM.MakeFontString(f, GM.FONT_BOLD, 13, "accent")
 	title:SetPoint("TOPLEFT", 12, -10)
-	title:SetText(o.title or "")
+	title:SetText(LT(o.title or ""))
 	f.titleFs = title
 
 	local close = CreateFrame("Button", nil, f)
@@ -1281,7 +1294,7 @@ function W.ItemSlot(parent, opts)
 		f.iconBtn.itemID = nil
 		f.icon:Hide()
 		f.name:SetText(GM.CC("textDim")
-			.. (opts.hint or "drop item here · shift-click one")
+			.. LT(opts.hint or "drop item here · shift-click one")
 			.. "|r")
 		f.sub:SetText("")
 	end

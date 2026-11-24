@@ -33,6 +33,10 @@ local SetMark = W.SetMark
 
 local function Footer(msg, err) W.Footer(ui.footer, msg, err) end
 
+-- placeholder text the compare sites need identical — one localized
+-- constant, not four driftable literals
+local NEWOP_LBL = (GM.L or function(s) return s end)("new operation…")
+
 -- ============ selection state ============
 
 local function SelType() return ui.selType or "auctioning" end
@@ -263,10 +267,10 @@ local function BuildUI()
 
 	local newEb = EditBox(opP, 130)
 	newEb:SetPoint("BOTTOMLEFT", 8, 8)
-	newEb:SetText("new operation…")
+	newEb:SetText(NEWOP_LBL)
 	newEb:SetTextColor(GM.RGB("textDim"))
 	newEb:SetScript("OnEditFocusGained", function()
-		if newEb:GetText() == "new operation…" then
+		if newEb:GetText() == NEWOP_LBL then
 			newEb:SetText("")
 			newEb:SetTextColor(GM.RGB("text"))
 		end
@@ -275,11 +279,11 @@ local function BuildUI()
 	newBtn:SetPoint("LEFT", newEb, "RIGHT", 4, 0)
 	newBtn:SetScript("OnClick", function()
 		local name = newEb:GetText()
-		if name == "new operation…" then name = "" end
+		if name == NEWOP_LBL then name = "" end
 		local ok, err = GM.Groups.CreateOp(SelType(), name)
 		if ok then
 			ui.selName = strtrim(name)
-			newEb:SetText("new operation…")
+			newEb:SetText(NEWOP_LBL)
 			newEb:SetTextColor(GM.RGB("textDim"))
 			newEb:ClearFocus()
 			OU.Refresh()
