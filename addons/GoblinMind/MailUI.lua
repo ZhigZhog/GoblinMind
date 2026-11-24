@@ -418,6 +418,37 @@ local function Build()
 
 	ui.foot = GM.MakeFontString(f, GM.FONT, 9, "textDim")
 	ui.foot:SetPoint("BOTTOMLEFT", 14, 10)
+
+	-- ============ GoblinUI managed layout ============
+	-- hand-laid: toolbar at -34, hdr at -60, host at -78, and the
+	-- compose strip sliding hdr/host down + shrinking the list on
+	-- SEND. As a column that's just [toolbar][comp][hdr][host fill]
+	-- [foot] — SetVisible on the comp node collapses its space and
+	-- the fill host re-sizes itself; no re-anchoring needed. The
+	-- sendBar/openAllBtn pair share one slot host (never co-shown).
+	local u = GM.ui
+	if u then
+		local slot = CreateFrame("Frame", nil, f)
+		ui.sendBar:SetParent(slot)
+		ui.sendBar:ClearAllPoints()
+		ui.sendBar:SetPoint("TOPLEFT", slot)
+		ui.openAllBtn:SetParent(slot)
+		ui.openAllBtn:ClearAllPoints()
+		ui.openAllBtn:SetPoint("LEFT", slot)
+		local root = u:AttachRoot(f, { direction = "column", gap = 4,
+			pad = { top = 34, left = 12, right = 12, bottom = 10 } })
+		local bar = u:Row(root, { gap = 6 })
+		root:Add(bar, { width = "fill", height = 20 })
+		bar:Add(u:Adopt(tabHost), { width = 186, height = 20 })
+		bar:Add(u:Adopt(scan), { width = 88, height = 20 })
+		bar:Add(u:Adopt(slot), { width = "fill", height = 20 })
+		ui.compNode = u:Adopt(comp)
+		root:Add(ui.compNode, { width = "fill", height = 112 })
+		root:Add(u:Adopt(hdr), { width = "fill", height = 16 })
+		ui.hostNode = u:Adopt(host)
+		root:Add(ui.hostNode, { width = "fill", height = "fill" })
+		root:Add(u:Adopt(ui.foot), { width = "fill", height = 12 })
+	end
 end
 
 -- ============ actions ============
@@ -565,20 +596,30 @@ function MU.Refresh()
 	ui.pageTabs.set(ui.page)
 	ui.sendBar:SetShown(ui.page == "send")
 	ui.openAllBtn:SetShown(ui.page == "inbox")
-	-- layout swap: the compose strip pushes the list down on SEND
-	ui.compose:SetShown(ui.page == "send")
-	local vis = VISIBLE
-	ui.hdr:ClearAllPoints()
-	ui.host:ClearAllPoints()
-	if ui.page == "send" then
-		vis = VISIBLE_SEND
-		ui.hdr:SetPoint("TOPLEFT", 12, -180)
-		ui.host:SetPoint("TOPLEFT", 12, -198)
+	-- layout swap: the compose strip pushes the list down on SEND.
+	-- Under GoblinUI the comp node collapses and the fill host
+	-- re-sizes; the hand anchors are the no-layout fallback.
+	if ui.compNode then
+		ui.compNode:SetVisible(ui.page == "send")
 	else
-		ui.hdr:SetPoint("TOPLEFT", 12, -60)
-		ui.host:SetPoint("TOPLEFT", 12, -78)
+		ui.compose:SetShown(ui.page == "send")
 	end
-	ui.host:SetHeight(vis * ROW_H + 4)
+	local vis = VISIBLE
+	if not ui.hostNode then
+		ui.hdr:ClearAllPoints()
+		ui.host:ClearAllPoints()
+		if ui.page == "send" then
+			vis = VISIBLE_SEND
+			ui.hdr:SetPoint("TOPLEFT", 12, -180)
+			ui.host:SetPoint("TOPLEFT", 12, -198)
+		else
+			ui.hdr:SetPoint("TOPLEFT", 12, -60)
+			ui.host:SetPoint("TOPLEFT", 12, -78)
+		end
+		ui.host:SetHeight(vis * ROW_H + 4)
+	else
+		vis = ui.page == "send" and VISIBLE_SEND or VISIBLE
+	end
 
 	if ui.page == "inbox" then
 		for i, t in ipairs({ "SENDER", "SUBJECT", "ITEMS", "GOLD", "DAYS" }) do
