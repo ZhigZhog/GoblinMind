@@ -432,6 +432,31 @@ local function Build()
 
 	ui.foot = GM.MakeFontString(f, GM.FONT, 9, "textDim")
 	ui.foot:SetPoint("BOTTOMLEFT", 14, 10)
+
+	-- ============ GoblinUI managed layout ============
+	-- title/close chrome stays bespoke; everything below packs into
+	-- one column: toolbar row, filter row, column header, the scroll
+	-- host fills, foot pins to the bottom
+	local u = GM.ui
+	if u then
+		local root = u:AttachRoot(f, { direction = "column", gap = 4,
+			pad = { top = 34, left = 12, right = 12, bottom = 10 } })
+		local tbar = u:Row(root, { gap = 6 })
+		root:Add(tbar, { width = "fill", height = 20 })
+		tbar:Add(u:Adopt(tabHost, { width = 186, height = 20 }))
+		tbar:Add(u:Adopt(plan, { width = 84, height = 20 }))
+		tbar:Add(u:Adopt(ui.repair, { width = 70, height = 20 }))
+		tbar:Add(u:Leaf(tbar), { width = "fill" })
+		tbar:Add(u:Adopt(blizz, { width = 84, height = 20 }))
+		local filt = u:Row(root, { gap = 6 })
+		root:Add(filt, { width = "fill", height = 20 })
+		filt:Add(u:Adopt(ui.search, { width = 130, height = 18 }))
+		filt:Add(u:Adopt(ui.flipsBtn, { width = 76, height = 20 }))
+		filt:Add(u:Adopt(ui.collapseBtn, { width = 100, height = 20 }))
+		root:Add(u:Adopt(hdr, { width = 536, height = 16 }))
+		root:Add(u:Adopt(host, { width = "fill", height = "fill" }))
+		root:Add(u:Adopt(ui.foot, { width = "fill", height = 12 }))
+	end
 end
 
 -- ============ refresh ============
