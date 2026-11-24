@@ -556,8 +556,14 @@ local function RefreshIntel()
 		lines[1] = GM.CC("textDim") .. (id and "no manipulation signals"
 			or "—") .. "|r"
 	end
-	for i = 1, 6 do
-		mp.intelRows[i]:SetText(lines[i] or "")
+	mp.intelText:SetText(table.concat(lines, "\n"))
+	-- grow the scroll child to the wrapped height so the scroll
+	-- range reflects the real content
+	mp.intelChild:SetHeight(math.max(1, mp.intelText:GetStringHeight()))
+	-- content shrank? pull the view back into range quietly
+	local range = mp.intelSf:GetVerticalScrollRange()
+	if mp.intelSf:GetVerticalScroll() > range then
+		mp.intelSf:SetVerticalScroll(range)
 	end
 	PaintAuto()
 end
@@ -851,14 +857,27 @@ function MU.Build(f, ahui)
 		mp.auto.t:SetTextColor(GM.RGB("text"))
 	end)
 	mp.auto:SetScript("OnLeave", function() MU.Refresh() end)
-	mp.intelRows = {}
-	for i = 1, 6 do
-		local fs = GM.MakeFontString(ip, GM.FONT, 9, "text")
-		fs:SetPoint("TOPLEFT", 8, -16 - (i - 1) * 13)
-		fs:SetWidth(180)
-		fs:SetJustifyH("LEFT") fs:SetWordWrap(false)
-		mp.intelRows[i] = fs
-	end
+	-- scrollable wrapped text — signals run long ("31 step-chain
+	-- asks — algorithmic repricing") and stack up past six rows
+	local sf = CreateFrame("ScrollFrame", nil, ip)
+	sf:SetPoint("TOPLEFT", 6, -16)
+	sf:SetPoint("BOTTOMRIGHT", -6, 4)
+	local child = CreateFrame("Frame", nil, sf)
+	child:SetSize(181, 1)
+	sf:SetScrollChild(child)
+	mp.intelSf = sf
+	mp.intelChild = child
+	mp.intelText = GM.MakeFontString(child, GM.FONT, 9, "text")
+	mp.intelText:SetPoint("TOPLEFT", 2, 0)
+	mp.intelText:SetWidth(177)
+	mp.intelText:SetJustifyH("LEFT")
+	mp.intelText:SetWordWrap(true)
+	ip:EnableMouseWheel(true)
+	ip:SetScript("OnMouseWheel", function(_, d)
+		local max = sf:GetVerticalScrollRange()
+		sf:SetVerticalScroll(math.max(0,
+			math.min(max, sf:GetVerticalScroll() - d * 16)))
+	end)
 
 	return mp
 end
