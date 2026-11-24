@@ -748,8 +748,10 @@ function MU.Build(f, ahui)
 		rowHeight = ASK_ROW_H,
 		makeRow = function(row)
 			local rf = row.frame
-			rf.bg = rf:CreateTexture(nil, "BACKGROUND")
-			rf.bg:SetAllPoints()
+			-- bindRow reads row.* off the wrapper table, not the
+			-- frame — keep cell handles on `row` itself
+			row.bg = rf:CreateTexture(nil, "BACKGROUND")
+			row.bg:SetAllPoints()
 			row.c1 = GM.MakeFontString(rf, GM.FONT, 10, "text")
 			row.c1:SetPoint("LEFT", 6, 0) row.c1:SetWidth(62)
 			row.c1:SetJustifyH("LEFT") row.c1:SetWordWrap(false)
