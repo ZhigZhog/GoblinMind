@@ -466,7 +466,7 @@ end
 -- un-stage matching hits so they can't sit on CONFIRM forever, and
 -- flag the itemID — a repeat click then says so instead of staging
 -- another quote that can never land
-function S.QuoteDied(itemID)
+function S.QuoteDied(itemID, alive)
 	local hits = GM.Sniper and GM.Sniper.hits
 	if not hits then return end
 	for _, h in ipairs(hits) do
@@ -475,7 +475,9 @@ function S.QuoteDied(itemID)
 			-- the confirm click marked it bought before the server
 			-- answered — a refused purchase means put the row back
 			h.done = nil
-			h.quoteDead = true
+			-- alive = drifted quote, not a dead API — keep the buy
+			-- path open for the next click
+			if not alive then h.quoteDead = true end
 		end
 	end
 end

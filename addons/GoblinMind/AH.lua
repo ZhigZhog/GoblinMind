@@ -161,9 +161,26 @@ f:SetScript("OnEvent", function(_, event, ...)
 	elseif event == "COMMODITY_PRICE_UPDATED" then
 		-- arg is the quoted total for the staged quantity
 		local totalPrice = select(2, ...)
-		if GM.AH.pendingConfirm then
-			GM.AH.pendingConfirm.quote = totalPrice
-			GM.Print("quote ready — total " .. GM.Money(totalPrice or 0) .. " — click CONFIRM")
+		local pc = GM.AH.pendingConfirm
+		if pc then
+			-- TSM's wrapper only resolves the buy when the quoted
+			-- unit matches what the buy expected (bait pulled / cheap
+			-- lots eaten between request and confirm must not buy at
+			-- the drifted price). <= passes — a cheaper quote is a
+			-- bargain, not a trap
+			local unit = math.ceil((totalPrice or 0) / math.max(pc.qty or 1, 1))
+			if pc.unit and unit > pc.unit then
+				GM.AH.pendingConfirm = nil
+				GM.Print(GM.CC("warn") .. format(
+					"quote moved — expected %s ea, quoted %s ea — rescan before buying|r",
+					GM.Money(pc.unit), GM.Money(unit)))
+				if GM.Shopping and GM.Shopping.QuoteDied then
+					GM.Shopping.QuoteDied(pc.itemID, true)
+				end
+			else
+				pc.quote = totalPrice
+				GM.Print("quote ready — total " .. GM.Money(totalPrice or 0) .. " — click CONFIRM")
+			end
 			RefreshUIs()
 		end
 	elseif event == "COMMODITY_PRICE_UNAVAILABLE" then
@@ -1147,7 +1164,8 @@ function GM.AH.Execute(step)
 		-- StartCommoditiesPurchase(itemID, quantity, expectedUnitPrice)
 		GM.Print(format("requesting quote for %d× @ %s ea…", step.qty, GM.Money(step.unit)))
 		C_AuctionHouse.StartCommoditiesPurchase(step.itemID, step.qty, step.unit)
-		local pc = { itemID = step.itemID, qty = step.qty }
+		-- pc.unit rides for the quote-drift check on PRICE_UPDATED
+		local pc = { itemID = step.itemID, qty = step.qty, unit = step.unit }
 		GM.AH.pendingConfirm = pc
 		-- if no quote lands the staged flow is dead on this client —
 		-- splice in per-lot buyouts automatically
