@@ -61,6 +61,24 @@ GM.ui = lib:CreateContext("GoblinMind", {
 	diagnostics = true,        -- dev: reports layout guard trips
 })
 
+-- GoblinMind's own enUS table — English keys ARE the lookup keys,
+-- so registering literals documents the translatable surface and
+-- silences the unregistered-key diagnostic. Keys gather here as
+-- the L() migration sweeps each window (market page first).
+lib:RegisterLocale("GoblinMind", "enUS", {
+	["Ask Book"] = "Ask Book",
+	["Auto"] = "Auto",
+	["Depth"] = "Depth",
+	["Execute"] = "Execute",
+	["Intel"] = "Intel",
+	["Numbers"] = "Numbers",
+	["Plan"] = "Plan",
+	["Post Scan"] = "Post Scan",
+	["Price"] = "Price",
+	["Rescan"] = "Rescan",
+	["Skip"] = "Skip",
+})
+
 -- the English-keyed localizer: L('Post Scan') — enUS source of
 -- truth, missing keys degrade to the literal English key
 GM.L = GM.ui:GetLocalizer()

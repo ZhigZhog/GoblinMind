@@ -556,6 +556,7 @@ Cmd("crafttrace", function()
 	GM.Print("craft trace " .. (GM.Crafting.trace and "ON" or "OFF"))
 end, true)
 Cmd("owndump", function() GM.Inventory.DumpOwned() end, true)
+Cmd("cancelprobe", function() GM.Inventory.CancelProbe() end, true)
 -- font health probe: a dead file reports zero glyph width — catches
 -- the first-run stall that blanked FONT_MED labels
 Cmd("fontcheck", function()

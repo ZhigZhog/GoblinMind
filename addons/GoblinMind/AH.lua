@@ -1184,7 +1184,15 @@ function GM.AH.Execute(step)
 		-- the listing survives.
 		local cancelFn = C_AuctionHouse.CancelAuction or CancelAuction
 		local attemptT = time()
-		if cancelFn then pcall(cancelFn, step.auctionID) end
+		if cancelFn then
+			local ok, err = pcall(cancelFn, step.auctionID)
+			if not ok then
+				GM.Print(GM.CC("err") .. "cancel(aid) failed: "
+					.. tostring(err) .. "|r")
+			end
+		else
+			GM.Print(GM.CC("err") .. "no CancelAuction API on this client|r")
+		end
 		local aid = step.auctionID
 		GM.Inventory.QueryOwned()
 		GM.After(3, function()
@@ -1199,8 +1207,15 @@ function GM.AH.Execute(step)
 				GM.Inventory.QueryOwned() -- enum still pending
 			elseif e and e.idx and cancelFn then
 				-- listing survived the id call — index semantics
-				pcall(cancelFn, e.idx)
+				local ok, err = pcall(cancelFn, e.idx)
+				if not ok then
+					GM.Print(GM.CC("err") .. "cancel(idx) failed: "
+						.. tostring(err) .. "|r")
+				end
 				GM.After(2, GM.Inventory.QueryOwned)
+			elseif e then
+				GM.Print(GM.CC("warn") .. "cancel did not take — "
+					.. "listing still active|r")
 			end
 		end)
 		return true

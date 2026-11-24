@@ -393,6 +393,60 @@ function GM.Inventory.DumpOwned()
 	end
 end
 
+-- /goblin cancelprobe — fires ONE real cancel at the first owned
+-- listing that resolves an auctionID, reporting which signature the
+-- client accepts (aid vs owner-list index) and any thrown error.
+-- Destructive by design: run it on a listing you want gone anyway.
+function GM.Inventory.CancelProbe()
+	local C = C_AuctionHouse
+	GM.Print(format("cancel APIs: C_AuctionHouse.CancelAuction=%s global=%s",
+		tostring(C and type(C.CancelAuction)),
+		tostring(type(CancelAuction))))
+	local n = C and C.GetNumOwnedAuctions
+		and C.GetNumOwnedAuctions() or 0
+	local row
+	for i = 1, n do
+		local ok, info = pcall(C.GetOwnedAuctionInfo, i)
+		if ok and info and info.auctionID then
+			row = { i = i, aid = info.auctionID,
+				status = info.status }
+			break
+		end
+	end
+	if not row then
+		GM.Print("no owned auctions with an auctionID to probe")
+		return
+	end
+	GM.Print(format("probing row %d aid=%s status=%s — aid signature first",
+		row.i, tostring(row.aid), tostring(row.status)))
+	local fn = (C and C.CancelAuction) or CancelAuction
+	if not fn then
+		GM.Print("no cancel function to call")
+		return
+	end
+	local ok, err = pcall(fn, row.aid)
+	GM.Print(format("  CancelAuction(aid): ok=%s err=%s",
+		tostring(ok), tostring(err)))
+	local t0 = time()
+	GM.Inventory.QueryOwned()
+	GM.After(3, function()
+		local fresh = GM.Inventory.OwnedAt() or 0
+		local e = GM.Inventory.OwnedByKey
+			and GM.Inventory.OwnedByKey(row.aid)
+		GM.Print(format("  enum fresh=%s stillListed=%s",
+			tostring(fresh > t0), tostring(e ~= nil)))
+		if e and e.idx then
+			GM.Print("  still listed — index signature next")
+			local ok2, err2 = pcall(fn, e.idx)
+			GM.Print(format("  CancelAuction(idx=%s): ok=%s err=%s",
+				tostring(e.idx), tostring(ok2), tostring(err2)))
+			GM.After(2, GM.Inventory.QueryOwned)
+		elseif e then
+			GM.Print("  still listed — aid call did not take")
+		end
+	end)
+end
+
 function GM.Inventory.QueryOwned()
 	if not (C_AuctionHouse and C_AuctionHouse.QueryOwnedAuctions) then
 		return
