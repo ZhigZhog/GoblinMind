@@ -30,6 +30,14 @@ end
 styles.cell = { font = "regular", size = 11, color = "text", line = 14 }
 styles.cellAccent = { font = "medium", size = 11, color = "accent", line = 14 }
 styles.cellDim = { font = "regular", size = 11, color = "textDim", line = 14 }
+-- widget chrome at the addon's scale — the lib defaults (14px)
+-- are window-scale; GoblinMind's conventions run 9-11px
+styles.button = { font = "semibold", size = 10, color = "text", line = 12 }
+styles.input = { font = "regular", size = 11, color = "text", line = 14 }
+styles.panelTitle = { font = "semibold", size = 10, color = "textDim",
+	line = 12 }
+styles.panelCount = { font = "regular", size = 10, color = "textDim",
+	line = 12 }
 
 local fonts = {}
 for k, v in pairs(base.fonts) do fonts[k] = v end

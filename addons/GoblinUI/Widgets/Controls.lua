@@ -36,7 +36,8 @@ function ctxMT:Button(parent, opts)
 
 	local lbl = b:CreateFontString(nil, "OVERLAY")
 	lbl:SetPoint("CENTER", 0, 0)
-	lbl:SetFont(self:Font("semibold"), 14 * self.textScale, "")
+	-- style-driven (paint() owns color — ApplyStyle's is overridden)
+	self:ApplyStyle(lbl, "button")
 	lbl:SetText(opts.text or "")
 	node.label = lbl
 
@@ -126,7 +127,11 @@ function ctxMT:EditBox(parent, opts)
 	local eb = CreateFrame("EditBox", nil, node.frame)
 	eb:SetPoint("TOPLEFT", SP.sm, 0)
 	eb:SetPoint("BOTTOMRIGHT", -SP.sm, 0)
-	eb:SetFont(self:Font("regular"), 14 * self.textScale, "")
+	-- resolve the style by hand — ApplyStyle's font probe would
+	-- briefly swap a "1" into the editbox's text to measure it
+	local is = self:TextStyle("input")
+	eb:SetFont(self:Font(is.font),
+		math.floor(is.size * self.textScale + 0.5), "")
 	eb:SetTextColor(self:Color("text"))
 	eb:SetAutoFocus(false)
 	eb:SetTextInsets(0, 0, 0, 0)
@@ -134,7 +139,7 @@ function ctxMT:EditBox(parent, opts)
 
 	local ph = node.frame:CreateFontString(nil, "OVERLAY")
 	ph:SetPoint("LEFT", SP.sm, 0)
-	ph:SetFont(self:Font("regular"), 14 * self.textScale, "")
+	self:ApplyStyle(ph, "input")
 	ph:SetTextColor(self:Color("textDim"))
 	ph:SetText(opts.placeholder or "")
 	node.placeholder = ph
@@ -190,7 +195,7 @@ function ctxMT:SegmentedControl(parent, opts)
 		b:SetHeight(node._h or internal.CONTROL_H)
 		local lbl = b:CreateFontString(nil, "OVERLAY")
 		lbl:SetPoint("CENTER", 0, 0)
-		lbl:SetFont(self:Font("medium"), 14 * self.textScale, "")
+		self:ApplyStyle(lbl, "button")
 		lbl:SetText(label)
 		b._lbl = lbl
 		b:SetScript("OnClick", function()
@@ -303,7 +308,7 @@ function ctxMT:RangeText(parent, opts)
 	plus.frame:SetParent(node.frame)
 
 	local val = node.frame:CreateFontString(nil, "OVERLAY")
-	val:SetFont(self:Font("medium"), 14 * self.textScale, "")
+	self:ApplyStyle(val, "value")
 	val:SetTextColor(self:Color("text"))
 	val:SetJustifyH("CENTER")
 	node.valueFS = val
@@ -348,7 +353,7 @@ function ctxMT:Status(parent, opts)
 	node._h = opts.height or 20
 	local fs = node.frame:CreateFontString(nil, "OVERLAY")
 	fs:SetPoint("LEFT", 0, 0)
-	fs:SetFont(self:Font("regular"), 14 * self.textScale, "")
+	self:ApplyStyle(fs, "body")
 	node.fs = fs
 	function node:measure(availW)
 		fs:SetWidth(math.max(1, availW or 1))

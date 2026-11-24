@@ -92,15 +92,23 @@ function ctxMT:Panel(parent, opts)
 		self:Fill(hdr, "contMedium")
 		local ttl = hdr:CreateFontString(nil, "OVERLAY")
 		ttl:SetPoint("LEFT", pad, 0)
-		ttl:SetFont(self:Font("semibold"),
-			(opts.slim and 13 or 16) * self.textScale, "")
-		ttl:SetTextColor(self:Color(opts.slim and "textDim" or "text"))
+		if opts.slim then
+			self:ApplyStyle(ttl, "panelTitle")
+		else
+			ttl:SetFont(self:Font("semibold"),
+				16 * self.textScale, "")
+			ttl:SetTextColor(self:Color("text"))
+		end
 		ttl:SetText(opts.title)
 		local cnt = hdr:CreateFontString(nil, "OVERLAY")
 		cnt:SetPoint("RIGHT", -pad, 0)
-		cnt:SetFont(self:Font("regular"),
-			(opts.slim and 13 or 14) * self.textScale, "")
-		cnt:SetTextColor(self:Color("textDim"))
+		if opts.slim then
+			self:ApplyStyle(cnt, "panelCount")
+		else
+			cnt:SetFont(self:Font("regular"),
+				14 * self.textScale, "")
+			cnt:SetTextColor(self:Color("textDim"))
+		end
 		cont._header = hdr
 		cont._titleFS = ttl
 		cont._countFS = cnt

@@ -95,6 +95,11 @@ lib:RegisterTheme("default", {
 		warn    = { font = "medium",   size = 14, color = "warn",    line = 20 },
 		error   = { font = "medium",   size = 14, color = "text",    line = 20 },
 		caption = { font = "regular",  size = 12, color = "textDim", line = 16 },
+		-- widget-chrome styles — default sizes match the historical
+		-- hardcoded renders; hosts override to their own scale
+		input   = { font = "regular",  size = 14, color = "text",    line = 18 },
+		panelTitle = { font = "semibold", size = 13, color = "textDim", line = 15 },
+		panelCount = { font = "regular",  size = 13, color = "textDim", line = 15 },
 	},
 	chrome = { kind = "flat" },
 	roles = { focus = "accent", controlBorder = "outline",
