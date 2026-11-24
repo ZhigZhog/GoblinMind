@@ -279,7 +279,14 @@ function GM.AH.CollectItemAsks()
 				-- owners[] uses sentinels on Forever: "player" = our own
 				-- listing, "" = redacted — TSM's wrapper translates the
 				-- same way (player→UnitName, ""→"?")
-				local seller = (r.owners and r.owners[1]) or r.owner or r.ownerName
+				local seller = (r.owners and r.owners[1])
+					or r.owner or r.ownerName or r.ownerFullName
+					or r.seller or r.sellerName or r.posterName
+				-- same leaked-constant guard as the replicate path —
+				-- player names never carry underscores
+				if type(seller) == "string" and seller:find("_") then
+					seller = nil
+				end
 				local ownSeller = seller == "player"
 				if ownSeller then seller = me
 				elseif seller == "" then seller = "?" end
@@ -692,12 +699,20 @@ function GM.AH.CollectBook()
 			-- divide by stackSize or multi-stack items underprice
 			local unit = buyout
 			local own = id and ownSet[id .. ":" .. stackSize .. ":" .. buyout] or false
-			-- seller name for intel marks: the owner is the last
-			-- non-empty non-link string in the tuple (highestBidder
-			-- sits earlier and is usually empty on buyout lots)
+			-- seller name for intel marks: scan ONLY the window
+			-- between buyout and itemID — that's bidder/owner
+			-- territory in both known layouts (retail owner =
+			-- buyout+4, Forever's extra field moves it but stays
+			-- inside the window). Whole-tuple scans picked up
+			-- leaked localization keys ("REQ_LEVEL_ABBR") from
+			-- unrelated fields. Reject any string with an
+			-- underscore too — player names can't have them, so a
+			-- constant token can never stand in for a seller
 			local seller
-			for _, v in ipairs(t) do
-				if type(v) == "string" and v ~= "" and v ~= link then
+			for j = buyIdx + 1, math.min(buyIdx + 6, #t) do
+				local v = t[j]
+				if type(v) == "string" and v ~= "" and v ~= link
+					and not v:find("_") then
 					seller = v
 				end
 			end

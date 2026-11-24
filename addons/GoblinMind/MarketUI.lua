@@ -438,6 +438,16 @@ local function RefreshNumbers()
 	end
 end
 
+-- both AUTO switches (header button + intel-pane tag) paint the
+-- same preference — green when the cadence is lit
+local function PaintAuto()
+	if not mp then return end
+	local c = GM.RGB(GM.AH.AutoScanOn and GM.AH.AutoScanOn()
+		and "pos" or "textDim")
+	if mp.autoBtn then mp.autoBtn.text:SetTextColor(c) end
+	if mp.auto then mp.auto.t:SetTextColor(c) end
+end
+
 local function RefreshIntel()
 	local lines = {}
 	local id = M.itemID
@@ -479,8 +489,7 @@ local function RefreshIntel()
 	for i = 1, 6 do
 		mp.intelRows[i]:SetText(lines[i] or "")
 	end
-	mp.auto.t:SetTextColor(GM.RGB(
-		GM.AH.AutoScanOn and GM.AH.AutoScanOn() and "pos" or "textDim"))
+	PaintAuto()
 end
 
 local function StepLabel(s)
@@ -584,7 +593,7 @@ function MU.Build(f, ahui)
 	mp.name:SetWordWrap(false)
 	mp.chips = GM.MakeFontString(mp, GM.FONT, 10, "text")
 	mp.chips:SetPoint("TOPLEFT", 32, -19)
-	mp.chips:SetWidth(400)
+	mp.chips:SetWidth(368)
 	mp.chips:SetJustifyH("LEFT")
 	mp.chips:SetWordWrap(false)
 	mp.slot = W.ItemSlot(mp, {
@@ -593,6 +602,19 @@ function MU.Build(f, ahui)
 		onItem = function(id, link) MU.SetItem(id, link) end,
 	})
 	mp.slot:SetPoint("TOPRIGHT", -8, -2)
+	-- AUTO: the book-refresh cadence that feeds this page's intel —
+	-- same preference as /goblin autoscan; text goes green when lit
+	mp.autoBtn = Btn(mp, 56, "AUTO", function()
+		GM.AH.SetAutoScan(not GM.AH.AutoScanOn())
+		PaintAuto()
+	end)
+	mp.autoBtn:SetPoint("TOPRIGHT", mp.slot, "TOPLEFT", -6, -3)
+	mp.autoBtn:SetScript("OnLeave", function()
+		if mp.autoBtn._gmBg then
+			mp.autoBtn._gmBg:SetColorTexture(GM.RGB("contHigh"))
+		end
+		PaintAuto()
+	end)
 
 	-- ===== PRICE pane =====
 	local ch = CreateFrame("Frame", nil, mp)

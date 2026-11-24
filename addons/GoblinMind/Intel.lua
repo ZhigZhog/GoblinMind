@@ -167,13 +167,16 @@ local function AnalyzeLadder(id, l, scanT)
 	-- the cheapest WALL_TOP asks, or WALL_MIN+ lots at 35% book share
 	local bySeller, topCount = {}, {}
 	for _, r in ipairs(l) do
-		if r.seller then
-			bySeller[r.seller] = (bySeller[r.seller] or 0) + 1
+		local s = r.seller
+		-- "?" = redacted/unknown — grouping unknowns fabricates a
+		-- shared-seller wall out of unrelated listings
+		if s and s ~= "?" then
+			bySeller[s] = (bySeller[s] or 0) + 1
 		end
 	end
 	for i = 1, math.min(#l, WALL_TOP) do
 		local s = l[i].seller
-		if s then topCount[s] = (topCount[s] or 0) + 1 end
+		if s and s ~= "?" then topCount[s] = (topCount[s] or 0) + 1 end
 	end
 	for seller, n in pairs(bySeller) do
 		local top = topCount[seller] or 0
