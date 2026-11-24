@@ -117,6 +117,20 @@ local function ScanAsks()
 		if GM.Intel and GM.Intel.AnalyzeItem then
 			GM.Intel.AnalyzeItem(id, M.asks, time())
 		end
+		-- …and freshen the item's book row: mb/sup/n derive from the
+		-- ladder the same way CollectBook derives them, so a page-
+		-- scoped autoscan keeps the chips + NUMBERS live too
+		if asks[1] then
+			GM.AH.book = GM.AH.book or {}
+			local e = GM.AH.book[id]
+			if not e then e = {} GM.AH.book[id] = e end
+			e.mb, e.sup, e.n = asks[1].unit, 0, #asks
+			e.mbx = math.huge
+			for _, a in ipairs(asks) do
+				e.sup = e.sup + a.qty
+				if not a.own and a.unit < e.mbx then e.mbx = a.unit end
+			end
+		end
 		MU.Refresh()
 	end, M.itemKey)
 end
@@ -458,15 +472,37 @@ local function RefreshNumbers()
 	end
 end
 
--- both AUTO switches (header button + intel-pane tag) paint the
--- same preference — green when the cadence is lit
+-- the page's AUTO cadence is item-scoped: while lit and the page is
+-- showing, the ask ladder re-scans once it goes stale. The book-wide
+-- cadence stays on /goblin autoscan — it feeds sniper/mesh/book
+-- marks, not this page
+local function AutoItemOn()
+	return GM.db and GM.db.mktAutoscan and true or false
+end
+
 local function PaintAuto()
 	if not mp then return end
-	local c = GM.RGB(GM.AH.AutoScanOn and GM.AH.AutoScanOn()
-		and "pos" or "textDim")
+	local c = GM.RGB(AutoItemOn() and "pos" or "textDim")
 	if mp.autoBtn then mp.autoBtn.text:SetTextColor(c) end
 	if mp.auto then mp.auto.t:SetTextColor(c) end
 end
+
+local autoAcc = 0
+local autoF = CreateFrame("Frame")
+autoF:SetScript("OnUpdate", function(_, dt)
+	if not AutoItemOn() or not (mp and mp:IsShown())
+		or not (M.itemID and GM.AH.open) then
+		autoAcc = 0
+		return
+	end
+	autoAcc = autoAcc + dt
+	if autoAcc < 10 then return end -- 10s check cadence, cheap
+	autoAcc = 0
+	if (not M.asks or (M.askT and GetTime() - M.askT > 60))
+		and not M.askWait then
+		ScanAsks()
+	end
+end)
 
 local function RefreshIntel()
 	local lines = {}
@@ -630,11 +666,13 @@ function MU.Build(f, ahui)
 		onItem = function(id, link) MU.SetItem(id, link) end,
 	})
 	mp.slot:SetPoint("TOPRIGHT", -8, -2)
-	-- AUTO: the book-refresh cadence that feeds this page's intel —
-	-- same preference as /goblin autoscan; text goes green when lit
+	-- AUTO: item-scoped ask refresh for this page — same preference
+	-- as the intel-pane tag; text goes green when lit
 	mp.autoBtn = Btn(mp, 56, "AUTO", function()
-		GM.AH.SetAutoScan(not GM.AH.AutoScanOn())
-		PaintAuto()
+		if GM.db then
+			GM.db.mktAutoscan = not GM.db.mktAutoscan or nil
+			PaintAuto()
+		end
 	end)
 	mp.autoBtn:SetPoint("TOPRIGHT", mp.slot, "TOPLEFT", -6, -3)
 	mp.autoBtn:SetScript("OnLeave", function()
@@ -790,8 +828,10 @@ function MU.Build(f, ahui)
 	mp.auto.t:SetPoint("CENTER")
 	mp.auto.t:SetText("AUTO")
 	mp.auto:SetScript("OnClick", function()
-		GM.AH.SetAutoScan(not GM.AH.AutoScanOn())
-		MU.Refresh()
+		if GM.db then
+			GM.db.mktAutoscan = not GM.db.mktAutoscan or nil
+			PaintAuto()
+		end
 	end)
 	mp.auto:SetScript("OnEnter", function()
 		mp.auto.t:SetTextColor(GM.RGB("text"))
