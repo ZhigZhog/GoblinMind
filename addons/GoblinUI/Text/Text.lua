@@ -54,7 +54,9 @@ function ctxMT:Text(parent, opts)
 	fs._guiuStyle = node._style
 	fs:SetPoint("TOPLEFT", 0, 0)
 	fs:SetJustifyH(node._align)
+	fs:SetJustifyV("TOP")
 	fs:SetWordWrap(wrap)
+	if opts.spacing then fs:SetSpacing(opts.spacing) end
 	node.fontString = fs
 
 	function node:ApplyText()

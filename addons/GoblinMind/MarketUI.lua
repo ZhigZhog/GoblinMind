@@ -839,7 +839,9 @@ function MU.Build(f, ahui)
 	bot:Add(mp.intelPanel, { width = "fill", height = "fill" })
 	local isc = u:Scroll(mp.intelPanel, { gap = "none" })
 	mp.intelPanel.body:Add(isc, { width = "fill", height = "fill" })
-	mp.intelText = u:Text(isc, { style = "cell" })
+	-- spacing=3: Montserrat's wrapped lines render tight enough to
+	-- overlap at 13px — give the intel lines breathing room
+	mp.intelText = u:Text(isc, { style = "cell", spacing = 3 })
 	isc.content:Add(mp.intelText, { height = "auto" })
 
 	PaintAuto()
