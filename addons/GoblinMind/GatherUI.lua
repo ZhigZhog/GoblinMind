@@ -1160,6 +1160,50 @@ local function Toggle()
 			"click = inspect · double-click = waypoint "
 			.. "· double-click route = run · "
 			.. "loot records automatically")
+
+		-- ============ GoblinUI managed layout ============
+		-- hand-laid: detail line at -32, two chained control rows,
+		-- then a left leaderboard column beside the fixed 576px map
+		-- pane. As columns/rows: the two control rows pack left, the
+		-- body row gives the list column the left slack and the map
+		-- pane its width, hint pins the bottom edge. The scroll clip
+		-- and map internals adapt to fill — scroll math reads
+		-- clip:GetHeight() live, so the new rect needs no rewiring.
+		local u = GM.ui
+		if u then
+			local root = u:AttachRoot(ui, { direction = "column", gap = 4,
+				pad = { top = 30, left = 10, right = 10, bottom = 8 } })
+			root:Add(u:Adopt(ui.detail), { width = "fill", height = 12 })
+			local r1 = u:Row(root, { gap = 6 })
+			root:Add(r1, { width = "fill", height = 20 })
+			r1:Add(u:Adopt(ui.current), { width = 80, height = 20 })
+			r1:Add(u:Adopt(ui.zoneBtn), { width = 150, height = 20 })
+			r1:Add(u:Adopt(ui.filterBtn), { width = 130, height = 20 })
+			r1:Add(u:Leaf(r1), { width = 6, height = 1 })
+			r1:Add(u:Adopt(ui.build), { width = 70, height = 20 })
+			r1:Add(u:Adopt(ui.save), { width = 70, height = 20 })
+			r1:Add(u:Adopt(ui.load), { width = 70, height = 20 })
+			r1:Add(u:Adopt(ui.clear), { width = 70, height = 20 })
+			r1:Add(u:Leaf(r1), { width = 6, height = 1 })
+			r1:Add(u:Adopt(ui.mmBtn), { width = 110, height = 20 })
+			local r2 = u:Row(root, { gap = 6 })
+			root:Add(r2, { width = "fill", height = 26 })
+			r2:Add(u:Adopt(tlbl), { width = 42, height = 12 })
+			r2:Add(u:Adopt(ui.target), { width = 190, height = 18 })
+			r2:Add(u:Adopt(ui.targetClear), { width = 60, height = 20 })
+			r2:Add(u:Adopt(ui.targetSlot), { width = 240, height = 26 })
+			local body = u:Row(root, { gap = 8 })
+			root:Add(body, { width = "fill", height = "fill" })
+			local leftCol = u:Column(body, { gap = 4 })
+			body:Add(leftCol, { width = "fill", height = "fill" })
+			local lrow = u:Row(leftCol, { gap = 6 })
+			leftCol:Add(lrow, { width = "fill", height = 12 })
+			lrow:Add(u:Adopt(ui.count), { width = "fill", height = 12 })
+			lrow:Add(u:Adopt(ui.scrollFs), { width = 110, height = 12 })
+			leftCol:Add(u:Adopt(ui.clip), { width = "fill", height = "fill" })
+			body:Add(u:Adopt(mp), { width = 576, height = "fill" })
+			root:Add(u:Adopt(ui.hint), { width = "fill", height = 12 })
+		end
 	end
 	if ui:IsShown() then
 		ui:Hide()
