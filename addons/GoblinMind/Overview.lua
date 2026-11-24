@@ -642,6 +642,20 @@ local function Build()
 	host:SetPoint("BOTTOMRIGHT", -10, 10)
 	ui.host = host
 
+	-- ============ GoblinUI managed layout ============
+	-- the chrome was two hand-anchored rects: nav (10,-34, 110×516)
+	-- and the content host filling 126,-34 .. -10,10. As one root
+	-- row the same rects come out exactly (gap 6 reproduces the
+	-- x=126 offset); page surfaces inside host keep their 0,0 rects
+	-- and their own Show/Hide toggling.
+	local u = GM.ui
+	if u then
+		local root = u:AttachRoot(f, { direction = "row", gap = 6,
+			pad = { top = 34, left = 10, right = 10, bottom = 10 } })
+		root:Add(u:Adopt(nav), { width = 110, height = "fill" })
+		root:Add(u:Adopt(host), { width = "fill", height = "fill" })
+	end
+
 	-- ---- page: activity ----
 	local actP = Panel(host, 0, 0, 724, 516, "ACTIVITY LOG")
 	actP:EnableMouseWheel(true)
