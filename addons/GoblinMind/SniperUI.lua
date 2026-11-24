@@ -59,7 +59,6 @@ local function Build()
 		GM.Sniper.Scan()
 		SU.Refresh()
 	end)
-	ui.snap:SetPoint("TOPLEFT", 12, -34)
 	Tip(ui.snap, function()
 		return { "Book snapshot",
 			"ReplicateItems dumps the full auction book and diffs",
@@ -71,7 +70,6 @@ local function Build()
 		if ui.autoOn then GM.Sniper.StartAuto() end
 		SU.Refresh()
 	end)
-	ui.auto:SetPoint("LEFT", ui.snap, "RIGHT", 6, 0)
 	Tip(ui.auto, function()
 		return { "Auto snapshots",
 			"Repeats the snapshot on the sniper op's refreshTime",
@@ -84,14 +82,12 @@ local function Build()
 		end
 		SU.Refresh()
 	end)
-	ui.clear:SetPoint("LEFT", ui.auto, "RIGHT", 6, 0)
 	-- feed filters: GOLD = only what we can pay for (bid or buyout),
 	-- BID = only listings that accept bids (non-commodity item rows)
 	ui.gold = Btn(f, 56, "GOLD", function()
 		ui.filters.gold = not ui.filters.gold or nil
 		SU.Refresh()
 	end)
-	ui.gold:SetPoint("LEFT", ui.clear, "RIGHT", 6, 0)
 	Tip(ui.gold, function()
 		return { "Affordable only",
 			"Hides hits where both the buyout and the bid price",
@@ -101,7 +97,6 @@ local function Build()
 		ui.filters.bid = not ui.filters.bid or nil
 		SU.Refresh()
 	end)
-	ui.bid:SetPoint("LEFT", ui.gold, "RIGHT", 6, 0)
 	Tip(ui.bid, function()
 		return { "Biddable only",
 			"Hides listings with no bid path — commodities and",
@@ -111,24 +106,16 @@ local function Build()
 		ui.filters.soon = not ui.filters.soon or nil
 		SU.Refresh()
 	end)
-	ui.soon:SetPoint("LEFT", ui.bid, "RIGHT", 6, 0)
 	Tip(ui.soon, function()
 		return { "Expiring soon only",
 			"Hides listings with more than 2h left — sniping is",
 			"about grabbing underpriced lots before they expire,",
 			"not watching 48h walls. Toggle off for the raw feed." }
 	end)
-	ui.status = GM.MakeFontString(f, GM.FONT, 9, "textDim")
-	ui.status:SetPoint("LEFT", ui.soon, "RIGHT", 10, 0)
-	ui.status:SetJustifyH("LEFT")
 
 	-- column header
 	local hdr = CreateFrame("Frame", nil, f)
 	hdr:SetSize(656, 16)
-	hdr:SetPoint("TOPLEFT", 12, -60)
-	ui.status:SetWidth(320)
-	ui.status:SetJustifyH("LEFT")
-	ui.status:SetWordWrap(false)
 	for _, h in ipairs({
 		{ "ITEM", 8 }, { "QTY", 252 }, { "BID", 296 },
 		{ "UNIT", 364 }, { "TIME", 432 }, { "CAP", 474 },
@@ -143,8 +130,6 @@ local function Build()
 
 	-- feed
 	local host = CreateFrame("Frame", nil, f)
-	host:SetSize(656, VISIBLE * ROW_H + 4)
-	host:SetPoint("TOPLEFT", 12, -78)
 	if host.SetClipsChildren then host:SetClipsChildren(true) end
 	host:EnableMouseWheel(true)
 	host:SetScript("OnMouseWheel", function(_, d)
@@ -195,6 +180,29 @@ local function Build()
 	ui.foot:SetPoint("BOTTOMLEFT", 14, 10)
 	ui.foot:SetText("click = buy flow · double-click = bid +1c · "
 		.. "shift-click = plan · x dismisses · deepest discount sorts first")
+
+	-- ============ layout wiring ============
+	-- toolbar row over the column header over the fill-size feed;
+	-- the footer stays hand-anchored below the managed region
+	local u = GM.ui
+	local root = u:AttachRoot(f, {
+		direction = "column", gap = "xs",
+		pad = { top = 34, right = 12, bottom = 4, left = 12 },
+	})
+	local bar = u:Row(root, { gap = 6 })
+	root:Add(bar, { height = 22 })
+	local function BarBtn(fr, w)
+		bar:Add(u:Adopt(fr, { width = w, height = 20 }),
+			{ width = w, height = 20, align = "center" })
+	end
+	BarBtn(ui.snap, 88) BarBtn(ui.auto, 52) BarBtn(ui.clear, 92)
+	BarBtn(ui.gold, 56) BarBtn(ui.bid, 52) BarBtn(ui.soon, 52)
+	ui.status = u:Text(bar, { style = "caption", wrap = false })
+	bar:Add(ui.status, { width = "fill", align = "center" })
+	root:Add(u:Adopt(hdr, { width = 656, height = 16 }),
+		{ height = 16 })
+	root:Add(u:Adopt(host, { width = 656, height = VISIBLE * ROW_H + 4 }),
+		{ width = "fill", height = "fill" })
 end
 
 -- ============ refresh ============
