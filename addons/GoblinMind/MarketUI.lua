@@ -692,8 +692,8 @@ function MU.Build(f, ahui)
 	if mp then return mp end
 	ui = ahui
 	mp = CreateFrame("Frame", nil, f)
-	mp:SetPoint("TOPLEFT", 12, -62)
-	mp:SetSize(776, 366)
+	-- no self-anchoring: AHUI adopts mp into the page-fill slot and
+	-- the layout owns its bounds
 	mp:Hide()
 
 	local u = GM.ui

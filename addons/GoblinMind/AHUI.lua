@@ -383,18 +383,16 @@ local function Build()
 		end)
 	end)
 
-	-- toolbar: search + page toggles + scan shortcuts
+	-- toolbar: search + page toggles + scan shortcuts — positions are
+	-- owned by the layout row wired up at the end of Build
 	ui.search = EditBox(f, 150, "search…")
-	ui.search:SetPoint("TOPLEFT", 12, -34)
 	ui.search:SetScript("OnEnterPressed", function(self)
 		self:ClearFocus()
 		ui.scroll = 0
 		DoSearch()
 	end)
-	local x = 164
 	local tabHost = CreateFrame("Frame", nil, f)
 	tabHost:SetSize(186, 20)
-	tabHost:SetPoint("TOPLEFT", x, -34)
 	ui.pageTabs = W.PageTabs(tabHost,
 		{ { "shop", "SHOP" }, { "mine", "MINE" }, { "market", "MARKET" } },
 		function(key)
@@ -407,30 +405,25 @@ local function Build()
 			end
 			AU.Refresh()
 		end)
-	x = x + 192
 	local full = Btn(f, 68, "FULL SCAN", function() GM.AH.FullScan() end)
-	full:SetPoint("TOPLEFT", x + 6, -34)
 	Tip(full, function()
 		return { "Full book scan",
 			"ReplicateItems → the shared price book (mb/mbx/sup).",
 			"Feeds tooltips, sniper, and every market column." }
 	end)
 	local post = Btn(f, 76, "POST SCAN", function() GM.Auctioning.PostScan() end)
-	post:SetPoint("LEFT", full, "RIGHT", 6, 0)
 	Tip(post, function()
 		return { "Post scan",
 			"Plans posts for bag items (vendor-floor guarded).",
 			"With GROUPS checked, only those items post." }
 	end)
 	local cancel = Btn(f, 82, "CANCEL SCAN", function() GM.Auctioning.CancelScan() end)
-	cancel:SetPoint("LEFT", post, "RIGHT", 6, 0)
 	Tip(cancel, function()
 		return { "Cancel scan",
 			"Cancels your undercut auctions (ops-gated).",
 			"With GROUPS checked, only their listings scan." }
 	end)
 	local snip = Btn(f, 56, "SNIPER", function() GM.SniperUI.Toggle() end)
-	snip:SetPoint("LEFT", cancel, "RIGHT", 6, 0)
 	Tip(snip, function()
 		return { "Sniper",
 			"Opens the deal panel — soon-expiring auctions priced",
@@ -440,7 +433,6 @@ local function Build()
 		ui.wantDefault = true
 		f:Hide() -- OnHide → Restore: native frame returns, session stays
 	end)
-	blizz:SetPoint("TOPRIGHT", -28, -34)
 	Tip(blizz, function()
 		return { "Blizzard default UI",
 			"Brings the default auction frame back and hides this",
@@ -449,8 +441,6 @@ local function Build()
 
 	-- left pane: results (SHOP) or owned auctions (MINE)
 	local lp = CreateFrame("Frame", nil, f)
-	lp:SetSize(412, VISIBLE * ROW_H + 30)
-	lp:SetPoint("TOPLEFT", 12, -62)
 	GM.Panel(lp, "contLowest")
 	ui.lp = lp
 	ui.lHead = GM.MakeFontString(lp, GM.FONT_BOLD, 9, "secondary")
@@ -561,8 +551,6 @@ local function Build()
 
 	-- right pane: per-listing asks for the selected SHOP row
 	local rp = CreateFrame("Frame", nil, f)
-	rp:SetSize(344, ASK_VISIBLE * ROW_H + 30)
-	rp:SetPoint("TOPRIGHT", -12, -62)
 	GM.Panel(rp, "contLowest")
 	ui.rHead = GM.MakeFontString(rp, GM.FONT_BOLD, 9, "secondary")
 	ui.rHead:SetPoint("TOPLEFT", 8, -6)
@@ -637,15 +625,12 @@ local function Build()
 	local MINE_VISIBLE = 6
 	local MINE_PANE_H = 22 + MINE_VISIBLE * ROW_H + 8
 	local fp = CreateFrame("Frame", nil, f)
-	fp:SetSize(776, MINE_PANE_H)
-	fp:SetPoint("TOPLEFT", 12, -62)
 	GM.Panel(fp, "contLowest")
 	fp:EnableMouseWheel(true)
 	fp:SetScript("OnMouseWheel", function(_, d)
 		ui.scroll = math.max(0, ui.scroll - d * 3)
 		AU.Refresh()
 	end)
-	fp:Hide()
 	ui.fp = fp
 	ui.mHead = {}
 	for i, h in ipairs({
@@ -727,15 +712,12 @@ local function Build()
 	-- bottom half: auctions we've bid on — our bid, current bid,
 	-- buyout, time left, and winning/outbid status; REBID = +1c
 	local bp = CreateFrame("Frame", nil, f)
-	bp:SetSize(776, MINE_PANE_H)
-	bp:SetPoint("TOPLEFT", fp, "BOTTOMLEFT", 0, -8)
 	GM.Panel(bp, "contLowest")
 	bp:EnableMouseWheel(true)
 	bp:SetScript("OnMouseWheel", function(_, d)
 		ui.bidScroll = math.max(0, (ui.bidScroll or 0) - d * 3)
 		AU.Refresh()
 	end)
-	bp:Hide()
 	ui.bp = bp
 	for i, h in ipairs({
 		{ "BIDS — ITEM", 26 }, { "OUR BID", 218 }, { "CURRENT", 300 },
@@ -812,6 +794,54 @@ local function Build()
 	ui.foot:SetWidth(772)
 	ui.foot:SetJustifyH("LEFT")
 	ui.foot:SetWordWrap(false)
+
+	-- ============ layout wiring ============
+	-- the window chrome and page grid live in one managed tree —
+	-- toolbar row on top, page area filling the rest, footer anchored
+	-- outside the padded region. Panes are adopted frames: the layout
+	-- owns their slots, their internals keep hand-anchored row pools.
+	local u = GM.ui
+	local root = u:AttachRoot(f, {
+		direction = "column", gap = "sm",
+		pad = { top = 34, right = 12, bottom = 34, left = 12 },
+	})
+	local bar = u:Row(root, { gap = "sm" })
+	root:Add(bar, { height = 24 })
+	local function AdoptBar(fr, w, h)
+		bar:Add(u:Adopt(fr, { width = w, height = h or 20 }),
+			{ width = w, height = h or 20, align = "center" })
+	end
+	AdoptBar(ui.search, 150, 18)
+	AdoptBar(tabHost, 186, 20)
+	AdoptBar(full, 68) AdoptBar(post, 76)
+	AdoptBar(cancel, 82) AdoptBar(snip, 56)
+	bar:Add(u:Leaf(bar), { width = "fill" }) -- spacer → BLIZZARD UI right
+	AdoptBar(blizz, 84)
+
+	-- SHOP = results + listings side by side
+	local shopRow = u:Row(root, { gap = "sm" })
+	root:Add(shopRow, { height = "fill" })
+	ui.lpLeaf = shopRow:Add(u:Adopt(lp, { width = 412 }),
+		{ width = 412, height = "fill" })
+	ui.rpLeaf = shopRow:Add(u:Adopt(rp, { width = 344 }),
+		{ width = "fill", height = "fill" })
+	-- MINE = posted over bids, full width
+	ui.mineCol = u:Column(root, { gap = "sm" })
+	root:Add(ui.mineCol, { height = "fill" })
+	ui.fpLeaf = ui.mineCol:Add(u:Adopt(fp, { height = MINE_PANE_H }),
+		{ height = MINE_PANE_H })
+	ui.bpLeaf = ui.mineCol:Add(u:Adopt(bp, { height = MINE_PANE_H }),
+		{ height = "fill" })
+	-- MARKET = the terminal page's own layout root inside our slot
+	if ui.mp then
+		ui.mpLeaf = root:Add(u:Adopt(ui.mp, {}),
+			{ width = "fill", height = "fill" })
+	end
+	ui.shopRow = shopRow
+	-- pin the starting page before the first arrange — Refresh owns
+	-- it from then on
+	ui.mineCol:SetVisible(false)
+	if ui.mpLeaf then ui.mpLeaf:SetVisible(false) end
 
 	-- ============ filter popover ============
 	-- client-side filters over the shared browse array — changes
@@ -1374,13 +1404,12 @@ function AU.Refresh()
 		ui.grpBtn.text:SetTextColor(GM.RGB(scoped and "accent" or "text"))
 	end
 
-	-- pane visibility: SHOP = results + listings panes; MINE = posted
-	-- on top + bids underneath; MARKET = the terminal page
-	ui.lp:SetShown(ui.page == "shop")
-	ui.rp:SetShown(ui.page == "shop")
-	ui.fp:SetShown(ui.page == "mine")
-	ui.bp:SetShown(ui.page == "mine")
-	if ui.mp then ui.mp:SetShown(ui.page == "market") end
+	-- page visibility: exactly one host occupies the fill slot —
+	-- SHOP's side-by-side row, MINE's stacked column, or MARKET's
+	-- adopted terminal pane (hidden nodes collapse in the layout)
+	ui.shopRow:SetVisible(ui.page == "shop")
+	ui.mineCol:SetVisible(ui.page == "mine")
+	if ui.mpLeaf then ui.mpLeaf:SetVisible(ui.page == "market") end
 
 	if ui.page == "shop" then
 		ui.lHead:SetText(ui.lastBrowseLabel
