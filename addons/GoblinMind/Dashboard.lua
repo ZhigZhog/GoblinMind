@@ -95,8 +95,7 @@ function DB.AddTabs(frame, titleFs, currentKey)
 	end
 	frame._gmTabs = {}
 	-- the strip must fit the window: measure real string widths and
-	-- fall back to compact labels when the full set would run off the
-	-- frame's right edge
+	-- step down through label/spacing modes when it would overrun
 	local meas = frame._gmTabMeas
 	if not meas then
 		meas = GM.MakeFontString(frame, GM.FONT_BOLD, 9, "textDim")
@@ -108,42 +107,56 @@ function DB.AddTabs(frame, titleFs, currentKey)
 	-- its RIGHT pushed the whole strip to mid-window ("right aligned")
 	local titleW = titleFs.GetStringWidth
 		and titleFs:GetStringWidth() or 120
-	local avail = (frame:GetWidth() or 640) - titleW - 48
+	-- the strip's right bound is the close button's LEFT edge, not
+	-- the frame edge — measuring the frame lets the last tab slide
+	-- under the X (the report that prompted this)
+	local function StripBound()
+		return frame.closeBtn and frame.closeBtn.GetLeft
+			and frame.closeBtn:GetLeft()
+	end
+	local bound = StripBound()
+	local frameL = frame.GetLeft and frame:GetLeft()
+	local avail = (bound and frameL)
+		and ((bound - frameL) - titleW - 24)
+		or ((frame:GetWidth() or 640) - titleW - 48)
 	local total = 0
 	for _, t in ipairs(TABS) do
 		meas:SetText(t.label)
 		total = total + (meas:GetStringWidth() or 40) + 15
 	end
-	local function build(compact)
+	local function build(mode)
+		-- 0 = full labels · 1 = short labels · 2 = short + tight gaps
 		for _, b in ipairs(frame._gmTabs) do
 			b:Hide()
 			b:SetParent(nil)
 		end
 		wipe(frame._gmTabs)
+		local gap = mode >= 2 and 2 or 5
+		local pad = mode >= 2 and 6 or 10
 		local anchor = titleFs
 		for _, t in ipairs(TABS) do
 			local b = CreateFrame("Button", nil, frame)
 			if anchor == titleFs then
 				b:SetPoint("LEFT", titleFs, "LEFT", titleW + 8, 0)
 			else
-				b:SetPoint("LEFT", anchor, "RIGHT", 5, 0)
+				b:SetPoint("LEFT", anchor, "RIGHT", gap, 0)
 			end
 			b:SetHeight(14)
 			local cur = t.key == currentKey
 			b.text = GM.MakeFontString(b, GM.FONT_BOLD, 9,
 				cur and "accent" or "textDim")
 			b.text:SetPoint("CENTER")
-			b.text:SetText(compact and t.short or t.label)
+			b.text:SetText(mode >= 1 and t.short or t.label)
 			-- auto-width from the label — fixed px widths clip the
 			-- longer tab names into their neighbours
 			b:SetWidth((b.text.GetStringWidth
-				and b.text:GetStringWidth() or 40) + 10)
+				and b.text:GetStringWidth() or 40) + pad)
 			-- the current destination stays visible and selected — a
 			-- disappearing tab shifts every following target under the
 			-- cursor
 			if cur then
 				b.line = b:CreateTexture(nil, "ARTWORK")
-				b.line:SetSize(b:GetWidth() - 10, 2)
+				b.line:SetSize(b:GetWidth() - pad, 2)
 				b.line:SetPoint("BOTTOM", 0, -1)
 				b.line:SetColorTexture(GM.RGB("accent"))
 			end
@@ -156,23 +169,26 @@ function DB.AddTabs(frame, titleFs, currentKey)
 			anchor = b
 			frame._gmTabs[#frame._gmTabs + 1] = b
 		end
+		return mode
 	end
-	build(total > avail)
+	local mode = build(total > avail and 1 or 0)
 	-- GetStringWidth under-measures this client's Montserrat bold —
 	-- the pre-check can pass while the rendered strip still overruns
-	-- the frame edge. Verify real extents post-layout and rebuild
-	-- compact if the last tab doesn't fit inside the window.
-	local function VerifyFit(retries)
+	-- the close button. Verify real extents post-layout and step
+	-- down a mode until the last tab clears the X (or modes run out)
+	local function VerifyFit(mode, retries)
 		local last = frame._gmTabs[#frame._gmTabs]
 		local lr = last and last.GetRight and last:GetRight()
-		local fr = frame.GetRight and frame:GetRight()
-		if lr and fr then
-			if lr > fr - 30 then build(true) end
+		local b = StripBound()
+		if lr and b then
+			if lr > b - 2 and mode < 2 then
+				GM.After(0, function() VerifyFit(build(mode + 1), retries) end)
+			end
 		elseif retries > 0 and GM.After then
-			GM.After(0.2, function() VerifyFit(retries - 1) end)
+			GM.After(0.2, function() VerifyFit(mode, retries - 1) end)
 		end
 	end
-	if GM.After then GM.After(0, function() VerifyFit(2) end) end
+	if GM.After then GM.After(0, function() VerifyFit(mode, 2) end) end
 end
 
 -- ============ home view ============
