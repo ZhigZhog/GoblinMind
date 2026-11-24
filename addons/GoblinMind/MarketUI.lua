@@ -127,14 +127,23 @@ local function ScanAsks()
 		M.asks = asks or {}
 		M.askT = GetTime()
 		-- targeted scans feed the same marks + suspect table as the
-		-- book pass — intel accumulates without waiting on full scans
-		if GM.Intel and GM.Intel.AnalyzeItem then
-			GM.Intel.AnalyzeItem(id, M.asks, time())
+		-- book pass — intel accumulates without waiting on full scans.
+		-- A variant-scoped ladder describes one suffix's market, not
+		-- the item's — feeding it would mint bait/wall claims off a
+		-- handful of lots the same way it would corrupt the book row
+		if not (M.itemKey and (M.itemKey.itemSuffix or 0) ~= 0) then
+			if GM.Intel and GM.Intel.AnalyzeItem then
+				GM.Intel.AnalyzeItem(id, M.asks, time())
+			end
 		end
 		-- …and freshen the item's book row: mb/sup/n derive from the
 		-- ladder the same way CollectBook derives them, so a page-
-		-- scoped autoscan keeps the chips + NUMBERS live too
-		if asks[1] then
+		-- scoped autoscan keeps the chips + NUMBERS live too.
+		-- SUFFIXED scans describe one variant only — writing them into
+		-- the itemID-wide row would shrink a 38-lot market to 1 and
+		-- lie about mb/sup until the per-key book exists (roadmap)
+		local suffixed = M.itemKey and (M.itemKey.itemSuffix or 0) ~= 0
+		if asks[1] and not suffixed then
 			GM.AH.book = GM.AH.book or {}
 			local e = GM.AH.book[id]
 			if not e then e = {} GM.AH.book[id] = e end

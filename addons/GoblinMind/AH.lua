@@ -1177,8 +1177,32 @@ function GM.AH.Execute(step)
 			if a.fp then GM.Inventory.recentCancels[a.fp] = now end
 			GM.Ledger.Add("cancel", a.itemID, a.qty, a.buyout)
 		end
-		C_AuctionHouse.CancelAuction(step.auctionID)
-		GM.After(2, GM.Inventory.QueryOwned)
+		-- Forever's CancelAuction may follow the classic contract —
+		-- owner-list INDEX, not auctionID. An auctionID where an index
+		-- belongs is an out-of-range no-op (no error, listing stays).
+		-- Try the id first; re-enumerate and retry by fresh index if
+		-- the listing survives.
+		local cancelFn = C_AuctionHouse.CancelAuction or CancelAuction
+		local attemptT = time()
+		if cancelFn then pcall(cancelFn, step.auctionID) end
+		local aid = step.auctionID
+		GM.Inventory.QueryOwned()
+		GM.After(3, function()
+			-- only trust a snapshot taken AFTER the attempt — an
+			-- index read off a stale enum could belong to a different
+			-- listing now (positions shift once something cancels)
+			local fresh = GM.Inventory.OwnedAt
+				and GM.Inventory.OwnedAt() or 0
+			local e = GM.Inventory.OwnedByKey
+				and GM.Inventory.OwnedByKey(aid)
+			if fresh <= attemptT then
+				GM.Inventory.QueryOwned() -- enum still pending
+			elseif e and e.idx and cancelFn then
+				-- listing survived the id call — index semantics
+				pcall(cancelFn, e.idx)
+				GM.After(2, GM.Inventory.QueryOwned)
+			end
+		end)
 		return true
 	end
 end
