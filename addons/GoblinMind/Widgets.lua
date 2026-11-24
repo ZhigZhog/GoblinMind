@@ -1222,14 +1222,18 @@ function W.ItemSlot(parent, opts)
 	end)
 	f.iconBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
+	-- compact slots can't stack name+sub at the roomy offsets —
+	-- the sub would spill past the bottom edge, so the pair
+	-- hugs the icon's vertical span instead
+	local compact = h <= 30
 	f.name = GM.MakeFontString(f, GM.FONT_MED,
 		opts.nameSize or 12, "text")
-	f.name:SetPoint("TOPLEFT", iconBox, "TOPRIGHT", 10, -4)
+	f.name:SetPoint("TOPLEFT", iconBox, "TOPRIGHT", 10, compact and 3 or -4)
 	f.name:SetPoint("RIGHT", f, "RIGHT", -8, 0)
 	f.name:SetJustifyH("LEFT")
 	f.name:SetWordWrap(false)
 	f.sub = GM.MakeFontString(f, GM.FONT, opts.subSize or 10, "textDim")
-	f.sub:SetPoint("TOPLEFT", f.name, "BOTTOMLEFT", 0, -4)
+	f.sub:SetPoint("TOPLEFT", f.name, "BOTTOMLEFT", 0, compact and 0 or -4)
 	f.sub:SetPoint("RIGHT", f, "RIGHT", -8, 0)
 	f.sub:SetJustifyH("LEFT")
 

@@ -572,11 +572,11 @@ function MU.Build(f, ahui)
 	mp.name:SetWordWrap(false)
 	mp.chips = GM.MakeFontString(mp, GM.FONT, 10, "text")
 	mp.chips:SetPoint("TOPLEFT", 32, -19)
-	mp.chips:SetWidth(440)
+	mp.chips:SetWidth(400)
 	mp.chips:SetJustifyH("LEFT")
 	mp.chips:SetWordWrap(false)
 	mp.slot = W.ItemSlot(mp, {
-		icon = 18, w = 240, h = 26, nameSize = 10, subSize = 8,
+		icon = 18, w = 300, h = 26, nameSize = 10, subSize = 8,
 		hint = "target — drop · shift-click · [link]",
 		onItem = function(id, link) MU.SetItem(id, link) end,
 	})
@@ -695,18 +695,22 @@ function MU.Build(f, ahui)
 	GM.Panel(np, "contLowest")
 	local nh = GM.MakeFontString(np, GM.FONT_BOLD, 10, "secondary")
 	nh:SetPoint("TOPLEFT", 8, -5) nh:SetText("NUMBERS")
+	-- two columns of five — a single font-9 column can't hold ten
+	-- fields plus a header in 96px (the rows landed on the foot)
 	mp.numRows = {}
 	for i = 1, #NUM_FIELDS do
+		local col = i <= 5 and 0 or 1
+		local row = (i - 1) % 5
 		local lab = GM.MakeFontString(np, GM.FONT, 9, "textDim")
-		lab:SetPoint("TOPLEFT", 8, -16 - (i - 1) * 8)
+		lab:SetPoint("TOPLEFT", 8 + col * 96, -17 - row * 11)
 		lab:SetJustifyH("LEFT")
 		local val = GM.MakeFontString(np, GM.FONT, 9, "text")
-		val:SetPoint("TOPRIGHT", -8, -16 - (i - 1) * 8)
+		val:SetPoint("TOPRIGHT", col == 0 and -104 or -8, -17 - row * 11)
 		val:SetJustifyH("RIGHT")
 		mp.numRows[i] = { lab, val }
 	end
-	mp.numFoot = GM.MakeFontString(np, GM.FONT, 9, "textDim")
-	mp.numFoot:SetPoint("BOTTOMLEFT", 8, 3)
+	mp.numFoot = GM.MakeFontString(np, GM.FONT, 8, "textDim")
+	mp.numFoot:SetPoint("BOTTOMLEFT", 8, 2)
 	mp.numFoot:SetJustifyH("LEFT")
 
 	-- ===== INTEL pane =====
