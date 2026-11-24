@@ -391,6 +391,92 @@ local function Build()
 	done:SetPoint("BOTTOMRIGHT", -12, 10)
 	local oBack = Btn(p5, 90, "< BACK", function() SetPage("app") end)
 	oBack:SetPoint("BOTTOMLEFT", 12, 10)
+
+	-- ============ GoblinUI managed layout ============
+	-- window chrome (title, close, page frames + their SetShown page
+	-- switching) stays hand-anchored; each page's content stacks in a
+	-- column below the title. The old label→field chains anchored off
+	-- wrapped-body bottoms — column children get that free.
+	local u = GM.ui
+	if u then
+		local PAD = { top = 28, left = 12, right = 12, bottom = 10 }
+
+		-- p1 backend: status, wrapped body, field cascade, corner row
+		local c1 = u:AttachRoot(p1, { pad = PAD, gap = 4 })
+		c1:Add(u:Adopt(status, { width = 436, height = 10 }))
+		c1:Add(u:Adopt(body, { width = 432, height = 126 }))
+		c1:Add(u:Adopt(urlLab, { width = 200, height = 10 }))
+		c1:Add(u:Adopt(urlEb, { width = 300, height = 18 }))
+		c1:Add(u:Leaf(c1), { height = 6 })
+		c1:Add(u:Adopt(nameLab, { width = 240, height = 10 }))
+		c1:Add(u:Adopt(nameEb, { width = 200, height = 18 }))
+		c1:Add(u:Leaf(c1), { height = 6 })
+		c1:Add(u:Adopt(keyLab, { width = 280, height = 10 }))
+		c1:Add(u:Adopt(keyEb, { width = 200, height = 18 }))
+		c1:Add(u:Leaf(c1), { height = "fill" })
+		c1:Add(u:Adopt(ui.invite, { width = 436, height = 22 }))
+		c1:Add(u:Adopt(ui.watch1, { width = 436, height = 10 }))
+		local r1 = u:Row(c1, { gap = 8 })
+		c1:Add(r1, { width = "fill", height = 20 })
+		r1:Add(u:Adopt(connect, { width = 90, height = 20 }))
+		r1:Add(u:Adopt(skip, { width = 90, height = 20 }))
+		r1:Add(u:Adopt(later, { width = 90, height = 20 }))
+
+		-- p2 api: same shape minus the invite line
+		local c2 = u:AttachRoot(p2, { pad = PAD, gap = 4 })
+		c2:Add(u:Adopt(aStatus, { width = 436, height = 10 }))
+		c2:Add(u:Adopt(aBody, { width = 432, height = 130 }))
+		c2:Add(u:Adopt(idLab, { width = 200, height = 10 }))
+		c2:Add(u:Adopt(idEb, { width = 300, height = 18 }))
+		c2:Add(u:Leaf(c2), { height = 6 })
+		c2:Add(u:Adopt(secLab, { width = 200, height = 10 }))
+		c2:Add(u:Adopt(secEb, { width = 300, height = 18 }))
+		c2:Add(u:Leaf(c2), { height = 6 })
+		c2:Add(u:Adopt(regLab, { width = 240, height = 10 }))
+		c2:Add(u:Adopt(regEb, { width = 80, height = 18 }))
+		c2:Add(u:Leaf(c2), { height = "fill" })
+		c2:Add(u:Adopt(ui.watch2, { width = 436, height = 10 }))
+		local r2 = u:Row(c2, { gap = 8 })
+		c2:Add(r2, { width = "fill", height = 20 })
+		r2:Add(u:Adopt(aSave, { width = 90, height = 20 }))
+		r2:Add(u:Adopt(aSkip, { width = 90, height = 20 }))
+		r2:Add(u:Adopt(aBack, { width = 90, height = 20 }))
+
+		-- p3 import: GM.Import.Mount owns the whole page — the column
+		-- only pins the nav row to the bottom edge
+		local c3 = u:AttachRoot(p3, { pad = PAD, gap = 4 })
+		c3:Add(u:Leaf(c3), { height = "fill" })
+		local r3 = u:Row(c3, { gap = 8 })
+		c3:Add(r3, { width = "fill", height = 20 })
+		r3:Add(u:Adopt(back, { width = 90, height = 20 }))
+		r3:Add(u:Leaf(r3), { width = "fill" })
+		r3:Add(u:Adopt(toOpts, { width = 90, height = 20 }))
+
+		-- p4 app: status, wrapped body, path field, corner row
+		local c4 = u:AttachRoot(p4, { pad = PAD, gap = 4 })
+		c4:Add(u:Adopt(cStatus, { width = 436, height = 10 }))
+		c4:Add(u:Adopt(cBody, { width = 432, height = 122 }))
+		c4:Add(u:Adopt(pathLab, { width = 280, height = 10 }))
+		c4:Add(u:Adopt(pathEb, { width = 432, height = 18 }))
+		c4:Add(u:Leaf(c4), { height = "fill" })
+		local r4 = u:Row(c4, { gap = 8 })
+		c4:Add(r4, { width = "fill", height = 20 })
+		r4:Add(u:Adopt(cBack, { width = 90, height = 20 }))
+		r4:Add(u:Leaf(r4), { width = "fill" })
+		r4:Add(u:Adopt(cNext, { width = 90, height = 20 }))
+
+		-- p5 options: body, toggle, watch hint, corner row
+		local c5 = u:AttachRoot(p5, { pad = PAD, gap = 4 })
+		c5:Add(u:Adopt(oBody, { width = 432, height = 78 }))
+		c5:Add(u:Adopt(spoiler, { width = 220, height = 20 }))
+		c5:Add(u:Leaf(c5), { height = "fill" })
+		c5:Add(u:Adopt(ui.watch5, { width = 436, height = 10 }))
+		local r5 = u:Row(c5, { gap = 8 })
+		c5:Add(r5, { width = "fill", height = 20 })
+		r5:Add(u:Adopt(oBack, { width = 90, height = 20 }))
+		r5:Add(u:Leaf(r5), { width = "fill" })
+		r5:Add(u:Adopt(done, { width = 90, height = 20 }))
+	end
 end
 
 -- shared staged-request copy — the ~2 min figure is the SV
