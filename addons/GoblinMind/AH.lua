@@ -444,6 +444,7 @@ function GM.AH.SaveBook()
 	for id, e in pairs(GM.AH.book) do
 		items[id] = { mb = e.mb,
 			mbx = e.mbx == math.huge and -1 or e.mbx,
+			mbx2 = e.mbx2 == math.huge and -1 or e.mbx2,
 			sup = e.sup, n = e.n }
 	end
 	-- books are keyed by realm-faction scope — a char on another
@@ -466,6 +467,7 @@ function GM.AH.RestoreBook()
 	for id, e in pairs(s.items) do
 		book[tonumber(id) or id] = { mb = e.mb,
 			mbx = e.mbx == -1 and math.huge or e.mbx,
+			mbx2 = e.mbx2 == -1 and math.huge or e.mbx2,
 			sup = e.sup, n = e.n }
 	end
 	GM.AH.book, GM.AH.bookT, GM.AH.bookKind = book, s.t or time(), s.kind
@@ -600,10 +602,17 @@ function GM.AH.Busy()
 	return GM.AH.wantBook or GM.AH.collecting or GM.AH.browse or nil
 end
 
--- cheapest unit excluding our own listings (decisions use this)
+-- cheapest unit excluding our own listings (decisions use this). A
+-- bait-flagged drag lot isn't the market — when intel marks the
+-- cheapest ask, answer the price behind it instead
 function GM.AH.BookCheapest(itemID)
 	local e = GM.AH.book and GM.AH.book[itemID]
-	return e and e.mbx ~= math.huge and e.mbx or nil
+	if not e or e.mbx == math.huge then return nil end
+	local m = GM.Intel and GM.Intel.marks and GM.Intel.marks[itemID]
+	if m and m.bait and (e.mbx2 or math.huge) < math.huge then
+		return e.mbx2
+	end
+	return e.mbx
 end
 
 -- cheapest unit including ours (display)
@@ -878,10 +887,19 @@ function GM.AH.CollectBook()
 			if id then
 				local e = book[id]
 				if not e then
-					book[id] = { mb = unit, mbx = own and math.huge or unit, sup = stackSize, n = 1 }
+					book[id] = { mb = unit, mbx = own and math.huge or unit,
+						mbx2 = math.huge, sup = stackSize, n = 1 }
 				else
 					if unit < e.mb then e.mb = unit end
-					if not own and unit < e.mbx then e.mbx = unit end
+					-- two cheapest non-own units — a flagged bait lot
+					-- poisons mbx; mbx2 is the price behind the drag
+					if not own then
+						if unit < e.mbx then
+							e.mbx2, e.mbx = e.mbx, unit
+						elseif unit < (e.mbx2 or math.huge) then
+							e.mbx2 = unit
+						end
+					end
 					e.sup = e.sup + stackSize
 					e.n = e.n + 1
 				end
@@ -1034,9 +1052,13 @@ function GM.AH.OnBrowseResults()
 			local e = b.book[id]
 			if not e then
 				b.book[id] = { mb = r.minPrice, mbx = r.minPrice,
-					sup = r.totalQuantity or 0, n = 1 }
+					mbx2 = math.huge, sup = r.totalQuantity or 0, n = 1 }
 			else
-				if r.minPrice < e.mb then e.mb, e.mbx = r.minPrice, r.minPrice end
+				if r.minPrice < e.mb then
+					e.mbx2, e.mb, e.mbx = e.mbx, r.minPrice, r.minPrice
+				elseif r.minPrice < (e.mbx2 or math.huge) then
+					e.mbx2 = r.minPrice
+				end
 				e.sup = e.sup + (r.totalQuantity or 0)
 				e.n = e.n + 1
 			end

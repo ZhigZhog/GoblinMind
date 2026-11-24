@@ -29,13 +29,22 @@ local function Pump()
 		function(asks)
 			if scanning ~= job then return end -- stale callback
 			scanning = nil
+			-- intel marks before the consumer reads rows — bait/step
+			-- flags feed A.Cheapest's drag-lot skip. Suffixed scans
+			-- stay out: marks are itemID-wide and a variant ladder
+			-- would poison them
+			if GM.Intel and GM.Intel.AnalyzeItem
+				and not (job.key and job.key.itemSuffix
+					and job.key.itemSuffix ~= 0) then
+				pcall(GM.Intel.AnalyzeItem, job.itemID, asks)
+			end
 			local ok, err = pcall(job.done, asks)
 			if not ok then
 				GM.Print(GM.CC("warn") .. "scan callback failed: "
 					.. tostring(err) .. "|r")
 			end
 			Pump()
-		end)
+		end, job.key)
 	-- no response (or a thrown call) within 5s: empty book, keep moving
 	GM.After(5, function()
 		if scanning == job then
@@ -50,8 +59,9 @@ local function Pump()
 	end
 end
 
-local function ScanQueued(itemID, done)
-	tinsert(scanQ, { itemID = itemID, name = GetInfo and GetInfo(itemID), done = done })
+local function ScanQueued(itemID, done, key)
+	tinsert(scanQ, { itemID = itemID, key = key,
+		name = GetInfo and GetInfo(itemID), done = done })
 	Pump()
 end
 
@@ -71,17 +81,19 @@ end
 
 -- public entry into the serial queue — shopping/sniper scan one item
 -- at a time too, and a second ScanItem would clobber the pending one
-function A.QueueScan(itemID, done)
-	ScanQueued(itemID, done)
+function A.QueueScan(itemID, done, key)
+	ScanQueued(itemID, done, key)
 end
 
 -- ============ pure decision (harness-testable) ============
 
--- Lowest ask that isn't ours. Own auctions can't be undercut — posting
--- below your own listing is just losing money to yourself.
+-- Lowest ask that isn't ours and isn't bait-flagged. Own auctions
+-- can't be undercut — posting below your own listing is just losing
+-- money to yourself — and a drag lot posted under the real market
+-- exists to pull our reference down with it, not to be undercut.
 function A.Cheapest(asks)
 	for _, a in ipairs(asks) do
-		if not a.own then return a.unit end
+		if not a.own and not a.bait then return a.unit end
 	end
 end
 

@@ -760,7 +760,11 @@ end
 function PQ.Solve(asks, workID)
 	workID = workID or PQ.itemID
 	GM.AH.pendingConfirm = nil -- a rescan invalidates any staged quote
-	PQ.scan = { n = #asks, cheapest = asks[1] and asks[1].unit }
+	-- cheapest = raw book minimum (display); postRef = first ask that
+	-- isn't ours and isn't bait-flagged — repricing off a drag lot
+	-- gifts the manipulator an underpriced stack
+	PQ.scan = { n = #asks, cheapest = asks[1] and asks[1].unit,
+		postRef = GM.Auctioning.Cheapest(asks) }
 	local entry = workID and GM.ItemEntry(workID)
 	local p50 = entry and entry.p or (workID and GM.TSMMarket(workID))
 	if not p50 then
@@ -1182,7 +1186,7 @@ function PQ.SkipStep()
 		-- spend/EV/days-to-clear get re-derived so the summary stays honest
 		plan.qty = math.max(0, (plan.qty or 0) - step.qty)
 		plan.spend = math.max(0, (plan.spend or 0) - step.unit * step.qty)
-		local cheapest = PQ.scan and PQ.scan.cheapest
+		local cheapest = PQ.scan and (PQ.scan.postRef or PQ.scan.cheapest)
 		local revenue = 0
 		for _, s in ipairs(plan.steps) do
 			if s.kind == "post" then

@@ -356,6 +356,8 @@ function S.BuyHit(h)
 	if h.state then return end -- already scanning
 	h.state = "scanning"
 	S.Refresh()
+	-- the hit's link carries the variant — without it a suffixed item
+	-- re-queries the suffix-0 base and comes back "gone"
 	GM.Auctioning.QueueScan(h.itemID, function(asks)
 		h.state = nil
 		local cheapest
@@ -374,7 +376,7 @@ function S.BuyHit(h)
 			h.done = true
 		end
 		S.Refresh()
-	end)
+	end, GM.AH.ItemKeyFromLink(h.link))
 end
 
 -- sniper bid: double-click places a +1c bid over the current bid (or
@@ -440,7 +442,7 @@ function S.BidHit(h)
 			h.wantBid = nil
 		end
 		S.Refresh()
-	end)
+	end, GM.AH.ItemKeyFromLink(h.link))
 end
 
 -- staged-quote death (COMMODITY_PRICE_UNAVAILABLE / quote timeout):
