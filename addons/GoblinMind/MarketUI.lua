@@ -707,11 +707,12 @@ function MU.Build(f, ahui)
 	local header = u:Row(root, { gap = "sm" })
 	root:Add(header, { height = 40 })
 
-	-- item icon (fixed square leaf)
-	local iconN = u:Leaf(header, { measure = function() return 18, 18 end })
+	-- item icon — square leaf sized to the name+chips text pair
+	-- (value line 20 + cellDim line 14 + hair gap)
+	local iconN = u:Leaf(header, { measure = function() return 36, 36 end })
 	mp.icon = iconN.frame:CreateTexture(nil, "ARTWORK")
 	mp.icon:SetAllPoints()
-	header:Add(iconN, { width = 18, height = 18, align = "center" })
+	header:Add(iconN, { width = 36, height = 36, align = "center" })
 
 	-- name + chips column (fill)
 	local nc = u:Column(header, { gap = "hair" })
