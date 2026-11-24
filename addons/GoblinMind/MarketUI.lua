@@ -25,7 +25,7 @@ local M = {} -- market state: itemID, link, asks, askT, askScroll
 MU.M = M
 
 local ROW_H = 24
-local ASK_VIS = 4
+local ASK_VIS = 5
 
 local BAIT_DROP = 0.60 -- matches Intel.lua — lone ask far under the next
 local WALL_MIN = 4     -- matches Intel.lua — same-seller lot wall
@@ -124,6 +124,14 @@ local function ScanAsks()
 	end
 	M.askWait = nil
 	local id, name = M.itemID, GM.ItemName(M.itemID)
+	-- throttle-dropped searches answer nothing — retry once before
+	-- declaring the book empty so a lost query doesn't read as "no asks"
+	M.askTries = (M.askTries or 0) + 1
+	GM.After(6, function()
+		if M.itemID == id and not M.asks and (M.askTries or 0) < 3 then
+			ScanAsks()
+		end
+	end)
 	GM.AH.ScanItem(id, name, function(asks)
 		if M.itemID ~= id then return end -- retargeted mid-scan
 		M.asks = asks or {}
@@ -135,9 +143,17 @@ end
 
 function MU.SetItem(id, link, key)
 	if not id then return end
+	local changed = M.itemID ~= id
 	M.itemID, M.itemLink, M.itemKey = id, link, key
-	M.asks, M.askT = nil, nil
-	ScanAsks()
+	if changed then
+		M.asks, M.askT, M.askTries = nil, nil, nil
+		ScanAsks()
+	end
+	-- the planner target follows the market slot — a change to one
+	-- is a change to the other
+	if GM.PlanQueue.itemID ~= id then
+		GM.PlanQueue.SetItem(id, link)
+	end
 	if MU.Refresh then MU.Refresh() end
 end
 
@@ -509,6 +525,21 @@ end
 
 function MU.Refresh()
 	if not (mp and mp:IsShown()) then return end
+	-- planner retargets follow into the page too (plan window /
+	-- /goblin [link] / scan-plan step items) — one direction check,
+	-- no loop: SetItem only re-syncs PQ when the ids differ
+	local tid = GM.PlanQueue.itemID
+	if tid and tid ~= M.itemID then
+		MU.SetItem(tid, GM.PlanQueue.item)
+		return
+	end
+	-- asks older than a minute while the page is live deserve a
+	-- quiet refresh — the ladder is only useful while it's true
+	if M.itemID and M.asks and M.askT
+		and GetTime() - M.askT > 60 and not M.askWait then
+		M.asks = nil
+		ScanAsks()
+	end
 	FreeArt()
 	RefreshHeader()
 	DrawPrice()
@@ -534,14 +565,14 @@ function MU.Build(f, ahui)
 	mp.icon = mp:CreateTexture(nil, "ARTWORK")
 	mp.icon:SetSize(18, 18)
 	mp.icon:SetPoint("TOPLEFT", 8, -2)
-	mp.name = GM.MakeFontString(mp, GM.FONT_BOLD, 12, "text")
+	mp.name = GM.MakeFontString(mp, GM.FONT_BOLD, 13, "text")
 	mp.name:SetPoint("TOPLEFT", 32, -2)
 	mp.name:SetWidth(280)
 	mp.name:SetJustifyH("LEFT")
 	mp.name:SetWordWrap(false)
-	mp.chips = GM.MakeFontString(mp, GM.FONT, 9, "text")
-	mp.chips:SetPoint("TOPLEFT", 32, -18)
-	mp.chips:SetWidth(430)
+	mp.chips = GM.MakeFontString(mp, GM.FONT, 10, "text")
+	mp.chips:SetPoint("TOPLEFT", 32, -19)
+	mp.chips:SetWidth(440)
 	mp.chips:SetJustifyH("LEFT")
 	mp.chips:SetWordWrap(false)
 	mp.slot = W.ItemSlot(mp, {
@@ -553,10 +584,10 @@ function MU.Build(f, ahui)
 
 	-- ===== PRICE pane =====
 	local ch = CreateFrame("Frame", nil, mp)
-	ch:SetSize(776, 96)
-	ch:SetPoint("TOPLEFT", 0, -32)
+	ch:SetSize(776, 100)
+	ch:SetPoint("TOPLEFT", 0, -34)
 	GM.Panel(ch, "contLowest")
-	ch.title = GM.MakeFontString(ch, GM.FONT_BOLD, 9, "secondary")
+	ch.title = GM.MakeFontString(ch, GM.FONT_BOLD, 10, "secondary")
 	ch.title:SetPoint("TOPLEFT", 8, -4)
 	ch.title:SetText("PRICE")
 	ch.msg = GM.MakeFontString(ch, GM.FONT, 9, "textDim")
@@ -566,10 +597,10 @@ function MU.Build(f, ahui)
 
 	-- ===== DEPTH pane =====
 	local dp = CreateFrame("Frame", nil, mp)
-	dp:SetSize(366, 122)
-	dp:SetPoint("TOPLEFT", 0, -132)
+	dp:SetSize(366, 144)
+	dp:SetPoint("TOPLEFT", 0, -140)
 	GM.Panel(dp, "contLowest")
-	dp.title = GM.MakeFontString(dp, GM.FONT_BOLD, 9, "secondary")
+	dp.title = GM.MakeFontString(dp, GM.FONT_BOLD, 10, "secondary")
 	dp.title:SetPoint("TOPLEFT", 8, -4)
 	dp.title:SetText("DEPTH")
 	dp.msg = GM.MakeFontString(dp, GM.FONT, 9, "textDim")
@@ -579,13 +610,13 @@ function MU.Build(f, ahui)
 
 	-- ===== ASK BOOK pane =====
 	local ab = CreateFrame("Frame", nil, mp)
-	ab:SetSize(394, 122)
-	ab:SetPoint("TOPRIGHT", 0, -132)
+	ab:SetSize(394, 144)
+	ab:SetPoint("TOPRIGHT", 0, -140)
 	GM.Panel(ab, "contLowest")
-	mp.abHead = GM.MakeFontString(ab, GM.FONT_BOLD, 9, "secondary")
+	mp.abHead = GM.MakeFontString(ab, GM.FONT_BOLD, 10, "secondary")
 	mp.abHead:SetPoint("TOPLEFT", 8, -5)
 	mp.abHead:SetText("ASK BOOK")
-	mp.abCount = GM.MakeFontString(ab, GM.FONT, 9, "textDim")
+	mp.abCount = GM.MakeFontString(ab, GM.FONT, 10, "textDim")
 	mp.abCount:SetPoint("TOPRIGHT", -8, -6)
 	ab:EnableMouseWheel(true)
 	ab:SetScript("OnMouseWheel", function(_, d)
@@ -602,16 +633,16 @@ function MU.Build(f, ahui)
 		row.bg:SetColorTexture(GM.RGB(i % 2 == 0 and "contMedium" or "contLowest"))
 		W.HoverTint(row)
 		row.c1 = GM.MakeFontString(row, GM.FONT, 10, "text")
-		row.c1:SetPoint("LEFT", 6, 0) row.c1:SetWidth(62)
+		row.c1:SetPoint("LEFT", 6, 0) row.c1:SetWidth(66)
 		row.c1:SetJustifyH("LEFT") row.c1:SetWordWrap(false)
 		row.c2 = GM.MakeFontString(row, GM.FONT, 10, "accent")
-		row.c2:SetPoint("LEFT", 70, 0) row.c2:SetWidth(32)
+		row.c2:SetPoint("LEFT", 76, 0) row.c2:SetWidth(34)
 		row.c2:SetJustifyH("LEFT") row.c2:SetWordWrap(false)
-		row.c3 = GM.MakeFontString(row, GM.FONT, 9, "text")
-		row.c3:SetPoint("LEFT", 106, 0) row.c3:SetWidth(196)
+		row.c3 = GM.MakeFontString(row, GM.FONT, 10, "text")
+		row.c3:SetPoint("LEFT", 112, 0) row.c3:SetWidth(196)
 		row.c3:SetJustifyH("LEFT") row.c3:SetWordWrap(false)
 		row.c4 = GM.MakeFontString(row, GM.FONT, 9, "textDim")
-		row.c4:SetPoint("LEFT", 304, 0) row.c4:SetWidth(46)
+		row.c4:SetPoint("LEFT", 310, 0) row.c4:SetWidth(46)
 		row.c4:SetJustifyH("LEFT") row.c4:SetWordWrap(false)
 		local act = CreateFrame("Button", nil, row)
 		act:SetSize(44, 16)
@@ -622,16 +653,16 @@ function MU.Build(f, ahui)
 		row.act = act
 		mp.askRows[i] = row
 	end
-	mp.abEmpty = GM.MakeFontString(ab, GM.FONT, 9, "textDim")
+	mp.abEmpty = GM.MakeFontString(ab, GM.FONT, 10, "textDim")
 	mp.abEmpty:SetPoint("CENTER", 0, -8)
 
 	-- ===== PLAN pane =====
 	local pp = CreateFrame("Frame", nil, mp)
-	pp:SetSize(366, 90)
-	pp:SetPoint("TOPLEFT", 0, -258)
+	pp:SetSize(366, 96)
+	pp:SetPoint("TOPLEFT", 0, -290)
 	GM.Panel(pp, "contLowest")
 	mp.pPane = pp
-	mp.pHead = GM.MakeFontString(pp, GM.FONT_BOLD, 9, "secondary")
+	mp.pHead = GM.MakeFontString(pp, GM.FONT_BOLD, 10, "secondary")
 	mp.pHead:SetPoint("TOPLEFT", 8, -5)
 	mp.pHead:SetText("PLAN")
 	mp.exec = Btn(pp, 70, "EXECUTE", function() GM.PlanQueue.ExecuteNext() end)
@@ -641,16 +672,16 @@ function MU.Build(f, ahui)
 	mp.skip:SetPoint("TOPRIGHT", mp.exec, "TOPLEFT", -4, 0)
 	mp.rescan = Btn(pp, 52, "RESCAN", function() GM.PlanQueue.Rescan() end)
 	mp.rescan:SetPoint("TOPRIGHT", mp.skip, "TOPLEFT", -4, 0)
-	mp.pArmed = GM.MakeFontString(pp, GM.FONT, 9, "text")
-	mp.pArmed:SetPoint("TOPLEFT", 8, -22)
+	mp.pArmed = GM.MakeFontString(pp, GM.FONT, 10, "text")
+	mp.pArmed:SetPoint("TOPLEFT", 8, -24)
 	mp.pArmed:SetWidth(348)
 	mp.pArmed:SetJustifyH("LEFT") mp.pArmed:SetWordWrap(false)
-	mp.pNext = GM.MakeFontString(pp, GM.FONT, 9, "textDim")
-	mp.pNext:SetPoint("TOPLEFT", 8, -38)
+	mp.pNext = GM.MakeFontString(pp, GM.FONT, 10, "textDim")
+	mp.pNext:SetPoint("TOPLEFT", 8, -42)
 	mp.pNext:SetWidth(348)
 	mp.pNext:SetJustifyH("LEFT") mp.pNext:SetWordWrap(false)
-	mp.pMore = GM.MakeFontString(pp, GM.FONT, 9, "textDim")
-	mp.pMore:SetPoint("TOPLEFT", 8, -52)
+	mp.pMore = GM.MakeFontString(pp, GM.FONT, 10, "textDim")
+	mp.pMore:SetPoint("TOPLEFT", 8, -58)
 	mp.pMore:SetJustifyH("LEFT")
 	mp.prog = pp:CreateTexture(nil, "ARTWORK")
 	mp.prog:SetColorTexture(GM.RGB("accent"))
@@ -659,37 +690,37 @@ function MU.Build(f, ahui)
 
 	-- ===== NUMBERS pane =====
 	local np = CreateFrame("Frame", nil, mp)
-	np:SetSize(190, 90)
-	np:SetPoint("TOPLEFT", 374, -258)
+	np:SetSize(200, 96)
+	np:SetPoint("TOPLEFT", 374, -290)
 	GM.Panel(np, "contLowest")
-	local nh = GM.MakeFontString(np, GM.FONT_BOLD, 9, "secondary")
+	local nh = GM.MakeFontString(np, GM.FONT_BOLD, 10, "secondary")
 	nh:SetPoint("TOPLEFT", 8, -5) nh:SetText("NUMBERS")
 	mp.numRows = {}
 	for i = 1, #NUM_FIELDS do
-		local lab = GM.MakeFontString(np, GM.FONT, 8, "textDim")
-		lab:SetPoint("TOPLEFT", 8, -14 - (i - 1) * 7.5)
+		local lab = GM.MakeFontString(np, GM.FONT, 9, "textDim")
+		lab:SetPoint("TOPLEFT", 8, -16 - (i - 1) * 8)
 		lab:SetJustifyH("LEFT")
-		local val = GM.MakeFontString(np, GM.FONT, 8, "text")
-		val:SetPoint("TOPRIGHT", -8, -14 - (i - 1) * 7.5)
+		local val = GM.MakeFontString(np, GM.FONT, 9, "text")
+		val:SetPoint("TOPRIGHT", -8, -16 - (i - 1) * 8)
 		val:SetJustifyH("RIGHT")
 		mp.numRows[i] = { lab, val }
 	end
-	mp.numFoot = GM.MakeFontString(np, GM.FONT, 8, "textDim")
-	mp.numFoot:SetPoint("BOTTOMLEFT", 8, 4)
+	mp.numFoot = GM.MakeFontString(np, GM.FONT, 9, "textDim")
+	mp.numFoot:SetPoint("BOTTOMLEFT", 8, 3)
 	mp.numFoot:SetJustifyH("LEFT")
 
 	-- ===== INTEL pane =====
 	local ip = CreateFrame("Frame", nil, mp)
-	ip:SetSize(196, 90)
-	ip:SetPoint("TOPRIGHT", 0, -258)
+	ip:SetSize(200, 96)
+	ip:SetPoint("TOPRIGHT", 0, -290)
 	GM.Panel(ip, "contLowest")
-	local ih = GM.MakeFontString(ip, GM.FONT_BOLD, 9, "secondary")
+	local ih = GM.MakeFontString(ip, GM.FONT_BOLD, 10, "secondary")
 	ih:SetPoint("TOPLEFT", 8, -5) ih:SetText("INTEL")
 	mp.intelRows = {}
 	for i = 1, 6 do
-		local fs = GM.MakeFontString(ip, GM.FONT, 8, "text")
-		fs:SetPoint("TOPLEFT", 8, -15 - (i - 1) * 12)
-		fs:SetWidth(182)
+		local fs = GM.MakeFontString(ip, GM.FONT, 9, "text")
+		fs:SetPoint("TOPLEFT", 8, -16 - (i - 1) * 13)
+		fs:SetWidth(184)
 		fs:SetJustifyH("LEFT") fs:SetWordWrap(false)
 		mp.intelRows[i] = fs
 	end

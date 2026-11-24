@@ -384,16 +384,16 @@ local function Build()
 	end)
 
 	-- toolbar: search + page toggles + scan shortcuts
-	ui.search = EditBox(f, 170, "search…")
+	ui.search = EditBox(f, 150, "search…")
 	ui.search:SetPoint("TOPLEFT", 12, -34)
 	ui.search:SetScript("OnEnterPressed", function(self)
 		self:ClearFocus()
 		ui.scroll = 0
 		DoSearch()
 	end)
-	local x = 190
+	local x = 164
 	local tabHost = CreateFrame("Frame", nil, f)
-	tabHost:SetSize(190, 20)
+	tabHost:SetSize(186, 20)
 	tabHost:SetPoint("TOPLEFT", x, -34)
 	ui.pageTabs = W.PageTabs(tabHost,
 		{ { "shop", "SHOP" }, { "mine", "MINE" }, { "market", "MARKET" } },
@@ -407,29 +407,29 @@ local function Build()
 			end
 			AU.Refresh()
 		end)
-	x = x + 196
-	local full = Btn(f, 76, "FULL SCAN", function() GM.AH.FullScan() end)
+	x = x + 192
+	local full = Btn(f, 68, "FULL SCAN", function() GM.AH.FullScan() end)
 	full:SetPoint("TOPLEFT", x + 6, -34)
 	Tip(full, function()
 		return { "Full book scan",
 			"ReplicateItems → the shared price book (mb/mbx/sup).",
 			"Feeds tooltips, sniper, and every market column." }
 	end)
-	local post = Btn(f, 84, "POST SCAN", function() GM.Auctioning.PostScan() end)
+	local post = Btn(f, 76, "POST SCAN", function() GM.Auctioning.PostScan() end)
 	post:SetPoint("LEFT", full, "RIGHT", 6, 0)
 	Tip(post, function()
 		return { "Post scan",
 			"Plans posts for bag items (vendor-floor guarded).",
 			"With GROUPS checked, only those items post." }
 	end)
-	local cancel = Btn(f, 90, "CANCEL SCAN", function() GM.Auctioning.CancelScan() end)
+	local cancel = Btn(f, 82, "CANCEL SCAN", function() GM.Auctioning.CancelScan() end)
 	cancel:SetPoint("LEFT", post, "RIGHT", 6, 0)
 	Tip(cancel, function()
 		return { "Cancel scan",
 			"Cancels your undercut auctions (ops-gated).",
 			"With GROUPS checked, only their listings scan." }
 	end)
-	local snip = Btn(f, 62, "SNIPER", function() GM.SniperUI.Toggle() end)
+	local snip = Btn(f, 56, "SNIPER", function() GM.SniperUI.Toggle() end)
 	snip:SetPoint("LEFT", cancel, "RIGHT", 6, 0)
 	Tip(snip, function()
 		return { "Sniper",
