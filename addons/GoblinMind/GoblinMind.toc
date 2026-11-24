@@ -4,12 +4,13 @@
 ## Author: ZhigZhog
 ## Version: 0.2.0-beta
 ## SavedVariables: GoblinMindSettings, GoblinMindPrices, GoblinMindLedger, GoblinMindGroups, GoblinMindHistory, GoblinMindCrafting, GoblinMindGather
-## Dependencies: GoblinMind_Data
+## Dependencies: GoblinMind_Data, GoblinUI
 
 Libs\LibStub.lua
 Libs\LibDeflate.lua
 Libs\LibSerialize.lua
 Theme.lua
+GoblinUIHost.lua
 Core.lua
 FramePark.lua
 Inventory.lua

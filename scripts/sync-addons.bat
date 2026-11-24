@@ -15,7 +15,7 @@ REM /XF Data.lua: GoblinMind_Data\Data.lua is LIVE emit output — the dev
 REM copy is a stale release artifact; deploying it over the watcher's
 REM file makes the client load a day-old DB (stale sync, phantom
 REM "backend not configured" popup).
-for %%A in (GoblinMind GoblinMind_Data) do (
+for %%A in (GoblinMind GoblinMind_Data GoblinUI) do (
 	robocopy "%SRC%\%%A" "%WOW%\%%A" /MIR /XD brain /XF Data.lua /NFL /NDL /NJH /NJS >nul
 	if errorlevel 8 ( echo FAILED %%A ) else ( echo synced %%A )
 )

@@ -7,6 +7,9 @@ Canonical layout (must match scripts/sync-addons.bat):
                            bare run = the launcher; NO .bat files —
                            CurseForge moderation bans them)
     GoblinMind_Data/       addons/GoblinMind_Data/**      (generated DB)
+    GoblinUI/              addons/GoblinUI/**             (UI toolkit —
+                           hard dependency since the design-system
+                           rebuild; ships beside the two above)
 
 Usage: python scripts/package-release.py <version>
        e.g.  python scripts/package-release.py 0.2.0-alpha
@@ -16,7 +19,7 @@ import sys
 import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-ADDONS = ("GoblinMind", "GoblinMind_Data")
+ADDONS = ("GoblinMind", "GoblinMind_Data", "GoblinUI")
 BRAIN_FILES = ("goblin_brain.py", "vendor_buy.json",
                "recipe_sources.json",
                "goblin_server.py", "install.py",

@@ -1,28 +1,30 @@
 local _, GM = ...
 
--- GoblinMind palette — ramps derived from the artwork's four source
--- colors: #434307 (tab olive), #333506 (body olive), #0e1313 (dark),
--- #000000. Semantic colors (err/pos/warn) keep their hues — they carry
--- buy/sell/error meaning the palette can't express.
+-- GoblinMind palette — neutral surfaces + gold accent, the
+-- TSM-derived scheme ratified for the GoblinUI rebuild (see
+-- WoWVault/Proposals/goblin-ui-design-system.md §6.2). Keys are the
+-- GoblinUI palette contract; the library default ships the same
+-- ramp so GoblinUI's own widgets paint identically out of the box.
 GM.C = {
-	surface        = "121407",
-	surfaceVariant = "333506",
-	contLowest     = "0b0d05",
-	contLow        = "14170a",
-	contMedium     = "1c1f0e",
-	contHigh       = "282b14",
-	contHighest    = "3a3d17",
-	outline        = "6f7229",
-	outlineVar     = "3b3e15",
-	text           = "ecedd8",
-	textDim        = "a2a47c",
-	primary        = "b7ba83",
-	secondary      = "696c3d",
-	accent         = "c6c83f",
-	accentDark     = "434307",
+	surface        = "0e1313",
+	surfaceVariant = "363c3c",
+	contLowest     = "090e0e",
+	contLow        = "161c1c",
+	contMedium     = "1d2323",
+	contHigh       = "292f2f",
+	contHighest    = "313737",
+	outline        = "99a0a0",
+	outlineVar     = "434949",
+	text           = "ecf4f3",
+	textDim        = "b8bfbf",
+	primary        = "b9bfbf",
+	secondary      = "77818d",
+	accent         = "e1ba00",
+	accentDark     = "654000",
 	err            = "fd392e",
 	pos            = "08d36b",
 	warn           = "ff9707",
+	onAccent       = "090e0e",
 }
 
 -- Montserrat is vendored in Media/ (copied from TSM — same license,
