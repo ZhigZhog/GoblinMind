@@ -32,7 +32,7 @@ local SPEED     = 36   -- px/s marquee rate
 local GAP       = 30   -- px between cells
 local REFRESH   = 20   -- s between price repaints
 local MAX_ITEMS = 24
-local BAR_H     = 13   -- xp/rep-bar slim
+local BAR_H     = 11   -- xp/rep-bar slim
 
 local bar, sf, child
 local cells = {}
@@ -204,8 +204,8 @@ local function Restore()
 		bar:SetSize(bar:GetWidth(), BAR_H)
 		bar:SetPoint(pos.p, UIParent, pos.rp, pos.x, pos.y)
 	else
-		bar:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 0, 0)
-		bar:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", 0, 0)
+		-- docked: centered strip stacked just under the stock bars
+		bar:SetPoint("TOP", UIParent, "TOP", 0, -20)
 	end
 end
 
@@ -226,7 +226,9 @@ end
 local function BuildBar()
 	bar = CreateFrame("Frame", "GoblinMindTicker", UIParent)
 	bar:SetFrameStrata("HIGH") -- above the HUD like an xp-bar strip
-	bar:SetSize(math.max(400, floor(UIParent:GetWidth() or 1024)), BAR_H)
+	-- one strip among the stock xp/rep bars: centered, ~2/3 screen
+	bar:SetSize(math.max(360, floor((UIParent:GetWidth() or 1024) * 0.62)),
+		BAR_H)
 	GM.Panel(bar, "contMedium")
 	if GM.ChromePanel then GM.ChromePanel(bar) end
 	bar:SetMovable(true)
@@ -242,9 +244,9 @@ local function BuildBar()
 	-- the TICKER tag is the drag handle + usage hint; drag it to
 	-- undock the bar anywhere, like a Titan panel pulled off its edge
 	local brand = CreateFrame("Button", nil, bar)
-	brand:SetSize(56, BAR_H)
+	brand:SetSize(40, BAR_H)
 	brand:SetPoint("LEFT", 0, 0)
-	local bf = GM.MakeFontString(brand, GM.FONT_BOLD, 8, "accent")
+	local bf = GM.MakeFontString(brand, GM.FONT_BOLD, 7, "accent")
 	bf:SetPoint("CENTER")
 	bf:SetText("TICKER")
 	bar._brand = brand
