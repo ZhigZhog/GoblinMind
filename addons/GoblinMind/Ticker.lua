@@ -42,9 +42,17 @@ local off, lastPaint, dirty = 0, 0, true
 local oneW = 0 -- width of one watchlist pass — the wrap distance
 
 local function Store()
+	-- GM.db is the SavedVariable root — adds landing anywhere else
+	-- would render fine all session and never flush to disk, which
+	-- is exactly the failure mode "items don't persist" describes;
+	-- fail loudly instead of writing an orphan table
+	if not GM.db then
+		GM.Print("ticker: settings not loaded yet")
+		return { items = {} }
+	end
 	local st = GM.db.ticker
 	if not st then st = {} GM.db.ticker = st end
-	if st.items == nil then st.items = {} end
+	if type(st.items) ~= "table" then st.items = {} end
 	if st.alpha == nil then st.alpha = 70 end   -- resting dim, % opacity
 	if st.hover == nil then st.hover = 100 end  -- lit under the cursor
 	return st
