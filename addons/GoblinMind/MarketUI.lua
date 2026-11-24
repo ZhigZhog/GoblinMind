@@ -400,6 +400,12 @@ local function RefreshAskBook()
 	local maxScroll = math.max(0, #asks - ASK_VIS)
 	M.askScroll = math.min(M.askScroll or 0, maxScroll)
 	W.ScrollText(mp.abCount, M.askScroll, ASK_VIS, #asks)
+	-- scan age rides the count — AUTO's cycle becomes visible: the
+	-- seconds climb to ~60 then reset when the ladder rescans
+	if #asks > 0 and M.askT then
+		mp.abCount:SetText(mp.abCount:GetText() .. GM.CC("textDim")
+			.. " · " .. floor(GetTime() - M.askT) .. "s|r")
+	end
 	mp.abEmpty:SetText(M.itemID and (M.askWait and BusyText()
 		or (not M.asks and "scanning…") or "no asks")
 		or "")
@@ -501,6 +507,18 @@ local function PaintAuto()
 	if mp.auto then mp.auto.t:SetTextColor(GM.RGB(key)) end
 end
 
+-- enable = scan NOW, don't wait out the first minute — the visible
+-- "scanning… → ladder" cycle is the feedback that the toggle works
+local function ToggleAuto()
+	if not GM.db then return end
+	GM.db.mktAutoscan = not GM.db.mktAutoscan or nil
+	PaintAuto()
+	if GM.db.mktAutoscan and M.itemID then
+		M.asks = nil
+		ScanAsks()
+	end
+end
+
 local autoAcc = 0
 local autoF = CreateFrame("Frame")
 autoF:SetScript("OnUpdate", function(_, dt)
@@ -515,6 +533,8 @@ autoF:SetScript("OnUpdate", function(_, dt)
 	if (not M.asks or (M.askT and GetTime() - M.askT > 60))
 		and not M.askWait then
 		ScanAsks()
+	else
+		MU.Refresh() -- tick the visible ask age between rescans
 	end
 end)
 
@@ -688,12 +708,7 @@ function MU.Build(f, ahui)
 	mp.slot:SetPoint("TOPRIGHT", -8, -2)
 	-- AUTO: item-scoped ask refresh for this page — same preference
 	-- as the intel-pane tag; text goes green when lit
-	mp.autoBtn = Btn(mp, 56, "AUTO", function()
-		if GM.db then
-			GM.db.mktAutoscan = not GM.db.mktAutoscan or nil
-			PaintAuto()
-		end
-	end)
+	mp.autoBtn = Btn(mp, 56, "AUTO", ToggleAuto)
 	mp.autoBtn:SetPoint("TOPRIGHT", mp.slot, "TOPLEFT", -6, -3)
 	mp.autoBtn:SetScript("OnLeave", function()
 		if mp.autoBtn._gmBg then
@@ -847,12 +862,7 @@ function MU.Build(f, ahui)
 	mp.auto.t = GM.MakeFontString(mp.auto, GM.FONT_BOLD, 8, "textDim")
 	mp.auto.t:SetPoint("CENTER")
 	mp.auto.t:SetText("AUTO")
-	mp.auto:SetScript("OnClick", function()
-		if GM.db then
-			GM.db.mktAutoscan = not GM.db.mktAutoscan or nil
-			PaintAuto()
-		end
-	end)
+	mp.auto:SetScript("OnClick", ToggleAuto)
 	mp.auto:SetScript("OnEnter", function()
 		mp.auto.t:SetTextColor(GM.RGB("text"))
 	end)
