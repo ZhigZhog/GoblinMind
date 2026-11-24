@@ -595,6 +595,29 @@ local function BuildUI()
 	ui.footer:SetPoint("BOTTOMLEFT", 10, 8)
 	ui.footer:SetText(FOOTER_DEFAULT)
 
+	-- ============ GoblinUI managed layout ============
+	-- the window was three hand-anchored layers: page segs TOPRIGHT,
+	-- the two page surfaces spanning -34..30, footer BOTTOMLEFT.
+	-- Same three layers in a column: segs right-packed in the header
+	-- row, page hosts as fill nodes (SetVisible collapses the hidden
+	-- page out of layout — no fill-split with its sibling), footer
+	-- pins the bottom edge. Pane innards keep their anchors.
+	local u = GM.ui
+	if u then
+		local root = u:AttachRoot(f, { direction = "column", gap = 4,
+			pad = { top = 6, left = 10, right = 10, bottom = 8 } })
+		local head = u:Row(root, { gap = 4, justify = "end" })
+		root:Add(head, { width = "fill", height = 18 })
+		for _, b in ipairs(ui.pageSegs) do
+			head:Add(u:Adopt(b), { width = 50, height = 18 })
+		end
+		ui.itemsNode = u:Adopt(items)
+		root:Add(ui.itemsNode, { width = "fill", height = "fill" })
+		ui.opsNode = u:Adopt(ops)
+		root:Add(ui.opsNode, { width = "fill", height = "fill" })
+		root:Add(u:Adopt(ui.footer), { width = "fill", height = 12 })
+	end
+
 	-- async names resolve → repaint the visible rows only. Rebuilding
 	-- the list here would re-request every uncached name and re-sort
 	-- 7k rows on every resolve burst (the flicker/lag loop).
@@ -882,8 +905,13 @@ end
 
 function GU.Refresh()
 	if not ui then return end
-	ui.pageItems:SetShown(ui.page == "items")
-	ui.pageOps:SetShown(ui.page == "ops")
+	if ui.itemsNode then
+		ui.itemsNode:SetVisible(ui.page == "items")
+		ui.opsNode:SetVisible(ui.page == "ops")
+	else
+		ui.pageItems:SetShown(ui.page == "items")
+		ui.pageOps:SetShown(ui.page == "ops")
+	end
 	for _, b in ipairs(ui.pageSegs) do
 		b.text:SetTextColor(GM.RGB(b.key == ui.page and "accent" or "textDim"))
 		GM.Panel(b, b.key == ui.page and "contHighest" or "contHigh")
