@@ -165,7 +165,6 @@ local function DrawPrice(entry)
 	ch.msg:SetText("")
 	ch.tipLines = nil
 	local pts, seriesMode, window = {}, false, WEEK
-	local sup = {}
 	if M.itemID and GM.History then
 		local s = GM.History.Points(M.itemID, WEEK)
 		if #s >= 2 then
@@ -175,8 +174,8 @@ local function DrawPrice(entry)
 			local t0 = time() - window
 			for _, p in ipairs(s) do
 				local x = (p.t - t0) / window
-				tinsert(pts, { x = x < 0 and 0 or x > 1 and 1 or x, v = p.p })
-				if p.s then tinsert(sup, { x = pts[#pts].x, s = p.s }) end
+				x = x < 0 and 0 or x > 1 and 1 or x
+				tinsert(pts, { x = x, v = p.p, s = p.s })
 			end
 			if entry and entry.p then
 				tinsert(pts, { x = 1.0, v = entry.p, hot = true })
@@ -211,17 +210,7 @@ local function DrawPrice(entry)
 	local volTop = 18 -- supply bars live under the line
 	local function px(x) return padX + x * cw end
 	local function py(v) return base + (v - lo) / (hi - lo) * (top - base) end
-	-- supply bars
-	local smax = 0
-	for _, s in ipairs(sup) do smax = math.max(smax, s.s) end
-	if smax > 0 then
-		local bw = math.max(1, cw / math.max(8, #sup * 2))
-		for _, s in ipairs(sup) do
-			Bar(ch, px(s.x) - bw / 2, 4, bw, s.s / smax * volTop,
-				"contHigh", 0.9, "BACKGROUND")
-		end
-	end
-	-- mkt / mb horizontals
+	-- mkt / mb horizontals (under the candles)
 	if entry and entry.p and entry.p >= lo and entry.p <= hi then
 		local y = py(entry.p)
 		Bar(ch, padX, y, cw, 1, "secondary", 0.6)
@@ -232,28 +221,72 @@ local function DrawPrice(entry)
 		Bar(ch, padX, y, cw, 1, "warn", 0.5)
 		Label(ch, ch:GetWidth() - 4, y + 2, "mb", "warn", 8, "RIGHT")
 	end
-	for i = 2, #pts do
-		Segment(ch, px(pts[i - 1].x), py(pts[i - 1].v),
-			px(pts[i].x), py(pts[i].v))
-	end
-	-- trendline over the series itself
-	if seriesMode and #pts >= 3 then
-		local n, sx, sy, sxx, sxy = #pts, 0, 0, 0, 0
+	if seriesMode then
+		-- OHLC candles — the real tape: each time bucket's open/close
+		-- are its first/last samples, the wick carries the bucket's
+		-- extremes; body green when the period closed up, red down
+		local NB = math.max(8, math.min(30, floor(cw / 26)))
+		local cs, occ = {}, {}
 		for _, p in ipairs(pts) do
-			sx, sy = sx + p.x, sy + p.v
-			sxx, sxy = sxx + p.x * p.x, sxy + p.x * p.v
+			local b = math.min(NB, math.max(1, floor(p.x * NB) + 1))
+			local c = cs[b]
+			if not c then
+				c = { o = p.v, h = p.v, l = p.v, c = p.v, s = 0, sn = 0 }
+				cs[b] = c
+				occ[#occ + 1] = b
+			end
+			c.h = math.max(c.h, p.v) c.l = math.min(c.l, p.v) c.c = p.v
+			if p.s then c.s = c.s + p.s c.sn = c.sn + 1 end
 		end
-		local den = n * sxx - sx * sx
-		if den ~= 0 then
-			local m = (n * sxy - sx * sy) / den
-			local b = (sy - m * sx) / n
-			Segment(ch, px(0), py(m * 0 + b), px(1), py(m + b), "textDim")
+		local step = cw / NB
+		local bw = math.max(3, math.min(14, step * 0.55))
+		local smax = 0
+		for _, b in ipairs(occ) do
+			local c = cs[b]
+			if c.sn > 0 then smax = math.max(smax, c.s / c.sn) end
 		end
+		for _, b in ipairs(occ) do
+			local c = cs[b]
+			local cx = padX + (b - 0.5) * step
+			if c.sn > 0 and smax > 0 then
+				Bar(ch, cx - bw / 2, 4, bw, c.s / c.sn / smax * volTop,
+					"contHigh", 0.9, "BACKGROUND")
+			end
+			local key = c.c >= c.o and "pos" or "err"
+			Bar(ch, cx - 0.5, py(c.l), 1,
+				math.max(1, py(c.h) - py(c.l)), key, 0.7, "ARTWORK")
+			Bar(ch, cx - bw / 2, py(math.min(c.o, c.c)), bw,
+				math.max(1, py(math.max(c.o, c.c)) - py(math.min(c.o, c.c))),
+				key, 0.9, "ARTWORK")
+		end
+		-- moving average over candle closes — the overlay real
+		-- terminals carry instead of a raw regression line
+		local PER, prev = 5, nil
+		for i, b in ipairs(occ) do
+			local s, n = 0, 0
+			for j = math.max(1, i - PER + 1), i do
+				s = s + cs[occ[j]].c n = n + 1
+			end
+			local ma, x = s / n, (b - 0.5) / NB
+			if prev then
+				Segment(ch, px(prev[1]), py(prev[2]), px(x), py(ma), "textDim")
+			end
+			prev = { x, ma }
+		end
+		local lastB = occ[#occ]
+		Dot(ch, px((lastB - 0.5) / NB), py(cs[lastB].c), 5, "accent")
+		Label(ch, ch:GetWidth() - 4, py(cs[lastB].c) - 5,
+			GM.Money(cs[lastB].c), "text", 10, "RIGHT")
+	else
+		for i = 2, #pts do
+			Segment(ch, px(pts[i - 1].x), py(pts[i - 1].v),
+				px(pts[i].x), py(pts[i].v))
+		end
+		local last = pts[#pts]
+		Dot(ch, px(last.x), py(last.v), 5, "accent")
+		Label(ch, ch:GetWidth() - 4, py(last.v) - 5, GM.Money(last.v),
+			"text", 10, "RIGHT")
 	end
-	local last = pts[#pts]
-	Dot(ch, px(last.x), py(last.v), 5, "accent")
-	Label(ch, ch:GetWidth() - 4, py(last.v) - 5, GM.Money(last.v),
-		"text", 10, "RIGHT")
 	Label(ch, ch:GetWidth() - 4, top + 1, GM.Money(hi), "textDim", 9, "RIGHT")
 	Label(ch, ch:GetWidth() - 4, base + 2, GM.Money(lo), "textDim", 9, "RIGHT")
 	if seriesMode then

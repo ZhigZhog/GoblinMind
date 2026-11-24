@@ -41,6 +41,7 @@ GM.frame:SetScript("OnEvent", function(_, event, arg1)
 	elseif event == "PLAYER_LOGIN" then
 		GM.MigrateCharKeys()
 		if GM.MinimapInit then pcall(GM.MinimapInit) end
+		if GM.TickerInit then pcall(GM.TickerInit) end
 		-- pre-build the plan window: its ~100 widgets cost real time,
 		-- and paying that at first AH open reads as a multi-second
 		-- stall. Build hides the frame — visibility follows the AH.

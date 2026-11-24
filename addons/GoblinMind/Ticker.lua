@@ -1,0 +1,332 @@
+local _, GM = ...
+
+-- ================================================================
+-- Ticker.lua — the detached market tape. One screen-edge bar lists
+-- the player's watchlist with live mb and the % move vs the model
+-- price — the convention a real tape uses (green = trading above
+-- the mark, red = below). The marquee scrolls when the list
+-- outgrows the bar and pauses under the cursor, like the real
+-- thing. Watchlist + bar position persist in
+-- GoblinMindSettings.ticker.
+--
+--   /goblin ticker            — show/hide the bar
+--   /goblin ticker add [link] — add an item (or drop one on the bar)
+--   /goblin ticker del [link] — remove it (or right-click its cell)
+--   /goblin ticker clear      — empty the tape
+--   /goblin ticker reset      — re-dock the bar to the top edge
+--
+-- Cells are buttons: left-click targets the item (routes into the
+-- MARKET page when the AH is open), hover shows the real tooltip,
+-- the marquee pauses so you can actually click a moving symbol.
+-- ================================================================
+
+GM.Ticker = {}
+local T = GM.Ticker
+
+local W = GM.Widgets
+local tinsert, tremove, wipe = tinsert, tremove, wipe
+local floor, ceil = math.floor, math.ceil
+local strtrim, strlower = strtrim, strlower
+
+local SPEED     = 36   -- px/s marquee rate
+local GAP       = 30   -- px between cells
+local REFRESH   = 20   -- s between price repaints
+local MAX_ITEMS = 24
+local BAR_H     = 22
+
+local bar, sf, child
+local cells = {}
+local off, lastPaint, dirty = 0, 0, true
+local oneW = 0 -- width of one watchlist pass — the wrap distance
+
+local function Store()
+	GM.db.ticker = GM.db.ticker or { on = false, items = {} }
+	return GM.db.ticker
+end
+local function Items() return Store().items end
+
+-- ============ cells ============
+
+local function CellText(id)
+	local e = GM.ItemEntry and GM.ItemEntry(id)
+	local name = (GM.ItemNameOr(id) or ("item " .. id))
+		:gsub("[%[%]]", "")
+	local mb = e and e.mb
+	local price = mb and GM.MoneyShort(mb)
+		or GM.CC("textDim") .. "—|r"
+	local move = ""
+	if mb and e and e.p and e.p > 0 then
+		local pct = floor((mb - e.p) / e.p * 100 + 0.5)
+		if pct ~= 0 then
+			move = " " .. GM.CC(pct > 0 and "pos" or "err")
+				.. (pct > 0 and "+" or "") .. pct .. "%|r"
+		end
+	end
+	return GM.CC("textDim") .. name .. "|r " .. price .. move
+end
+
+local function PaintCells()
+	for _, cell in ipairs(cells) do
+		cell.fs:SetText(CellText(cell.id))
+	end
+	lastPaint = GetTime()
+end
+
+local function Build()
+	for _, c in ipairs(cells) do c:Hide() c:SetParent(nil) end
+	wipe(cells)
+	local ids = Items()
+	if #ids == 0 then
+		child:SetSize(1, BAR_H)
+		if not child.hint then
+			child.hint = GM.MakeFontString(child, GM.FONT, 9, "textDim")
+			child.hint:SetPoint("LEFT", 4, 0)
+		end
+		child.hint:SetText("drop items on the tape"
+			.. " — or /goblin ticker add [link]")
+		child.hint:Show()
+		oneW = 0
+		return
+	end
+	if child.hint then child.hint:Hide() end
+	local view = sf:GetWidth()
+	local totalW = 0
+	-- one pass measures the tape; repeat it until a full loop always
+	-- covers the viewport so the wrap seam never shows a bare stretch
+	for pass = 1, 60 do
+		for _, id in ipairs(ids) do
+			local cell = CreateFrame("Button", nil, child)
+			cell.id = id
+			local fs = GM.MakeFontString(cell, GM.FONT, 9, "text")
+			fs:SetPoint("LEFT", 5, 0)
+			fs:SetWordWrap(false)
+			fs:SetText(CellText(id))
+			cell.fs = fs
+			cell:SetSize(ceil(fs:GetStringWidth()) + 10, BAR_H)
+			cell:SetPoint("LEFT", totalW, 0)
+			totalW = totalW + cell:GetWidth() + GAP
+			cell:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+			cell:SetScript("OnClick", function(_, btn)
+				if btn == "RightButton" then
+					T.Del(id)
+				else
+					GM.TargetItem(id)
+				end
+			end)
+			cell:SetScript("OnEnter", function(s)
+				bar._hover = true
+				GameTooltip:SetOwner(s, "ANCHOR_TOP")
+				if GameTooltip.SetItemByID then
+					GameTooltip:SetItemByID(id)
+				else
+					GameTooltip:SetHyperlink("item:" .. id)
+				end
+				GameTooltip:Show()
+			end)
+			cell:SetScript("OnLeave", function()
+				bar._hover = nil
+				GameTooltip:Hide()
+			end)
+			cell:SetScript("OnReceiveDrag", function()
+				local t, did = GetCursorInfo()
+				if t == "item" then ClearCursor() T.Add(did) end
+			end)
+			cells[#cells + 1] = cell
+		end
+		if pass == 1 then oneW = totalW end
+		if pass >= 2 and totalW >= oneW + view then break end
+	end
+	child:SetSize(math.max(totalW, 1), BAR_H)
+	off = 0
+	sf:SetHorizontalScroll(0)
+end
+
+function T.Paint()
+	if not bar then return end
+	PaintCells()
+end
+
+local function RebuildSoon()
+	dirty = true
+end
+
+-- ============ watchlist ============
+
+local function Has(id)
+	for _, v in ipairs(Items()) do
+		if v == id then return true end
+	end
+end
+
+function T.Add(id, silent)
+	if not id or Has(id) then return end
+	local it = Items()
+	if #it >= MAX_ITEMS then
+		GM.Print("ticker full (" .. MAX_ITEMS .. ")"
+			.. " — /goblin ticker del [link]")
+		return
+	end
+	it[#it + 1] = id
+	RebuildSoon()
+	if not silent then
+		GM.Print(GM.ItemNameOr(id) .. " on the tape")
+	end
+end
+
+function T.Del(id)
+	local it = Items()
+	for i, v in ipairs(it) do
+		if v == id then
+			tremove(it, i)
+			RebuildSoon()
+			GM.Print(GM.ItemNameOr(id) .. " off the tape")
+			return true
+		end
+	end
+end
+
+-- ============ the bar ============
+
+local function SavePos()
+	local p, _, rp, x, y = bar:GetPoint(1)
+	Store().pos = { p = p, rp = rp, x = x, y = y }
+end
+
+local function Restore()
+	local pos = Store().pos
+	bar:ClearAllPoints()
+	if pos then
+		bar:SetSize(bar:GetWidth(), BAR_H)
+		bar:SetPoint(pos.p, UIParent, pos.rp, pos.x, pos.y)
+	else
+		bar:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 0, 0)
+		bar:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", 0, 0)
+	end
+end
+
+local function BuildBar()
+	bar = CreateFrame("Frame", "GoblinMindTicker", UIParent)
+	bar:SetFrameStrata("MEDIUM")
+	bar:SetSize(math.max(400, floor(UIParent:GetWidth() or 1024)), BAR_H)
+	GM.Panel(bar, "contMedium")
+	if GM.ChromePanel then GM.ChromePanel(bar) end
+	bar:SetMovable(true)
+	bar:SetClampedToScreen(true)
+	bar:EnableMouse(true)
+	bar:SetScript("OnEnter", function() bar._hover = true end)
+	bar:SetScript("OnLeave", function() bar._hover = nil end)
+	bar:SetScript("OnReceiveDrag", function()
+		local t, id = GetCursorInfo()
+		if t == "item" then ClearCursor() T.Add(id) end
+	end)
+
+	-- the TICKER tag is the drag handle + usage hint; drag it to
+	-- undock the bar anywhere, like a Titan panel pulled off its edge
+	local brand = CreateFrame("Button", nil, bar)
+	brand:SetSize(56, BAR_H)
+	brand:SetPoint("LEFT", 0, 0)
+	local bf = GM.MakeFontString(brand, GM.FONT_BOLD, 8, "accent")
+	bf:SetPoint("CENTER")
+	bf:SetText("TICKER")
+	brand:RegisterForDrag("LeftButton")
+	brand:SetScript("OnDragStart", function()
+		-- collapse the edge-docked two-point anchor to one so the
+		-- bar can move freely without a width fight
+		local w, l, t = bar:GetWidth(), bar:GetLeft(), bar:GetTop()
+		bar:ClearAllPoints()
+		bar:SetSize(w, BAR_H)
+		bar:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT",
+			l or 0, t or 0)
+		bar:StartMoving()
+	end)
+	brand:SetScript("OnDragStop", function()
+		bar:StopMovingOrSizing()
+		SavePos()
+	end)
+	brand:SetScript("OnReceiveDrag", function()
+		local t, id = GetCursorInfo()
+		if t == "item" then ClearCursor() T.Add(id) end
+	end)
+	W.Tip(brand, function()
+		return {
+			GM.CC("accent") .. "market tape|r",
+			"drop items to add · right-click removes",
+			"left-click targets · hover pauses the scroll",
+			"drag this tag to move the bar",
+			"/goblin ticker — hide · add/del · clear · reset",
+		}
+	end)
+
+	sf = CreateFrame("ScrollFrame", nil, bar)
+	sf:SetPoint("TOPLEFT", brand, "TOPRIGHT", 2, 0)
+	sf:SetPoint("BOTTOMRIGHT", -2, 0)
+	sf:EnableMouse(true)
+	sf:SetScript("OnReceiveDrag", function()
+		local t, id = GetCursorInfo()
+		if t == "item" then ClearCursor() T.Add(id) end
+	end)
+	child = CreateFrame("Frame", nil, sf)
+	child:SetSize(1, BAR_H)
+	sf:SetScrollChild(child)
+
+	sf:SetScript("OnUpdate", function(_, dt)
+		if dirty then dirty = nil Build() end
+		if GetTime() - lastPaint > REFRESH then PaintCells() end
+		if oneW > sf:GetWidth() and not bar._hover then
+			off = (off + SPEED * dt) % oneW
+			sf:SetHorizontalScroll(off)
+		end
+	end)
+end
+
+function GM.TickerInit()
+	if bar then return end
+	BuildBar()
+	Restore()
+	bar:SetShown(Store().on and true or false)
+end
+
+function T.Apply()
+	if bar then bar:SetShown(Store().on) end
+end
+
+-- ============ book repaint + slash ============
+
+GM.AH.bookSubs[#GM.AH.bookSubs + 1] = function() T.Paint() end
+
+GM.Cmd({ "ticker", "tape" }, function(arg, msg)
+	arg = strtrim(arg or "")
+	local verb = strlower(arg:match("^(%S*)") or "")
+	if verb == "" or verb == "on" or verb == "off"
+		or verb == "toggle" then
+		local st = Store()
+		st.on = (verb == "on") or (verb ~= "off" and not st.on)
+		T.Apply()
+		GM.Print("ticker " .. (st.on and "on" or "off"))
+	elseif verb == "add" or verb == "del" or verb == "remove" then
+		local id = GM.LinkID(msg) or tonumber(arg:match("(%d+)"))
+		if not id then
+			GM.Print("ticker " .. verb .. " needs an item"
+				.. " — [link] or id")
+			return
+		end
+		if verb == "add" then T.Add(id)
+		elseif not T.Del(id) then GM.Print("not on the tape") end
+	elseif verb == "clear" then
+		wipe(Items())
+		RebuildSoon()
+		GM.Print("tape cleared")
+	elseif verb == "reset" or verb == "dock" then
+		Store().pos = nil
+		if bar then Restore() end
+		GM.Print("ticker docked")
+	elseif verb == "list" then
+		for i, id in ipairs(Items()) do
+			GM.Print(i .. ". " .. GM.ItemNameOr(id))
+		end
+		if #Items() == 0 then GM.Print("tape is empty") end
+	else
+		GM.Print("ticker — on/off · add/del [link] · clear · reset · list")
+	end
+end, { prefix = true,
+	help = "market tape — add/del [link] · clear · reset" })

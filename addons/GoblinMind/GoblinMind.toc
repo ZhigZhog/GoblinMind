@@ -63,3 +63,4 @@ BugReport.lua
 Import.lua
 Onboarding.lua
 Minimap.lua
+Ticker.lua
