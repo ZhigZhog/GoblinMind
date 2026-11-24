@@ -593,22 +593,21 @@ local function RefreshPlan()
 		mp.pArmed:SetText(GM.CC("textDim")
 			.. "runs in the standalone plan window|r")
 		mp.pNext:SetText("")
-		mp.pMore:SetText("")
 	elseif not plan or total == 0 or not armed then
 		mp.planPanel:SetTitle("Plan")
 		mp.pArmed:SetText(GM.CC("textDim") ..
 			"no plan — POST/CANCEL/SHOP scans and targeted items route here|r")
 		mp.pNext:SetText("")
-		mp.pMore:SetText("")
 	else
 		showBtns = true
 		mp.planPanel:SetTitle(format("Plan — Step %d/%d%s", idx, total,
 			plan.mode and (" · " .. plan.mode) or ""))
 		mp.pArmed:SetText(GM.CC("accent") .. "▶ " .. StepLabel(armed) .. "|r")
 		mp.pNext:SetText(idx + 1 <= total and GM.CC("textDim")
-			.. "  " .. StepLabel(steps[idx + 1]) .. "|r" or "")
-		mp.pMore:SetText(idx + 2 <= total and GM.CC("textDim")
-			.. format("  …+%d more", total - idx - 1) .. "|r" or "")
+			.. "  " .. StepLabel(steps[idx + 1])
+			.. (idx + 2 <= total
+				and format("  …+%d more", total - idx - 1) or "")
+			.. "|r" or "")
 		mp.exec:SetText(GM.AH.pendingConfirm and "Confirm"
 			or GM.PlanQueue.lossConfirm and "Confirm" or "Execute")
 		mp.prog:SetValue(total > 0 and (idx - 1) / total or 0)
@@ -784,31 +783,34 @@ function MU.Build(f, ahui)
 	local bot = u:Row(root, { gap = "sm" })
 	root:Add(bot, { height = "fill" })
 
-	mp.planPanel = u:Panel(bot, { title = L("Plan"), slim = true, pad = "xs" })
+	mp.planPanel = u:Panel(bot, { title = L("Plan"), slim = true,
+		pad = "xs", gap = "xs" })
 	bot:Add(mp.planPanel, { width = 366, height = "fill" })
-	mp.pArmed = u:Text(mp.planPanel, { style = "cell", wrap = false })
-	mp.planPanel.body:Add(mp.pArmed)
-	mp.pNext = u:Text(mp.planPanel, { style = "cellDim", wrap = false })
-	mp.planPanel.body:Add(mp.pNext)
-	mp.pMore = u:Text(mp.planPanel, { style = "cellDim", wrap = false })
-	mp.planPanel.body:Add(mp.pMore)
-	local pBtns = u:Row(mp.planPanel, { gap = "xs", justify = "end" })
-	mp.planPanel.body:Add(pBtns, { height = "auto" })
-	mp.exec = u:Button(pBtns, {
-		text = L("Execute"), variant = "accent", height = 24,
-		onClick = function() GM.PlanQueue.ExecuteNext() end,
-	})
-	pBtns:Add(mp.exec, { width = "auto" })
-	mp.skip = u:Button(pBtns, {
-		text = L("Skip"), variant = "ghost", height = 24,
-		onClick = function() GM.PlanQueue.SkipStep() end,
-	})
-	pBtns:Add(mp.skip, { width = "auto" })
-	mp.rescan = u:Button(pBtns, {
+	-- armed step + action buttons share one 24px row — stacking
+	-- them vertically pushed the buttons past the pane's bottom
+	local pTop = u:Row(mp.planPanel, { gap = "xs" })
+	mp.planPanel.body:Add(pTop, { height = 24 })
+	mp.pArmed = u:Text(pTop, { style = "cell", wrap = false })
+	pTop:Add(mp.pArmed, { width = "fill", align = "center" })
+	mp.rescan = u:Button(pTop, {
 		text = L("Rescan"), variant = "ghost", height = 24,
 		onClick = function() GM.PlanQueue.Rescan() end,
 	})
-	pBtns:Add(mp.rescan, { width = "auto" })
+	pTop:Add(mp.rescan, { width = "auto", align = "center" })
+	mp.skip = u:Button(pTop, {
+		text = L("Skip"), variant = "ghost", height = 24,
+		onClick = function() GM.PlanQueue.SkipStep() end,
+	})
+	pTop:Add(mp.skip, { width = "auto", align = "center" })
+	mp.exec = u:Button(pTop, {
+		text = L("Execute"), variant = "accent", height = 24,
+		onClick = function() GM.PlanQueue.ExecuteNext() end,
+	})
+	pTop:Add(mp.exec, { width = "auto", align = "center" })
+	-- next/more folds into one line — three stacked hint rows was
+	-- what overflowed the pane
+	mp.pNext = u:Text(mp.planPanel, { style = "cellDim", wrap = false })
+	mp.planPanel.body:Add(mp.pNext)
 	mp.prog = u:Progress(mp.planPanel, { height = 3 })
 	mp.planPanel.body:Add(mp.prog, { width = "fill", height = "auto" })
 
