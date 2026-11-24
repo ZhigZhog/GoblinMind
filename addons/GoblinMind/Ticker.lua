@@ -32,7 +32,9 @@ local SPEED     = 36   -- px/s marquee rate
 local GAP       = 30   -- px between cells
 local REFRESH   = 20   -- s between price repaints
 local MAX_ITEMS = 24
-local BAR_H     = 11   -- xp/rep-bar slim
+local DEF_W     = 500  -- default strip size
+local DEF_H     = 20
+local DEF_FS    = 9    -- default cell font
 
 local bar, sf, child
 local cells = {}
@@ -48,6 +50,8 @@ local function Store()
 	return st
 end
 local function Items() return Store().items end
+local function BH() return Store().h or DEF_H end
+local function FS() return Store().fs or DEF_FS end
 
 -- ============ cells ============
 
@@ -81,9 +85,9 @@ local function Build()
 	wipe(cells)
 	local ids = Items()
 	if #ids == 0 then
-		child:SetSize(1, BAR_H)
+		child:SetSize(1, BH())
 		if not child.hint then
-			child.hint = GM.MakeFontString(child, GM.FONT, 8, "textDim")
+			child.hint = GM.MakeFontString(child, GM.FONT, FS(), "textDim")
 			child.hint:SetPoint("LEFT", 4, 0)
 		end
 		child.hint:SetText("drop items on the tape"
@@ -101,12 +105,13 @@ local function Build()
 		for _, id in ipairs(ids) do
 			local cell = CreateFrame("Button", nil, child)
 			cell.id = id
-			local fs = GM.MakeFontString(cell, GM.FONT, 8, "text")
+			local fs = GM.MakeFontString(cell, GM.FONT, FS(), "text")
 			fs:SetPoint("LEFT", 5, 0)
+			fs:SetJustifyV("MIDDLE")
 			fs:SetWordWrap(false)
 			fs:SetText(CellText(id))
 			cell.fs = fs
-			cell:SetSize(ceil(fs:GetStringWidth()) + 10, BAR_H)
+			cell:SetSize(ceil(fs:GetStringWidth()) + 10, BH())
 			cell:SetPoint("LEFT", totalW, 0)
 			totalW = totalW + cell:GetWidth() + GAP
 			cell:EnableMouse(not Store().click)
@@ -141,7 +146,7 @@ local function Build()
 		if pass == 1 then oneW = totalW end
 		if pass >= 2 and totalW >= oneW + view then break end
 	end
-	child:SetSize(math.max(totalW, 1), BAR_H)
+	child:SetSize(math.max(totalW, 1), BH())
 	off = 0
 	sf:SetHorizontalScroll(0)
 end
@@ -198,10 +203,11 @@ local function SavePos()
 end
 
 local function Restore()
-	local pos = Store().pos
+	local st = Store()
 	bar:ClearAllPoints()
-	if pos then
-		bar:SetSize(bar:GetWidth(), BAR_H)
+	if st.pos then
+		local pos = st.pos
+		bar:SetSize(st.w or bar:GetWidth(), BH())
 		bar:SetPoint(pos.p, UIParent, pos.rp, pos.x, pos.y)
 	else
 		-- docked: centered strip stacked just under the stock bars
@@ -228,9 +234,7 @@ local function BuildBar()
 	bar:SetFrameStrata("HIGH") -- above the HUD like an xp-bar strip
 	-- one strip among the stock xp/rep bars: centered, ~2/3 screen
 	local st = Store()
-	bar:SetSize(st.w
-		or math.max(360, floor((UIParent:GetWidth() or 1024) * 0.62)),
-		st.h or BAR_H)
+	bar:SetSize(st.w or DEF_W, BH())
 	GM.Panel(bar, "contMedium")
 	if GM.ChromePanel then GM.ChromePanel(bar) end
 	bar:SetMovable(true)
@@ -246,7 +250,7 @@ local function BuildBar()
 	-- the TICKER tag is the drag handle + usage hint; drag it to
 	-- undock the bar anywhere, like a Titan panel pulled off its edge
 	local brand = CreateFrame("Button", nil, bar)
-	brand:SetSize(40, BAR_H)
+	brand:SetSize(40, BH())
 	brand:SetPoint("LEFT", 0, 0)
 	local bf = GM.MakeFontString(brand, GM.FONT_BOLD, 7, "accent")
 	bf:SetPoint("CENTER")
@@ -259,7 +263,7 @@ local function BuildBar()
 		-- bar can move freely without a width fight
 		local w, l, t = bar:GetWidth(), bar:GetLeft(), bar:GetTop()
 		bar:ClearAllPoints()
-		bar:SetSize(w, BAR_H)
+		bar:SetSize(w, bar:GetHeight()) -- keep configured height
 		bar:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT",
 			l or 0, t or 0)
 		bar:StartMoving()
@@ -291,7 +295,7 @@ local function BuildBar()
 		if t == "item" then ClearCursor() T.Add(id) end
 	end)
 	child = CreateFrame("Frame", nil, sf)
-	child:SetSize(1, BAR_H)
+	child:SetSize(1, BH())
 	sf:SetScrollChild(child)
 
 	sf:SetScript("OnUpdate", function(_, dt)
@@ -299,7 +303,9 @@ local function BuildBar()
 		if GetTime() - lastPaint > REFRESH then PaintCells() end
 		local st = Store()
 		local over = not st.click and bar:IsMouseOver()
-		if oneW > sf:GetWidth() and not over then
+		-- tape scrolls whenever it has items — Build guarantees
+		-- enough passes to cover oneW+view, so the wrap is seamless
+		if oneW > 0 and not over then
 			off = (off + SPEED * dt) % oneW
 			sf:SetHorizontalScroll(off)
 		end
@@ -332,12 +338,25 @@ function T.SetDims(w, h)
 	if w ~= nil then st.w = w > 0 and w or nil end
 	if h ~= nil then st.h = h > 0 and h or nil end
 	if not bar then return end
-	h = st.h or BAR_H
+	h = st.h or BH()
 	bar:SetHeight(h)
 	bar._brand:SetHeight(h)
 	child:SetHeight(h)
 	for _, c in ipairs(cells) do c:SetHeight(h) end
-	if st.w then bar:SetWidth(st.w) end
+	bar:SetWidth(st.w or DEF_W)
+end
+
+-- font size changes cell text metrics — repaint fonts now and
+-- flag a rebuild so widths re-measure on the next tick
+function T.SetFontSize(n)
+	local st = Store()
+	st.fs = (n and n > 0) and floor(n) or nil
+	if not bar then return end
+	for _, c in ipairs(cells) do
+		c.fs:SetFont(GM.FONT, FS(), "")
+	end
+	if child.hint then child.hint:SetFont(GM.FONT, FS(), "") end
+	RebuildSoon()
 end
 
 -- ============ book repaint + slash ============

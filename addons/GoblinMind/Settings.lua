@@ -520,7 +520,7 @@ local function Build()
 	-- leaving UISpecialFrames pointing at a plain table (IsShown crash)
 	local f = GM.Widgets.Window({
 		name = "GoblinMindSettingsFrame", title = "SETTINGS",
-		w = 620, h = 1078, x = -60, y = 10, tab = "settings",
+		w = 620, h = 1100, x = -60, y = 10, tab = "settings",
 	})
 	ui.frame = f
 
@@ -916,14 +916,14 @@ local function Build()
 	-- row list the onboarding wizard shows). Panel itself only
 	-- reports what detection sees; the window does the work
 	-- ===== TICKER =====
-	local tk = Panel(f, 10, -942, 600, 64, "TICKER TAPE")
+	local tk = Panel(f, 10, -942, 600, 88, "TICKER TAPE")
 	local function tkStore() return GM.Ticker.Opts() end
 	Row(tk, "Width (px — blank = auto)", 22)
 	ui.tkW = EditBox(tk, 56)
 	ui.tkW:SetPoint("TOPLEFT", 240, -20)
 	ui.tkW:SetScript("OnEnterPressed", function(self)
 		local v = tonumber(self:GetText())
-		GM.Ticker.SetDims(v, nil)
+		GM.Ticker.SetDims(v or 0, nil)
 		self:ClearFocus()
 		S.Refresh()
 	end)
@@ -932,7 +932,16 @@ local function Build()
 	ui.tkH:SetPoint("TOPLEFT", 240, -44)
 	ui.tkH:SetScript("OnEnterPressed", function(self)
 		local v = tonumber(self:GetText())
-		GM.Ticker.SetDims(nil, v)
+		GM.Ticker.SetDims(nil, v or 0)
+		self:ClearFocus()
+		S.Refresh()
+	end)
+	Row(tk, "Font size (px)", 70)
+	ui.tkF = EditBox(tk, 56)
+	ui.tkF:SetPoint("TOPLEFT", 240, -68)
+	ui.tkF:SetScript("OnEnterPressed", function(self)
+		local v = tonumber(self:GetText())
+		GM.Ticker.SetFontSize(v or 0)
 		self:ClearFocus()
 		S.Refresh()
 	end)
@@ -950,7 +959,7 @@ local function Build()
 		end)
 	ui.tkClick:SetPoint("TOPLEFT", 500, -44)
 
-	local imp = Panel(f, 10, -1012, 600, 60,
+	local imp = Panel(f, 10, -1036, 600, 60,
 		"IMPORT FROM OTHER ADDONS")
 	ui.impScan = CreateFrame("Button", nil, imp)
 	ui.impScan:SetSize(110, 22)
@@ -1046,6 +1055,7 @@ function S.Refresh()
 		local st = GM.Ticker.Opts()
 		ui.tkW:SetText(tostring(st.w or ""))
 		ui.tkH:SetText(tostring(st.h or ""))
+		ui.tkF:SetText(tostring(st.fs or ""))
 		ui.tkLock.paint()
 		ui.tkClick.paint()
 	end
