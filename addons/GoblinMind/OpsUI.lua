@@ -403,6 +403,23 @@ local function BuildUI()
 	ui.footer:SetWidth(520)
 	ui.footer:SetJustifyH("LEFT")
 	ui.footer:SetWordWrap(false)
+
+	-- ============ GoblinUI managed layout ============
+	-- the three ColPanes were a hand-laid row at y=-34 spanning to
+	-- the window bottom; the same three panels become row leaves in
+	-- a column whose footer pins to the bottom edge. Panel innards
+	-- (list rows, field rows, editboxes) keep their own anchors.
+	local u = GM.ui
+	if u then
+		local root = u:AttachRoot(f, { direction = "column", gap = 4,
+			pad = { top = 34, left = 10, right = 10, bottom = 8 } })
+		local panes = u:Row(root, { gap = 6 })
+		root:Add(panes, { width = "fill", height = "fill" })
+		panes:Add(u:Adopt(typeP), { width = 140, height = "fill" })
+		panes:Add(u:Adopt(opP), { width = 200, height = "fill" })
+		panes:Add(u:Adopt(fldP), { width = "fill", height = "fill" })
+		root:Add(u:Adopt(ui.footer), { width = "fill", height = 12 })
+	end
 	ui.footer:SetText("named ops are shared — assign via ASSIGN or the group's op slot")
 
 	-- scroll for the field host (ops have ≤9 fields — fixed layout ok)
