@@ -375,6 +375,34 @@ local function Build()
 		r.rej:SetPoint("RIGHT", 0, 0)
 		ui.incRows[i] = r
 	end
+
+	-- ============ GoblinUI managed layout ============
+	-- the window was a hand-laid column: header strip (board label +
+	-- dynamic board btns + REFRESH), POST panel, BOARD list, then a
+	-- bottom pair. The header strip moves into a managed host frame
+	-- (its pieces re-anchor to the host, dynamic btns anchor off it),
+	-- the panels adopt as column leaves — the BOARD list fills slack,
+	-- the bottom pair rows COMMITS fixed / INBOUND fill.
+	local u = GM.ui
+	if u then
+		local head = CreateFrame("Frame", nil, f)
+		ui.headHost = head
+		ui.boardBar:ClearAllPoints()
+		ui.boardBar:SetPoint("TOPLEFT", head, "TOPLEFT", 2, -4)
+		ui.refreshBtn:ClearAllPoints()
+		ui.refreshBtn:SetPoint("TOPRIGHT", head, "TOPRIGHT", -2, -3)
+		ui.hint:ClearAllPoints()
+		ui.hint:SetPoint("RIGHT", ui.refreshBtn, "LEFT", -8, 0)
+		local root = u:AttachRoot(f, { direction = "column", gap = 6,
+			pad = { top = 26, left = 10, right = 10, bottom = 8 } })
+		root:Add(u:Adopt(head), { width = "fill", height = 20 })
+		root:Add(u:Adopt(post), { width = 700, height = 84 })
+		root:Add(u:Adopt(list), { width = "fill", height = "fill" })
+		local pair = u:Row(root, { gap = 6 })
+		root:Add(pair, { width = "fill", height = 146 })
+		pair:Add(u:Adopt(mine), { width = 342, height = "fill" })
+		pair:Add(u:Adopt(inc), { width = "fill", height = "fill" })
+	end
 end
 
 function OU.SetItem(itemID)
@@ -763,7 +791,11 @@ function OU.Refresh()
 		local lbl = OR.IsRemote(b) and (b .. "·") or b
 		local w = 10 + #lbl * 8
 		local btn = MkBtn(ui.frame, lbl, w)
-		btn:SetPoint("TOPLEFT", bx, -27)
+		if ui.headHost then
+			btn:SetPoint("TOPLEFT", ui.headHost, "TOPLEFT", bx - 10, -4)
+		else
+			btn:SetPoint("TOPLEFT", bx, -27)
+		end
 		bx = bx + w + 6
 		if b ~= ui.board then
 			btn.text:SetTextColor(GM.RGB("textDim"))
