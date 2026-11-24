@@ -1113,3 +1113,48 @@ function GM.AH.Execute(step)
 		return true
 	end
 end
+
+-- === Active scan — periodic book refresh while the AH is open ===
+-- The intel layer (marks, wall history, suspects) is only as fresh
+-- as the book; this keeps a scan cadence running during an AH
+-- session the way the sniper's auto loop does, without needing the
+-- sniper feed open. Cadence respects the server's ~15m replicate
+-- throttle: a background feature doesn't get the browse fallback —
+-- that's reserved for an explicit FULL SCAN click.
+local AUTO_AGE = 300 -- refresh once the book is 5m stale
+local autoAcc = 0
+local autoF = CreateFrame("Frame")
+autoF:SetScript("OnUpdate", function(_, dt)
+	if not (GM.db and GM.db.autoscan and GM.AH.open) then
+		autoAcc = 0
+		return
+	end
+	autoAcc = autoAcc + dt
+	if autoAcc < 20 then return end -- cheap 20s check cadence
+	autoAcc = 0
+	if GM.AH.Busy() then return end
+	local lastOK = GM.db.lastReplicateOK or 0
+	if GM.AH.BookAge() > AUTO_AGE
+		and (lastOK == 0 or time() - lastOK >= 900) then
+		GM.AH.FullScan()
+	end
+end)
+
+function GM.AH.SetAutoScan(on)
+	if not GM.db then return end
+	GM.db.autoscan = on and true or false
+end
+
+function GM.AH.AutoScanOn()
+	return GM.db and GM.db.autoscan and true or false
+end
+
+GM.Cmd({ "autoscan", "autosc" }, function(arg)
+	local sub = (arg or ""):match("^%s*(%S*)") or ""
+	if sub == "on" then GM.AH.SetAutoScan(true)
+	elseif sub == "off" then GM.AH.SetAutoScan(false)
+	else GM.AH.SetAutoScan(not GM.AH.AutoScanOn()) end
+	GM.Print(format("auto-scan %s%s — book refreshes while the AH is open",
+		GM.AH.AutoScanOn() and GM.CC("pos") .. "on" or GM.CC("textDim") .. "off",
+		"|r"))
+end, true)

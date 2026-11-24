@@ -27,9 +27,6 @@ MU.M = M
 local ROW_H = 24
 local ASK_VIS = 5
 
-local BAIT_DROP = 0.60 -- matches Intel.lua — lone ask far under the next
-local WALL_MIN = 4     -- matches Intel.lua — same-seller lot wall
-
 -- ============ art pool (same primitives as the plan window) ============
 
 local art = {}
@@ -75,46 +72,9 @@ end
 
 -- ============ asks + intel flags ============
 
--- per-lot flags recomputed on the ask array: Intel.marks carries
--- cross-scan state; the flags below describe THIS book snapshot
-local function FlagAsks(asks)
-	local bySeller = {}
-	for _, a in ipairs(asks) do
-		if a.seller and not a.own then
-			bySeller[a.seller] = (bySeller[a.seller] or 0) + 1
-		end
-	end
-	for s, n in pairs(bySeller) do
-		if n >= WALL_MIN then
-			for _, a in ipairs(asks) do
-				if a.seller == s then a.wall = true end
-			end
-		end
-	end
-	if #asks >= 2 and asks[2].unit > 0
-		and asks[1].unit <= asks[2].unit * BAIT_DROP
-		and not asks[1].own then
-		asks[1].bait = true
-	end
-	local run = 1
-	local function Close(hi)
-		if run >= 3 then
-			for j = hi - run + 1, hi do asks[j].step = true end
-		end
-		run = 1
-	end
-	for i = 2, #asks do
-		if asks[i].unit - asks[i - 1].unit == 1 then run = run + 1
-		else Close(i - 1) end
-	end
-	Close(#asks)
-	for _, a in ipairs(asks) do
-		if a.seller and GM.Intel and GM.Intel.IsSuspect(a.seller) then
-			a.solver = true
-		end
-	end
-	return bySeller
-end
+-- per-lot flags are computed at scan time by GM.Intel.AnalyzeItem —
+-- the same ladder analysis the book pass runs, so targeted scans
+-- feed marks, wall history, and the suspect table too
 
 local function ScanAsks()
 	if not M.itemID then return end
@@ -137,6 +97,11 @@ local function ScanAsks()
 		M.asks = asks or {}
 		M.askT = GetTime()
 		M.askScroll = 0
+		-- targeted scans feed the same marks + suspect table as the
+		-- book pass — intel accumulates without waiting on full scans
+		if GM.Intel and GM.Intel.AnalyzeItem then
+			GM.Intel.AnalyzeItem(id, M.asks, time())
+		end
 		MU.Refresh()
 	end, M.itemKey)
 end
@@ -383,7 +348,13 @@ end
 
 local function RefreshAskBook()
 	local asks = M.asks or {}
-	FlagAsks(asks)
+	-- rows arrive flagged by AnalyzeItem at scan time; suspect state
+	-- can shift between scans (a book scan lands mid-session) — the
+	-- solver flag alone is cheap to keep current on each repaint
+	for _, a in ipairs(asks) do
+		a.solver = a.seller and GM.Intel
+			and GM.Intel.IsSuspect(a.seller) or nil
+	end
 	mp.abHead:SetText("ASK BOOK")
 	local maxScroll = math.max(0, #asks - ASK_VIS)
 	M.askScroll = math.min(M.askScroll or 0, maxScroll)
@@ -481,9 +452,15 @@ local function RefreshIntel()
 	if marks and marks.walls then
 		for s, n in pairs(marks.walls) do
 			local sc = GM.Intel.Score(s)
+			local wh = marks.wallHist and marks.wallHist[s]
+			local tag = ""
+			if wh then
+				tag = format(" · %d obs", wh.scans or 1)
+				if wh.replenished then tag = tag .. " · repost" end
+			end
 			tinsert(lines, GM.CC("warn") .. format(
-				"wall — %s holds %d lots%s|r", s, n,
-				sc >= 4 and (" (suspect " .. sc .. ")") or ""))
+				"wall — %s ×%d%s%s|r", s, n, tag,
+				sc >= 4 and (" · suspect " .. sc) or ""))
 		end
 	end
 	-- suspects selling this item right now (from the live asks)
@@ -502,6 +479,8 @@ local function RefreshIntel()
 	for i = 1, 6 do
 		mp.intelRows[i]:SetText(lines[i] or "")
 	end
+	mp.auto.t:SetTextColor(GM.RGB(
+		GM.AH.AutoScanOn and GM.AH.AutoScanOn() and "pos" or "textDim"))
 end
 
 local function StepLabel(s)
@@ -753,6 +732,21 @@ function MU.Build(f, ahui)
 	GM.Panel(ip, "contLowest")
 	local ih = GM.MakeFontString(ip, GM.FONT_BOLD, 10, "secondary")
 	ih:SetPoint("TOPLEFT", 8, -5) ih:SetText("INTEL")
+	-- AUTO: the book-refresh cadence that feeds this pane — green lit
+	mp.auto = CreateFrame("Button", nil, ip)
+	mp.auto:SetSize(42, 12)
+	mp.auto:SetPoint("TOPRIGHT", -5, -3)
+	mp.auto.t = GM.MakeFontString(mp.auto, GM.FONT_BOLD, 8, "textDim")
+	mp.auto.t:SetPoint("CENTER")
+	mp.auto.t:SetText("AUTO")
+	mp.auto:SetScript("OnClick", function()
+		GM.AH.SetAutoScan(not GM.AH.AutoScanOn())
+		MU.Refresh()
+	end)
+	mp.auto:SetScript("OnEnter", function()
+		mp.auto.t:SetTextColor(GM.RGB("text"))
+	end)
+	mp.auto:SetScript("OnLeave", function() MU.Refresh() end)
 	mp.intelRows = {}
 	for i = 1, 6 do
 		local fs = GM.MakeFontString(ip, GM.FONT, 9, "text")
