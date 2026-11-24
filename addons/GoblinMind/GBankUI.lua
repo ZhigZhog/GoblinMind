@@ -211,7 +211,6 @@ local function Build()
 	end)
 
 	ui.summary = GM.MakeFontString(f, GM.FONT, 9, "textDim")
-	ui.summary:SetPoint("TOPLEFT", 12, -38)
 	ui.summary:SetJustifyH("LEFT")
 	ui.summary:SetWidth(560)
 	ui.summary:SetJustifyH("LEFT")
@@ -230,13 +229,9 @@ local function Build()
 
 	-- gbank tab strip (built at refresh — tab count/name arrive async)
 	ui.tabs = CreateFrame("Frame", nil, f)
-	ui.tabs:SetSize(320, 20)
-	ui.tabs:SetPoint("TOPRIGHT", -12, -60)
 	ui.tabBtns = {}
 
 	ui.lp = CreateFrame("Frame", nil, f)
-	ui.lp:SetSize(320, VISIBLE * ROW_H + 30)
-	ui.lp:SetPoint("TOPLEFT", 12, -84)
 	GM.Panel(ui.lp, "contLowest")
 	local lh = GM.MakeFontString(ui.lp, GM.FONT_BOLD, 9, "secondary")
 	lh:SetPoint("TOPLEFT", 8, -6)
@@ -254,8 +249,6 @@ local function Build()
 	for i = 1, VISIBLE do ui.lrows[i] = MakeRow(ui.lp, i, "→") end
 
 	ui.rp = CreateFrame("Frame", nil, f)
-	ui.rp:SetSize(320, VISIBLE * ROW_H + 30)
-	ui.rp:SetPoint("TOPRIGHT", -12, -84)
 	GM.Panel(ui.rp, "contLowest")
 	ui.rHead = GM.MakeFontString(ui.rp, GM.FONT_BOLD, 9, "secondary")
 	ui.rHead:SetPoint("TOPLEFT", 8, -6)
@@ -275,9 +268,38 @@ local function Build()
 	for i = 1, VISIBLE do ui.rrows[i] = MakeRow(ui.rp, i, "←") end
 
 	ui.foot = GM.MakeFontString(f, GM.FONT, 9, "textDim")
-	ui.foot:SetPoint("BOTTOMLEFT", 14, 10)
 	ui.foot:SetText("one stack per click · merges onto matching partials "
 		.. "first · tab permissions gate the arrows")
+
+	-- ============ layout wiring ============
+	-- summary + BLIZZARD UI share the top row; the dynamic tab strip
+	-- right-packs below it; the two panes split the fill width with a
+	-- fixed gutter; the hint line is a managed foot row
+	local u = GM.ui
+	local root = u:AttachRoot(f, {
+		direction = "column", gap = "sm",
+		pad = { top = 30, right = 12, bottom = 4, left = 12 },
+	})
+	local top = u:Row(root, { gap = "sm" })
+	root:Add(top, { height = 20 })
+	top:Add(u:Adopt(ui.summary, { width = 560, height = 14 }),
+		{ width = "fill", height = 14, align = "center" })
+	top:Add(u:Adopt(blizz, { width = 84, height = 18 }),
+		{ width = 84, height = 18, align = "center" })
+	local tabRow = u:Row(root, { justify = "end" })
+	root:Add(tabRow, { height = 20 })
+	tabRow:Add(u:Adopt(ui.tabs, { width = 320, height = 20 }),
+		{ width = 320, height = 20 })
+	local panes = u:Row(root, {})
+	root:Add(panes, { height = "fill" })
+	panes:Add(u:Adopt(ui.lp, { width = 320,
+		height = VISIBLE * ROW_H + 30 }), { width = 320, height = "fill" })
+	panes:Add(u:Adopt(CreateFrame("Frame", nil, f),
+		{ width = 16, height = 1 }), { width = "fill", height = 1 })
+	panes:Add(u:Adopt(ui.rp, { width = 320,
+		height = VISIBLE * ROW_H + 30 }), { width = 320, height = "fill" })
+	root:Add(u:Adopt(ui.foot, { width = 640, height = 12 }),
+		{ height = 12 })
 end
 
 -- ============ refresh ============
