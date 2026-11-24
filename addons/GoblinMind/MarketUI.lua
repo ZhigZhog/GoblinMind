@@ -208,6 +208,12 @@ local function DrawPrice(entry)
 	for _, p in ipairs(pts) do
 		lo = math.min(lo, p.v) hi = math.max(hi, p.v)
 	end
+	-- the live min ask belongs in the scale — below the series floor
+	-- it rendered off-chart (no mb line, its label hanging under the
+	-- axis) instead of marking the bottom of the book
+	if entry and entry.mb then
+		lo = math.min(lo, entry.mb) hi = math.max(hi, entry.mb)
+	end
 	if hi == lo then hi = lo + 1 end
 	local pad = (hi - lo) * 0.08
 	lo = lo - pad hi = hi + pad
@@ -549,14 +555,21 @@ local function RefreshIntel()
 	local lines = {}
 	local id = M.itemID
 	local marks = id and GM.Intel and GM.Intel.marks[id]
-	if marks and marks.bait then
+	-- marks are book-derived — a stale book can't claim a bait lot
+	-- is "live" (a dead drag stays flagged long after it's bought)
+	local live = GM.AH.BookLive and GM.AH.BookLive()
+	if marks and not live then
+		tinsert(lines, GM.CC("textDim")
+			.. "book stale — marks may be outdated|r")
+	end
+	if live and marks and marks.bait then
 		tinsert(lines, GM.CC("err") .. "bait lot live — cheapest ask is a drag|r")
 	end
-	if marks and marks.steps and marks.steps > 0 then
+	if live and marks and marks.steps and marks.steps > 0 then
 		tinsert(lines, GM.CC("warn") .. format("%d step-chain asks — "
 			.. "algorithmic repricing|r", marks.steps))
 	end
-	if marks and marks.walls then
+	if live and marks and marks.walls then
 		for s, n in pairs(marks.walls) do
 			local sc = GM.Intel.Score(s)
 			local wh = marks.wallHist and marks.wallHist[s]

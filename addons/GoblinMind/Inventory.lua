@@ -506,7 +506,12 @@ function GM.Inventory.MineRows()
 			-- mesh beacon when newer still, emitted row otherwise
 			local e0 = GM.ItemEntry(a.itemID)
 			local cheap = e0 and e0.mbx ~= math.huge and e0.mbx
-			local undercut = cheap and a.buyout
+			-- undercut claims someone beats us NOW — only a live
+			-- source (fresh book or mesh beacon) can say that; a
+			-- stale emit mbx flags phantom undercuts on sole listings
+			local live = e0 and (e0._src == "mesh" or (e0._src == "book"
+				and GM.AH.BookLive and GM.AH.BookLive()))
+			local undercut = live and cheap and a.buyout
 				and cheap < a.buyout or nil
 			-- tLeft is remaining-seconds at capture — rebase it or the
 			-- column freezes at whatever the last refresh saw
