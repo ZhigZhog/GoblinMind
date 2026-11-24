@@ -494,9 +494,11 @@ end
 
 local function PaintAuto()
 	if not mp then return end
-	local c = GM.RGB(AutoItemOn() and "pos" or "textDim")
-	if mp.autoBtn then mp.autoBtn.text:SetTextColor(c) end
-	if mp.auto then mp.auto.t:SetTextColor(c) end
+	local key = AutoItemOn() and "pos" or "textDim"
+	-- GM.RGB is a triple return — pass it straight through so all
+	-- three channels reach SetTextColor (a captured var keeps r only)
+	if mp.autoBtn then mp.autoBtn.text:SetTextColor(GM.RGB(key)) end
+	if mp.auto then mp.auto.t:SetTextColor(GM.RGB(key)) end
 end
 
 local autoAcc = 0
