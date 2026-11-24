@@ -31,21 +31,16 @@ local function Build()
 	})
 	ui.frame = f
 
-	-- toolbar
+	-- toolbar (refresh + plan + summary go under flow at the end)
 	local refresh = Btn(f, 66, "REFRESH", DU.Refresh)
-	refresh:SetPoint("TOPLEFT", 12, -34)
 	local plan = Btn(f, 90, "SCAN → PLAN", function()
 		GM.Destroying.Scan()
 	end)
-	plan:SetPoint("LEFT", refresh, "RIGHT", 6, 0)
 	ui.summary = GM.MakeFontString(f, GM.FONT, 9, "textDim")
-	ui.summary:SetPoint("LEFT", plan, "RIGHT", 12, 0)
 	ui.summary:SetJustifyH("LEFT")
 
 	-- column header
 	local hdr = CreateFrame("Frame", nil, f)
-	hdr:SetSize(596, 16)
-	hdr:SetPoint("TOPLEFT", 12, -60)
 	ui.summary:SetWidth(340)
 	ui.summary:SetJustifyH("LEFT")
 	ui.summary:SetWordWrap(false)
@@ -63,8 +58,6 @@ local function Build()
 
 	-- scroll host
 	local host = CreateFrame("Frame", nil, f)
-	host:SetSize(596, VISIBLE * ROW_H + 4)
-	host:SetPoint("TOPLEFT", 12, -78)
 	if host.SetClipsChildren then host:SetClipsChildren(true) end
 	host:EnableMouseWheel(true)
 	host:SetScript("OnMouseWheel", function(_, d)
@@ -112,9 +105,32 @@ local function Build()
 	ui.empty:SetPoint("CENTER")
 
 	ui.foot = GM.MakeFontString(f, GM.FONT, 9, "textDim")
-	ui.foot:SetPoint("BOTTOMLEFT", 14, 10)
 	ui.foot:SetText("VENDOR is what SELL pays · PROC EST needs manual "
 		.. "disenchant/mill · click row = target item")
+
+	-- ============ layout wiring ============
+	-- toolbar Row / header / scroll host / foot — the title bar
+	-- and tab stay W.Window chrome
+	local u = GM.ui
+	local root = u:AttachRoot(f, {
+		direction = "column", gap = "sm",
+		pad = { top = 34, right = 12, bottom = 12, left = 12 },
+	})
+	local bar = u:Row(root, { gap = "sm" })
+	root:Add(bar, { height = 20 })
+	local function Bar(fr, w, h)
+		h = h or 18
+		bar:Add(u:Adopt(fr, { width = w, height = h }),
+			{ width = w, height = h, align = "center" })
+	end
+	Bar(refresh, 66) Bar(plan, 90)
+	bar:Add(u:Adopt(ui.summary, { width = 340, height = 14 }),
+		{ width = "fill", height = 14, align = "center" })
+	root:Add(u:Adopt(hdr, { width = 596, height = 16 }), { height = 16 })
+	root:Add(u:Adopt(host, { width = 596, height = VISIBLE * ROW_H + 4 }),
+		{ height = "fill" })
+	root:Add(u:Adopt(ui.foot, { width = 596, height = 12 }),
+		{ height = 12 })
 end
 
 -- ============ data ============
