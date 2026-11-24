@@ -75,19 +75,15 @@ end
 
 -- sections slide down to make room for the reload banner
 function S.Relayout()
-	if not ui then return end
-	local genY = S.needReload and 62 or 34
-	ui.gen:SetPoint("TOPLEFT", 10, -genY)
-	local ttY = genY + 128 + 6
-	ui.ttPanel:SetPoint("TOPLEFT", 10, -ttY)
-	ui.ttPanel:SetHeight(428 - ttY)
-	ui.ttScroll:SetHeight(428 - ttY - 22)
+	if not ui or not ui.barLeaf then return end
+	-- the banner is a layout node now — toggling it reflows the
+	-- stack and the tooltip panel's fill height absorbs the shift
+	ui.barLeaf:SetVisible(S.needReload and true or false)
 end
 
 local function Panel(f, x, y, w, h, title)
 	local p = W.TitledPanel(f, title)
 	p:SetSize(w, h)
-	p:SetPoint("TOPLEFT", x, y)
 	return p
 end
 
@@ -527,7 +523,6 @@ local function Build()
 	-- reload-required banner: appears when a flagged option changes
 	local bar = CreateFrame("Frame", nil, f)
 	bar:SetSize(600, 24)
-	bar:SetPoint("TOPLEFT", 10, -32)
 	GM.Panel(bar, "contHigh")
 	local barEdge = bar:CreateTexture(nil, "ARTWORK")
 	barEdge:SetPoint("TOPLEFT")
@@ -980,6 +975,36 @@ local function Build()
 	hint:SetPoint("BOTTOMLEFT", 12, 6)
 	hint:SetText("TSM groups/ops/searches · GatherLite nodes "
 		.. "· merges into your setup, never deletes")
+
+	-- ============ layout wiring ============
+	-- the window is a vertical stack of titled panels — one managed
+	-- Column owns their slots; the reload banner is a toggleable
+	-- node and the tooltip panel fills whatever height remains
+	local u = GM.ui
+	local root = u:AttachRoot(f, {
+		direction = "column", gap = 6,
+		pad = { top = 34, right = 10, bottom = 4, left = 10 },
+	})
+	ui.barLeaf = root:Add(u:Adopt(bar, { width = 600, height = 24 }),
+		{ height = 24 })
+	ui.barLeaf:SetVisible(S.needReload and true or false)
+	local function StackPanel(p, h)
+		root:Add(u:Adopt(p, { width = 600, height = h }), { height = h })
+	end
+	StackPanel(gen, 128)
+	root:Add(u:Adopt(tt, { width = 600, height = 256 }),
+		{ height = "fill", minHeight = 60 })
+	StackPanel(prof, 118)
+	StackPanel(src, 148)
+	StackPanel(gt, 78)
+	StackPanel(ov, 142)
+	StackPanel(tk, 88)
+	StackPanel(imp, 60)
+	-- the tooltip panel's height is layout-owned now — keep the clip
+	-- viewport tracking it (Relayout used to resize it by hand)
+	tt:HookScript("OnSizeChanged", function(_, _, th)
+		ttScroll:SetHeight(math.max(40, th - 22))
+	end)
 
 	S.Relayout()
 end
