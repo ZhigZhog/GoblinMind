@@ -1053,9 +1053,9 @@ function S.Refresh()
 	if ui.detail then ui.detail.paint() end
 	if ui.tkW then
 		local st = GM.Ticker.Opts()
-		ui.tkW:SetText(tostring(st.w or ""))
-		ui.tkH:SetText(tostring(st.h or ""))
-		ui.tkF:SetText(tostring(st.fs or ""))
+		ui.tkW:SetText(tostring(st.w or GM.Ticker.DEF_W))
+		ui.tkH:SetText(tostring(st.h or GM.Ticker.DEF_H))
+		ui.tkF:SetText(tostring(st.fs or GM.Ticker.DEF_FS))
 		ui.tkLock.paint()
 		ui.tkClick.paint()
 	end

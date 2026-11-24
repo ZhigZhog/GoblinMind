@@ -35,6 +35,9 @@ local MAX_ITEMS = 24
 local DEF_W     = 500  -- default strip size
 local DEF_H     = 20
 local DEF_FS    = 9    -- default cell font
+-- settings window reads these to show the EFFECTIVE value —
+-- a stored nil means "auto", not "no setting"
+T.DEF_W, T.DEF_H, T.DEF_FS = DEF_W, DEF_H, DEF_FS
 
 local bar, sf, child
 local cells = {}
