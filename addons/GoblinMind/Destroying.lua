@@ -163,12 +163,14 @@ function D.Candidates()
 		local ops = GM.Groups.GetOpsForPath(group, "destroying")
 		local thresh = GM.Groups.EvalOp(ops, "threshold", id) or 0
 		local vendor, proc = D.Split(id)
-		local dv = (proc and (not vendor or proc > vendor)) and proc or vendor
+		local deWins = proc and (not vendor or proc > vendor)
+		local dv = deWins and proc or vendor
 		local e = GM.ItemEntry(id)
 		local mkt = e and e.p
 		if dv and dv >= thresh and (not mkt or dv > mkt) then
 			tinsert(rows, { id = id, qty = qty, dv = dv, mkt = mkt,
 				vendor = vendor, proc = proc,
+				action = deWins and "de" or "vendor",
 				gain = mkt and (dv - mkt) or dv,
 				group = group, name = GM.ItemName(id) })
 		end
@@ -191,9 +193,11 @@ function D.SeedDemo()
 		local vendor = VendorSell(id) or (5000 + i * 3737)
 		local mkt = math.floor(vendor * (0.4 + (i % 3) * 0.15))
 		local proc = i % 2 == 0 and math.floor(vendor * 1.6) or nil
-		local dv = (proc and proc > vendor) and proc or vendor
+		local deWins = proc and proc > vendor
+		local dv = deWins and proc or vendor
 		tinsert(rows, { id = id, qty = 1 + (i * 7) % 17,
 			dv = dv, mkt = mkt, vendor = vendor, proc = proc,
+			action = deWins and "de" or "vendor",
 			gain = dv - mkt,
 			group = i % 3 == 0 and "Base Group" or "demo",
 			name = GM.ItemName(id) })
@@ -210,10 +214,14 @@ function D.Scan()
 	end
 	local steps = {}
 	for _, r in ipairs(rows) do
-		tinsert(steps, { kind = "destroy", itemID = r.id,
-			qty = r.qty, name = r.name,
-			desc = format("%s > %s (+%s)",
-				GM.Money(r.dv), r.mkt and GM.Money(r.mkt) or "no market",
+		-- de rows are manual casts (protected) — the step instructs;
+		-- vendor rows execute through SELL at an open merchant
+		local de = r.action == "de"
+		tinsert(steps, { kind = de and "disenchant" or "destroy",
+			itemID = r.id, qty = r.qty, name = r.name,
+			desc = format("%s %s > %s (+%s)",
+				de and "DE" or "sell", GM.Money(r.dv),
+				r.mkt and GM.Money(r.mkt) or "no market",
 				GM.Money(r.gain)) })
 	end
 	GM.PlanQueue.SetScanPlan({ steps = steps, mode = "destroying",
@@ -246,4 +254,10 @@ end
 
 function D.Execute(step)
 	if step.kind == "destroy" then return DoDestroy(step) end
+	if step.kind == "disenchant" then
+		-- the cast is protected — no programmatic path; the plan
+		-- can only point at the item and ask for the manual cast
+		return "bounce", format("cast Disenchant on %s yourself",
+			step.name or ("item " .. step.itemID))
+	end
 end

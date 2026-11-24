@@ -17,13 +17,46 @@ function ctxMT:TextStyle(name)
 	return s
 end
 
--- apply a semantic style to a fontstring
+-- apply a semantic style to a fontstring. A custom font that fails
+-- to resolve must degrade, not silently render in the client
+-- default forever: this client's SetFont doesn't report failure, so
+-- prove the font works by measuring a real glyph — a dead font
+-- reports zero width. Failed fontstrings queue on ctx._deadFonts;
+-- Refont() re-applies once the client can rasterize (host calls it
+-- alongside its own font fixup pass — first-load failure heals
+-- there instead of sticking to the fallback)
 function ctxMT:ApplyStyle(fs, name)
 	local s = self:TextStyle(name)
 	local size = math.floor(s.size * self.textScale + 0.5)
-	fs:SetFont(self:Font(s.font), size, "")
+	local path = self:Font(s.font)
+	fs:SetFont(path, size, "")
+	local dead = false
+	if fs.GetStringWidth then
+		local prev = fs:GetText()
+		fs:SetText("1")
+		dead = fs:GetStringWidth() == 0
+		fs:SetText(prev)
+	end
+	if dead then
+		fs:SetFont(STANDARD_TEXT_FONT, size, "")
+		self._deadFonts = self._deadFonts or {}
+		self._deadFonts[fs] = name
+	elseif self._deadFonts then
+		self._deadFonts[fs] = nil
+	end
 	fs:SetTextColor(self:Color(s.color))
 	return s
+end
+
+-- deferred heal for fontstrings whose font failed to resolve — the
+-- host calls this once the client is fully up
+function ctxMT:Refont()
+	local dead = self._deadFonts
+	if not dead then return end
+	self._deadFonts = nil
+	for fs, name in pairs(dead) do
+		self:ApplyStyle(fs, name)
+	end
 end
 
 -- measurement cache: font×size×width×text -> height. Invalidated

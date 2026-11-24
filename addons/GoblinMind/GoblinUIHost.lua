@@ -56,3 +56,12 @@ GM.ui = lib:CreateContext("GoblinMind", {
 -- the English-keyed localizer: L('Post Scan') — enUS source of
 -- truth, missing keys degrade to the literal English key
 GM.L = GM.ui:GetLocalizer()
+
+-- GoblinUI Text nodes get the same deferred font heal the
+-- MakeFontString path has — Refont re-applies dead styles once the
+-- client can rasterize them (first-login load-order failure)
+local origFixup = GM.FixupFonts
+function GM.FixupFonts()
+	if origFixup then origFixup() end
+	if GM.ui then GM.ui:Refont() end
+end

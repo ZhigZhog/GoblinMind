@@ -90,8 +90,11 @@ local function Build()
 		act.text = GM.MakeFontString(act, GM.FONT_BOLD, 8, "warn")
 		act.text:SetPoint("CENTER")
 		act.text:SetText("DESTROY")
-		act:SetScript("OnEnter", function()
-			GM.Widgets.HintShow(act, {
+		act:SetScript("OnEnter", function(act)
+			GM.Widgets.HintShow(act, act.deRow and {
+				"disenchant EV beats vendor + market",
+				"cast Disenchant yourself — the cast is protected",
+			} or {
 				"sell one stack to the open merchant",
 				"click to arm, click again to sell",
 			})
@@ -105,8 +108,8 @@ local function Build()
 	ui.empty:SetPoint("CENTER")
 
 	ui.foot = GM.MakeFontString(f, GM.FONT, 9, "textDim")
-	ui.foot:SetText("VENDOR is what SELL pays · PROC EST needs manual "
-		.. "disenchant/mill · click row = target item")
+	ui.foot:SetText("DE = disenchant/mill EV beats vendor + market "
+		.. "· SELL vendors a stack · click row = target item")
 
 	-- ============ layout wiring ============
 	-- toolbar Row / header / scroll host / foot — the title bar
@@ -138,14 +141,16 @@ end
 function DU.Refresh()
 	if not ui then return end
 	local rows = GM.Destroying.Candidates()
-	local totDv, totGain = 0, 0
+	local totDv, totGain, nDe = 0, 0, 0
 	for _, r in ipairs(rows) do
 		totDv = totDv + r.dv * r.qty
 		totGain = totGain + r.gain * r.qty
+		if r.action == "de" then nDe = nDe + 1 end
 	end
 	local mOpen = MerchantFrame and MerchantFrame:IsShown()
-	ui.summary:SetText(format("%d item%s · best destroy %s%s",
-		#rows, #rows == 1 and "" or "s", GM.Money(totDv),
+	ui.summary:SetText(format("%d item%s · %d DE / %d sell · best destroy %s%s",
+		#rows, #rows == 1 and "" or "s", nDe, #rows - nDe,
+		GM.Money(totDv),
 		not mOpen and GM.CC("warn") .. " · merchant closed|r" or ""))
 	ui.empty:SetText("nothing worth destroying — threshold + market checked")
 	ui.empty:SetShown(#rows == 0)
@@ -178,10 +183,23 @@ function DU.Refresh()
 			end
 			row.group:SetText(r.group)
 			row.act.armed = nil
-			row.act.text:SetText("SELL")
-			row.act.text:SetTextColor(GM.RGB("warn"))
+			row.act.deRow = r.action == "de"
 			local id = r.id
-			row.act:SetScript("OnClick", function(act)
+			if r.action == "de" then
+				row.act.text:SetText("DE")
+				row.act.text:SetTextColor(GM.RGB("accent"))
+				row.act:SetScript("OnClick", function()
+					-- the cast is protected — point at the item and
+					-- leave the button press to the player
+					GM.TargetItem(id)
+					GM.Print(GM.CC("accent") .. "cast Disenchant on "
+						.. (r.name or ("item " .. id))
+						.. " — protected cast, can't be automated|r")
+				end)
+			else
+				row.act.text:SetText("SELL")
+				row.act.text:SetTextColor(GM.RGB("warn"))
+				row.act:SetScript("OnClick", function(act)
 				if not act.armed then
 					local st = GM.Banking.FindStack(id)
 					act.armed = true
@@ -198,6 +216,7 @@ function DU.Refresh()
 				end
 				DU.Refresh()
 			end)
+			end
 			row:SetScript("OnClick", function()
 				if not r.id then return end
 				-- the widget's modified-click hook already ran the
