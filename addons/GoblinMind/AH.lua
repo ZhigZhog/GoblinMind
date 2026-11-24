@@ -235,7 +235,11 @@ function GM.AH.ItemKeyFromLink(link)
 	local id, _, _, _, _, _, suffix = strsplit(":", s)
 	id, suffix = tonumber(id), tonumber(suffix)
 	if id and suffix and suffix ~= 0 then
-		return C_AuctionHouse.MakeItemKey(id, 0, suffix, nil)
+		-- the itemString carries no itemLevel, but Forever keys do
+		-- (owndump: Banded Girdle of Spirit = lvl 31) — a level-0 key
+		-- can miss a strict server-side match where the real key hits
+		local ilvl = GetInfo and (select(4, GetInfo(id))) or 0
+		return C_AuctionHouse.MakeItemKey(id, ilvl or 0, suffix, nil)
 	end
 end
 
