@@ -256,7 +256,11 @@ function GM.AH.CollectCommodityAsks(itemID)
 	for i = 1, C_AuctionHouse.GetNumCommoditySearchResults(itemID) do
 		local r = C_AuctionHouse.GetCommoditySearchResultInfo(itemID, i)
 		if r and r.unitPrice and r.quantity and r.quantity > 0 then
+			-- commodity rows carry no seller names on Forever
+			-- (owners table is empty) — totalNumberOfOwners is the
+			-- only seller signal the API gives back
 			tinsert(asks, { qty = r.quantity, unit = r.unitPrice,
+				nOwners = r.totalNumberOfOwners,
 				own = (r.containsOwnerItem or r.isOwned) or nil })
 		end
 	end
@@ -303,6 +307,7 @@ function GM.AH.CollectItemAsks()
 						and r.timeLeftSeconds) or NormTl(r.timeLeft),
 					own = (r.containsOwnerItem or r.isOwned or ownSeller) or nil,
 					highBidder = (meGUID and r.bidder == meGUID) or nil,
+					nOwners = r.totalNumberOfOwners,
 					seller = seller })
 			end
 		end

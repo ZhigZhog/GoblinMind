@@ -79,7 +79,22 @@ end
 local function ScanAsks()
 	if not M.itemID then return end
 	if GM.AH.Busy and GM.AH.Busy() then
-		M.askWait = true
+		-- latch once per busy stretch, then poll until the book pass
+		-- drains — SendSearchQuery is refused while a replicate
+		-- collect or browse build is in flight. Before the retry the
+		-- latch just stayed set forever ("scan busy…" for the session)
+		if not M.askWait then
+			M.askWait = true
+			local id = M.itemID
+			local function retry()
+				if not M.askWait or M.itemID ~= id or not GM.AH.open then
+					return
+				end
+				if GM.AH.Busy and GM.AH.Busy() then GM.After(2, retry)
+				else ScanAsks() end
+			end
+			GM.After(2, retry)
+		end
 		return
 	end
 	M.askWait = nil
@@ -111,7 +126,7 @@ function MU.SetItem(id, link, key)
 	local changed = M.itemID ~= id
 	M.itemID, M.itemLink, M.itemKey = id, link, key
 	if changed then
-		M.asks, M.askT, M.askTries = nil, nil, nil
+		M.asks, M.askT, M.askTries, M.askWait = nil, nil, nil, nil
 		ScanAsks()
 	end
 	-- the planner target follows the market slot — a change to one
@@ -376,7 +391,12 @@ local function RefreshAskBook()
 			if a.bait then tinsert(flags, GM.CC("err") .. "BAIT|r") end
 			if a.step then tinsert(flags, GM.CC("warn") .. "STEP|r") end
 			if a.solver then tinsert(flags, GM.CC("err") .. "⚠|r") end
-			local seller = a.seller or "?"
+			-- no seller name (commodity API returns none) — the
+			-- owner count is the honest fallback display
+			local seller = a.seller
+				or (a.nOwners and a.nOwners > 0
+					and (a.nOwners .. (a.nOwners == 1 and " seller" or " sellers")))
+				or "?"
 			row.c3:SetText(seller .. (#flags > 0 and "  " .. table.concat(flags, " ") or ""))
 			row.c4:SetText(a.tl and GM.FmtAge(a.tl) or "")
 			row.a = a
@@ -559,6 +579,14 @@ function MU.Refresh()
 	if M.itemID and M.asks and M.askT
 		and GetTime() - M.askT > 60 and not M.askWait then
 		M.asks = nil
+		ScanAsks()
+	end
+	-- recovery: a latched askWait whose retry died (AH closed mid-
+	-- wait, retarget race) leaves both panes stuck — re-kick when
+	-- nothing is actually scanning anymore
+	if M.itemID and not M.asks and GM.AH.open
+		and not (M.askWait and GM.AH.Busy and GM.AH.Busy()) then
+		M.askWait = nil
 		ScanAsks()
 	end
 	FreeArt()
