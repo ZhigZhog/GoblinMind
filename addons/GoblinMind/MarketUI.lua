@@ -567,7 +567,24 @@ local function RefreshIntel()
 		lines[1] = GM.CC("textDim") .. (id and "no manipulation signals"
 			or "—") .. "|r"
 	end
-	mp.intelText:SetText(table.concat(lines, "\n"))
+	-- one pooled Text node per signal — the same row pattern the
+	-- numbers pane runs; a single wrapped fontstring's lines were
+	-- colliding inside the scroll content
+	local pool = mp.intelLines
+	for i = 1, math.max(#pool, #lines) do
+		if not pool[i] then
+			pool[i] = GM.ui:Text(mp.intelScroll,
+				{ style = "cell", spacing = 3 })
+			mp.intelScroll.content:Add(pool[i], { height = "auto" })
+		end
+		local t = pool[i]
+		if lines[i] then
+			t:SetText(lines[i])
+			t:SetVisible(true)
+		else
+			t:SetVisible(false)
+		end
+	end
 	PaintAuto()
 end
 
@@ -839,10 +856,8 @@ function MU.Build(f, ahui)
 	bot:Add(mp.intelPanel, { width = "fill", height = "fill" })
 	local isc = u:Scroll(mp.intelPanel, { gap = "none" })
 	mp.intelPanel.body:Add(isc, { width = "fill", height = "fill" })
-	-- spacing=3: Montserrat's wrapped lines render tight enough to
-	-- overlap at 13px — give the intel lines breathing room
-	mp.intelText = u:Text(isc, { style = "cell", spacing = 3 })
-	isc.content:Add(mp.intelText, { height = "auto" })
+	mp.intelScroll = isc
+	mp.intelLines = {} -- pooled per-signal Text nodes (RefreshIntel)
 
 	PaintAuto()
 	return mp
