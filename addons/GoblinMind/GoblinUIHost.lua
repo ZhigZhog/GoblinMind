@@ -27,9 +27,9 @@ for k, v in pairs(base.styles) do
 	for k2, v2 in pairs(v) do s[k2] = v2 end
 	styles[k] = s
 end
-styles.cell = { font = "regular", size = 13, color = "text", line = 17 }
-styles.cellAccent = { font = "medium", size = 13, color = "accent", line = 17 }
-styles.cellDim = { font = "regular", size = 13, color = "textDim", line = 17 }
+styles.cell = { font = "regular", size = 11, color = "text", line = 14 }
+styles.cellAccent = { font = "medium", size = 11, color = "accent", line = 14 }
+styles.cellDim = { font = "regular", size = 11, color = "textDim", line = 14 }
 
 local fonts = {}
 for k, v in pairs(base.fonts) do fonts[k] = v end

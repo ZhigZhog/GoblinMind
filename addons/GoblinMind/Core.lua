@@ -473,6 +473,26 @@ end)
 Cmd("import", function()
 	if GM.Import then GM.Import.Show() end
 end)
+-- /goblin fontdump — which font each creation path actually resolves
+-- to. Text nodes (theme ApplyStyle) vs MakeFontString (ApplyFont
+-- probe) should both report a Montserrat path; STANDARD_TEXT_FONT or
+-- a client font means that path fell back
+Cmd("fontdump", function()
+	local function probe(tag, fs)
+		local path, size, flags = fs:GetFont()
+		GM.Print(tag .. " -> " .. tostring(path) .. " "
+			.. tostring(size) .. " " .. tostring(flags))
+	end
+	local f = CreateFrame("Frame", nil, UIParent)
+	probe("MakeFontString", GM.MakeFontString(f, GM.FONT, 11, "text"))
+	if GM.ui then
+		local fs = f:CreateFontString(nil, "OVERLAY")
+		GM.ui:ApplyStyle(fs, "cell")
+		probe("ui:Text(cell)", fs)
+		GM.ui:ApplyStyle(fs, "value")
+		probe("ui:Text(value)", fs)
+	end
+end)
 Cmd("api", function()
 	if GM.Onboard then GM.Onboard.Show("api") end
 end)
