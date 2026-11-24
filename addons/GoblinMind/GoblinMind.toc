@@ -42,6 +42,7 @@ MyAuctions.lua
 DestroyingUI.lua
 VendoringUI.lua
 AHUI.lua
+MarketUI.lua
 MailUI.lua
 BankUI.lua
 GBankUI.lua

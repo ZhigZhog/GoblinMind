@@ -393,10 +393,10 @@ local function Build()
 	end)
 	local x = 190
 	local tabHost = CreateFrame("Frame", nil, f)
-	tabHost:SetSize(124, 20)
+	tabHost:SetSize(190, 20)
 	tabHost:SetPoint("TOPLEFT", x, -34)
 	ui.pageTabs = W.PageTabs(tabHost,
-		{ { "shop", "SHOP" }, { "mine", "MINE" } },
+		{ { "shop", "SHOP" }, { "mine", "MINE" }, { "market", "MARKET" } },
 		function(key)
 			ui.page = key
 			ui.scroll = 0
@@ -407,7 +407,7 @@ local function Build()
 			end
 			AU.Refresh()
 		end)
-	x = x + 130
+	x = x + 196
 	local full = Btn(f, 76, "FULL SCAN", function() GM.AH.FullScan() end)
 	full:SetPoint("TOPLEFT", x + 6, -34)
 	Tip(full, function()
@@ -799,6 +799,11 @@ local function Build()
 	end
 	ui.bEmpty = GM.MakeFontString(bp, GM.FONT, 10, "textDim")
 	ui.bEmpty:SetPoint("CENTER", 0, -10)
+
+	-- MARKET page: MarketUI owns the pane; we hand it the frame + ui
+	if GM.MarketUI and GM.MarketUI.Build then
+		ui.mp = GM.MarketUI.Build(f, ui)
+	end
 
 	ui.foot = GM.MakeFontString(f, GM.FONT, 9, "textDim")
 	ui.foot:SetPoint("BOTTOMLEFT", 14, 10)
@@ -1370,11 +1375,12 @@ function AU.Refresh()
 	end
 
 	-- pane visibility: SHOP = results + listings panes; MINE = posted
-	-- on top + bids underneath
+	-- on top + bids underneath; MARKET = the terminal page
 	ui.lp:SetShown(ui.page == "shop")
 	ui.rp:SetShown(ui.page == "shop")
 	ui.fp:SetShown(ui.page == "mine")
 	ui.bp:SetShown(ui.page == "mine")
+	if ui.mp then ui.mp:SetShown(ui.page == "market") end
 
 	if ui.page == "shop" then
 		ui.lHead:SetText(ui.lastBrowseLabel
@@ -1502,7 +1508,7 @@ function AU.Refresh()
 		end
 		ui.foot:SetText("one protected call per click · item BUY = lot buyout · "
 			.. "commodity BUY stages a quote → CONFIRM")
-	else
+	elseif ui.page == "mine" then
 		-- MINE page: posted auctions on top, our bids underneath
 		local rows = open and GM.Inventory.MineRows() or {}
 		ui.fEmpty:SetText(not open and "open the auction house"
@@ -1606,6 +1612,10 @@ function AU.Refresh()
 			.. "undercuts sort first (book mbx < your price)",
 			#rows, #rows == 1 and "" or "s",
 			uc > 0 and format(" · %s%d undercut|r", GM.CC("warn"), uc) or ""))
+	elseif ui.page == "market" then
+		ui.foot:SetText("market terminal — every ask, every seller, "
+			.. "every manipulation signal")
+		if GM.MarketUI then GM.MarketUI.Refresh() end
 	end
 	-- scan progress mirrors into the footer on both pages — live while
 	-- a scan is moving, then the completion line for ~15s (it arrives
@@ -1670,6 +1680,10 @@ end
 function AU.Toggle()
 	Build()
 	if ui.frame:IsShown() then ui.frame:Hide() else AU.Show() end
+end
+
+function AU.IsOpen()
+	return ui and ui.frame:IsShown() or false
 end
 
 -- repaint when item names/icons resolve asynchronously

@@ -3,8 +3,9 @@ local _, GM = ...
 -- Price history — self-recorded market-value snapshots. TSM's AppData
 -- exposes no per-item series, so we keep our own: one global snapshot
 -- whenever at least MIN_GAP has passed (login + an hourly ticker).
--- Each item stores a packed "t.p,t.p,…" string so the SavedVariable
--- stays small (~1 MB for a week of points across the full dataset).
+-- Each item stores a packed "t.p.s.n,…" string (supply + lots came
+-- with the market terminal; the parser tolerates old "t.p" points)
+-- so the SavedVariable stays small.
 
 GM.History = {}
 
@@ -31,12 +32,16 @@ function GM.History.Snapshot()
 	local items = GoblinMindDB and GoblinMindDB.items
 	if not items then return end
 	db.lastT = now
+	local book = GM.AH and GM.AH.book
 	for id, e in pairs(items) do
 		local p = GM.Price("dbmarket", id)
 		if p then
+			local b = book and book[id]
+			local tail = b and ("." .. (b.sup or 0) .. "." .. (b.n or 0))
+				or ""
 			local s = db.items[id]
 			db.items[id] = GM.History.Prune(
-				(s and s .. "," or "") .. now .. "." .. floor(p), now)
+				(s and s .. "," or "") .. now .. "." .. floor(p) .. tail, now)
 		end
 	end
 end
@@ -58,17 +63,19 @@ function GM.History.Prune(s, now)
 	return table.concat(keep, ",")
 end
 
--- { {t, p}, ... } ascending over the last maxAge seconds
+-- { {t, p, s, n}, ... } ascending over the last maxAge seconds —
+-- s/n are nil on points written before the supply fields existed
 function GM.History.Points(itemID, maxAge)
 	local s = GM.History.db and GM.History.db.items[itemID]
 	if not s then return {} end
 	local cutoff = time() - (maxAge or MAX_AGE)
 	local out = {}
 	for pt in s:gmatch("[^,]+") do
-		local t, p = pt:match("^(%d+)%.(%d+)$")
+		local t, p, sup, n = pt:match("^(%d+)%.(%d+)%.?(%d*)%.?(%d*)")
 		t, p = tonumber(t), tonumber(p)
 		if t and p and t >= cutoff then
-			out[#out + 1] = { t = t, p = p }
+			out[#out + 1] = { t = t, p = p,
+				s = tonumber(sup), n = tonumber(n) }
 		end
 	end
 	table.sort(out, function(a, b) return a.t < b.t end)

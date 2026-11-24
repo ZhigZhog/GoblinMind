@@ -12,7 +12,13 @@ function GM.TargetItem(itemID, link)
 		link = full or link
 	end
 	GM.PlanQueue.SetItem(itemID, link)
-	GM.PlanQueue.Show()
+	-- AH planning lives in the market terminal while the session
+	-- window is up; the standalone plan window keeps everything else
+	if GM.AH.open and GM.AHUI and GM.AHUI.IsOpen and GM.AHUI.IsOpen() then
+		GM.AHUI.OpenMarket(itemID, link)
+	else
+		GM.PlanQueue.Show()
+	end
 	if GM.AH.open then GM.PlanQueue.Rescan() end
 end
 
@@ -21,9 +27,14 @@ end
 -- still paste, stacks still split — and while the plan window is open
 -- the clicked item also becomes its target. Gated on IsShown so a
 -- bare shift+click for chat-linking never pops the planner.
+-- shift+click captures whenever a planning surface is up — the
+-- standalone window, or the AH session window hosting the market
+-- page (which also eats AHUI's search-fill hook; the market page
+-- shows everything the search row would and more)
 local function Capture()
 	return IsShiftKeyDown and IsShiftKeyDown()
-		and GM.PlanQueue.IsShown()
+		and (GM.PlanQueue.IsShown()
+			or (GM.AHUI and GM.AHUI.IsOpen and GM.AHUI.IsOpen()))
 end
 
 -- The shared funnel every container/click path delegates to on this

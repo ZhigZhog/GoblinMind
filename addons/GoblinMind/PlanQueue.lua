@@ -464,6 +464,18 @@ end
 
 function PQ.Show()
 	Build()
+	-- AH-context plans render inside the market terminal when the AH
+	-- session window is open — the standalone window keeps non-AH
+	-- modes (warehousing/mailing/craft/destroying) and everything
+	-- when the session window is down
+	if GM.AHUI and GM.AHUI.IsOpen and GM.AHUI.IsOpen()
+		and (PQ.itemID or PQ.plan)
+		and (not PQ.plan or not PQ.plan.mode
+			or PQ.plan.mode == "postscan" or PQ.plan.mode == "cancelscan"
+			or PQ.plan.mode == "shopscan") then
+		GM.AHUI.OpenMarket(PQ.plan and PQ.plan.itemID or PQ.itemID)
+		return
+	end
 	ui.frame:Show()
 	PQ.Refresh()
 end
