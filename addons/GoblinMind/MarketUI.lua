@@ -158,9 +158,13 @@ function MU.SetItem(id, link, key)
 		ScanAsks()
 	end
 	-- the planner target follows the market slot — a change to one
-	-- is a change to the other
-	if GM.PlanQueue.itemID ~= id then
-		GM.PlanQueue.SetItem(id, link)
+	-- is a change to the other (itemKey passes too: suffixed variants
+	-- scan nothing under the suffix-0 base key; same id + different
+	-- suffix is still a retarget)
+	local pk = GM.PlanQueue.itemKey
+	if GM.PlanQueue.itemID ~= id
+		or (pk and pk.itemSuffix or 0) ~= (key and key.itemSuffix or 0) then
+		GM.PlanQueue.SetItem(id, link, key)
 	end
 	if MU.Refresh then MU.Refresh() end
 end
@@ -671,7 +675,7 @@ function MU.Refresh()
 	-- no loop: SetItem only re-syncs PQ when the ids differ
 	local tid = GM.PlanQueue.itemID
 	if tid and tid ~= M.itemID then
-		MU.SetItem(tid, GM.PlanQueue.item)
+		MU.SetItem(tid, GM.PlanQueue.item, GM.PlanQueue.itemKey)
 		return
 	end
 	-- asks older than a minute while the page is live deserve a

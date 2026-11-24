@@ -237,6 +237,9 @@ function GM.Inventory.RefreshOwned()
 			if aid then seenAid[aid] = true end
 			local e = {
 				itemID = id,
+				-- keep the API key: suffixed variants scan/post/cancel
+				-- under their exact itemKey, never the suffix-0 base
+				itemKey = info.itemKey,
 				qty = info.quantity or 1,
 				-- per-ITEM buyout (Forever convention — not lot total)
 				buyout = info.buyoutAmount or info.bidAmount,
@@ -465,6 +468,7 @@ local function EnumerateBids()
 			local b = bids[aid] or {}
 			b.itemID = b.itemID
 				or (info.itemKey and info.itemKey.itemID)
+			b.itemKey = b.itemKey or info.itemKey
 			b.qty = info.quantity or b.qty or 1
 			b.curBid = info.bidAmount or info.requiredBid or b.curBid
 			b.ourBid = b.ourBid or b.curBid
@@ -521,7 +525,8 @@ function GM.Inventory.MineRows()
 				-- fp-keyed cache: hand cancel the real auctionID when
 				-- the snapshot had one, else the enumeration index
 				aid = a.aid or a.idx or fp,
-				id = a.itemID, qty = (a.qty or 1) * (a.n or 1),
+				id = a.itemID, key = a.itemKey,
+				qty = (a.qty or 1) * (a.n or 1),
 				unit = a.buyout, tLeft = remain,
 				mkt = mkt, cheap = cheap, undercut = undercut,
 				name = GM.ItemName(a.itemID) or ("item " .. a.itemID),
@@ -544,7 +549,8 @@ function GM.Inventory.BidRows()
 			local remain = b.tl and b.at
 				and (b.at + b.tl - time()) or b.tl
 			rows[#rows + 1] = {
-				aid = aid, id = b.itemID, qty = b.qty or 1,
+				aid = aid, id = b.itemID, key = b.itemKey,
+				qty = b.qty or 1,
 				ourBid = b.ourBid, curBid = b.curBid or b.ourBid,
 				buyout = b.buyout, status = b.status or "winning",
 				remain = remain,

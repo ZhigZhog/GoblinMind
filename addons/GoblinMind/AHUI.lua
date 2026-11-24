@@ -1584,7 +1584,7 @@ function AU.Refresh()
 				row:SetScript("OnClick", function()
 					if not r.id then return end
 					if IsModifiedClick() then RowModClick(r.id)
-					else GM.TargetItem(r.id) end
+					else GM.TargetItem(r.id, nil, r.key) end
 				end)
 			else
 				row:Hide()
@@ -1634,7 +1634,7 @@ function AU.Refresh()
 				row:SetScript("OnClick", function()
 					if not r.id then return end
 					if IsModifiedClick() then RowModClick(r.id)
-					else GM.TargetItem(r.id) end
+					else GM.TargetItem(r.id, nil, r.key) end
 				end)
 			else
 				row:Hide()

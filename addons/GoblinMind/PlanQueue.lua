@@ -501,7 +501,10 @@ function PQ.Show()
 		and (not PQ.plan or not PQ.plan.mode
 			or PQ.plan.mode == "postscan" or PQ.plan.mode == "cancelscan"
 			or PQ.plan.mode == "shopscan") then
-		GM.AHUI.OpenMarket(PQ.plan and PQ.plan.itemID or PQ.itemID)
+		local oid = PQ.plan and PQ.plan.itemID or PQ.itemID
+		GM.AHUI.OpenMarket(oid, nil,
+			(oid == PQ.itemID and PQ.itemKey)
+				or (PQ.plan and PQ.plan.itemKey) or nil)
 		return
 	end
 	ui.frame:Show()
@@ -670,11 +673,16 @@ function PQ.SetScanPlan(plan)
 	PQ.Refresh()
 end
 
-function PQ.SetItem(itemID, itemLink)
+function PQ.SetItem(itemID, itemLink, key)
 	Build()
 	PQ.homeMode = false
 	PQ.itemID = itemID
 	PQ.item = itemLink
+	-- suffixed variants ("of the Bear") need their exact ItemKey —
+	-- suffix-0 scans return zero listings. Callers hand the key from
+	-- browse/owned rows; links carry it in itemString field 8.
+	PQ.itemKey = key or (GM.AH.ItemKeyFromLink
+		and GM.AH.ItemKeyFromLink(itemLink)) or nil
 	PQ.scan = nil
 	PQ.scanMode = nil -- retargeting supersedes "rerun last scan"
 	PQ.itemFresh = true -- and outranks the armed plan's mode on rescan
@@ -701,7 +709,7 @@ function PQ.Rescan()
 		PQ.ScanStart()
 		GM.AH.ScanItem(workID, name, function(asks)
 			PQ.Solve(asks, workID)
-		end)
+		end, workID == PQ.itemID and PQ.itemKey or nil)
 		return
 	end
 	-- craft plans re-emit, not re-solve: fresh inventory + prices
@@ -743,7 +751,9 @@ function PQ.Rescan()
 	PQ.ScanStart() -- no stale steps armed while the query is out
 	GM.AH.ScanItem(workID, name, function(asks)
 		PQ.Solve(asks, workID)
-	end)
+	end, (workID == PQ.itemID and PQ.itemKey)
+		or (PQ.plan and PQ.plan.itemID == workID and PQ.plan.itemKey)
+		or nil)
 	ui.summary:SetText(GM.CC("textDim") .. "scanning…|r")
 end
 
@@ -836,6 +846,9 @@ function PQ.Solve(asks, workID)
 		lot.item = workLink
 	end
 	plan.itemID = workID
+	-- keep the variant's key on the plan — re-solves target the exact
+	-- suffixed listing set, never the suffix-0 base that scans empty
+	plan.itemKey = (workID == PQ.itemID) and PQ.itemKey or nil
 	plan.bank = GM.BankCount(workID)
 	plan.deposit = GM.AH.DepositCost(workID,
 		plan.qty + (plan.owned or 0) + (plan.relisted or 0)) or 0

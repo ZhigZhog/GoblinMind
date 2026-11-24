@@ -485,7 +485,7 @@ function S.Refresh()
 	if ui.mode == "shop" then
 		local asks = S.asks or {}
 		if #asks == 0 then
-			S.Status(GM.CC("textDim") .. (S.itemID and "book is empty" or
+			S.Status(GM.CC("textDim") .. (S.itemID and "no asks listed" or
 				"SHOP — SCAN the targeted item's book|r"))
 		end
 		PushGroup(asks, function(a) return a.itemID end)

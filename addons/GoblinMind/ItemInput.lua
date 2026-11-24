@@ -5,17 +5,17 @@ local GetIDByInfo = C_Item and C_Item.GetItemInfoInstant or GetItemInfoInstant
 
 -- Every input path funnels here: target the item, surface the window,
 -- and read the book when we're already at the AH.
-function GM.TargetItem(itemID, link)
+function GM.TargetItem(itemID, link, key)
 	if not itemID then return end
 	if not link or link:match("^item:") then
 		local _, full = GetInfo and GetInfo(itemID)
 		link = full or link
 	end
-	GM.PlanQueue.SetItem(itemID, link)
+	GM.PlanQueue.SetItem(itemID, link, key)
 	-- AH planning lives in the market terminal while the session
 	-- window is up; the standalone plan window keeps everything else
 	if GM.AH.open and GM.AHUI and GM.AHUI.IsOpen and GM.AHUI.IsOpen() then
-		GM.AHUI.OpenMarket(itemID, link)
+		GM.AHUI.OpenMarket(itemID, link, key)
 	else
 		GM.PlanQueue.Show()
 	end

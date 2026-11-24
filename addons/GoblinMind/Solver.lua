@@ -98,7 +98,7 @@ function GM.Solver.Plan(asks, p50, p90, gold, vel, opts)
 		if #asks == 0 then
 			return nil, ownOnly
 				and "only listings up are yours — nothing to buy"
-				or "book is empty and you own none"
+				or "no asks listed and nothing in bags to post"
 		end
 		local first = asks[1]
 		if (resale - first.unit) / first.unit < minMargin then

@@ -222,6 +222,23 @@ function GM.AH.ScanItem(itemID, itemName, done, key)
 	C_AuctionHouse.SendSearchQuery(GM.AH.scanItemKey, EMPTY_SORTS, true)
 end
 
+-- a chat/bag/tooltip link carries the variant in itemString field 8
+-- (itemID:enchant:gem1:gem2:gem3:gem4:suffixID) — the only key source
+-- when the caller didn't drill in through a browse/search row. A
+-- suffix-0 key returns no listings when every posting is a variant,
+-- so suffixed links MUST come through here.
+function GM.AH.ItemKeyFromLink(link)
+	local s = link and link:match("item:([^|h]+)")
+	if not s or not (C_AuctionHouse and C_AuctionHouse.MakeItemKey) then
+		return nil
+	end
+	local id, _, _, _, _, _, suffix = strsplit(":", s)
+	id, suffix = tonumber(id), tonumber(suffix)
+	if id and suffix and suffix ~= 0 then
+		return C_AuctionHouse.MakeItemKey(id, 0, suffix, nil)
+	end
+end
+
 -- Time-left arrives in two shapes on Forever: real seconds on
 -- item-search results (timeLeftSeconds) and a 0–3 bucket enum on
 -- replicate rows (Short/Medium/Long/VeryLong — the same field
