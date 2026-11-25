@@ -589,9 +589,12 @@ GM.Cmd("mmdebug", function()
 	local n, w, z, c = UnitPosition("player")
 	local mapID = C_Map and C_Map.GetBestMapForUnit
 		and C_Map.GetBestMapForUnit("player")
-	local x, y = mapID and GM.MapPos(c, n, w, mapID)
-	local wpn, wpw, wpc = (x and GM.WorldPos) and
-		GM.WorldPos(mapID, x, y)
+	local x, y
+	if mapID then x, y = GM.MapPos(c, n, w, mapID) end
+	local wpn, wpw, wpc
+	if x and y and GM.WorldPos then
+		wpn, wpw, wpc = GM.WorldPos(mapID, x, y)
+	end
 	GM.Print(("unit: n=%.1f w=%.1f c=%s | map=%s x=%.3f y=%.3f | wp: n=%s w=%s c=%s")
 		:format(n or -1, w or -1, tostring(c), tostring(mapID),
 			x or -1, y or -1,
