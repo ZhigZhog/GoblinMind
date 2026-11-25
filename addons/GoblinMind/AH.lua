@@ -1482,7 +1482,8 @@ function GM.AH.Execute(step)
 			-- the listing on the next snapshot
 			if a.fp then GM.Inventory.recentCancels[a.fp] = now end
 			GM.Ledger.Add("cancel", a.itemID, a.qty, a.buyout,
-				{ dep = a.dep, auctionID = step.auctionID })
+				{ dep = a.dep, auctionID = step.auctionID,
+					nm = a.name })
 		end
 		-- CancelAuction is PROTECTED on Forever — the call throws the
 		-- client-side "Interface action failed" block, never reaches

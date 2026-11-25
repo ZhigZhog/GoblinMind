@@ -353,7 +353,8 @@ function GM.Inventory.RefreshOwned()
 			and t <= postUntil then
 			for _ = 1, extra do
 				GM.Ledger.Add("post", e.itemID, e.qty, e.buyout,
-					{ dep = e.dep, aid = e.aid, dur = e.tLeft })
+					{ dep = e.dep, aid = e.aid, dur = e.tLeft,
+						nm = e.name })
 			end
 		end
 	end
@@ -387,7 +388,7 @@ function GM.Inventory.RefreshOwned()
 						-- vanished on schedule without a cancel → expiry
 						GM.Ledger.Add("expire", pl.e.itemID, pl.e.qty,
 							nil, { auctionID = pl.e.aid or fp,
-								dep = pl.e.dep })
+								dep = pl.e.dep, nm = pl.e.name })
 					else
 						-- buyout is per-item on Forever — sale proceeds
 						-- per unit are buyout minus the 5% AH cut
@@ -395,7 +396,7 @@ function GM.Inventory.RefreshOwned()
 							and math.floor(pl.e.buyout * 0.95) or nil
 						GM.Ledger.Add("sell", pl.e.itemID, pl.e.qty,
 							unit, { auctionID = pl.e.aid or fp,
-								dep = pl.e.dep })
+								dep = pl.e.dep, nm = pl.e.name })
 					end
 				end
 			end

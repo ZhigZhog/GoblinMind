@@ -190,6 +190,15 @@ local function QName(id)
 	return (GM.QHex(id) or "") .. ItemName(id) .. "|r"
 end
 
+-- display name for a tx: the recorded nm carries the suffix variant
+-- ("Banded Girdle of the Bear") — the bare itemID can only give the
+-- base name
+local function TxName(e)
+	return (e.x and e.x.nm)
+		and ((GM.QHex(e.i) or "") .. e.x.nm .. "|r")
+		or QName(e.i)
+end
+
 -- INVENTORY: owned items by value
 local function BuildInventory()
 	local out, total = {}, 0
@@ -329,7 +338,7 @@ function OV.RefreshLog()
 				e.ty == "sell" and GM.CC("pos") or
 					e.ty == "buy" and GM.CC("warn") or GM.CC("textDim"),
 				TX_LABEL[e.ty] or e.ty,
-				QName(e.i), e.q,
+				TxName(e), e.q,
 				money and (" · " .. GM.Money(money)) or "", depTxt))
 		end
 	end
@@ -604,26 +613,29 @@ end
 -- debit (money/value arriving), negative = credit
 local JE_ORDER = { "cash", "stock", "posted", "dep", "pnl", "ext" }
 
-local function JournalRowText(e)
+local function PaintJournalRow(r, e)
 	local money = e.u and e.u * e.q
-	local base = format("%s  %s %s|r · %s ×%d%s",
-		date("%H:%M", e.t),
-		e.ty == "sell" and GM.CC("pos") or
-			e.ty == "buy" and GM.CC("warn") or GM.CC("textDim"),
-		TX_LABEL[e.ty] or e.ty, QName(e.i), e.q,
-		money and (" · " .. GM.Money(money)) or "")
-	if not e.je then return base end
-	local dr, cr = {}, {}
-	for _, a in ipairs(JE_ORDER) do
-		local d = e.je[a]
-		if d and d ~= 0 then
-			tinsert(d > 0 and dr or cr,
-				a .. " " .. GM.MoneyShort(math.abs(d)))
+	r[1]:SetText(date("%H:%M", e.t))
+	r[2]:SetText((e.ty == "sell" and GM.CC("pos") or
+		e.ty == "buy" and GM.CC("warn") or GM.CC("textDim"))
+		.. (TX_LABEL[e.ty] or e.ty) .. "|r")
+	r[3]:SetText(format("%s ×%d%s", TxName(e), e.q,
+		money and (" · " .. GM.Money(money)) or ""))
+	if e.je then
+		local dr, cr = {}, {}
+		for _, a in ipairs(JE_ORDER) do
+			local d = e.je[a]
+			if d and d ~= 0 then
+				tinsert(d > 0 and dr or cr,
+					a .. " " .. GM.MoneyShort(math.abs(d)))
+			end
 		end
+		r[4]:SetText(table.concat(dr, " · "))
+		r[5]:SetText(table.concat(cr, " · "))
+	else
+		r[4]:SetText("")
+		r[5]:SetText("")
 	end
-	return base .. GM.CC("textDim") .. "   —  dr|r "
-		.. table.concat(dr, " · ") .. GM.CC("textDim")
-		.. "   cr|r " .. table.concat(cr, " · ")
 end
 
 local function RefreshAccounts()
@@ -635,7 +647,10 @@ local function RefreshAccounts()
 	end
 	-- journal chrome
 	ui.journalBal:SetShown(journal)
-	for _, fs in ipairs(ui.journalRows) do fs:SetShown(journal) end
+	for _, fs in ipairs(ui.journalCols) do fs:SetShown(journal) end
+	for _, r in ipairs(ui.journalRows) do
+		for _, fs in ipairs(r) do fs:SetShown(journal) end
+	end
 	ui.acctAdd:SetShown(not journal)
 	ui.acctHint:SetShown(not journal)
 	if journal then
@@ -665,12 +680,20 @@ local function RefreshAccounts()
 		local tx = GM.Ledger.TxFor(ViewChar())
 		local maxOff = math.max(0, #tx - #ui.journalRows)
 		if ui.jScroll > maxOff then ui.jScroll = maxOff end
-		for i, fs in ipairs(ui.journalRows) do
+		for i, r in ipairs(ui.journalRows) do
 			local e = tx[#tx - (i - 1 + ui.jScroll)]
-			fs:SetText(e and JournalRowText(e)
-				or (i == 1 and #tx == 0
-					and "no transactions yet — the journal fills as you trade"
-					or ""))
+			if e then
+				PaintJournalRow(r, e)
+			elseif i == 1 and #tx == 0 then
+				r[1]:SetText("")
+				r[2]:SetText("")
+				r[3]:SetText("no transactions yet — the journal "
+					.. "fills as you trade")
+				r[4]:SetText("")
+				r[5]:SetText("")
+			else
+				for _, fs in ipairs(r) do fs:SetText("") end
+			end
 		end
 		return
 	end
@@ -881,7 +904,9 @@ local function Build()
 	local avs = { L("ACCOUNTS"), L("JOURNAL") }
 	for i, lab in ipairs(avs) do
 		local seg = W.Segment(accts, lab, 72, 16)
-		seg:SetPoint("TOPRIGHT", -10 - (#avs - i) * 76, -20)
+		-- in the title band, not the row area — at -20 they sat ON
+		-- the first account row's in/out column
+		seg:SetPoint("TOPRIGHT", -10 - (#avs - i) * 76, -4)
 		local idx = i
 		seg:SetScript("OnClick", function()
 			ui.acctView = idx == 2 and "journal" or "accounts"
@@ -896,14 +921,36 @@ local function Build()
 	ui.journalBal = GM.MakeFontString(accts, GM.FONT, 9, "secondary")
 	ui.journalBal:SetPoint("TOPLEFT", 8, -20)
 	ui.journalBal:SetWordWrap(false)
-	ui.journalRows = {}
-	for i = 1, 9 do
-		local fs = GM.MakeFontString(accts, GM.FONT, 9, "textDim")
-		fs:SetPoint("TOPLEFT", 8, -40 - (i - 1) * 24)
-		fs:SetWidth(696)
+	-- column geometry shared by the header and every row
+	-- L() at the literal site — variable-fed L(c[1]) registers
+	-- nothing for the extractor
+	local JC = {
+		{ L("TIME"), 8, 44 }, { L("TX"), 56, 62 },
+		{ L("ITEM"), 122, 192 },
+		{ L("DR"), 316, 190 }, { L("CR"), 508, 188 },
+	}
+	ui.journalCols = {}
+	for _, c in ipairs(JC) do
+		local fs = GM.MakeFontString(accts, GM.FONT_BOLD, 8, "secondary")
+		fs:SetPoint("TOPLEFT", c[2], -38)
+		fs:SetWidth(c[3])
 		fs:SetJustifyH("LEFT")
 		fs:SetWordWrap(false)
-		ui.journalRows[i] = fs
+		fs:SetText(c[1])
+		ui.journalCols[#ui.journalCols + 1] = fs
+	end
+	ui.journalRows = {}
+	for i = 1, 9 do
+		local r, y = {}, -54 - (i - 1) * 22
+		for j, c in ipairs(JC) do
+			local fs = GM.MakeFontString(accts, GM.FONT, 9, "textDim")
+			fs:SetPoint("TOPLEFT", c[2], y)
+			fs:SetWidth(c[3])
+			fs:SetJustifyH("LEFT")
+			fs:SetWordWrap(false)
+			r[j] = fs
+		end
+		ui.journalRows[i] = r
 	end
 	-- wheel scrubs back through the journal while that view is up
 	accts:EnableMouseWheel(true)
