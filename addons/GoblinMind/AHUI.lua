@@ -1397,14 +1397,44 @@ end
 
 -- ============ refresh ============
 
-function AU.Refresh()
+-- view-model for the registry's Data() pass — shop results +
+-- listings, mine's posted/bid rows, AH-open + pending-confirm
+-- state. Per-row icon/name/BagCount enrichment stays per-VISIBLE-
+-- row in the painters (lazy virtualization — see GroupsUI); the
+-- pendingConfirm re-read inside row OnClick stays live — a vm
+-- frozen at refresh time would be stale by the click
+local function Data()
+	local vm = {
+		open = AHOpen(),
+		scanGroups = next(GM.Model.Pref("scanGroups") or {})
+			and true or false,
+		pendingConfirm = GM.AH.pendingConfirm,
+	}
+	if ui.page == "shop" then
+		vm.rows = vm.open and Results() or {}
+		vm.asks = ui.asks or {}
+		vm.isComm = vm.asks[1] and vm.asks[1].id == nil
+		for _, a in ipairs(vm.asks) do
+			if not a.own and a.unit then
+				vm.cheapest = a break
+			end
+		end
+	elseif ui.page == "mine" then
+		vm.rows = vm.open and GM.Inventory.MineRows() or {}
+		vm.bids = vm.open and GM.Inventory.BidRows() or {}
+	end
+	return vm
+end
+
+function AU.Refresh(vm)
 	if not ui then return end
-	local open = AHOpen()
+	vm = vm or Data()
+	local open = vm.open
 	ui.pageTabs.set(ui.page)
 	-- GROUPS reads accent when a scan scope is active — otherwise
 	-- scans cover everything and the button stays plain text
 	if ui.grpBtn and ui.grpBtn.text then
-		local scoped = next(GM.Model.Pref("scanGroups") or {})
+		local scoped = vm.scanGroups
 		ui.grpBtn.text:SetTextColor(GM.RGB(scoped and "accent" or "text"))
 	end
 
@@ -1418,7 +1448,7 @@ function AU.Refresh()
 	if ui.page == "shop" then
 		ui.lHead:SetText(ui.lastBrowseLabel
 			and strupper(ui.lastBrowseLabel) or "RESULTS")
-		local rows = open and Results() or {}
+		local rows = vm.rows
 		ui.lEmpty:SetText(not open and "open the auction house"
 			or ui.status
 			or (#rows == 0 and (ui.searchedAt
@@ -1467,18 +1497,18 @@ function AU.Refresh()
 		end
 
 		-- right pane: per-listing asks
-		local asks = ui.asks or {}
+		local asks = vm.asks
 		ui.rHead:SetText(ui.sel and ("LISTINGS — " .. (ui.sel.name or "?"))
 			or "LISTINGS")
 		-- commodity asks (no auctionID) get the Blizzard-style qty buy
-		local isComm = asks[1] and asks[1].id == nil
+		local isComm = vm.isComm
 		ui.qty:SetShown(isComm and true or false)
 		ui.qtyLbl:SetShown(isComm and true or false)
 		ui.buyN:SetShown(isComm and true or false)
 		if isComm then
 			local n = tonumber(ui.qty:GetText())
 			local pending = ui.stagedBuy or ui.confirmAsk
-			local pc = GM.AH.pendingConfirm
+			local pc = vm.pendingConfirm
 			ui.buyN.text:SetText(pending and (pc and pc.quote
 				and ("CONFIRM " .. GM.Money(pc.quote)) or "CONFIRM")
 				or ("BUY" .. (n and n > 0 and (" ×" .. n) or "")))
@@ -1494,10 +1524,7 @@ function AU.Refresh()
 		ui.askScroll = math.min(ui.askScroll or 0, askMax)
 		W.ScrollText(ui.rCount, ui.askScroll, ASK_VISIBLE, #asks)
 		-- cheapest non-own level gets the pos flag — that's the buy point
-		local cheapest
-		for _, a in ipairs(asks) do
-			if not a.own and a.unit then cheapest = a break end
-		end
+		local cheapest = vm.cheapest
 		for i = 1, ASK_VISIBLE do
 			local row, a = ui.askRows[i], asks[i + ui.askScroll]
 			if a then
@@ -1543,7 +1570,7 @@ function AU.Refresh()
 			.. "commodity BUY stages a quote → CONFIRM")
 	elseif ui.page == "mine" then
 		-- MINE page: posted auctions on top, our bids underneath
-		local rows = open and GM.Inventory.MineRows() or {}
+		local rows = vm.rows
 		ui.fEmpty:SetText(not open and "open the auction house"
 			or (#rows == 0 and "no auctions up" or ""))
 		ui.fEmpty:SetShown(#rows == 0)
@@ -1594,7 +1621,7 @@ function AU.Refresh()
 			end
 		end
 		-- bids pane: outbid rows sort first, REBID = current + 1c
-		local bids = open and GM.Inventory.BidRows() or {}
+		local bids = vm.bids
 		ui.bEmpty:SetText(not open and ""
 			or (#bids == 0 and "no bids placed this session" or ""))
 		ui.bEmpty:SetShown(#bids == 0)
@@ -1805,4 +1832,5 @@ end
 -- AH session, never touched by tab switches
 GM.View.Register("ah", { class = "contextual",
 	Show = AU.Show, Hide = AU.Hide, Toggle = AU.Toggle,
+	Data = Data,
 	Refresh = AU.Refresh, IsShown = AU.IsOpen })
