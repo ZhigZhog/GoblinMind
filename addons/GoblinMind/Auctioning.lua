@@ -29,15 +29,9 @@ local function Pump()
 		function(asks)
 			if scanning ~= job then return end -- stale callback
 			scanning = nil
-			-- intel marks before the consumer reads rows — bait/step
-			-- flags feed A.Cheapest's drag-lot skip. Suffixed scans
-			-- stay out: marks are itemID-wide and a variant ladder
-			-- would poison them
-			if GM.Intel and GM.Intel.AnalyzeItem
-				and not (job.key and job.key.itemSuffix
-					and job.key.itemSuffix ~= 0) then
-				pcall(GM.Intel.AnalyzeItem, job.itemID, asks)
-			end
+			-- collect already ran Intel.AnalyzeItem before delivery —
+			-- bait/step flags ride the rows, marks are written.
+			-- Re-analyzing would double-count suspect scores
 			local ok, err = pcall(job.done, asks)
 			if not ok then
 				GM.Print(GM.CC("warn") .. "scan callback failed: "

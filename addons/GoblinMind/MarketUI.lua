@@ -150,16 +150,10 @@ local function ScanAsks()
 		-- auto-refresh burns all 3 tries on good scans and a later
 		-- throttled empty never retries ("scanner died")
 		if #M.asks > 0 then M.askTries = 0 end
-		-- targeted scans feed the same marks + suspect table as the
-		-- book pass — intel accumulates without waiting on full scans.
-		-- A variant-scoped ladder describes one suffix's market, not
-		-- the item's — feeding it would mint bait/wall claims off a
-		-- handful of lots the same way it would corrupt the book row
-		if not (M.itemKey and (M.itemKey.itemSuffix or 0) ~= 0) then
-			if GM.Intel and GM.Intel.AnalyzeItem then
-				GM.Intel.AnalyzeItem(id, M.asks, time())
-			end
-		end
+		-- collect already ran Intel.AnalyzeItem on these rows before
+		-- delivery (suffix-0 scans only — a variant ladder would mint
+		-- item-level marks off a subset). Re-running here would
+		-- double-count suspect scores in the same bucket
 		-- …and freshen the item's book row: mb/sup/n derive from the
 		-- ladder the same way CollectBook derives them, so a page-
 		-- scoped autoscan keeps the chips + NUMBERS live too.

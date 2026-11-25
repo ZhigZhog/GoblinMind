@@ -42,11 +42,7 @@ function GM.Solver.Plan(asks, p50, p90, gold, vel, opts)
 	-- engages the drag on its terms (it re-drags under you, or its
 	-- sniper collects the discount). Wall-undercut sits behind the
 	-- bait at near-market and sells the moment it clears
-	local baitUnit, wall
-	for _, a in ipairs(asks) do
-		if a.bait then baitUnit = baitUnit or a.unit
-		elseif not wall then wall = a.unit end
-	end
+	local wall, baitUnit = GM.Auctioning.Cheapest(asks)
 	if baitUnit then
 		local ref = wall or baitUnit -- all-bait book: the drag itself
 		-- is the only reference left
