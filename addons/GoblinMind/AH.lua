@@ -375,8 +375,11 @@ function GM.AH.CollectCommodityAsks(itemID)
 	GM.AH.MergeOwnAsks(asks, GM.AH.scanItemKey)
 	table.sort(asks, function(a, b) return a.unit < b.unit end)
 	-- flag rows before delivery — solver/sniper consumers price off
-	-- bait/step marks; unflagged rows feed the drag
-	if GM.Intel and GM.Intel.AnalyzeItem then
+	-- bait/step marks; unflagged rows feed the drag. Suffixed scans
+	-- describe one variant's market — flagging them would mint
+	-- item-level marks off a subset (same rule MarketUI applies)
+	local sfx = GM.AH.scanItemKey and (GM.AH.scanItemKey.itemSuffix or 0) or 0
+	if sfx == 0 and GM.Intel and GM.Intel.AnalyzeItem then
 		GM.Intel.AnalyzeItem(itemID, asks, time())
 	end
 	GM.AH.asks = asks
@@ -429,7 +432,8 @@ function GM.AH.CollectItemAsks()
 	end
 	GM.AH.MergeOwnAsks(asks, key)
 	table.sort(asks, function(a, b) return a.unit < b.unit end)
-	if GM.Intel and GM.Intel.AnalyzeItem then
+	local sfx = GM.AH.scanItemKey and (GM.AH.scanItemKey.itemSuffix or 0) or 0
+	if sfx == 0 and GM.Intel and GM.Intel.AnalyzeItem then
 		GM.Intel.AnalyzeItem(GM.AH.scanItemID, asks, time())
 	end
 	GM.AH.asks = asks

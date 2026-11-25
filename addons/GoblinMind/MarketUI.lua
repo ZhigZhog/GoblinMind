@@ -131,6 +131,11 @@ local function ScanAsks()
 		if M.itemID ~= id then return end -- retargeted mid-scan
 		M.asks = asks or {}
 		M.askT = GetTime()
+		-- the retry budget covers CONSECUTIVE lost scans, not the
+		-- item's lifetime — a real delivery refills it, otherwise the
+		-- auto-refresh burns all 3 tries on good scans and a later
+		-- throttled empty never retries ("scanner died")
+		if #M.asks > 0 then M.askTries = 0 end
 		-- targeted scans feed the same marks + suspect table as the
 		-- book pass — intel accumulates without waiting on full scans.
 		-- A variant-scoped ladder describes one suffix's market, not
