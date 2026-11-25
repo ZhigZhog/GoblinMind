@@ -118,7 +118,12 @@ local function ScanAsks()
 	-- declaring the book empty so a lost query doesn't read as "no asks"
 	M.askTries = (M.askTries or 0) + 1
 	GM.After(6, function()
-		if M.itemID == id and not M.asks and (M.askTries or 0) < 3 then
+		-- a dropped query never calls back (M.asks stays nil); an
+		-- empty callback while the book insists lots exist is a lost
+		-- race — both deserve the retry, a truly unlisted item doesn't
+		if M.itemID ~= id or (M.askTries or 0) >= 3 then return end
+		local e = GM.AH.book and GM.AH.book[id]
+		if not M.asks or (#M.asks == 0 and e and (e.n or 0) > 0) then
 			ScanAsks()
 		end
 	end)

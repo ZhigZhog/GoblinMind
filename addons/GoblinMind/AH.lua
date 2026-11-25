@@ -151,13 +151,24 @@ f:SetScript("OnEvent", function(_, event, ...)
 		if GM.AH.browse then GM.AH.OnBrowseResults() end
 	elseif event == "COMMODITY_SEARCH_RESULTS_UPDATED" then
 		local itemID = ...
-		GM.AH.commEvtSeen = true
+		-- flags are per-scan: foreign searches (TSM's scans run
+		-- alongside ours) must not pretend our commodity side
+		-- answered, or an item final-empty + a stale flag reads
+		-- as "honest empty" while our rows are still in flight
 		if itemID == GM.AH.scanItemID then
+			GM.AH.commEvtSeen = true
 			PollResults(itemID, 0)
 		end
 	elseif event == "ITEM_SEARCH_RESULTS_UPDATED" then
-		GM.AH.itemEvtSeen = true
-		if GM.AH.scanItemID then PollResults(GM.AH.scanItemID, 0) end
+		local ikey = ...
+		-- same guard — the event carries the queried ItemKey (or
+		-- nothing on some clients; a keyless arg can't be verified
+		-- so it counts as ours rather than hanging the job)
+		local iid = type(ikey) == "table" and ikey.itemID or ikey
+		if GM.AH.scanItemID and (not iid or iid == GM.AH.scanItemID) then
+			GM.AH.itemEvtSeen = true
+			PollResults(GM.AH.scanItemID, 0)
+		end
 	elseif event == "COMMODITY_PRICE_UPDATED" then
 		-- arg is the quoted total for the staged quantity
 		local totalPrice = select(2, ...)
