@@ -111,6 +111,10 @@ G.RegisterKind{ id = "fish", label = "FISH",
 	-- splash. armSec covers the channel as a SUCCEEDED fallback;
 	-- CHANNEL_START arms to the channel's own endTime instead
 	armSec = 24,
+	-- a fishing farm IS the one spot: no loop exists to solve.
+	-- cycleSec is the cast+loot cadence — the ~21s channel plus
+	-- recast latency — so a lone spot still gets an honest gpm
+	spot = true, cycleSec = 22,
 	castIds = { 7620 }, castNames = { "fishing" },
 	glCats = { "fishing" } }
 G.RegisterKind{ id = "skin", label = "SKIN",
@@ -1405,7 +1409,27 @@ function SolveNow(map, kind)
 			end
 		end
 	end
-	if #pts < 3 then return nil end
+	if #pts < 3 then
+		local def = G.KindDefs[kind]
+		-- standstill kinds (fishing): the farm IS one spot —
+		-- no loop to solve; the best single record is the row,
+		-- gpm = spot EV over the cast cadence
+		if not (def and def.spot) or #pts == 0 then return nil end
+		local bi
+		for i = 1, #pts do
+			if not bi or evs[i] > evs[bi] then bi = i end
+		end
+		local cyc = def.cycleSec or GATHER_SEC
+		return {
+			stops = { pts[bi] },
+			kind = kind, map = map,
+			speed = G.SPEEDS[db.speedIx or 2].yps,
+			respawn = G.RespawnSec(map, kind),
+			gpm = evs[bi] * 60 / cyc * G.ContF(),
+			lapSec = cyc, yards = 0, evLoop = evs[bi],
+			spot = true,
+		}
+	end
 
 	local ctx = {
 		speed = G.SPEEDS[db.speedIx or 2].yps,
