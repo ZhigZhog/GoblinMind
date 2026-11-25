@@ -336,7 +336,7 @@ local function Build()
 	-- Contextual takeover (AH session only) — no tab strip.
 	local f = GM.Widgets.Window({
 		name = "GoblinMindAH", title = "AUCTION HOUSE",
-		w = 800, h = 470, x = -40, y = -10,
+		w = 840, h = 470, x = -40, y = -10,
 		onHide = function()
 			GM.FramePark.Restore(AuctionHouseFrame)
 			if not ui.wantDefault then
@@ -446,8 +446,8 @@ local function Build()
 	ui.lHead = GM.MakeFontString(lp, GM.FONT_BOLD, 9, "secondary")
 	ui.lHead:SetPoint("TOPLEFT", 8, -6)
 	-- browse labels + the scroll counter must stay left of the
-	-- BROWSE/FILTER/SAVED buttons (start ~264)
-	ui.lHead:SetWidth(190)
+	-- GROUPS/BROWSE/FILTER/SAVED buttons (start ~x180)
+	ui.lHead:SetWidth(110)
 	ui.lHead:SetJustifyH("LEFT")
 	ui.lCount = GM.MakeFontString(lp, GM.FONT, 9, "textDim")
 	-- follows the header text's right edge — never collides with the
@@ -455,42 +455,42 @@ local function Build()
 	ui.lCount:SetPoint("LEFT", ui.lHead, "RIGHT", 10, 0)
 	-- BROWSE pops the item-class tree — the native UI's category
 	-- browse, reissued as itemClassFilters on an empty search
-	ui.browseBtn = Btn(lp, 48, "BROWSE", function()
+	ui.browseBtn = Btn(lp, 56, "BROWSE", function()
 		ui.filterBox:Hide()
 		if ui.savedBox then ui.savedBox:Hide() end
 		if ui.groupsBox then ui.groupsBox:Hide() end
 		ui.browseBox:SetShown(not ui.browseBox:IsShown())
 	end)
-	ui.browseBtn:SetSize(48, 14)
-	ui.browseBtn:SetPoint("TOPRIGHT", -100, -4)
-	ui.fltBtn = Btn(lp, 44, "FILTER", function()
+	ui.browseBtn:SetSize(56, 14)
+	ui.browseBtn:SetPoint("TOPRIGHT", -108, -4)
+	ui.fltBtn = Btn(lp, 48, "FILTER", function()
 		ui.browseBox:Hide()
 		if ui.savedBox then ui.savedBox:Hide() end
 		if ui.groupsBox then ui.groupsBox:Hide() end
 		ui.filterBox:SetShown(not ui.filterBox:IsShown())
 	end)
-	ui.fltBtn:SetSize(44, 14)
-	ui.fltBtn:SetPoint("TOPRIGHT", -52, -4)
-	ui.saveBtn = Btn(lp, 42, "SAVED", function()
+	ui.fltBtn:SetSize(48, 14)
+	ui.fltBtn:SetPoint("TOPRIGHT", -56, -4)
+	ui.saveBtn = Btn(lp, 46, "SAVED", function()
 		ui.browseBox:Hide()
 		ui.filterBox:Hide()
 		if ui.groupsBox then ui.groupsBox:Hide() end
 		BuildSavedBox()
 		ui.savedBox:SetShown(not ui.savedBox:IsShown())
 	end)
-	ui.saveBtn:SetSize(42, 14)
+	ui.saveBtn:SetSize(46, 14)
 	ui.saveBtn:SetPoint("TOPRIGHT", -6, -4)
 	-- GROUPS scopes POST/CANCEL/SHOPPING scans — checkbox multi-
 	-- select persisted in GM.db.scanGroups; empty = unscoped
-	ui.grpBtn = Btn(lp, 56, "GROUPS", function()
+	ui.grpBtn = Btn(lp, 64, "GROUPS", function()
 		ui.browseBox:Hide()
 		ui.filterBox:Hide()
 		if ui.savedBox then ui.savedBox:Hide() end
 		BuildGroupsBox()
 		ui.groupsBox:SetShown(not ui.groupsBox:IsShown())
 	end)
-	ui.grpBtn:SetSize(56, 14)
-	ui.grpBtn:SetPoint("TOPRIGHT", -156, -4)
+	ui.grpBtn:SetSize(64, 14)
+	ui.grpBtn:SetPoint("TOPRIGHT", -168, -4)
 	Tip(ui.grpBtn, function()
 		return { "Scan groups",
 			"Check groups to scope POST, CANCEL, and",
@@ -559,8 +559,17 @@ local function Build()
 	ui.rHead:SetWidth(130)
 	ui.rHead:SetJustifyH("LEFT")
 	ui.rCount = GM.MakeFontString(rp, GM.FONT, 9, "textDim")
-	ui.rCount:SetPoint("TOPRIGHT", -166, -7)
+	-- follows the header text's right edge, like lCount — the old
+	-- TOPRIGHT anchor stranded it mid-pane once the pane filled
+	ui.rCount:SetPoint("LEFT", ui.rHead, "RIGHT", 10, 0)
 	ui.rHead:SetWordWrap(false)
+	-- column labels on a second header line, aligned with the ask
+	-- row columns below (qty / unit / total)
+	for i, h in ipairs({ { "QTY", 8 }, { "UNIT", 72 }, { "TOTAL", 162 } }) do
+		local fs = GM.MakeFontString(rp, GM.FONT_BOLD, 9, "secondary")
+		fs:SetPoint("TOPLEFT", h[2], -18)
+		fs:SetText(h[1])
+	end
 	rp:EnableMouseWheel(true)
 	rp:SetScript("OnMouseWheel", function(_, d)
 		ui.askScroll = math.max(0, ui.askScroll - d * 3)
@@ -570,11 +579,11 @@ local function Build()
 	ui.askRows = {}
 	for i = 1, ASK_VISIBLE do
 		local row = CreateFrame("Button", nil, rp)
-		-- rows span pane-width minus the 8px inset each side —
-		-- the pane widened under fill, so bare pane bg showed under
-		-- the BUY button's overhang as a dead black strip
-		row:SetSize(344, ROW_H - 2)
-		row:SetPoint("TOPLEFT", 8, -22 - ((i - 1) * ROW_H))
+		-- dual-anchored so rows always span pane-width minus the 8px
+		-- inset each side, whatever the fill slot resolves to
+		row:SetHeight(ROW_H - 2)
+		row:SetPoint("TOPLEFT", 8, -34 - ((i - 1) * ROW_H))
+		row:SetPoint("TOPRIGHT", -8, -34 - ((i - 1) * ROW_H))
 		row.bg = row:CreateTexture(nil, "BACKGROUND")
 		row.bg:SetAllPoints()
 		row.bg:SetColorTexture(GM.RGB(i % 2 == 0 and "contMedium" or "contLowest"))
@@ -609,10 +618,12 @@ local function Build()
 	-- commodity multi-buy controls in the right-pane header (Blizzard
 	-- parity: enter N, buy through the ask levels → quote → CONFIRM)
 	ui.qtyLbl = GM.MakeFontString(rp, GM.FONT_BOLD, 9, "secondary")
-	ui.qtyLbl:SetPoint("TOPRIGHT", -130, -7)
 	ui.qtyLbl:SetText("QTY")
 	ui.qty = EditBox(rp, 40, "qty")
 	ui.qty:SetPoint("TOPRIGHT", -84, -4)
+	-- label hugs the box — fixed TOPRIGHT offsets stranded it when
+	-- the pane filled wider
+	ui.qtyLbl:SetPoint("RIGHT", ui.qty, "LEFT", -6, 0)
 	-- no SetNumeric — it strips the "qty" hint on this client and the
 	-- empty dark box was invisible. tonumber() validates on use.
 	GM.Panel(ui.qty, "contMedium")
@@ -651,8 +662,9 @@ local function Build()
 	ui.mRows = {}
 	for i = 1, MINE_VISIBLE do
 		local row = CreateFrame("Button", nil, fp)
-		row:SetSize(760, ROW_H - 2)
+		row:SetHeight(ROW_H - 2)
 		row:SetPoint("TOPLEFT", 8, -22 - ((i - 1) * ROW_H))
+		row:SetPoint("TOPRIGHT", -8, -22 - ((i - 1) * ROW_H))
 		row.bg = row:CreateTexture(nil, "BACKGROUND")
 		row.bg:SetAllPoints()
 		row.bg:SetColorTexture(GM.RGB(i % 2 == 0 and "contMedium" or "contLowest"))
@@ -735,8 +747,9 @@ local function Build()
 	ui.bRows = {}
 	for i = 1, MINE_VISIBLE do
 		local row = CreateFrame("Button", nil, bp)
-		row:SetSize(760, ROW_H - 2)
+		row:SetHeight(ROW_H - 2)
 		row:SetPoint("TOPLEFT", 8, -22 - ((i - 1) * ROW_H))
+		row:SetPoint("TOPRIGHT", -8, -22 - ((i - 1) * ROW_H))
 		row.bg = row:CreateTexture(nil, "BACKGROUND")
 		row.bg:SetAllPoints()
 		row.bg:SetColorTexture(GM.RGB(i % 2 == 0 and "contMedium" or "contLowest"))
@@ -851,7 +864,9 @@ local function Build()
 	-- re-render instantly, no re-query
 	local fb = CreateFrame("Frame", nil, f)
 	fb:SetSize(216, 150)
-	fb:SetPoint("TOPLEFT", 12, -58)
+	-- pops under its button — a fixed frame offset put it over the
+	-- pane header and buried the toggle that closes it
+	fb:SetPoint("TOPRIGHT", ui.fltBtn, "BOTTOMRIGHT", 0, -4)
 	fb:SetFrameStrata("DIALOG")
 	GM.Panel(fb, "contHigh", "outlineVar")
 	fb:Hide()
@@ -1020,9 +1035,10 @@ local function Build()
 	-- name prompt — {name, q, f} goes into GM.db.ahSearches
 	local nb = CreateFrame("Frame", nil, f)
 	nb:SetSize(216, 44)
-	-- right of the saved-searches popover (12..228) and well above it
-	-- in level — it used to open exactly beneath sb and look dead
-	nb:SetPoint("TOPLEFT", 232, -58)
+	-- right of the saved-searches popover and well above it in level —
+	-- it used to open exactly beneath sb and look dead. The add
+	-- button re-anchors it flush to sb at show time.
+	nb:SetPoint("TOPLEFT", lp, "TOPLEFT", 232, -20)
 	nb:SetFrameStrata("DIALOG")
 	nb:SetFrameLevel(500)
 	GM.Panel(nb, "contHigh", "outlineVar")
@@ -1104,7 +1120,10 @@ local function Build()
 	}
 	local bb = CreateFrame("Frame", nil, f)
 	bb:SetSize(336, 24 + 17 * 18 + 8)
-	bb:SetPoint("TOPLEFT", 12, -58)
+	-- too wide to drop under BROWSE without clipping off-window —
+	-- left-aligns inside the pane, below the header so the toggle
+	-- buttons stay clickable
+	bb:SetPoint("TOPLEFT", lp, "TOPLEFT", 8, -20)
 	bb:SetFrameStrata("DIALOG")
 	GM.Panel(bb, "contHigh", "outlineVar")
 	bb:Hide()
@@ -1261,7 +1280,7 @@ function BuildSavedBox()
 	if not ui.savedBox then
 		local sb = CreateFrame("Frame", nil, ui.frame)
 		sb:SetSize(216, 8 + 8 * 18 + 22)
-		sb:SetPoint("TOPLEFT", 12, -58)
+		sb:SetPoint("TOPRIGHT", ui.saveBtn, "BOTTOMRIGHT", 0, -4)
 		sb:SetFrameStrata("DIALOG")
 		GM.Panel(sb, "contHigh", "outlineVar")
 		sb.rows = {}
@@ -1279,6 +1298,8 @@ function BuildSavedBox()
 			sb.rows[i] = { b = b, x = x }
 		end
 		local add = Btn(sb, 120, "+ SAVE CURRENT", function()
+			ui.nameBox:ClearAllPoints()
+			ui.nameBox:SetPoint("TOPLEFT", sb, "TOPRIGHT", 4, 0)
 			ui.nameBox:Show()
 		end)
 		add:SetSize(120, 16)
@@ -1322,7 +1343,7 @@ function BuildGroupsBox()
 	if not ui.groupsBox then
 		local gb = CreateFrame("Frame", nil, ui.frame)
 		gb:SetSize(240, 22 + 14 * 18 + 28)
-		gb:SetPoint("TOPLEFT", 12, -58)
+		gb:SetPoint("TOPRIGHT", ui.grpBtn, "BOTTOMRIGHT", 0, -4)
 		gb:SetFrameStrata("DIALOG")
 		GM.Panel(gb, "contHigh", "outlineVar")
 		local t = GM.MakeFontString(gb, GM.FONT_BOLD, 9, "accent")
