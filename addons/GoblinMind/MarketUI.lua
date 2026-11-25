@@ -260,8 +260,8 @@ local function DrawPrice(entry)
 	end
 	if seriesMode then
 		-- OHLC candles — the real tape: each time bucket's open/close
-		-- are its first/last samples, the wick carries the bucket's
-		-- extremes; body green when the period closed up, red down
+		-- are its first/last samples, the I-beam stem+caps carry the
+		-- bucket's extremes; body green when the period closed up, red down
 		local NB = math.max(8, math.min(30, floor(cw / 26)))
 		local cs, occ = {}, {}
 		for _, p in ipairs(pts) do
@@ -290,8 +290,17 @@ local function DrawPrice(entry)
 					"contHigh", 0.9, "BACKGROUND")
 			end
 			local key = c.c >= c.o and "pos" or "err"
-			Bar(ch, cx - 0.5, py(c.l), 1,
-				math.max(1, py(c.h) - py(c.l)), key, 0.7, "ARTWORK")
+			-- I-beam candle: stem + caps straddling the extremes, with
+			-- a minimum glyph height so a flat candle still draws an
+			-- I instead of collapsing into the MA line
+			local sl, sh = py(c.l), py(c.h)
+			if sh - sl < 5 then
+				local grow = (5 - (sh - sl)) / 2
+				sl, sh = sl - grow, sh + grow
+			end
+			Bar(ch, cx - 0.5, sl, 1, math.max(1, sh - sl), key, 0.7, "ARTWORK")
+			Bar(ch, cx - bw / 2, sh - 0.5, bw, 1, key, 0.9, "ARTWORK")
+			Bar(ch, cx - bw / 2, sl - 0.5, bw, 1, key, 0.9, "ARTWORK")
 			Bar(ch, cx - bw / 2, py(math.min(c.o, c.c)), bw,
 				math.max(1, py(math.max(c.o, c.c)) - py(math.min(c.o, c.c))),
 				key, 0.9, "ARTWORK")
