@@ -1121,5 +1121,16 @@ Primary data = the in-house book feed below.
     (`ProduceItem` = family item by drop hits — a vein icons as
     its ore, not a 1% gem; `StaticProduce` covers unlooted
     imports via Gathering.nodes).
+- **GoblinUI layout: `"fill"` is a constraint, not a size**
+  (Layout.lua:330 crash, 2026-11-25): `u:Adopt(frame, opts)` and
+  `u:Canvas(parent, opts)` forward `opts.width/height` VERBATIM into
+  the node's natural-size measure — `u:Adopt(host, {height="fill"})`
+  reports a measured `"fill"` and `math.max(0, m)` crashes in
+  arrange. `"fill"`/`"auto"`/numbers belong in the SECOND arg —
+  `parent:Add(node, {height="fill"})`; Adopt/Canvas opts take only
+  numeric measure hints. `u:Leaf(parent, opts)` ignores
+  width/height entirely (measure-only via `opts.measure`). Leaf
+  measure returns are now coerced (`tonumber(x) or 0`) so misuse
+  degrades to 0-size instead of crashing — but don't rely on it.
 - Not yet registered on the Codebase Map (project started 2026-11-11,
   post-closure).
