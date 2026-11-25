@@ -1144,12 +1144,43 @@ local function BuildTooltipRows()
 	ui.ttInnerH = math.max(234, -y + 10)
 end
 
-function S.Refresh()
+-- view-model for the registry's Data() pass — prefs (facade),
+-- ticker opts, the custom-source SV rows, the import scan. The
+-- ticker/import reads are gated on their widgets existing —
+-- Detect() is cheap but not free
+local function Data()
+	local names, cs = {}, nil
+	if ui.srcRows then
+		cs = GoblinMindPrices and GoblinMindPrices.customSources
+		for n in pairs(cs or {}) do names[#names + 1] = n end
+		sort(names)
+	end
+	local impItems, impPending = 0, 0
+	if ui.impCount and GM.Import then
+		local items = GM.Import.Detect()
+		impItems = #items
+		for _, it in ipairs(items) do
+			if not it.done then impPending = impPending + 1 end
+		end
+	end
+	return {
+		risk = GM.Model.Pref("riskBudget"),
+		margin = GM.Model.Pref("minProfitMargin"),
+		days = GM.Model.Pref("maxDaysToClear"),
+		age = GM.Model.Pref("dataMaxAge"),
+		tk = ui.tkW and GM.Ticker.Opts(),
+		srcNames = names, srcCs = cs,
+		impItems = impItems, impPending = impPending,
+	}
+end
+
+function S.Refresh(vm)
 	if not ui then return end
-	ui.risk:SetText(tostring(floor((GM.Model.Pref("riskBudget") or 0) * 100 + 0.5)))
-	ui.margin:SetText(tostring(floor((GM.Model.Pref("minProfitMargin") or 0) * 100 + 0.5)))
-	ui.days:SetText(tostring(GM.Model.Pref("maxDaysToClear") or ""))
-	ui.age:SetText(tostring(GM.Model.Pref("dataMaxAge") or ""))
+	vm = vm or Data()
+	ui.risk:SetText(tostring(floor((vm.risk or 0) * 100 + 0.5)))
+	ui.margin:SetText(tostring(floor((vm.margin or 0) * 100 + 0.5)))
+	ui.days:SetText(tostring(vm.days or ""))
+	ui.age:SetText(tostring(vm.age or ""))
 	ui.mmHide.paint()
 	ui.embed.paint()
 	ui.mod.paint()
@@ -1159,7 +1190,7 @@ function S.Refresh()
 	ui.fmt.paint()
 	if ui.detail then ui.detail.paint() end
 	if ui.tkW then
-		local st = GM.Ticker.Opts()
+		local st = vm.tk
 		ui.tkW:SetText(tostring(st.w or GM.Ticker.DEF_W))
 		ui.tkH:SetText(tostring(st.h or GM.Ticker.DEF_H))
 		ui.tkF:SetText(tostring(st.fs or GM.Ticker.DEF_FS))
@@ -1174,13 +1205,8 @@ function S.Refresh()
 	end
 	-- custom price source rows
 	if ui.srcRows then
-		local names = {}
-		for n in pairs((GoblinMindPrices
-			and GoblinMindPrices.customSources) or {}) do
-			names[#names + 1] = n
-		end
-		sort(names)
-		local cs = GoblinMindPrices.customSources
+		local names = vm.srcNames
+		local cs = vm.srcCs
 		for i, row in ipairs(ui.srcRows) do
 			local n = names[i]
 			if n then
@@ -1200,15 +1226,11 @@ function S.Refresh()
 	-- addon-import detection count — cheap scan, same Detect() the
 	-- importer window runs so the numbers always agree
 	if ui.impCount and GM.Import then
-		local items = GM.Import.Detect()
-		local pending = 0
-		for _, it in ipairs(items) do
-			if not it.done then pending = pending + 1 end
-		end
-		ui.impCount:SetText(#items == 0
+		ui.impCount:SetText(vm.impItems == 0
 			and "no compatible addon data found"
 			or format("%d importable item%s (%d pending)",
-				#items, #items == 1 and "" or "s", pending))
+				vm.impItems, vm.impItems == 1 and "" or "s",
+				vm.impPending))
 	end
 end
 
@@ -1230,5 +1252,6 @@ end
 
 GM.View.Register("settings", {
 	Show = S.Show, Hide = S.Hide, Toggle = S.Toggle,
+	Data = Data,
 	Refresh = S.Refresh,
 	IsShown = function() return ui and ui.frame and ui.frame:IsShown() end })
