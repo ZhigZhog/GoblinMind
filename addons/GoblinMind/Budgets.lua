@@ -294,9 +294,12 @@ function B.Sample()
 	if #w == 0 or w[#w].g ~= gold or w[#w].a ~= posted
 		or w[#w].h ~= held or t - w[#w].t > 3600 then
 		-- c: the sampler char — wealth is per-char by nature and
-		-- untagged mixing drew alt logins as giant fake dips
+		-- untagged mixing drew alt logins as giant fake dips.
+		-- CharKey() not Qualified: the realm stays empty on this
+		-- client and a nil tag makes the chart filter toothless —
+		-- IsSelfCharKey matches a bare name fine
 		w[#w + 1] = { t = t, g = gold, a = posted, h = held,
-			c = GM.CharKeyQualified() }
+			c = GM.CharKey() }
 		if #w > HIST_CAP then tremove(w, 1) end
 	end
 end

@@ -22,7 +22,8 @@ local soldMarks = {}      -- [fp] = time() — ERR_AUCTION_SOLD marks
                           -- survive until the enum drops the row
 local ownedPrimed = false -- first refresh just populates — everything
                           -- would look "new" otherwise
-local emptyArmed = false  -- empty snapshots must repeat before vanish
+local emptyArmed = nil  -- timestamp of the first zero report; an
+-- empty snapshot must SUSTAIN before it may vanish the cache
                           -- processing (mid-requery reads can be empty)
 local postUntil = 0       -- posts are only ledgered inside this window —
                           -- enumeration ghost rows (sold/history rows the
@@ -244,12 +245,18 @@ function GM.Inventory.RefreshOwned()
 	if not GM.AH.open then return end
 	local ok, n = pcall(C_AuctionHouse.GetNumOwnedAuctions)
 	if not ok or not n then return end
-	-- a requery can briefly report zero rows mid-flight; only trust an
-	-- empty snapshot when it repeats, or every cached listing logs a
-	-- phantom sale and comes back as a phantom post
-	if n == 0 and ownedPrimed and next(auctionCache) and not emptyArmed then
-		emptyArmed = true
-		return
+	-- a requery can briefly report zero rows mid-flight (throttled enum,
+	-- results still loading); the armed repeat covers one flap, but the
+	-- query retry ladder (0.5/1.5/4s) delivers two zeros inside 4s on a
+	-- slow pipe — every query cycle wiped the cache and PostedValue()
+	-- flap-dipped the wealth chart. Zero must SUSTAIN for 15s to count.
+	if n == 0 and ownedPrimed and next(auctionCache) then
+		if not emptyArmed then
+			emptyArmed = time()
+			return
+		elseif time() - emptyArmed < 15 then
+			return
+		end
 	end
 	emptyArmed = nil
 	-- first pass: collect rows + detect a reliable status field (only

@@ -375,19 +375,19 @@ function OV.RefreshChart()
 	-- window-filtered samples + stats pass
 	local cutoff = WIN_SECS[ui.chartWin or "ALL"]
 	cutoff = cutoff and (time() - cutoff) or -math.huge
-	local me = GM.CharKeyQualified and GM.CharKeyQualified()
 	local hist, tMin, tMax, vMin, vMax =
 		{}, math.huge, 0, math.huge, 0
 	local vals = {}
 	local n, st, sv, stt, stv = 0, 0, 0, 0, 0
 	for _, p in ipairs(GM.db.wealthHist or {}) do
 		-- untagged legacy samples (no c) still count; tagged ones
-		-- only count when they're THIS char — wealth is per-char.
+		-- only count when they're THIS char — IsSelfCharKey matches
+		-- bare-name tags too (realm never resolves on this client).
 		-- Zero-total samples never draw: pre-tag alts and init races
 		-- wrote them into the shared pool as giant fake dips
 		if p.t >= cutoff
 			and (p.g or 0) + (p.a or 0) + (p.h or 0) > 0
-			and (not p.c or not me or p.c == me) then
+			and (not p.c or GM.IsSelfCharKey(p.c)) then
 			hist[#hist + 1] = p
 			if p.t < tMin then tMin = p.t end
 			if p.t > tMax then tMax = p.t end
