@@ -454,8 +454,8 @@ local function Build()
 		filt:Add(u:Adopt(ui.flipsBtn, { width = 76, height = 20 }))
 		filt:Add(u:Adopt(ui.collapseBtn, { width = 100, height = 20 }))
 		root:Add(u:Adopt(hdr, { width = 536, height = 16 }))
-		root:Add(u:Adopt(host, { width = "fill", height = "fill" }))
-		root:Add(u:Adopt(ui.foot, { width = "fill", height = 12 }))
+		root:Add(u:Adopt(host), { width = "fill", height = "fill" })
+		root:Add(u:Adopt(ui.foot, { height = 12 }), { width = "fill", height = 12 })
 	end
 end
 

@@ -216,7 +216,13 @@ function NodeIdx:SetPadding(p) self.pad = normPad(p) self:InvalidateLayout() end
 local function measureNode(node, availW, availH)
 	local c = node.constraints or {}
 	if node.kind == "leaf" then
-		if node.measure then return node:measure(availW, availH) end
+		if node.measure then
+			-- coerce: a measure that returns a constraint word like
+			-- "fill" (e.g. passed through Adopt opts) degrades to 0
+			-- instead of crashing math.max downstream
+			local mw, mh = node:measure(availW, availH)
+			return tonumber(mw) or 0, tonumber(mh) or 0
+		end
 		return 0, 0
 	end
 	-- container-ish node (scroll viewports arrive here too — no
