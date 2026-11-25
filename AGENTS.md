@@ -116,6 +116,20 @@ Primary data = the in-house book feed below.
   `GM.AH.ScanAge(itemID)` / `GM.AH.FreshSource(itemID)` answer
   "how long since X / where do I read this" — consumers must NOT
   keep their own `GetTime()`/`time()` freshness snapshots.
+- **Snapshot-gate contract** (Inventory.lua + everywhere an API
+  snapshot becomes state): enumerate into a STAGING table, gate on
+  the OUTCOME, then swap — never wipe-then-fill in place. A result
+  that conflicts with committed state must SUSTAIN 15s before it
+  may overwrite (empty owned-enum → `emptyArmed`, missing lot →
+  `pendingLost.at`, vanished bid → `goneAt`). Completeness comes
+  first: `HasFullOwnedAuctionResults` false or `infos < n` =
+  don't commit, re-arm a retry, cap the stall at 10s. "Not loaded
+  yet" is UNKNOWN, not zero — `Inventory.OwnedLoaded()` gates
+  pre-PLAYER_LOGIN wealth samples. mailCache/guildCache swap
+  only on successful scans; the bank snapshot waits 0.5s after
+  BANKFRAME_OPENED. Vendor buys verify the slot's itemID before
+  spending and chunk via `GM.MerchantBuy`
+  (`GetMerchantItemMaxStack` cap).
 - **Universal source pipeline** (Core.lua `GM.ItemEntry`): the
   emitted DB row is the base, but OBSERVATION fields `mb`/`mbx`/
   `sup`/`n` are overlaid per-item from the freshest of three

@@ -25,6 +25,9 @@ local ownedPrimed = false -- first refresh just populates — everything
 local emptyArmed = nil  -- timestamp of the first zero report; an
 -- empty snapshot must SUSTAIN before it may vanish the cache
                           -- processing (mid-requery reads can be empty)
+local partialSince = nil -- first incomplete-read timestamp — the same
+                         -- sustained-state gate shape as emptyArmed
+local rearmQueued = false -- dedupe the incomplete-read retry arm
 local postUntil = 0       -- posts are only ledgered inside this window —
                           -- enumeration ghost rows (sold/history rows the
                           -- status filter can't catch) otherwise ratchet
@@ -44,8 +47,10 @@ end
 
 local function scanInbox()
 	GM.Inventory._inboxScans = (GM.Inventory._inboxScans or 0) + 1
-	wipe(mailCache)
+	-- build-then-swap, never wipe-then-scan: an absent API or a
+	-- mid-load event keeps the last good cache instead of zeroing it
 	if not (GetInboxNumItems and GetInboxItem) then return end
+	local t = {}
 	local n = GetInboxNumItems() or 0
 	for i = 1, n do
 		for slot = 1, 20 do
@@ -55,26 +60,30 @@ local function scanInbox()
 			if type(a) == "number" then id, count = a, b
 			elseif type(b) == "number" then id, count = b, d end
 			if not id then break end
-			mailCache[id] = (mailCache[id] or 0) + (count or 1)
+			t[id] = (t[id] or 0) + (count or 1)
 		end
 	end
+	mailCache = t
 end
 
 -- ============ guild bank (current tab only — TSM opens every tab) ============
 
 local function scanGuildBank()
 	GM.Inventory._gbScans = (GM.Inventory._gbScans or 0) + 1
-	wipe(guildCache)
+	-- same swap contract as the inbox: a missing API must not
+	-- zero the cache — an empty tab still commits as truth
 	if not (GetGuildBankItemInfo and GetGuildBankItemLink) then return end
+	local t = {}
 	local tab = GetCurrentGuildBankTab and GetCurrentGuildBankTab() or 1
 	for slot = 1, 98 do
 		local link = GetGuildBankItemLink(tab, slot)
 		local id = GM.LinkID(link)
 		if id then
 			local _, count = GetGuildBankItemInfo(tab, slot)
-			guildCache[id] = (guildCache[id] or 0) + (count or 1)
+			t[id] = (t[id] or 0) + (count or 1)
 		end
 	end
+	guildCache = t
 end
 
 -- ============ owned auctions ============
@@ -260,6 +269,33 @@ function GM.Inventory.RefreshOwned()
 			if info.status == 0 then anyActive = true end
 		end
 	end
+	-- completeness gate, same shape as the empty gate below: the enum
+	-- delivers asynchronously, so n>0 with unread rows — or
+	-- HasFullOwnedAuctionResults saying delivery isn't done — is a
+	-- PARTIAL read, not truth. Committing it flaps PostedValue and
+	-- mints phantom sell/expire verdicts. Don't swap; retry shortly.
+	-- The flag is trusted but not blindly: if Forever's never goes
+	-- true we accept after 10s rather than stall the cache forever.
+	-- (TSM's scanner does the same refusal + 2-frame retry.)
+	local full = true
+	if C_AuctionHouse.HasFullOwnedAuctionResults then
+		local okF, f = pcall(C_AuctionHouse.HasFullOwnedAuctionResults)
+		full = okF and f == true
+	end
+	if (not full or #infos < n) and ownedPrimed then
+		if not partialSince then partialSince = time() end
+		if time() - partialSince < 10 then
+			if not rearmQueued then
+				rearmQueued = true
+				GM.After(0.75, function()
+					rearmQueued = nil
+					GM.Inventory.RefreshOwned()
+				end)
+			end
+			return
+		end
+	end
+	partialSince = nil
 	local now = {}
 	local seenAid = {}
 	wipe(aidIndex)
@@ -952,7 +988,13 @@ f:SetScript("OnEvent", function(_, event, ...)
 	elseif event == "GUILDBANKBAGSLOTS_CHANGED" then
 		scanGuildBank()
 	elseif event == "BANKFRAME_OPENED" then
-		Snapshot("bank")
+		-- bank contents resolve async after the frame opens — the
+		-- instant read can be empty, so snapshot on a beat
+		GM.After(0.5, function()
+			if BankFrame and BankFrame:IsShown() then
+				Snapshot("bank")
+			end
+		end)
 	elseif event == "BAG_UPDATE" or event == "PLAYER_LOGOUT" then
 		-- coalesce bag churn into one snapshot; bank only while open
 		if f._snapPending then return end

@@ -1227,18 +1227,25 @@ end
 
 -- BuyMerchantItem fails the whole call when the count crosses the
 -- item's stack cap ("Internal Bag Error" — issue #21). Chunk the
--- purchase into stack-sized calls; the max stack comes from the
--- item itself (field 8), the merchant's sale stack as fallback,
--- and a single call as last resort
+-- purchase into stack-sized calls; the cap comes from the merchant's
+-- own GetMerchantItemMaxStack (sold-in-stacks items can cap lower
+-- than the item's normal max), the item itself (field 8), the
+-- merchant's sale stack as fallback, and a single call as last resort
 function GM.MerchantBuy(idx, n)
 	if not (idx and n and n > 0 and BuyMerchantItem) then return end
 	local max
-	local link = GetMerchantItemLink and GetMerchantItemLink(idx)
-	local id = link and GM.LinkID(link)
-	if id and GetInfo then
-		local ok, ms = pcall(function()
-			return select(8, GetInfo(id)) end)
+	if GetMerchantItemMaxStack then
+		local ok, ms = pcall(GetMerchantItemMaxStack, idx)
 		if ok and type(ms) == "number" and ms > 0 then max = ms end
+	end
+	if not max then
+		local link = GetMerchantItemLink and GetMerchantItemLink(idx)
+		local id = link and GM.LinkID(link)
+		if id and GetInfo then
+			local ok, ms = pcall(function()
+				return select(8, GetInfo(id)) end)
+			if ok and type(ms) == "number" and ms > 0 then max = ms end
+		end
 	end
 	if not max then
 		local info = C_MerchantFrame and C_MerchantFrame.GetItemInfo

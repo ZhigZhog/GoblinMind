@@ -123,17 +123,23 @@ end
 local function DoBuy(step)
 	if not MerchantOpen() then return "bounce", "merchant closed" end
 	local idx = step.index
+	-- a captured index can drift if the merchant list reloaded since
+	-- the scan — verify the slot still holds the item before spending
+	if idx and step.itemID and MerchantItemID(idx) ~= step.itemID then
+		idx = nil
+	end
 	if not idx and step.itemID then
 		-- plan-emitted steps carry no slot — find it live
 		for i = 1, GetMerchantNumItems and GetMerchantNumItems() or 0 do
-			local link = GetMerchantItemLink and GetMerchantItemLink(i)
-			if GM.LinkID(link) == step.itemID then
+			if MerchantItemID(i) == step.itemID then
 				idx = i break
 			end
 		end
 	end
 	if not idx then return "bounce", "vendor doesn't stock it" end
-	BuyMerchantItem(idx, step.qty)
+	-- MerchantBuy chunks past the stack cap — a raw call with
+	-- step.qty > max fails the whole purchase ("Internal Bag Error")
+	GM.MerchantBuy(idx, step.qty)
 	return true -- one purchase per click
 end
 
