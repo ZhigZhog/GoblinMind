@@ -26,8 +26,9 @@ local ui
 local ROW_H = 24
 local VISIBLE = 15
 local VISIBLE_SEND = 10 -- SEND page gives the rest to the compose strip
-local SUBJ_HINT = "subject — default: first attached item"
-local BODY_HINT = "message (optional)"
+local L = GM.L or function(s) return s end
+local SUBJ_HINT = L("subject — default: first attached item")
+local BODY_HINT = L("message (optional)")
 local tinsert, sort = tinsert, table.sort
 local format = format
 
