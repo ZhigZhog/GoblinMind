@@ -360,8 +360,60 @@ end
 local BAGS_COLS = { { "", 4 }, { "ITEM", 24 }, { "QTY", 232 },
 	{ "GROUP", 290 }, { "UNIT", 444 }, { "VERDICT", 520 } }
 
-function MA.Refresh()
+-- view-model for the registry's Data() pass — only the ACTIVE
+-- page's rows get computed (PreviewPost over every bag is the
+-- expensive side; computing both would waste it)
+local function Data(page)
+	page = page or ui.page
+	if page == "posted" then
+		local rows = GM.Inventory.MineRows()
+		local uc, totalVal = 0, 0
+		for _, r in ipairs(rows) do
+			uc = uc + (r.undercut and 1 or 0)
+			totalVal = totalVal + (r.unit or 0) * (r.qty or 1)
+		end
+		local snapAt = GM.Inventory.OwnedAt and GM.Inventory.OwnedAt()
+		local age = snapAt and (time() - snapAt)
+		local stale = age and not GM.AH.open and (age > 90
+			and format(" · snapshot %s ago", age >= 3600
+				and format("%dh%02dm",
+					floor(age / 3600), floor(age % 3600 / 60))
+				or format("%dm", floor(age / 60) + 1))
+			or " · live")
+		return { rows = rows, uc = uc, totalVal = totalVal,
+			stale = stale }
+	end
+	local bags = GM.Auctioning.BagItems()
+	local rows, nPost, nChk = {}, 0, 0
+	for id, e in pairs(bags) do
+		local unit, why = GM.Auctioning.PreviewPost(id)
+		local verdict
+		if e.bound then verdict = "soulbound"
+		elseif unit then verdict = "post"
+		else verdict = why or "skip" end
+		local postable = unit ~= nil and not e.bound
+		if postable then nPost = nPost + 1 end
+		local checked = postable and not ui.excl[id]
+		if checked then nChk = nChk + 1 end
+		rows[#rows + 1] = {
+			id = id, total = e.total, stacks = #e.stacks,
+			group = GM.Groups.GroupForItem(id) or "Base Group",
+			unit = unit, verdict = verdict,
+			postable = postable, checked = checked,
+		}
+	end
+	table.sort(rows, function(a, b)
+		if a.postable ~= b.postable then return a.postable end
+		if a.checked ~= b.checked then return a.checked end
+		return (GM.ItemName(a.id) or "") < (GM.ItemName(b.id) or "")
+	end)
+	return { rows = rows, nPost = nPost, nChk = nChk,
+		bookFresh = GM.AH.BookLive() }
+end
+
+function MA.Refresh(vm)
 	if not ui then return end
+	vm = vm or Data()
 	for _, b in ipairs(ui.segs) do
 		local sel = b.key == ui.page
 		b._gmBg:SetColorTexture(GM.RGB(sel and "contHighest" or "contLowest"))
@@ -391,13 +443,15 @@ function MA.Refresh()
 	end
 	-- hide the inactive page's pool; the active refresh re-shows its own
 	for _, r in ipairs(ui.bagRows) do r:SetShown(false) end
-	if posted then MA.RefreshPosted() else MA.RefreshBags() end
+	if posted then MA.RefreshPosted(vm)
+	else MA.RefreshBags(vm) end
 end
 
 -- same paint as the AH window's MINE tab — shared row sources live in
 -- Inventory so both surfaces read identical data
-function MA.RefreshPosted()
-	local rows = GM.Inventory.MineRows()
+function MA.RefreshPosted(vm)
+	vm = vm or Data("posted")
+	local rows = vm.rows
 	ui.fEmpty:SetText(#rows == 0 and "no auctions up" or "")
 	ui.fEmpty:SetShown(#rows == 0)
 	local maxScroll = math.max(0, #rows - #ui.mRows)
@@ -405,22 +459,8 @@ function MA.RefreshPosted()
 	ui.fUp:SetShown(ui.scroll > 0)
 	ui.fDn:SetShown(ui.scroll < maxScroll)
 	W.ScrollText(ui.mCount, ui.scroll, #ui.mRows, #rows)
-	local uc, totalVal = 0, 0
-	for _, r in ipairs(rows) do
-		uc = uc + (r.undercut and 1 or 0)
-		totalVal = totalVal + (r.unit or 0) * (r.qty or 1)
-	end
-	-- log semantics: away from the AH the snapshot is historical —
-	-- say how old it is
-	local snapAt = GM.Inventory.OwnedAt and GM.Inventory.OwnedAt()
-	local age = snapAt and (time() - snapAt)
-	local stale = age and not GM.AH.open and (age > 90
-		and format(" · snapshot %s ago", age >= 3600
-			and format("%dh%02dm", floor(age / 3600), floor(age % 3600 / 60))
-			or format("%dm", floor(age / 60) + 1))
-		or " · live")
 	ui.summary:SetText(format("%d auctions · %s listed%s",
-		#rows, GM.Money(totalVal), stale or ""))
+		#rows, GM.Money(vm.totalVal), vm.stale or ""))
 	for i = 1, #ui.mRows do
 		local row, r = ui.mRows[i], rows[i + ui.scroll]
 		if r then
@@ -513,41 +553,16 @@ function MA.RefreshPosted()
 	ui.foot:SetText(format("%d auction%s%s — undercuts sort first "
 		.. "(book mbx < your price) · snapshot refreshes at the AH",
 		#rows, #rows == 1 and "" or "s",
-		uc > 0 and format(" · %s%d undercut|r", GM.CC("warn"), uc) or ""))
+		vm.uc > 0 and format(" · %s%d undercut|r",
+			GM.CC("warn"), vm.uc) or ""))
 end
 
 -- BAGS page: every bag item with its live post decision (book-driven,
 -- no scan) — check toggles include; POST SCAN takes only checked rows.
-function MA.RefreshBags()
-	local bags = GM.Auctioning.BagItems()
-	local bookFresh = GM.AH.BookLive()
-	local rows, nPost, nChk = {}, 0, 0
-	for id, e in pairs(bags) do
-		local unit, why = GM.Auctioning.PreviewPost(id)
-		local verdict
-		if e.bound then verdict = "soulbound"
-		elseif unit then verdict = "post"
-		else verdict = why or "skip" end
-		-- a bound item can still price — postable means POSTABLE,
-		-- otherwise it checks on, gets included, then the scan drops
-		-- it as "soulbound" and the row looks skipped for no reason
-		local postable = unit ~= nil and not e.bound
-		if postable then nPost = nPost + 1 end
-		-- default: postable rows checked; ui.excl remembers user unchecks
-		local checked = postable and not ui.excl[id]
-		if checked then nChk = nChk + 1 end
-		rows[#rows + 1] = {
-			id = id, total = e.total, stacks = #e.stacks,
-			group = GM.Groups.GroupForItem(id) or "Base Group",
-			unit = unit, verdict = verdict,
-			postable = postable, checked = checked,
-		}
-	end
-	table.sort(rows, function(a, b)
-		if a.postable ~= b.postable then return a.postable end
-		if a.checked ~= b.checked then return a.checked end
-		return (GM.ItemName(a.id) or "") < (GM.ItemName(b.id) or "")
-	end)
+function MA.RefreshBags(vm)
+	vm = vm or Data("bags")
+	local rows, nPost, nChk, bookFresh =
+		vm.rows, vm.nPost, vm.nChk, vm.bookFresh
 	ui.include = {}
 	for _, r in ipairs(rows) do
 		if r.checked then ui.include[r.id] = true end
@@ -632,5 +647,6 @@ end
 
 GM.View.Register("auctions", { class = "peer",
 	Show = MA.Show, Hide = MA.Hide, Toggle = MA.Toggle,
+	Data = Data,
 	Refresh = MA.Refresh,
 	IsShown = function() return ui and ui.frame and ui.frame:IsShown() end })

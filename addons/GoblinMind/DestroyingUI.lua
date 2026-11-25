@@ -144,16 +144,26 @@ end
 
 -- ============ data ============
 
-function DU.Refresh()
-	if not ui then return end
+-- view-model for the registry's Data() pass — candidate rows plus
+-- the summary aggregates; merchant-open is a native-frame read
+local function Data()
 	local rows = GM.Destroying.Candidates()
-	local totDv, totGain, nDe = 0, 0, 0
+	local totDv, nDe = 0, 0
 	for _, r in ipairs(rows) do
 		totDv = totDv + r.dv * r.qty
-		totGain = totGain + r.gain * r.qty
 		if r.action == "de" then nDe = nDe + 1 end
 	end
-	local mOpen = MerchantFrame and MerchantFrame:IsShown()
+	return {
+		rows = rows, totDv = totDv, nDe = nDe,
+		mOpen = MerchantFrame and MerchantFrame:IsShown(),
+	}
+end
+
+function DU.Refresh(vm)
+	if not ui then return end
+	vm = vm or Data()
+	local rows, totDv, nDe, mOpen =
+		vm.rows, vm.totDv, vm.nDe, vm.mOpen
 	ui.summary:SetText(format("%d item%s · %d DE / %d sell · best destroy %s%s%s",
 		#rows, #rows == 1 and "" or "s", nDe, #rows - nDe,
 		GM.Money(totDv),
@@ -262,5 +272,6 @@ end
 
 GM.View.Register("destroy", { class = "peer",
 	Show = DU.Show, Hide = DU.Hide, Toggle = DU.Toggle,
+	Data = Data,
 	Refresh = DU.Refresh,
 	IsShown = function() return ui and ui.frame and ui.frame:IsShown() end })

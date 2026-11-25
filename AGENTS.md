@@ -149,6 +149,16 @@ Primary data = the in-house book feed below.
     hand-rolled evPending refresh-guard; `View.On/Off` is shared
     event dispatch. Slash commands and cross-view calls route
     `GM.View.Toggle("key")`, never `GM.XUI.Toggle()`.
+    **`def.events`** = declarative "repaint on these events" —
+    the registry wires shown-check + coalesced refresh itself
+    (`def.evDelay` tunes the delay); a view with only refresh
+    plumbing needs no event frame at all (bank/gbank/mail/
+    vendor/crafting converted). **`def.Data()`** = the view's
+    view-model producer: pure model reads + view state, no frame
+    writes. `V.Refresh`/event repaints compute it once and call
+    `def.Refresh(vm)` — Refresh is pure paint; `vm or Data()`
+    fallback keeps direct callers working. Converted: tasks,
+    bank, gbank, mail, vendor, crafting.
   - **`GM.Model`** (Model.lua): the view layer's data front door.
     `Item/Price/ItemName/Gold/Posted/Receivable/Mine/Bids/
     Wealth/WealthHist/Chars/CharKey/Accounts/TxFor` delegate to
