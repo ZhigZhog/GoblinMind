@@ -245,6 +245,12 @@ local function DrawPrice(entry)
 	-- push colliding entries apart instead of overdrawing
 	local axis = {}
 	local function axisLabel(y, str, key, size)
+		-- same-price labels stack as dupes (hi pinned to the chart
+		-- top, last at its own y) — first-added wins so the brighter
+		-- "text" labels survive over dim hi/lo tags
+		for _, a in ipairs(axis) do
+			if a.str == str then return end
+		end
 		axis[#axis + 1] = { y = y, str = str, key = key, size = size or 9 }
 	end
 	-- mkt / mb horizontals (under the candles)
@@ -261,7 +267,7 @@ local function DrawPrice(entry)
 	if seriesMode then
 		-- OHLC candles — the real tape: each time bucket's open/close
 		-- are its first/last samples, the I-beam stem+caps carry the
-		-- bucket's extremes; body green when the period closed up, red down
+		-- bucket's extremes; green when the period closed up, red down
 		local NB = math.max(8, math.min(30, floor(cw / 26)))
 		local cs, occ = {}, {}
 		for _, p in ipairs(pts) do
@@ -290,20 +296,19 @@ local function DrawPrice(entry)
 					"contHigh", 0.9, "BACKGROUND")
 			end
 			local key = c.c >= c.o and "pos" or "err"
-			-- I-beam candle: stem + caps straddling the extremes, with
-			-- a minimum glyph height so a flat candle still draws an
-			-- I instead of collapsing into the MA line
+			-- I-beam candle: thin stem spanning high→low with caps
+			-- straddling both extremes — no body block, or the caps
+			-- hide inside its silhouette and the I never reads.
+			-- Direction lives in the color; a 5px minimum glyph
+			-- height keeps a zero-range candle visible
 			local sl, sh = py(c.l), py(c.h)
 			if sh - sl < 5 then
 				local grow = (5 - (sh - sl)) / 2
 				sl, sh = sl - grow, sh + grow
 			end
-			Bar(ch, cx - 0.5, sl, 1, math.max(1, sh - sl), key, 0.7, "ARTWORK")
-			Bar(ch, cx - bw / 2, sh - 0.5, bw, 1, key, 0.9, "ARTWORK")
-			Bar(ch, cx - bw / 2, sl - 0.5, bw, 1, key, 0.9, "ARTWORK")
-			Bar(ch, cx - bw / 2, py(math.min(c.o, c.c)), bw,
-				math.max(1, py(math.max(c.o, c.c)) - py(math.min(c.o, c.c))),
-				key, 0.9, "ARTWORK")
+			Bar(ch, cx - 0.5, sl, 1, math.max(1, sh - sl), key, 0.9, "ARTWORK")
+			Bar(ch, cx - bw / 2, sh - 0.5, bw, 2, key, 0.9, "ARTWORK")
+			Bar(ch, cx - bw / 2, sl - 0.5, bw, 2, key, 0.9, "ARTWORK")
 		end
 		-- moving average over candle closes — the overlay real
 		-- terminals carry instead of a raw regression line
