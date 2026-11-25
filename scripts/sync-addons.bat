@@ -23,5 +23,5 @@ for %%A in (GoblinMind GoblinMind_Data GoblinUI) do (
 REM Brain rides inside the addon folder so `watch self` can derive
 REM the install root — same layout the release zip ships. Explicit file
 REM list (no /MIR): runtime files the watcher/server create stay put.
-robocopy "D:\WoW Mods\brain" "%WOW%\GoblinMind\brain" goblin_brain.py vendor_buy.json recipe_sources.json goblin_server.py install.py feeds.example.json goblin_server.example.json /NFL /NDL /NJH /NJS >nul
+robocopy "D:\WoW Mods\brain" "%WOW%\GoblinMind\brain" goblin_brain.py vendor_buy.json recipe_sources.json drop_sources.json goblin_server.py install.py feeds.example.json goblin_server.example.json /NFL /NDL /NJH /NJS >nul
 if errorlevel 8 ( echo FAILED brain ) else ( echo synced brain )

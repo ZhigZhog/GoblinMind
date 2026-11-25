@@ -179,7 +179,13 @@ function D.TopSources(itemID, count)
 	local rid = tostring(itemID)
 	local rdd = rd and rd.d and rd.d[rid]
 	local ad = ack and ack.d and ack.d[rid]
-	if not (m or rdd) then return end
+	-- emulator-table seed (import_drop_db.py → dropSources): fills
+	-- sources nobody has observed yet. Same srcKey scheme — a live or
+	-- crowd row for a srcKey always wins it, since this realm's
+	-- measured rates are the truth the emulator table approximates
+	local st = GoblinMindDB and GoblinMindDB.dropSources
+		and GoblinMindDB.dropSources[itemID]
+	if not (m or rdd or st) then return end
 	local nL = GM.db and GM.db.dropsN or {}
 	local nR = rd and rd.n or {}
 	local an = ack and ack.n or {}
@@ -209,8 +215,21 @@ function D.TopSources(itemID, count)
 			})
 		end
 	end
+	if st then for _, r in ipairs(st) do
+		if not srcs[r.src] then
+			tinsert(out, {
+				src = r.src, name = r.name,
+				rate = (r.chance or 0) / 100,
+				k = 0, q = 0, n = 0,
+				low = true, static = true, via = r.via,
+			})
+		end
+	end end
 	if #out == 0 then return end
-	table.sort(out, function(a, b) return a.rate > b.rate end)
+	table.sort(out, function(a, b)
+		if a.rate ~= b.rate then return a.rate > b.rate end
+		return (a.static and 1 or 0) < (b.static and 1 or 0)
+	end)
 	while #out > (count or 3) do tremove(out) end
 	return out
 end

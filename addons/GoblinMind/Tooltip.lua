@@ -292,7 +292,8 @@ local function P_Drops(t, id)
 		local pct = format("%d%%", floor(s.rate * 100 + 0.5))
 		if s.low then pct = "~" .. pct end
 		tinsert(parts, nm .. " " .. pct
-			.. (full and GM.CC("textDim") .. " n=" .. s.n .. "|r" or ""))
+			.. (full and GM.CC("textDim")
+				.. (s.static and " est" or " n=" .. s.n) .. "|r" or ""))
 	end
 	-- whole line bounded: names truncated, joined list clipped
 	local line = "Drops: " .. table.concat(parts, " · ")

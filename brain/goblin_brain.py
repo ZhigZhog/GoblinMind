@@ -254,6 +254,8 @@ VENDOR_BUY_PATH = os.path.join(os.path.dirname(
     os.path.abspath(__file__)), 'vendor_buy.json')
 RECIPE_SOURCES_PATH = os.path.join(os.path.dirname(
     os.path.abspath(__file__)), 'recipe_sources.json')
+DROP_SOURCES_PATH = os.path.join(os.path.dirname(
+    os.path.abspath(__file__)), 'drop_sources.json')
 
 
 def load_recipe_sources():
@@ -264,6 +266,20 @@ def load_recipe_sources():
     {kind,name,cost?/chance?} source records."""
     try:
         with open(RECIPE_SOURCES_PATH, encoding='utf-8') as fh:
+            return {int(k): v for k, v in json.load(fh).items()}
+    except (OSError, ValueError):
+        return {}
+
+
+def load_drop_sources():
+    """item-drop table — frozen artifact built by import_drop_db.py
+    from a vmangos classic-db dump; shipped with the release like
+    vendor_buy.json. Keys are dropped-item ids; values are lists of
+    {src,name,chance,via,qty?} records where src carries the live
+    capture scheme (c<npcID>/o<objectID>/i<itemID> plus d<> disenchant
+    groups and f<> zone ids)."""
+    try:
+        with open(DROP_SOURCES_PATH, encoding='utf-8') as fh:
             return {int(k): v for k, v in json.load(fh).items()}
     except (OSError, ValueError):
         return {}
@@ -425,6 +441,7 @@ def cmd_emit(path, out_path, realm=None):
         'items': flat.get('items', {}),
         'vendorBuy': load_vendor_buy(path),  # TSM VendorSell.Retail → id=cost
         'recipeSources': load_recipe_sources(),
+        'dropSources': load_drop_sources(),
     }
 
     write_db(db, out_path)
@@ -2036,6 +2053,7 @@ def cmd_book(sv_arg, out_paths, root=None, feed=None, realm=None):
             _sv_root(sv_arg, root), 'Interface', 'AddOns',
             'TradeSkillMaster_AppHelper', 'AppData.lua')),
         'recipeSources': load_recipe_sources(),
+        'dropSources': load_drop_sources(),
     }
     for out in out_paths:
         write_db(db, out)
