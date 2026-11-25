@@ -441,6 +441,12 @@ function B.Sample()
 	-- inventory haven't populated yet, and either way it draws as a
 	-- giant fake dip on every char's wealth chart
 	if gold + posted + held == 0 then return end
+	-- the init sample lands at ADDON_LOADED — before PLAYER_LOGIN's
+	-- LoadOwned rehydrates the owned-auction snapshot — so it would
+	-- write a=0/h=0 against real gold and dip every reload. "Not
+	-- loaded yet" is unknown, not zero: skip until the load ran.
+	if GM.Inventory.OwnedLoaded
+		and not GM.Inventory.OwnedLoaded() then return end
 	if #w == 0 or w[#w].g ~= gold or w[#w].a ~= posted
 		or w[#w].h ~= held or t - w[#w].t > 3600 then
 		-- c: the sampler char — wealth is per-char by nature and

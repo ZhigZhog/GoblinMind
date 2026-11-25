@@ -215,7 +215,10 @@ end
 -- rehydrate at login — ownedPrimed deliberately stays FALSE: a stale
 -- snapshot must never feed post/sell ledger deltas; the first live
 -- refresh re-primes cleanly
+local ownedLoaded = false -- the ATTEMPT ran — PostedValue is honest
+function GM.Inventory.OwnedLoaded() return ownedLoaded end
 local function LoadOwned()
+	ownedLoaded = true
 	local owned = GoblinMindSettings and GoblinMindSettings.owned
 	if not owned then return end
 	-- the same char can sit under bare and realm-qualified keys (the
@@ -245,20 +248,6 @@ function GM.Inventory.RefreshOwned()
 	if not GM.AH.open then return end
 	local ok, n = pcall(C_AuctionHouse.GetNumOwnedAuctions)
 	if not ok or not n then return end
-	-- a requery can briefly report zero rows mid-flight (throttled enum,
-	-- results still loading); the armed repeat covers one flap, but the
-	-- query retry ladder (0.5/1.5/4s) delivers two zeros inside 4s on a
-	-- slow pipe — every query cycle wiped the cache and PostedValue()
-	-- flap-dipped the wealth chart. Zero must SUSTAIN for 15s to count.
-	if n == 0 and ownedPrimed and next(auctionCache) then
-		if not emptyArmed then
-			emptyArmed = time()
-			return
-		elseif time() - emptyArmed < 15 then
-			return
-		end
-	end
-	emptyArmed = nil
 	-- first pass: collect rows + detect a reliable status field (only
 	-- filter sold/history rows when some row actually reports active=0 —
 	-- guards an inverted enum on this unverified client)
@@ -336,6 +325,24 @@ function GM.Inventory.RefreshOwned()
 	for key, t0 in pairs(recentCancels) do
 		if t - t0 > 300 then recentCancels[key] = nil end
 	end
+	-- zero-result gate, on the OUTCOME not the row count: n=0 is one
+	-- shape, but a throttled enum can also report n>0 while every
+	-- GetOwnedAuctionInfo errors or filters out — now builds empty
+	-- and the swap below would wipe a healthy cache the same way.
+	-- Zero usable rows must SUSTAIN for 15s before the cache may go
+	-- empty. ownedPrimed is deliberately NOT in the condition: after
+	-- /reload the cache is rehydrated-but-unprimed and the first
+	-- enum's zeros were wiping it — the X that popped in on every
+	-- reload.
+	if not next(now) and next(auctionCache) then
+		if not emptyArmed then
+			emptyArmed = t
+			return
+		elseif t - emptyArmed < 15 then
+			return
+		end
+	end
+	emptyArmed = nil
 	-- sold marks ride the cache: the buyer-found message lands before
 	-- the enum drops the row, so the mark has to survive refreshes —
 	-- and die with the row (or on a stale-mark timeout)
