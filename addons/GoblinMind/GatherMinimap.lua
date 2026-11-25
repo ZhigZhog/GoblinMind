@@ -252,20 +252,22 @@ local function Update()
 	local n, w, c, mapID = Player()
 	if not n then clear() return end
 
-	-- view radius in yards: live API, else the zoom-level table.
-	-- The minimapZoom cvar pins the outdoor zoom — matching it
-	-- means we're outdoors
-	local radius = C_Minimap and C_Minimap.GetViewRadius
-		and C_Minimap.GetViewRadius()
+	-- view radius in yards: the zoom-level table is authoritative —
+	-- GetViewRadius misreports on Forever (returns 150 where the
+	-- outdoor zoom-0 scale is 233.33, shrinking our yard span ~36%
+	-- so every overlay element slides ~1.55x against the terrain =
+	-- the zone "parallax"). API is only the fallback for a zoom
+	-- the table doesn't know. The minimapZoom cvar pins the
+	-- outdoor zoom — matching it means we're outdoors
 	local zoom = Minimap:GetZoom() or 0
-	if not radius or radius <= 0 then
-		-- the cvar pins the OUTDOOR zoom — matching it means
-		-- outdoors; a different zoom means an indoor minimap
-		local indoor = (GetCVar("minimapZoom") or 0) + 0 ~= zoom
-		radius = ((indoor and VIEW.indoor or VIEW.outdoor)[zoom]
-			or 0) / 2
+	local indoor = (GetCVar("minimapZoom") or 0) + 0 ~= zoom
+	local radius = ((indoor and VIEW.indoor or VIEW.outdoor)[zoom]
+		or 0) / 2
+	if radius <= 0 then
+		radius = C_Minimap and C_Minimap.GetViewRadius
+			and C_Minimap.GetViewRadius()
 	end
-	if radius <= 0 then clear() return end
+	if not radius or radius <= 0 then clear() return end
 
 	local rotate = GetCVar("rotateMinimap") == "1"
 	local facing = rotate and (GetPlayerFacing() or 0) or 0
