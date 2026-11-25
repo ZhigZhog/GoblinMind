@@ -1375,9 +1375,108 @@ function PQ.SetHome(on)
 	PQ.Refresh()
 end
 
-function PQ.Refresh()
+-- view-model for the registry's Data() pass — freshness clocks,
+-- the resolved display item (scan plans follow the active step),
+-- entry/market stats, the unsellable flags, and the plan-summary
+-- verdict. Step rows and the mode summary keep reading PQ.plan —
+-- that's the model's own structure, indexed lazily per row
+local function Data()
+	local vm = {
+		sync = GM.SyncAge and GM.SyncAge(),
+		realm = GM.RealmAge and GM.RealmAge(),
+		region = GM.RegionAge and GM.RegionAge(),
+		maxAge = GM.Model.Pref("dataMaxAge"),
+		bookAge = GM.AH.BookAge and GM.AH.BookAge(),
+		ahBusy = GM.AH.Busy and GM.AH.Busy() and true or false,
+		ahOpen = GM.AH.open and true or false,
+		gold = GetMoney(),
+		risk = GM.Model.Pref("riskBudget"),
+		margin = GM.Model.Pref("minProfitMargin"),
+		plan = PQ.plan,
+		planFrac = PlanFrac(),
+		nSteps = PQ.plan and #PQ.plan.steps or 0,
+		stepIndex = PQ.stepIndex,
+		pendingConfirm = GM.AH.pendingConfirm,
+		lossConfirm = PQ.lossConfirm,
+	}
+	-- home mode paints different panels — skip the plan vm
+	if ui and ui.home and PQ.homeMode then return vm end
+	local stepN = PQ.plan and math.min(PQ.stepIndex, #PQ.plan.steps)
+	local curStep = PQ.plan and PQ.plan.steps[stepN]
+	local scanMode = PQ.plan and PQ.plan.mode and curStep
+	local dispID = scanMode and curStep.itemID or PQ.itemID
+	local dispLink = scanMode and (curStep.item or curStep.name) or PQ.item
+	vm.stepN, vm.curStep, vm.scanMode = stepN, curStep, scanMode
+	vm.dispID, vm.dispLink = dispID, dispLink
+	vm.entry = dispID and GM.ItemEntry(dispID)
+	vm.market = dispID and GM.TSMMarket(dispID)
+	vm.bookTxt = scanMode
+		and format(" · step %d/%d", stepN, #PQ.plan.steps)
+		or dispID and (PQ.scan
+			and (PQ.scan.n > 0
+				and format(" · book: %d asks · cheapest %s",
+					PQ.scan.n, GM.Money(PQ.scan.cheapest))
+				or " · book: empty")
+			or " · RESCAN to read the book") or ""
+	-- a proper link renders its own name — bare "4238" targets fall
+	-- back to the resolved item name
+	vm.nameTxt = (dispLink and dispLink:find("%[") and dispLink)
+		or (dispID and GM.ItemName(dispID))
+		or dispLink
+		or (dispID and ("item " .. dispID))
+	vm.icon = dispID and C_Item and C_Item.GetItemIconByID
+		and C_Item.GetItemIconByID(dispID)
+	if not vm.icon and dispID and GetInfo then
+		vm.icon = select(10, GetInfo(dispID))
+	end
+	local sub = {}
+	if dispID and GetInfo then
+		local _, _, _, _, _, itemType = GetInfo(dispID)
+		if itemType then tinsert(sub, itemType) end
+	end
+	if dispID then tinsert(sub, "id " .. dispID) end
+	-- unsellable flag: soulbound by type (BoP/quest), or the bag
+	-- stack fails the client's own sell check
+	if dispID then
+		local flag
+		local bind = GetInfo and select(14, GetInfo(dispID))
+		if bind == 1 or bind == 4 then flag = "soulbound" end
+		local loc = not flag and GM.AH.FindInBags
+			and GM.AH.FindInBags(dispID)
+		if loc and C_AuctionHouse
+			and C_AuctionHouse.IsSellItemValid then
+			local ok, valid = pcall(C_AuctionHouse.IsSellItemValid, loc)
+			if ok and valid == false then flag = "not sellable" end
+		elseif loc and C_Item and C_Item.IsBound then
+			local ok, bound = pcall(C_Item.IsBound, loc)
+			if ok and bound then flag = "soulbound" end
+		end
+		if flag then
+			tinsert(sub, GM.CC("err")
+				.. "NOT AUCTIONABLE — " .. flag .. "|r")
+		end
+	end
+	if vm.entry and vm.entry.vel then
+		tinsert(sub, "sales ~" .. (GM.VelRate(vm.entry.vel)
+			or "?") .. "/day")
+	end
+	if #vm.bookTxt > 0 then
+		tinsert(sub, strtrim(vm.bookTxt:gsub("· ", "", 1)))
+	end
+	vm.sub = sub
+	-- the summary's solver verdict — one call for both the edge
+	-- color and the headline
+	if PQ.plan then
+		vm.verdict, vm.verdictNote =
+			GM.Solver.Verdict(PQ.plan, GM.db)
+	end
+	return vm
+end
+
+function PQ.Refresh(vm)
 	PQ._refreshes = (PQ._refreshes or 0) + 1
 	Build()
+	vm = vm or Data()
 	-- home mode: dashboard panels replace the plan inspector
 	if ui.home then
 		local h = PQ.homeMode
@@ -1408,10 +1507,9 @@ function PQ.Refresh()
 				or age >= 60 and format("%dm", age / 60)
 				or format("%ds", age)) .. "|r"
 	end
-	local sync = AgeTxt(GM.SyncAge and GM.SyncAge(), 2100)
-	local realm = AgeTxt(GM.RealmAge and GM.RealmAge(),
-		GM.Model.Pref("dataMaxAge") or 7200)
-	local region = AgeTxt(GM.RegionAge and GM.RegionAge())
+	local sync = AgeTxt(vm.sync, 2100)
+	local realm = AgeTxt(vm.realm, vm.maxAge or 7200)
+	local region = AgeTxt(vm.region)
 	local parts = {}
 	if not (sync or realm) then
 		tinsert(parts, GM.CC("warn") .. "no data file|r")
@@ -1421,7 +1519,7 @@ function PQ.Refresh()
 		if region then tinsert(parts, "rgn " .. region) end
 	end
 	local dbTxt = table.concat(parts, " ")
-	local bAge = GM.AH.BookAge and GM.AH.BookAge()
+	local bAge = vm.bookAge
 	local bookTxt = ""
 	if bAge and bAge < math.huge then
 		bookTxt = (bAge > 300 and GM.CC("warn") or GM.CC("textDim")) .. " · "
@@ -1431,84 +1529,28 @@ function PQ.Refresh()
 
 	-- FULL SCAN locks while any book build (replicate or browse) is live
 	if ui.fullScan then
-		local busy = GM.AH.Busy() and true or false
+		local busy = vm.ahBusy
 		ui.fullScan:SetEnabled(not busy)
 		ui.fullScan.text:SetTextColor(GM.RGB(busy and "textDim" or "text"))
 	end
 
-	-- header: icon, name, type/id, flow. For scan plans the display
-	-- follows the active step's item; single-item plans keep the target.
-	local stepN = PQ.plan and math.min(PQ.stepIndex, #PQ.plan.steps)
-	local curStep = PQ.plan and PQ.plan.steps[stepN]
-	local scanMode = PQ.plan and PQ.plan.mode and curStep
-	local dispID = scanMode and curStep.itemID or PQ.itemID
-	local dispLink = scanMode and (curStep.item or curStep.name) or PQ.item
-	local entry = dispID and GM.ItemEntry(dispID)
-	local book
-	if scanMode then
-		book = format(" · step %d/%d", stepN, #PQ.plan.steps)
-	else
-		book = dispID and (PQ.scan
-			and (PQ.scan.n > 0
-				and format(" · book: %d asks · cheapest %s", PQ.scan.n, GM.Money(PQ.scan.cheapest))
-				or " · book: empty")
-			or " · RESCAN to read the book") or ""
-	end
-	-- name gets its own line; book/readout context moves to the sub line.
-	-- a proper link already renders the name — bare "4238"-style targets
-	-- fall back to the resolved item name (async load → watcher repaints).
-	ui.item.name:SetText(
-		(dispLink and dispLink:find("%[") and dispLink)
-		or (dispID and GM.ItemName(dispID))
-		or dispLink
-		or (dispID and ("item " .. dispID))
-		or "no item")
+	-- header: icon, name, type/id, flow — the vm resolved the
+	-- display item (scan plans follow the active step)
+	local stepN, curStep, scanMode = vm.stepN, vm.curStep, vm.scanMode
+	local dispID, dispLink = vm.dispID, vm.dispLink
+	local entry = vm.entry
+	local book = vm.bookTxt
+	ui.item.name:SetText(vm.nameTxt or "no item")
 	ui.item.name:SetTextColor(GM.NameColor(dispID))
 	if not dispID then
 		ui.item.name:SetText(GM.CC("textDim") .. "drop item here · shift-click one · /goblin [link]|r")
 	end
-	local icon = dispID and C_Item and C_Item.GetItemIconByID and C_Item.GetItemIconByID(dispID)
-	if not icon and dispID and GetInfo then
-		icon = select(10, GetInfo(dispID))
-	end
-	if icon then ui.icon:SetTexture(icon) ui.icon:Show() else ui.icon:Hide() end
+	if vm.icon then ui.icon:SetTexture(vm.icon) ui.icon:Show() else ui.icon:Hide() end
 	ui.iconBtn.itemID = dispID
-	local sub = {}
-	if dispID and GetInfo then
-		local _, _, _, _, _, itemType = GetInfo(dispID)
-		if itemType then tinsert(sub, itemType) end
-	end
-	if dispID then tinsert(sub, "id " .. dispID) end
-	-- unsellable flag: soulbound by type (BoP/quest), or the bag
-	-- stack fails the client's own sell check
-	if dispID then
-		local flag
-		local bind = GetInfo and select(14, GetInfo(dispID))
-		if bind == 1 or bind == 4 then flag = "soulbound" end
-		local loc = not flag and GM.AH.FindInBags
-			and GM.AH.FindInBags(dispID)
-		if loc and C_AuctionHouse
-			and C_AuctionHouse.IsSellItemValid then
-			local ok, valid = pcall(C_AuctionHouse.IsSellItemValid, loc)
-			if ok and valid == false then flag = "not sellable" end
-		elseif loc and C_Item and C_Item.IsBound then
-			local ok, bound = pcall(C_Item.IsBound, loc)
-			if ok and bound then flag = "soulbound" end
-		end
-		if flag then
-			tinsert(sub, GM.CC("err")
-				.. "NOT AUCTIONABLE — " .. flag .. "|r")
-		end
-	end
-	if entry and entry.vel then
-		tinsert(sub, "sales ~" .. (GM.VelRate(entry.vel)
-			or "?") .. "/day")
-	end
-	if book and #book > 0 then tinsert(sub, strtrim(book:gsub("· ", "", 1))) end
-	ui.item.sub:SetText(table.concat(sub, " · "))
+	ui.item.sub:SetText(table.concat(vm.sub, " · "))
 
 	-- stats column
-	local market = dispID and GM.TSMMarket(dispID)
+	local market = vm.market
 	local p = (entry and entry.p) or market
 	local function set(k, v) ui.statText[k]:SetText(v or "") end
 	local function pct(a, b)
@@ -1542,18 +1584,18 @@ function PQ.Refresh()
 		and (GM.Money(rs.below) .. " · worth " .. GM.Money(rs.ev))
 		or type(rs) == "number" and rs > 0
 		and GM.Money(rs) or nil)
-	set("gold", GM.Money(GetMoney()))
+	set("gold", GM.Money(vm.gold))
 	-- the cap is a fraction of gold, not a currency amount
-	set("spend limit", format("%.0f%%", (GM.Model.Pref("riskBudget") or 0) * 100))
-	set("min profit", format("%.0f%%", (GM.Model.Pref("minProfitMargin") or 0) * 100))
+	set("spend limit", format("%.0f%%", (vm.risk or 0) * 100))
+	set("min profit", format("%.0f%%", (vm.margin or 0) * 100))
 
 	DrawChart(entry, dispID)
 
 	-- plan rows — a window into steps. The active step recenters to
 	-- row 3 (two finished steps of context above) whenever it changes;
 	-- mousewheel scrolls manually until the next step advance
-	local nSteps = PQ.plan and #PQ.plan.steps or 0
-	ui.planFrac = PlanFrac()
+	local nSteps = vm.nSteps
+	ui.planFrac = vm.planFrac
 	ApplyProg()
 	local maxOff = math.max(0, nSteps - ROWS)
 	if ui.lastStep ~= PQ.stepIndex then
@@ -1610,7 +1652,7 @@ function PQ.Refresh()
 			-- a staged commodity quote outranks the book estimate the
 			-- row was emitted with — while CONFIRM is armed the row
 			-- shows what the click will actually pay
-			local pc = GM.AH.pendingConfirm
+			local pc = vm.pendingConfirm
 			local shownUnit = step.unit
 			if pc and pc.quote and active
 				and step.itemID == pc.itemID and step.qty == pc.qty then
@@ -1681,7 +1723,7 @@ function PQ.Refresh()
 				or PQ.plan.mode == "mailing" and "mailbox must stay open"
 				or "merchant must stay open")
 		else
-		local verdict, note = GM.Solver.Verdict(PQ.plan, GM.db)
+		local verdict, note = vm.verdict, vm.verdictNote
 		local own = (PQ.plan.owned or 0) > 0 and ("own " .. PQ.plan.owned) or nil
 		if (PQ.plan.bank or 0) > 0 then own = (own or "own 0") .. " +" .. PQ.plan.bank .. " bank" end
 		-- headline the action, not the absence of alternatives
@@ -1697,11 +1739,11 @@ function PQ.Refresh()
 			GM.Money(PQ.plan.spend), dep, GM.Money(PQ.plan.ev), note, sub))
 		end
 		ui.exec:Show()
-		local pcPending = GM.AH.pendingConfirm
+		local pcPending = vm.pendingConfirm
 		local pcMatch = pcPending and curStep
 			and curStep.itemID == pcPending.itemID
-		local badPlan = not PQ.plan.mode and not PQ.lossConfirm
-			and GM.Solver.Verdict(PQ.plan, GM.db) == "bad"
+		local badPlan = not PQ.plan.mode and not vm.lossConfirm
+			and vm.verdict == "bad"
 		if PQ.budgetWarn then
 			ui.exec.text:SetText("OVER BUDGET −" ..
 				GM.Money(PQ.budgetWarn) .. " · CONFIRM")
@@ -1765,7 +1807,7 @@ function PQ.Refresh()
 		local canExec = pcMatch
 			or moveKind
 			or (vendKind and merchantOpen)
-			or (not pcPending and PQ.stepIndex <= #PQ.plan.steps and GM.AH.open)
+			or (not pcPending and PQ.stepIndex <= #PQ.plan.steps and vm.ahOpen)
 		ui.exec:SetEnabled(canExec)
 		-- honest disabled state: muted fill + label; blocker on line 1
 		GM.Panel(ui.exec, canExec and "accent" or "contHigh")
@@ -1776,11 +1818,11 @@ function PQ.Refresh()
 		elseif vendKind and not merchantOpen then
 			ui.summary:SetText(GM.CC("warn")
 				.. "open a merchant to execute|r")
-		elseif not canExec and not GM.AH.open then
+		elseif not canExec and not vm.ahOpen then
 			ui.summary:SetText(GM.CC("warn") .. "open the auction house to execute|r")
 		end
 		ui.skip:Show()
-		local canSkip = GM.AH.pendingConfirm ~= nil or PQ.stepIndex <= #PQ.plan.steps
+		local canSkip = vm.pendingConfirm ~= nil or PQ.stepIndex <= #PQ.plan.steps
 		ui.skip:SetEnabled(canSkip)
 		GM.Panel(ui.skip, canSkip and "contMedium" or "contLowest")
 		ui.clear:Show()
@@ -1816,5 +1858,6 @@ GM.View.Register("planner", { class = "pinned",
 	Show = function(...) return PQ.Show(...) end,
 	Hide = function(...) return PQ.Hide(...) end,
 	Toggle = function(...) return PQ.Toggle(...) end,
+	Data = function(...) return Data(...) end,
 	Refresh = function(...) return PQ.Refresh(...) end,
 	IsShown = function(...) return PQ.IsShown(...) end })
