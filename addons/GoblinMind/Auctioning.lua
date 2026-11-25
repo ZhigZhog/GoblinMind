@@ -91,16 +91,26 @@ end
 -- can't be undercut — posting below your own listing is just losing
 -- money to yourself — and a drag lot posted under the real market
 -- exists to pull our reference down with it, not to be undercut.
+-- Second return: the first flagged bait lot's price — PriceFor needs
+-- it to keep normal-priced posts out of the bait→wall trap gap.
 function A.Cheapest(asks)
+	local bait
 	for _, a in ipairs(asks) do
-		if not a.own and not a.bait then return a.unit end
+		if not a.own then
+			if a.bait then
+				bait = bait or a.unit
+			else
+				return a.unit, bait
+			end
+		end
 	end
+	return nil, bait
 end
 
 -- TSM post price: normal, pulled down to cheapest - undercut when the
 -- market sits below normal. nil,reason when the market is under min
 -- ("when below min: don't post").
-function A.PriceFor(aOps, itemID, normal, cheapest)
+function A.PriceFor(aOps, itemID, normal, cheapest, baitUnit)
 	local minP = GM.Groups.EvalOp(aOps, "min", itemID)
 	local maxP = GM.Groups.EvalOp(aOps, "max", itemID)
 	local undercut = tonumber(GM.Groups.EvalOp(aOps, "undercut", itemID)) or 0
@@ -108,7 +118,13 @@ function A.PriceFor(aOps, itemID, normal, cheapest)
 	if minP and normal < minP then normal = minP end
 	if maxP and normal > maxP then normal = maxP end
 	local unit = normal
-	if cheapest and cheapest - undercut < normal then
+	-- undercut the first honest ask — and when a drag lot is live, a
+	-- normal price inside the bait→wall gap gets lifted to the wall
+	-- undercut: posting in the gap is the same queue position at a
+	-- worse price, and the lot fills the manipulator's buy
+	if cheapest and (cheapest - undercut < normal
+		or (baitUnit and normal > baitUnit
+			and normal <= cheapest - undercut)) then
 		unit = cheapest - undercut
 	end
 	if minP and unit < minP then
@@ -247,11 +263,11 @@ function A.PostScan(only)
 	end
 
 	-- shared per-item decision → post steps appended to `steps`
-	local function ProcessItem(steps, it, cheapest)
+	local function ProcessItem(steps, it, cheapest, baitUnit)
 		local aOps = GM.Groups.GetOps(it.id, "auctioning")
 		local normal = GM.Groups.EvalOp(aOps, "normal", it.id)
 			or GM.Price("dbmarket", it.id)
-		local unit, why = A.PriceFor(aOps, it.id, normal, cheapest)
+		local unit, why = A.PriceFor(aOps, it.id, normal, cheapest, baitUnit)
 		if not unit then return nil, why or "?" end
 		local isComm = GM.AH.IsCommodity(it.id)
 		local cap = tonumber(aOps.postCap)

@@ -609,6 +609,13 @@ local function RefreshIntel()
 		tinsert(lines, GM.CC("warn") .. format("%d step-chain asks — "
 			.. "algorithmic repricing|r", marks.steps))
 	end
+	-- bait + chain together aren't two signals — they're one play:
+	-- the drag pulls posters under the wall, so the honest read is
+	-- "undercut the wall, never the bait"
+	if live and marks and marks.bait and (marks.steps or 0) > 0 then
+		tinsert(lines, GM.CC("err") .. "drag + ladder — undercut the "
+			.. "wall, never the bait lot|r")
+	end
 	if live and marks and marks.walls then
 		for s, n in pairs(marks.walls) do
 			local sc = GM.Intel.Score(s)

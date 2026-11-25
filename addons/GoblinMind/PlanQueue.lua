@@ -825,6 +825,7 @@ function PQ.Solve(asks, workID)
 		maxP = ev("max"),
 		postCap = tonumber(aOps.postCap),
 		stackSize = tonumber(aOps.stackSize),
+		undercut = tonumber(ev("undercut")),
 		ownAsks = ownAsks,
 		cancelUndercut = aOps.cancelUndercut,
 	})

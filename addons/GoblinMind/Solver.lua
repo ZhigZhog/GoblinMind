@@ -36,6 +36,20 @@ function GM.Solver.Plan(asks, p50, p90, gold, vel, opts)
 	local resale       = floor(postTarget * (1 - ahCut))
 	local guard        = opts.normal and postTarget
 		or (p90 and math.min(p50, p90) or p50)
+	-- drag-lot live: a post target inside the bait→wall trap gap is
+	-- the same queue position as the wall undercut at a worse price,
+	-- and the lot fills the manipulator's buy — lift to the wall
+	-- undercut. Below the bait is left alone (beating the drag is a
+	-- real position); at/above the wall is normal pricing
+	local baitUnit, wall
+	for _, a in ipairs(asks) do
+		if a.bait then baitUnit = baitUnit or a.unit
+		elseif not wall then wall = a.unit end
+	end
+	if baitUnit and wall and guard > baitUnit and guard < wall then
+		guard = wall - (opts.undercut or 0)
+		if opts.maxP then guard = math.min(guard, opts.maxP) end
+	end
 	local buyCap       = math.max(0, postCap - owned)
 	local spend, qty   = 0, 0
 	local steps        = {}
