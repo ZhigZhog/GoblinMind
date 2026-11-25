@@ -101,23 +101,28 @@ local function SendPendingBrowse()
 	p.gen = (p.gen or 0) + 1
 	local gen = p.gen
 	ui.status = "searching…"
-	local ok, err = pcall(C_AuctionHouse.SendBrowseQuery, {
-		searchString = p.str, sorts = SEARCH_SORTS,
-		filters = {}, itemClassFilters = p.classFilters or {},
-	})
-	if not ok then
-		ui.pendingBrowse = nil
-		ui.status = "query error: " .. tostring(err)
-	else
-		ui.status = "waiting for results…"
-		GM.After(8, function()
-			if ui.pendingBrowse == p and p.gen == gen then
-				ui.pendingBrowse = nil
-				ui.status = "query went unanswered — try again"
-				AU.Refresh()
-			end
-		end)
-	end
+	-- the send rides the shared query queue — it can't land inside
+	-- a burst with the book/market scans and get dropped
+	GM.AH.Dispatch("browse", function()
+		local ok, err = pcall(C_AuctionHouse.SendBrowseQuery, {
+			searchString = p.str, sorts = SEARCH_SORTS,
+			filters = {}, itemClassFilters = p.classFilters or {},
+		})
+		if not ok then
+			ui.pendingBrowse = nil
+			ui.status = "query error: " .. tostring(err)
+		else
+			ui.status = "waiting for results…"
+			GM.After(8, function()
+				if ui.pendingBrowse == p and p.gen == gen then
+					ui.pendingBrowse = nil
+					ui.status = "query went unanswered — try again"
+					AU.Refresh()
+				end
+			end)
+		end
+		AU.Refresh()
+	end)
 	AU.Refresh()
 end
 

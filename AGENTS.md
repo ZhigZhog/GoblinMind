@@ -102,6 +102,20 @@ Primary data = the in-house book feed below.
   still picked the book (the bug that prompted this). Dedup gates
   like `BookAge() < 30` ("don't rebuild a just-built book") are a
   different semantic — keep them fixed.
+- **Query dispatcher + scan clock** (AH.lua, `GM.AH.Dispatch`):
+  EVERY `C_AuctionHouse` endpoint call — `SendSearchQuery`,
+  `SendBrowseQuery`, `ReplicateItems` — goes through the single
+  FIFO queue, never direct. The server drops bursts silently (a
+  dropped query delivers an empty collect that reads as "no asks"),
+  so the pump enforces a 1.5s floor between calls AND waits on
+  `IsThrottledMessageSystemReady` (the server's own verdict).
+  Targeted scans serialize on `scanConsumed` — `scanItemID`/
+  `onScanDone` are single-slot state, and a queued job's state setup
+  must ride INSIDE the job fn or it clobbers an in-flight scan.
+  Freshness is deltaTime-style: `GM.AH.QueryAge(kind)` /
+  `GM.AH.ScanAge(itemID)` / `GM.AH.FreshSource(itemID)` answer
+  "how long since X / where do I read this" — consumers must NOT
+  keep their own `GetTime()`/`time()` freshness snapshots.
 - **Universal source pipeline** (Core.lua `GM.ItemEntry`): the
   emitted DB row is the base, but OBSERVATION fields `mb`/`mbx`/
   `sup`/`n` are overlaid per-item from the freshest of three

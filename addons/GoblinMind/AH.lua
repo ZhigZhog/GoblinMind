@@ -292,32 +292,116 @@ function GM.AH.IsCommodity(itemID)
 	return (maxStack or 1) > 1
 end
 
+-- ======== scan clock + query dispatcher ========
+-- One authority for WHEN AH endpoint calls leave the client. The
+-- server drops query bursts silently — a dropped query delivers an
+-- empty collect that reads as "no asks" — so every call (search,
+-- replicate, browse) funnels through one paced queue. The clock
+-- half is deltaTime-style: QueryAge(kind)/ScanAge(itemID) answer
+-- "how long since X" from a single place instead of every module
+-- keeping its own GetTime()/time() snapshot.
+local QT = {}          -- kind -> GetTime() of last dispatch
+local lastDispatch = 0 -- GetTime() of last dispatch, any kind
+local queryQ = {}      -- pending { kind, fn } jobs, FIFO
+local pumpArmed = false
+local QGAP = 1.5       -- seconds between any two endpoint calls
+
+function GM.AH.QueryAge(kind)
+	return QT[kind] and (GetTime() - QT[kind]) or math.huge
+end
+
+local function PumpQ()
+	pumpArmed = false
+	local job = queryQ[1]
+	if not job then return end
+	-- targeted-search state is single-slot (scanItemID/onScanDone) —
+	-- a search job can't run while another scan is still live or it
+	-- clobbers its callback mid-flight. A fully-dropped query never
+	-- fires an event, so PollResults never runs and scanConsumed
+	-- stays nil — the 10s ceiling treats a silent scan as dead
+	-- rather than letting it starve the queue
+	if job.kind == "search" and GM.AH.scanItemID
+		and not GM.AH.scanConsumed
+		and GetTime() - (GM.AH.scanItemT or 0) < 10 then
+		pumpArmed = true
+		GM.After(0.3, PumpQ)
+		return
+	end
+	-- the server reports its own pipe readiness — the fixed gap is a
+	-- floor between calls, this is the throttle's actual verdict
+	if C_AuctionHouse.IsThrottledMessageSystemReady
+		and not C_AuctionHouse.IsThrottledMessageSystemReady() then
+		pumpArmed = true
+		GM.After(0.3, PumpQ)
+		return
+	end
+	local wait = QGAP - (GetTime() - lastDispatch)
+	if wait > 0 then
+		pumpArmed = true
+		GM.After(wait, PumpQ)
+		return
+	end
+	table.remove(queryQ, 1)
+	QT[job.kind], lastDispatch = GetTime(), GetTime()
+	job.fn()
+	if queryQ[1] then
+		pumpArmed = true
+		GM.After(QGAP, PumpQ)
+	end
+end
+
+function GM.AH.Dispatch(kind, fn)
+	queryQ[#queryQ + 1] = { kind = kind, fn = fn }
+	if not pumpArmed then
+		pumpArmed = true
+		PumpQ()
+	end
+end
+
+-- freshness registry — epoch time() so it composes with bookT/
+-- bookLotsT (which persist across sessions); the query-side clock
+-- stays GetTime() for the sub-second resolution QGAP needs
+GM.AH.scanT = {} -- itemID -> time() of last delivered targeted scan
+GM.AH.scanN = {} -- itemID -> rows that scan delivered
+
+function GM.AH.ScanAge(itemID)
+	local t = itemID and GM.AH.scanT[itemID]
+	return t and (time() - t) or math.huge
+end
+
+-- one answer to "where do I read this item's ask picture" — the
+-- freshest of targeted scan vs book lots; past the ~15m throttle
+-- horizon it's the emitted row's job (ItemEntry owns that tier)
+function GM.AH.FreshSource(itemID)
+	local s = GM.AH.ScanAge(itemID)
+	local l = GM.AH.bookLotsT and (time() - GM.AH.bookLotsT) or math.huge
+	if s <= l then return "scan", s end
+	if l <= 900 then return "book", l end
+	return "emit", math.huge
+end
+
 -- === Scans (read-only; safe to call from UI, no protection on queries) ===
 
 function GM.AH.ScanItem(itemID, itemName, done, key)
 	if not C_AuctionHouse then return done({}) end
-	-- the server throttles search queries — bursts (plan + market +
-	-- sniper hitting together) get dropped silently, and a dropped
-	-- query delivers an EMPTY collect that reads as "no asks".
-	-- Self-pace: never two SendSearchQuery calls inside 1.5s
-	local gap = GM.AH.lastQueryT and (GetTime() - GM.AH.lastQueryT) or math.huge
-	if gap < 1.5 then
-		return GM.After(1.5 - gap, function()
-			GM.AH.ScanItem(itemID, itemName, done, key)
-		end)
-	end
-	GM.AH.lastQueryT = GetTime()
-	-- Forever's SendSearchQuery only accepts an ItemKey — no bare itemID
-	-- path; stackables are searched the same way. Browse rows carry the
-	-- exact key (itemID+suffix) — pass it through so suffixed variants
-	-- ("of the Bear") resolve their own listings instead of querying
-	-- the suffix-0 base item, which returns none.
-	GM.AH.scanItemID = itemID
-	GM.AH.scanItemKey = key or C_AuctionHouse.MakeItemKey(itemID, 0, 0, nil)
-	GM.AH.onScanDone = done
-	GM.AH.asks = nil
-	GM.AH.itemEvtSeen, GM.AH.commEvtSeen, GM.AH.scanConsumed = nil, nil, nil
-	C_AuctionHouse.SendSearchQuery(GM.AH.scanItemKey, EMPTY_SORTS, true)
+	-- state setup rides INSIDE the job — a queued scan must not
+	-- clobber the single-slot scanItemID/onScanDone of one still
+	-- in flight (the pump already holds it back, this is belt)
+	GM.AH.Dispatch("search", function()
+		-- Forever's SendSearchQuery only accepts an ItemKey — no bare
+		-- itemID path; stackables are searched the same way. Browse
+		-- rows carry the exact key (itemID+suffix) — pass it through
+		-- so suffixed variants ("of the Bear") resolve their own
+		-- listings instead of querying the suffix-0 base item, which
+		-- returns none.
+		GM.AH.scanItemID = itemID
+		GM.AH.scanItemKey = key or C_AuctionHouse.MakeItemKey(itemID, 0, 0, nil)
+		GM.AH.scanItemT = GetTime()
+		GM.AH.onScanDone = done
+		GM.AH.asks = nil
+		GM.AH.itemEvtSeen, GM.AH.commEvtSeen, GM.AH.scanConsumed = nil, nil, nil
+		C_AuctionHouse.SendSearchQuery(GM.AH.scanItemKey, EMPTY_SORTS, true)
+	end)
 end
 
 -- a chat/bag/tooltip link carries the variant in itemString field 8
@@ -400,6 +484,7 @@ function GM.AH.CollectCommodityAsks(itemID)
 	GM.AH.lastScanDiag = { id = itemID, n = #asks, src = "comm",
 		itemEvt = GM.AH.itemEvtSeen or false,
 		commEvt = GM.AH.commEvtSeen or false, t = time() }
+	GM.AH.scanT[itemID], GM.AH.scanN[itemID] = time(), #asks
 	if GM.AH.onScanDone then GM.AH.onScanDone(asks) end
 end
 
@@ -457,6 +542,10 @@ function GM.AH.CollectItemAsks()
 	GM.AH.lastScanDiag = { id = GM.AH.scanItemID, n = #asks, src = "item",
 		itemEvt = GM.AH.itemEvtSeen or false,
 		commEvt = GM.AH.commEvtSeen or false, t = time() }
+	if GM.AH.scanItemID then
+		GM.AH.scanT[GM.AH.scanItemID], GM.AH.scanN[GM.AH.scanItemID] =
+			time(), #asks
+	end
 	if GM.AH.onScanDone then GM.AH.onScanDone(asks) end
 end
 
@@ -603,13 +692,6 @@ function GM.AH.FullScan()
 	if GM.Shopping and GM.Shopping.Status then GM.Shopping.Status(msg) end
 	local prevT = GM.AH.bookT
 	GM.AH.wantBook = true
-	local ok, err = pcall(C_AuctionHouse.ReplicateItems)
-	if not ok then
-		GM.AH.wantBook = nil
-		GM.PlanQueue.ScanStatus(GM.CC("warn") .. "full scan failed: " .. tostring(err) .. "|r")
-		GM.PlanQueue.Refresh()
-		return
-	end
 	-- this client fires no completion event for replicate scans (neither
 	-- REPLICATE_ITEM_LIST_UPDATE nor the legacy name) — poll the buffer
 	-- instead: when the row count is nonzero and stable, data has landed
@@ -673,7 +755,18 @@ function GM.AH.FullScan()
 			GM.PlanQueue.Refresh()
 		end
 	end
-	GM.After(0.5, Poll)
+	-- ReplicateItems goes out on the shared queue — a search/browse
+	-- still in flight can't make it arrive inside a burst
+	GM.AH.Dispatch("replicate", function()
+		local ok, err = pcall(C_AuctionHouse.ReplicateItems)
+		if not ok then
+			GM.AH.wantBook = nil
+			GM.PlanQueue.ScanStatus(GM.CC("warn") .. "full scan failed: " .. tostring(err) .. "|r")
+			GM.PlanQueue.Refresh()
+			return
+		end
+		GM.After(0.5, Poll)
+	end)
 	GM.PlanQueue.Refresh()
 end
 
@@ -693,7 +786,8 @@ end
 
 -- a full scan of either kind is in flight — used to disable the button
 function GM.AH.Busy()
-	return GM.AH.wantBook or GM.AH.collecting or GM.AH.browse or nil
+	return GM.AH.wantBook or GM.AH.collecting or GM.AH.browse
+		or (#queryQ > 0 and true) or nil
 end
 
 -- cheapest unit excluding our own listings (decisions use this). A
@@ -759,10 +853,7 @@ function GM.AH.DumpRows(itemID, maxRows)
 	if itemID and C_AuctionHouse.MakeItemKey and C_AuctionHouse.GetItemSearchResultInfo
 		and C_AuctionHouse.SendSearchQuery then
 		local key = C_AuctionHouse.MakeItemKey(itemID, 0, 0, nil)
-		GM.AH.scanItemID = itemID
-		GM.AH.scanItemKey = key
-		GM.AH.itemEvtSeen, GM.AH.commEvtSeen, GM.AH.scanConsumed = nil, nil, nil
-		GM.AH.onScanDone = function()
+		local function dumpDone()
 			local n = C_AuctionHouse.GetNumItemSearchResults(key) or 0
 			GM.Print(format("item-search results: %d", n))
 			for i = 1, math.min(n, 2) do
@@ -789,8 +880,15 @@ function GM.AH.DumpRows(itemID, maxRows)
 			end
 			GM.AH.onScanDone = nil
 			GM.AH.scanItemKey = nil
+			GM.AH.scanConsumed = true -- release the dispatch queue
 		end
-		C_AuctionHouse.SendSearchQuery(key, EMPTY_SORTS, true)
+		GM.AH.Dispatch("search", function()
+			GM.AH.scanItemID = itemID
+			GM.AH.scanItemKey = key
+			GM.AH.itemEvtSeen, GM.AH.commEvtSeen, GM.AH.scanConsumed = nil, nil, nil
+			GM.AH.onScanDone = dumpDone
+			C_AuctionHouse.SendSearchQuery(key, EMPTY_SORTS, true)
+		end)
 		-- commodity side of the same item — what CollectCommodityAsks
 		-- would have consumed if the event fired
 		if C_AuctionHouse.GetCommoditySearchResultInfo then
@@ -1101,23 +1199,29 @@ function GM.AH.BrowseBook()
 	end
 	local b = { seen = 0, book = {}, rows = {}, tries = 0 }
 	GM.AH.browse = b
-	local ok, err = pcall(C_AuctionHouse.SendBrowseQuery, {
-		searchString = "", sorts = BROWSE_SORTS,
-		filters = {}, itemClassFilters = {},
-	})
-	if not ok then
-		GM.AH.browse = nil
-		GM.PlanQueue.ScanStatus(GM.CC("warn") .. "browse query failed: " .. tostring(err) .. "|r")
-		GM.PlanQueue.Refresh()
-		return false
-	end
-	-- stall watchdog: browse events should arrive promptly
-	GM.After(6, function()
-		if GM.AH.browse == b and b.seen == 0 then
+	-- the query rides the shared queue — GM.AH.browse is set now so
+	-- the wait is visible as busy, but the endpoint call + watchdog
+	-- only arm when the job actually dispatches
+	GM.AH.Dispatch("browse", function()
+		local ok, err = pcall(C_AuctionHouse.SendBrowseQuery, {
+			searchString = "", sorts = BROWSE_SORTS,
+			filters = {}, itemClassFilters = {},
+		})
+		if not ok then
 			GM.AH.browse = nil
-			GM.PlanQueue.ScanStatus(GM.CC("warn") .. "the auction house isn't responding — try again later|r")
+			GM.PlanQueue.ScanStatus(GM.CC("warn") .. "browse query failed: " .. tostring(err) .. "|r")
 			GM.PlanQueue.Refresh()
+			return
 		end
+		-- stall watchdog: browse events should arrive promptly
+		GM.After(6, function()
+			if GM.AH.browse == b and b.seen == 0 then
+				GM.AH.browse = nil
+				GM.PlanQueue.ScanStatus(GM.CC("warn") .. "the auction house isn't responding — try again later|r")
+				GM.PlanQueue.Refresh()
+			end
+		end)
+		GM.PlanQueue.Refresh()
 	end)
 	GM.PlanQueue.Refresh()
 	return true
