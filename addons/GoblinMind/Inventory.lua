@@ -212,7 +212,7 @@ local function SaveOwned()
 		if a.itemID then
 			rows[fp] = { itemID = a.itemID, qty = a.qty,
 				buyout = a.buyout, tLeft = a.tLeft, at = a.at,
-				n = a.n }
+				n = a.n, dep = a.dep, aid = a.aid, name = a.name }
 		end
 	end
 	local bs = {}
@@ -239,10 +239,42 @@ local function LoadOwned()
 		end
 	end
 	if not snap then return end
+	local dead = {}
 	for fp, a in pairs(snap.rows or {}) do
-		auctionCache[fp] = { fp = fp, itemID = a.itemID,
-			qty = a.qty, buyout = a.buyout, tLeft = a.tLeft,
-			at = a.at, n = a.n }
+		local e = { fp = fp, itemID = a.itemID, qty = a.qty,
+			buyout = a.buyout, tLeft = a.tLeft, at = a.at, n = a.n,
+			dep = a.dep, aid = a.aid, name = a.name }
+		-- a snapshot row whose listing deadline elapsed while offline
+		-- is dead on arrival — hydrating it counts an expired auction
+		-- as live wealth until the first enum corrects it (a flat
+		-- plateau that snaps down, the "weird jump" on the chart).
+		-- Ledger it as an expiry now: the same couldExpire verdict
+		-- pendingLost hands a row gone past its timeLeft.
+		if e.tLeft and e.at and (time() - e.at) >= e.tLeft then
+			dead[#dead + 1] = e
+		else
+			auctionCache[fp] = e
+		end
+	end
+	if #dead > 0 then
+		-- strip from the persisted snapshot now: without an AH visit
+		-- SaveOwned never runs and the same ghosts would re-ledger on
+		-- every login
+		for _, e in ipairs(dead) do snap.rows[e.fp] = nil end
+		-- defer: the ledger isn't guaranteed primed at PLAYER_LOGIN
+		GM.After(2, function()
+			for _, e in ipairs(dead) do
+				if GM.Ledger and GM.Ledger.Add then
+					local dep = e.dep or (GM.AH.DepositCost
+						and GM.AH.DepositCost(e.itemID, e.qty or 1)) or 0
+					for _ = 1, (e.n or 1) do
+						GM.Ledger.Add("expire", e.itemID, e.qty, nil,
+							{ auctionID = e.aid or e.fp,
+								dep = dep, nm = e.name })
+					end
+				end
+			end
+		end)
 	end
 	for aid, b in pairs(snap.bids or {}) do bids[aid] = b end
 	GM.Inventory.auctions = auctionCache
@@ -403,7 +435,12 @@ function GM.Inventory.RefreshOwned()
 	end
 	for fp, prev in pairs(auctionCache) do
 		local lost = (prev.n or 1) - (now[fp] and now[fp].n or 0)
-		if ownedPrimed and lost > 0
+		-- lost-detection is NOT primed-gated: the first live enum is
+		-- the only chance to verdict rows that resolved while offline
+		-- (deadline elapsed → expire, else sell — pendingLost's own
+		-- couldExpire). The "posts" side above stays gated: a hydrated
+		-- row re-seen must never ledger a duplicate post.
+		if lost > 0
 			and not recentCancels[fp]
 			and not (prev.aid and recentCancels[prev.aid]) then
 			-- a ghost row that popped in and out is noise, a real sale
