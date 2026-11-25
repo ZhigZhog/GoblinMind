@@ -310,7 +310,9 @@ function GM.Inventory.OwnedPrimed() return ownedPrimed end
 -- covers base-name vs variant-name pairs.
 local function NameMatches(e, name)
 	local en = e.name or (GM.ItemName and GM.ItemName(e.itemID))
-	return en ~= nil and name ~= nil and (en == name
+	-- notifications can carry a numeric auctionID instead of a
+	-- name — a non-string key is an aid compare, never a name
+	return type(en) == "string" and type(name) == "string" and (en == name
 		or en:sub(1, #name) == name
 		or name:sub(1, #en) == en)
 end
