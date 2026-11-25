@@ -1481,7 +1481,8 @@ function GM.AH.Execute(step)
 			-- suppress by fingerprint too — the owned list can rekey
 			-- the listing on the next snapshot
 			if a.fp then GM.Inventory.recentCancels[a.fp] = now end
-			GM.Ledger.Add("cancel", a.itemID, a.qty, a.buyout)
+			GM.Ledger.Add("cancel", a.itemID, a.qty, a.buyout,
+				{ dep = a.dep, auctionID = step.auctionID })
 		end
 		-- CancelAuction is PROTECTED on Forever — the call throws the
 		-- client-side "Interface action failed" block, never reaches

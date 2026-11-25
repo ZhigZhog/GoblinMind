@@ -302,6 +302,11 @@ function GM.Inventory.RefreshOwned()
 				buyout = info.buyoutAmount or info.bidAmount,
 				tLeft = info.timeLeftSeconds,
 				at = time(),
+				-- listing deposit estimate, captured once: the post,
+				-- sale, and cancel legs must move the SAME number or
+				-- the ledger's dep account never closes
+				dep = GM.AH and GM.AH.DepositCost
+					and GM.AH.DepositCost(id, info.quantity or 1) or 0,
 				aid = aid, idx = i, n = 1,
 			}
 			e.fp = EntryFp(e)
@@ -347,7 +352,8 @@ function GM.Inventory.RefreshOwned()
 		if ownedPrimed and extra > 0 and not recentCancels[fp]
 			and t <= postUntil then
 			for _ = 1, extra do
-				GM.Ledger.Add("post", e.itemID, e.qty, e.buyout)
+				GM.Ledger.Add("post", e.itemID, e.qty, e.buyout,
+					{ dep = e.dep, aid = e.aid, dur = e.tLeft })
 			end
 		end
 	end
@@ -356,20 +362,22 @@ function GM.Inventory.RefreshOwned()
 		if ownedPrimed and lost > 0
 			and not recentCancels[fp]
 			and not (prev.aid and recentCancels[prev.aid]) then
-			-- hold the verdict one refresh — a ghost row that popped
-			-- in and out is noise, a real sale stays gone
-			pendingLost[fp] = { e = prev, lost = lost, fresh = true }
+			-- a ghost row that popped in and out is noise, a real sale
+			-- stays gone — and on a throttled enum "one refresh" can
+			-- arrive 0.5s later, so the hold is a TIME gate, not a
+			-- pass count: missing must sustain 15s before the verdict
+			local pl = pendingLost[fp]
+			if pl then pl.lost = lost
+			else pendingLost[fp] = { e = prev, lost = lost, at = t } end
 		end
 	end
 	for fp, pl in pairs(pendingLost) do
-		if pl.fresh then
-			pl.fresh = nil -- just armed this pass — verdict next refresh
-		elseif recentCancels[fp]
+		local cur = now[fp]
+		local deficit = (pl.e.n or 1) - (cur and (cur.n or 1) or 0)
+		if deficit <= 0 or recentCancels[fp]
 			or (pl.e.aid and recentCancels[pl.e.aid]) then
-			pendingLost[fp] = nil -- canceled while pending — not a sale
-		else
-			local cur = now[fp]
-			local deficit = (pl.e.n or 1) - (cur and (cur.n or 1) or 0)
+			pendingLost[fp] = nil -- repopulated or canceled while pending
+		elseif t - (pl.at or t) >= 15 then
 			local n = math.min(pl.lost, deficit)
 			if n > 0 then
 				local couldExpire = pl.e.tLeft
@@ -378,14 +386,16 @@ function GM.Inventory.RefreshOwned()
 					if couldExpire then
 						-- vanished on schedule without a cancel → expiry
 						GM.Ledger.Add("expire", pl.e.itemID, pl.e.qty,
-							nil, { auctionID = pl.e.aid or fp })
+							nil, { auctionID = pl.e.aid or fp,
+								dep = pl.e.dep })
 					else
 						-- buyout is per-item on Forever — sale proceeds
 						-- per unit are buyout minus the 5% AH cut
 						local unit = pl.e.buyout and pl.e.qty > 0
 							and math.floor(pl.e.buyout * 0.95) or nil
 						GM.Ledger.Add("sell", pl.e.itemID, pl.e.qty,
-							unit, { auctionID = pl.e.aid or fp })
+							unit, { auctionID = pl.e.aid or fp,
+								dep = pl.e.dep })
 					end
 				end
 			end
@@ -556,6 +566,7 @@ end
 function GM.Inventory.RefreshBids()
 	if not (C_AuctionHouse and GM.AH.open) then return end
 	local me = UnitGUID and UnitGUID("player")
+	local t = time()
 	for aid, b in pairs(bids) do
 		if b.status == "winning" or b.status == "outbid" then
 			local info = BidInfoByID(aid)
@@ -564,10 +575,16 @@ function GM.Inventory.RefreshBids()
 				b.tl = info.timeLeftSeconds or b.tl
 				b.status = (me and info.bidder == me) and "winning"
 					or "outbid"
+				b.goneAt = nil
 			else
 				-- vanished without a terminal notification: sold to us
-				-- surfaces as AuctionWon; silent removal = expired/outbid
-				if b.status == "outbid" then b.status = "lost" end
+				-- surfaces as AuctionWon; silent removal = expired/outbid.
+				-- Same time gate as the owned snapshot — a throttled
+				-- enum can drop a live bid for one pass
+				b.goneAt = b.goneAt or t
+				if t - b.goneAt >= 15 and b.status == "outbid" then
+					b.status = "lost"
+				end
 			end
 		end
 	end

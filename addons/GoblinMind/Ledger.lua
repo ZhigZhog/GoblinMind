@@ -51,15 +51,41 @@ function GM.Ledger.Init()
 	}
 end
 
+-- journal accounts — every transaction writes je = {acct → signed
+-- delta} summing to zero, so a full replay reproduces balances:
+--   cash   gold on hand          stock  inventory at cost in bags
+--   posted AH escrow at cost     dep    listing deposits outstanding
+--   pnl    realized trading P&L — CREDIT balance: negative = profit
+--   ext    outside world (loot, vendors, mail, unseen gold flows)
+local function Journal(kind, s, qty, unit, extra)
+	local cost = s.paidQ and s.paidQ > 0
+		and s.paidT / s.paidQ * qty or 0
+	local dep = extra and extra.dep or 0
+	if kind == "buy" then
+		local tot = qty * (unit or 0)
+		return { cash = -tot, stock = tot }
+	elseif kind == "post" then
+		return { stock = -cost, posted = cost, cash = -dep, dep = dep }
+	elseif kind == "sell" then
+		local net = qty * (unit or 0)
+		return { cash = net + dep, posted = -cost, dep = -dep,
+			pnl = cost - net }
+	elseif kind == "cancel" or kind == "expire" then
+		return { posted = -cost, stock = cost, dep = -dep, pnl = dep }
+	end
+	-- mail items have no known cost — no money movement to balance
+end
+
 function GM.Ledger.Add(kind, itemID, qty, unit, extra)
 	local L = GM.Ledger.db
 	if not L or not itemID or not qty or qty <= 0 then return end
 	local tx = L.transactions
-	tx[#tx + 1] = { t = time(), ty = kind, i = itemID, q = qty, u = unit, x = extra }
-	if #tx > TX_CAP then table.remove(tx, 1) end
 	local s = L.itemStats[itemID]
 	if not s then s = {} L.itemStats[itemID] = s end
 	local t = time()
+	tx[#tx + 1] = { t = t, ty = kind, i = itemID, q = qty, u = unit,
+		x = extra, je = Journal(kind, s, qty, unit, extra) }
+	if #tx > TX_CAP then table.remove(tx, 1) end
 	if kind == "buy" then
 		local tot = qty * (unit or 0)
 		s.buyQ = (s.buyQ or 0) + qty
@@ -151,8 +177,29 @@ function GM.Ledger.Gold(delta, source)
 	local L = GM.Ledger.db
 	if not L then return end
 	local g = L.gold
-	g[#g + 1] = { t = time(), d = delta, src = source }
+	g[#g + 1] = { t = time(), d = delta, src = source,
+		je = { cash = delta, ext = -delta } }
 	if #g > GOLD_CAP then table.remove(g, 1) end
+end
+
+-- replay the journal for one char: every tx's acct deltas summed
+-- into balances. pnl reads as a credit account — negative = profit;
+-- -pnl is lifetime realized P&L. ext's drift from zero is how much
+-- the journal can't see (untracked gold flow).
+function GM.Ledger.Accounts(charKey)
+	local bal = { cash = 0, stock = 0, posted = 0, dep = 0,
+		pnl = 0, ext = 0 }
+	local c = GoblinMindLedger and GoblinMindLedger.byChar
+		and GoblinMindLedger.byChar[charKey or GM.Ledger._ck]
+	if not c then return bal end
+	for _, list in ipairs({ c.transactions, c.gold }) do
+		for _, e in ipairs(list or {}) do
+			for a, d in pairs(e.je or {}) do
+				bal[a] = (bal[a] or 0) + d
+			end
+		end
+	end
+	return bal
 end
 
 -- char-switcher surface for the ledger window: sorted char keys and

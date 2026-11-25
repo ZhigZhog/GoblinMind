@@ -315,13 +315,22 @@ function OV.RefreshLog()
 			fs:SetText(GM.CC("accent") .. e.head .. "|r")
 		else
 			local money = e.u and e.u * e.q
-			fs:SetText(format("%s  %s %s · %s ×%d%s",
+			-- the journal detail that makes a row answer "what was
+			-- the deposit" — dep estimate carried on the owned entry
+			local dep = e.x and e.x.dep
+			local depTxt = dep and dep > 0
+				and (" · dep " .. GM.Money(dep)
+					.. (e.ty == "sell" and " back"
+						or (e.ty == "cancel" or e.ty == "expire")
+							and " lost" or ""))
+				or ""
+			fs:SetText(format("%s  %s %s · %s ×%d%s%s",
 				date("%H:%M", e.t),
 				e.ty == "sell" and GM.CC("pos") or
 					e.ty == "buy" and GM.CC("warn") or GM.CC("textDim"),
 				TX_LABEL[e.ty] or e.ty,
 				QName(e.i), e.q,
-				money and (" · " .. GM.Money(money)) or ""))
+				money and (" · " .. GM.Money(money)) or "", depTxt))
 		end
 	end
 end
@@ -459,6 +468,27 @@ function OV.RefreshChart()
 				.. GM.Signed(realized) .. GM.CC("textDim")
 				.. "/d · reval |r" .. GM.Signed(slope * 86400 - realized)
 				.. GM.CC("textDim") .. "/d|r")
+		end
+	end
+
+	-- journal replay: where the money actually sits — AH escrow,
+	-- deposits outstanding, lifetime realized P&L (−pnl: credit
+	-- account, negative balance = profit)
+	if ui.kpiLedger then
+		local bal = GM.Ledger.Accounts and GM.Ledger.Accounts(ViewChar())
+		if bal then
+			local parts = {}
+			if bal.posted > 0 then
+				parts[#parts + 1] = "posted " .. GM.MoneyShort(bal.posted)
+			end
+			if bal.dep > 0 then
+				parts[#parts + 1] = "dep " .. GM.MoneyShort(bal.dep) .. " out"
+			end
+			if bal.pnl ~= 0 then
+				parts[#parts + 1] = "realized " .. GM.Signed(-bal.pnl)
+			end
+			ui.kpiLedger:SetText(GM.CC("textDim") .. "ledger |r"
+				.. table.concat(parts, " · "))
 		end
 	end
 
@@ -744,10 +774,16 @@ local function Build()
 	ui.kpiFlow = GM.MakeFontString(chart, GM.FONT, 8, "textDim")
 	ui.kpiFlow:SetPoint("BOTTOM", chart, "BOTTOM", 0, 6)
 	ui.kpiFlow:SetWordWrap(false)
+	ui.kpiLedger = GM.MakeFontString(chart, GM.FONT, 8, "textDim")
+	ui.kpiLedger:SetPoint("BOTTOMLEFT", chart, "BOTTOMLEFT", 8, 6)
+	ui.kpiLedger:SetWordWrap(false)
 	-- window segments: filter the sampled window (ALL = whole buffer)
 	ui.chartWin = "ALL"
 	ui.winSegs = {}
-	local wins = { "24H", "7D", "ALL" }
+	local L = GM.L or function(s) return s end
+	-- L() at the literal site — a table of labels feeding Segment()
+	-- is invisible to the locale extractor
+	local wins = { L("24H"), L("7D"), L("ALL") }
 	for i, lab in ipairs(wins) do
 		local seg = W.Segment(chart, lab, 34, 16)
 		seg:SetPoint("TOPRIGHT", -10 - (#wins - i) * 38, -20)

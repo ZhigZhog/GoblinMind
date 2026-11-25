@@ -39,13 +39,56 @@ STYLE_WORDS = {
     "contHigh", "contLow", "contLowest", "contMedium", "contHighest",
     "accent", "outlineVar", "outline", "secondary", "textDim", "text",
     "warn", "pos", "err",
+    # WoW API vocabulary swept in from code nested inside helper
+    # args — anchors, draw layers, widget classes, layout keywords,
+    # lua keywords. Never display text.
+    "TOP", "TOPLEFT", "TOPRIGHT", "BOTTOM", "BOTTOMLEFT",
+    "BOTTOMRIGHT", "LEFT", "RIGHT", "CENTER",
+    "BACKGROUND", "BORDER", "ARTWORK", "OVERLAY", "HIGHLIGHT",
+    "Frame", "Button", "EditBox", "Slider", "CheckButton",
+    "FontString", "Texture", "ScrollFrame", "StatusBar", "Cooldown",
+    "Model", "GameTooltip",
+    "fill", "fit", "wrap", "auto", "grow",
+    "function", "local", "return", "end", "self", "true", "false",
+    "nil", "and", "or", "not",
+    # URL fragments and pure-format strings
+    "https://", "http://",
 }
 
-HELPER_CALL = re.compile(
+HELPER_RE = re.compile(
     r'(?:^|[^\w_])'
     r'(?:Btn|ActionBtn|MkBtn|Segment|ColPanel|TitledPanel|ListPanel|'
-    r'Panel|FilterToggle|EditBox)\s*\(([^)]*)\)'
+    r'Panel|FilterToggle|EditBox)\s*\('
 )
+
+
+def helper_args(src):
+    """Yield the arg-list text of every widget-helper call.
+
+    A regex arg capture ([^)]*) truncates at the first ')' — which
+    kills any title that CONTAINS parens ("REVENUE — RESALE
+    (BUY→SELL MARGIN)" was silently unregistered for exactly this).
+    Scan char-by-char instead: track quote state so parens inside
+    string literals don't count, and stop at depth 0.
+    """
+    for m in HELPER_RE.finditer(src):
+        i = m.end()
+        depth, j, q = 1, i, None
+        while j < len(src) and depth:
+            c = src[j]
+            if q:
+                if c == "\\":
+                    j += 1
+                elif c == q:
+                    q = None
+            elif c == '"' or c == "'":
+                q = c
+            elif c == "(":
+                depth += 1
+            elif c == ")":
+                depth -= 1
+            j += 1
+        yield src[i:j - 1]
 DIRECT_L = re.compile(r'(?:\bL|\bLT|GM\.L)\s*\(\s*"((?:[^"\\]|\\.)*)"')
 OR_LIT = re.compile(r'\bend\)\s*\(\s*"((?:[^"\\]|\\.)*)"')
 KV_OPT = re.compile(r'(?:title|hint|label)\s*=\s*"((?:[^"\\]|\\.)*)"')
@@ -72,6 +115,7 @@ def plausible(s):
         and '\\' not in s
         and not CODE.search(s)
         and s not in STYLE_WORDS
+        and not s.startswith(")")  # concat fragment, not a label
         and not re.fullmatch(r'[\d.,:%/\-+ ]+', s)
         and not (' ' not in s and CAMEL.match(s))
     )
@@ -89,8 +133,8 @@ def collect():
                 keys.add(b)
             elif LOWKEY.match(b) and re.search(r'[A-Z]', a):
                 keys.add(a)
-        for m in HELPER_CALL.finditer(src):
-            keys.update(x.group(1) for x in ANY_LIT.finditer(m.group(1)))
+        for args in helper_args(src):
+            keys.update(x.group(1) for x in ANY_LIT.finditer(args))
     return {k for k in keys if plausible(k)}
 
 

@@ -42,7 +42,11 @@ GM.Groups.OP_FIELDS = {
 	{ "Undercut",        "auctioning", "undercut",       "expr", "expr" },
 	{ "Post cap",        "auctioning", "postCap",        "num",  "stepper", { min = 0, tip = "0 = no cap" } },
 	{ "Stack size",      "auctioning", "stackSize",      "num",  "stepper", { min = 0, tip = "0 = available stack" } },
-	{ "Duration",        "auctioning", "duration",       "num",  "seg", { opts = { { "12h", 1 }, { "24h", 2 }, { "48h", 3 } } } },
+	-- L() at the literal site registers the seg labels — a {"label",
+	-- number} opt pair is invisible to the locale extractor, and the
+	-- table builds before GM.L exists so the identity fallback is
+	-- all that's needed here (LT resolves for real at render)
+	{ "Duration",        "auctioning", "duration",       "num",  "seg", { opts = { { L("12h"), 1 }, { L("24h"), 2 }, { L("48h"), 3 } } } },
 	{ "Bid %",           "auctioning", "bidPercent",     "num",  "num", { min = 0, max = 100 } },
 	{ "Cancel under",    "auctioning", "cancelUndercut", "bool", "bool" },
 	{ "Buy margin %",    "shopping",   "belowPct",       "num",  "num", { min = 0, max = 100 } },
