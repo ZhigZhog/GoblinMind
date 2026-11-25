@@ -43,11 +43,16 @@ function GM.Ledger.Init()
 	end
 	c.transactions = c.transactions or {}
 	c.gold = c.gold or {}
+	-- mailSeen: fingerprints of auction-mail rows already ledgered —
+	-- the invoice scan is the authoritative record for offline
+	-- resolutions, and the set keeps re-scans idempotent
+	c.mailSeen = c.mailSeen or {}
 	-- facade: existing readers keep working, data is per-char underneath
 	GM.Ledger.db = {
 		transactions = c.transactions,
 		itemStats = L.itemStats,
 		gold = c.gold,
+		mailSeen = c.mailSeen,
 	}
 end
 
@@ -86,7 +91,9 @@ function GM.Ledger.Add(kind, itemID, qty, unit, extra)
 	local tx = L.transactions
 	local s = L.itemStats[itemID]
 	if not s then s = {} L.itemStats[itemID] = s end
-	local t = time()
+	-- extra.t backdates: mail-derived records carry the real event
+	-- time (invoice daysLeft), not the detection time
+	local t = extra and extra.t or time()
 	tx[#tx + 1] = { t = t, ty = kind, i = itemID, q = qty, u = unit,
 		x = extra, je = Journal(kind, s, qty, unit, extra) }
 	if #tx > TX_CAP then table.remove(tx, 1) end

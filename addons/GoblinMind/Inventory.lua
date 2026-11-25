@@ -19,6 +19,8 @@ local aidIndex = {}       -- [raw auctionID or enum index] = fp — resolves
                           -- cancel callers' raw ids back to their entry
 local recentCancels = {}  -- [fp or raw id] = time()
 local soldMarks = {}      -- [fp] = time() — ERR_AUCTION_SOLD marks
+local expireMarks = {}    -- [fp] = time() — AuctionExpired notif marks
+local removedMarks = {}   -- [fp] = time() — AuctionRemoved (cancel)
                           -- survive until the enum drops the row
 local ownedPrimed = false -- first refresh just populates — everything
                           -- would look "new" otherwise
@@ -64,6 +66,190 @@ local function scanInbox()
 		end
 	end
 	mailCache = t
+end
+
+-- ============ auction-mail records (TSM's invoice model) ============
+-- the owned enum is the real-time view; the AUTHORITATIVE record of
+-- a resolution is the auction mail: seller invoices carry the exact
+-- bid and the REAL AH cut (no *0.95 estimate), expire/cancel mails
+-- carry the item itself, and daysLeft backdates the event. The enum
+-- paths stay the fast path — this pass catches what they can't see
+-- (offline resolutions) with exact amounts. mailSeen fingerprints
+-- keep re-scans idempotent across sessions.
+
+local mailScanAt = 0
+
+local EXP_SUBJ = AUCTION_EXPIRED_MAIL_SUBJECT
+	and AUCTION_EXPIRED_MAIL_SUBJECT:gsub("%%s", "") or nil
+local CAN_SUBJ = AUCTION_REMOVED_MAIL_SUBJECT
+	and AUCTION_REMOVED_MAIL_SUBJECT:gsub("%%s", "") or nil
+
+-- invoice mails name items, never id them — resolve through the
+-- owned cache (variant-aware names) then the ledger's own nm history
+local function MailNameToID(name)
+	for _, e in pairs(auctionCache) do
+		if e.name == name and e.itemID then return e.itemID end
+	end
+	local tx = GM.Ledger.db and GM.Ledger.db.transactions
+	if tx then
+		for i = #tx, 1, -1 do
+			local e = tx[i]
+			if e.x and e.x.nm == name and e.i then return e.i end
+		end
+	end
+	for id in pairs(GoblinMindLedger and GoblinMindLedger.itemStats
+		or {}) do
+		if GM.ItemName(id) == name then return id end
+	end
+end
+
+-- has an enum-side txn already covered this item+qty+kind recently?
+-- bounded tail scan, not a break-on-old: backdated mail records make
+-- the list non-monotonic, so an early exit could skip newer rows
+local function TxnSeen(kind, itemID, qty, window)
+	local tx = GM.Ledger.db and GM.Ledger.db.transactions
+	if not tx then return false end
+	local cutoff = time() - (window or 129600)
+	for i = #tx, math.max(1, #tx - 400), -1 do
+		local e = tx[i]
+		if e.ty == kind and e.i == itemID and e.q == qty
+			and (e.t or 0) >= cutoff then
+			return true
+		end
+	end
+	return false
+end
+
+local function MailMark(fp)
+	local ms = GM.Ledger.db and GM.Ledger.db.mailSeen
+	if not ms then return end
+	ms[fp] = time()
+	-- bound: mail lives 30 days — prune stale keys and cap the table
+	local n = 0
+	for k, t0 in pairs(ms) do
+		n = n + 1
+		if n > 400 or time() - t0 > 32 * 86400 then ms[k] = nil end
+	end
+end
+
+-- item attachments: the expire/cancel/won mails carry the item
+-- itself — the link gives the exact itemID (and suffix variant) the
+-- invoice name can't. Quantities sum across slots like TSM's
+-- GetQuantity: an expiry can return the item in several stacks.
+local function MailAttachmentItem(index)
+	if not GetInboxItemLink then return end
+	local id, qty
+	for slot = 1, 20 do
+		local link = GetInboxItemLink(index, slot)
+		if link then
+			id = id or tonumber(link:match("item:(%d+)"))
+			-- GetInboxItem's return shape varies on this client (see
+			-- scanInbox): a=id,b=count or b=id,d=count
+			local a, b, _, d = GetInboxItem(index, slot)
+			qty = (qty or 0) + ((type(a) == "number" and b)
+				or (type(b) == "number" and d) or 1)
+		end
+	end
+	return id, qty
+end
+
+local function scanAuctionMail()
+	if not (GetInboxNumItems and GetInboxHeaderInfo) then return end
+	local now = GetTime()
+	if now - mailScanAt < 2 then return end
+	mailScanAt = now
+	local L = GM.Ledger.db
+	if not (L and GM.Ledger.Add) then return end
+	for i = 1, (GetInboxNumItems() or 0) do
+		local invoiceType, itemName, playerName, bid, buyout,
+			deposit, consignment, _, _, _, count, invAid
+		if GetInboxInvoiceInfo then
+			invoiceType, itemName, playerName, bid, buyout,
+				deposit, consignment, _, _, _, count, invAid =
+				GetInboxInvoiceInfo(i)
+		end
+		if invoiceType == "seller"
+			or invoiceType == "seller_temp_invoice" then
+			-- sold-proceeds mail: exact bid minus the real consignment
+			local id = itemName and MailNameToID(itemName)
+			local qty = count or 1
+			if id then
+				local fp = "s|" .. itemName .. "|"
+					.. tostring(bid or 0) .. "|" .. qty
+				if not L.mailSeen[fp] then
+					if TxnSeen("sell", id, qty) then
+						MailMark(fp)
+					else
+						local net = (bid or 0) - (consignment or 0)
+						local unit = qty > 0
+							and math.floor(net / qty + 0.5) or nil
+						local _, _, _, _, _, _, daysLeft =
+							GetInboxHeaderInfo(i)
+						GM.Ledger.Add("sell", id, qty, unit, {
+							dep = deposit or 0, nm = itemName,
+							auctionID = invAid,
+							t = daysLeft and math.floor(
+								time() + (daysLeft - 30) * 86400),
+						})
+						MailMark(fp)
+					end
+				end
+			end
+		elseif invoiceType == "buyer" then
+			-- won-auction delivery: exact paid price, no estimate
+			local qty = count or 1
+			local id, q2 = MailAttachmentItem(i)
+			id = id or (itemName and MailNameToID(itemName))
+			qty = q2 or qty
+			if id then
+				local fp = "b|" .. tostring(itemName or id) .. "|"
+					.. tostring(bid or 0) .. "|" .. qty
+				if not L.mailSeen[fp] then
+					if TxnSeen("buy", id, qty) then
+						MailMark(fp)
+					else
+						local unit = qty > 0
+							and math.floor((bid or 0) / qty + 0.5) or nil
+						local _, _, _, _, _, _, daysLeft =
+							GetInboxHeaderInfo(i)
+						GM.Ledger.Add("buy", id, qty, unit, {
+							nm = itemName,
+							t = daysLeft and math.floor(
+								time() + (daysLeft - 30) * 86400),
+						})
+						MailMark(fp)
+					end
+				end
+			end
+		elseif not invoiceType then
+			-- subject-typed AH mails: expire/cancel carry the item
+			-- back — the attachment IS the record
+			local _, _, _, subject, _, _, daysLeft =
+				GetInboxHeaderInfo(i)
+			subject = subject or ""
+			local kind = (EXP_SUBJ and subject:find(EXP_SUBJ) and "expire")
+				or (CAN_SUBJ and subject:find(CAN_SUBJ) and "cancel")
+			if kind then
+				local id, qty = MailAttachmentItem(i)
+				if id and qty and qty > 0 then
+					local fp = kind:sub(1, 1) .. "|" .. id .. "|" .. qty
+						.. "|" .. math.floor((daysLeft or 0) * 24)
+					if not L.mailSeen[fp] then
+						if TxnSeen(kind, id, qty) then
+							MailMark(fp)
+						else
+							GM.Ledger.Add(kind, id, qty, nil, {
+								nm = subject,
+								t = daysLeft and math.floor(
+									time() + (daysLeft - 30) * 86400),
+							})
+							MailMark(fp)
+						end
+					end
+				end
+			end
+		end
+	end
 end
 
 -- ============ guild bank (current tab only — TSM opens every tab) ============
@@ -118,18 +304,24 @@ function GM.Inventory.OwnedAt() return lastOwnedAt end
 -- as never-asked, not as canceled
 function GM.Inventory.OwnedPrimed() return ownedPrimed end
 
--- "A buyer has been found for your auction of X" — the mark only
--- carries the item NAME, so it resolves against the cached rows by
--- name. Exact match first (variant links carry "of X"), prefix
--- either way covers base-name vs variant-name pairs.
-function GM.Inventory.MarkSold(name)
-	if not name or name == "" then return end
+-- name matching for marks/notifications — the message only carries
+-- the item NAME, so it resolves against the cached rows by name.
+-- Exact match first (variant links carry "of X"), prefix either way
+-- covers base-name vs variant-name pairs.
+local function NameMatches(e, name)
+	local en = e.name or (GM.ItemName and GM.ItemName(e.itemID))
+	return en ~= nil and name ~= nil and (en == name
+		or en:sub(1, #name) == name
+		or name:sub(1, #en) == en)
+end
+
+-- "A buyer has been found for your auction of X" / the AuctionSold
+-- notification — either may carry a name OR an auctionID.
+function GM.Inventory.MarkSold(key)
+	if not key or key == "" then return end
 	local t, marked = time(), 0
 	for fp, e in pairs(auctionCache) do
-		local en = e.name or (GM.ItemName and GM.ItemName(e.itemID))
-		if en and (en == name
-			or en:sub(1, #name) == name
-			or name:sub(1, #en) == en) then
+		if e.aid == key or NameMatches(e, key) then
 			soldMarks[fp] = t
 			e.sold = true
 			if GM.Inventory.auctions[fp] then
@@ -151,6 +343,25 @@ function GM.Inventory.MarkSold(name)
 		end
 	end
 	return marked
+end
+
+-- the AuctionExpired/AuctionRemoved notifications carry the same
+-- name-or-aid arg — they give pendingLost a direct verdict instead
+-- of the couldExpire heuristic
+function GM.Inventory.MarkExpired(key)
+	if not key or key == "" then return end
+	local t = time()
+	for fp, e in pairs(auctionCache) do
+		if e.aid == key or NameMatches(e, key) then expireMarks[fp] = t end
+	end
+end
+
+function GM.Inventory.MarkRemoved(key)
+	if not key or key == "" then return end
+	local t = time()
+	for fp, e in pairs(auctionCache) do
+		if e.aid == key or NameMatches(e, key) then removedMarks[fp] = t end
+	end
 end
 
 -- total buyout value of currently listed auctions (last snapshot —
@@ -420,6 +631,12 @@ function GM.Inventory.RefreshOwned()
 	for fp, t0 in pairs(soldMarks) do
 		if not now[fp] or t - t0 > 600 then soldMarks[fp] = nil end
 	end
+	for fp, t0 in pairs(expireMarks) do
+		if t - t0 > 600 then expireMarks[fp] = nil end
+	end
+	for fp, t0 in pairs(removedMarks) do
+		if t - t0 > 600 then removedMarks[fp] = nil end
+	end
 	-- fingerprint delta: more listings at an fp than cached = posts,
 	-- fewer = sells/expires — identical twins stay distinguishable by
 	-- count even though they share one entry
@@ -462,11 +679,32 @@ function GM.Inventory.RefreshOwned()
 			pendingLost[fp] = nil -- repopulated or canceled while pending
 		elseif t - (pl.at or t) >= 15 then
 			local n = math.min(pl.lost, deficit)
+			-- a mail-side record may already cover one of these (the
+			-- invoice scan writes sells/expires/cancels the enum can
+			-- never see) — don't double-ledger the same resolution
+			if n > 0 and (TxnSeen("sell", pl.e.itemID, pl.e.qty)
+				or TxnSeen("expire", pl.e.itemID, pl.e.qty)
+				or TxnSeen("cancel", pl.e.itemID, pl.e.qty)) then
+				n = n - 1
+			end
 			if n > 0 then
 				local couldExpire = pl.e.tLeft
 					and (t - pl.e.at) >= pl.e.tLeft
 				for _ = 1, n do
-					if couldExpire then
+					if removedMarks[fp] then
+						-- the AuctionRemoved notification already said
+						-- cancel — no heuristic needed
+						GM.Ledger.Add("cancel", pl.e.itemID, pl.e.qty,
+							pl.e.buyout, { auctionID = pl.e.aid or fp,
+								dep = pl.e.dep, nm = pl.e.name })
+					elseif soldMarks[fp] then
+						-- buyer-found beat the enum drop
+						local unit = pl.e.buyout and pl.e.qty > 0
+							and math.floor(pl.e.buyout * 0.95) or nil
+						GM.Ledger.Add("sell", pl.e.itemID, pl.e.qty,
+							unit, { auctionID = pl.e.aid or fp,
+								dep = pl.e.dep, nm = pl.e.name })
+					elseif couldExpire or expireMarks[fp] then
 						-- vanished on schedule without a cancel → expiry
 						GM.Ledger.Add("expire", pl.e.itemID, pl.e.qty,
 							nil, { auctionID = pl.e.aid or fp,
@@ -840,8 +1078,21 @@ local function OnNotification(msg, _, aid)
 	elseif msg == NOTIF.AuctionWon then
 		local b = bids[aid]
 		if b then b.status = "won" end
+	elseif msg == NOTIF.AuctionSold then
+		-- the owned-side notifications carry the item name (or an aid
+		-- on some builds) — MarkSold accepts either
+		GM.Inventory.MarkSold(aid)
+		GM.Inventory.QueryOwned()
+	elseif msg == NOTIF.AuctionExpired then
+		GM.Inventory.MarkExpired(aid)
 	elseif msg == NOTIF.AuctionRemoved then
-		bids[aid] = nil
+		-- bid rows drop by aid; owned rows mark by name/aid for the
+		-- cancel verdict — the call covers whichever shape arrives
+		if aid then
+			bids[aid] = nil
+			GM.Inventory.MarkRemoved(aid)
+			GM.Inventory.QueryOwned()
+		end
 	elseif msg == NOTIF.BidPlaced then
 		GM.Inventory.RefreshBids()
 	end
@@ -1010,6 +1261,7 @@ end
 f:SetScript("OnEvent", function(_, event, ...)
 	if event == "MAIL_INBOX_UPDATE" or event == "MAIL_SHOW" then
 		scanInbox()
+		scanAuctionMail()
 	elseif event == "OWNED_AUCTIONS_UPDATED" then
 		GM.Inventory.RefreshOwned()
 	elseif event == "AUCTION_HOUSE_AUCTION_CREATED" then
