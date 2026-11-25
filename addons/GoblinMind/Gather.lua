@@ -106,6 +106,11 @@ G.RegisterKind{ id = "mine", label = "MINE",
 G.RegisterKind{ id = "fish", label = "FISH",
 	color = { 0.35, 0.65, 0.95 }, node = true,
 	cats = { "fish" }, corpse = true, keepArm = true,
+	-- fishing is a channel, not a tap: the catch lands ~21s past
+	-- cast-succeed — WINDOW_SEC's 3s arm expired before every
+	-- splash. armSec covers the channel as a SUCCEEDED fallback;
+	-- CHANNEL_START arms to the channel's own endTime instead
+	armSec = 24,
 	castIds = { 7620 }, castNames = { "fishing" },
 	glCats = { "fishing" } }
 G.RegisterKind{ id = "skin", label = "SKIN",
@@ -2274,10 +2279,11 @@ end)
 
 local arm -- { kind, pos, until_ }
 
-local function ArmWindow(kind)
+local function ArmWindow(kind, until_)
 	arm = {
 		kind = kind, pos = PosNow(),
-		until_ = GetTime() + WINDOW_SEC,
+		until_ = until_ or (GetTime() + (G.KindDefs[kind]
+			and G.KindDefs[kind].armSec or WINDOW_SEC)),
 	}
 end
 
@@ -2596,8 +2602,8 @@ end
 
 local evf = CreateFrame("Frame")
 for _, e in ipairs({
-	"UNIT_SPELLCAST_SUCCEEDED", "UNIT_SPELLCAST_FAILED",
-	"UNIT_SPELLCAST_INTERRUPTED",
+	"UNIT_SPELLCAST_SUCCEEDED", "UNIT_SPELLCAST_CHANNEL_START",
+	"UNIT_SPELLCAST_FAILED", "UNIT_SPELLCAST_INTERRUPTED",
 	"LOOT_OPENED", "LOOT_READY",
 	"PLAYER_LOGIN", "ZONE_CHANGED_NEW_AREA",
 }) do pcall(evf.RegisterEvent, evf, e) end
@@ -2619,6 +2625,46 @@ evf:SetScript("OnEvent", function(_, e, ...)
 			end
 		end
 		if kind then ArmWindow(kind) end
+		return
+	end
+	if e == "UNIT_SPELLCAST_CHANNEL_START" then
+		local unit, _, spellID = ...
+		if unit ~= "player" then return end
+		-- a channel tells us its own end: arm until endTime +
+		-- loot latency rather than a fixed window. endTime comes
+		-- back in ms on this API — a value orders of magnitude
+		-- past GetTime() can't be seconds
+		local kind = spellID and CAST_KIND[spellID]
+		local endS
+		if UnitChannelInfo then
+			local ok, nm, a4, a5, a6 = pcall(UnitChannelInfo,
+				"player")
+			if ok and nm then
+				local l = nm:lower()
+				for k, pat in pairs(CAST_NAME) do
+					if l:find(pat, 1, true) then
+						kind = kind or k
+						break
+					end
+				end
+				-- endTime is the largest time field — field order
+				-- differs across client generations (vanilla puts
+				-- it 6th, retail 5th), and units differ too: a
+				-- value orders of magnitude past GetTime() is ms
+				local et
+				for _, v in ipairs({ a4, a5, a6 }) do
+					if type(v) == "number"
+						and (not et or v > et) then
+						et = v
+					end
+				end
+				if et and et > GetTime() * 10 then
+					et = et / 1000
+				end
+				endS = et
+			end
+		end
+		if kind then ArmWindow(kind, endS and endS + 1.5) end
 		return
 	end
 	if e == "UNIT_SPELLCAST_FAILED"
