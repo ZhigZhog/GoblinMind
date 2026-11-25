@@ -374,6 +374,11 @@ function GM.AH.CollectCommodityAsks(itemID)
 	end
 	GM.AH.MergeOwnAsks(asks, GM.AH.scanItemKey)
 	table.sort(asks, function(a, b) return a.unit < b.unit end)
+	-- flag rows before delivery — solver/sniper consumers price off
+	-- bait/step marks; unflagged rows feed the drag
+	if GM.Intel and GM.Intel.AnalyzeItem then
+		GM.Intel.AnalyzeItem(itemID, asks, time())
+	end
 	GM.AH.asks = asks
 	GM.AH.scanConsumed = true
 	if GM.AH.onScanDone then GM.AH.onScanDone(asks) end
@@ -424,6 +429,9 @@ function GM.AH.CollectItemAsks()
 	end
 	GM.AH.MergeOwnAsks(asks, key)
 	table.sort(asks, function(a, b) return a.unit < b.unit end)
+	if GM.Intel and GM.Intel.AnalyzeItem then
+		GM.Intel.AnalyzeItem(GM.AH.scanItemID, asks, time())
+	end
 	GM.AH.asks = asks
 	GM.AH.scanConsumed = true
 	if GM.AH.onScanDone then GM.AH.onScanDone(asks) end
