@@ -193,6 +193,26 @@ local NODES = {
 	},
 }
 
+-- name aliases — server/client renames and the slime-covered cave
+-- variants share the base node's drops. Without them the icon
+-- chain falls through to KIND_ICON_ITEM and a thorium vein brands
+-- itself copper
+for _, p in ipairs({
+	{ "Heavy Thorium Vein", "Small Thorium Vein" },
+	{ "Ooze Covered Thorium Vein", "Small Thorium Vein" },
+	{ "Ooze Covered Rich Thorium Vein", "Rich Thorium Vein" },
+	{ "Hakkari Thorium Vein", "Rich Thorium Vein" },
+	{ "Ooze Covered Mithril Deposit", "Mithril Deposit" },
+	{ "Ooze Covered Truesilver Deposit", "Truesilver Deposit" },
+	{ "Ooze Covered Gold Vein", "Gold Vein" },
+	{ "Ooze Covered Iron Deposit", "Iron Deposit" },
+	{ "Ooze Covered Silver Vein", "Silver Vein" },
+}) do
+	if NODES[p[2]] and not NODES[p[1]] then
+		NODES[p[1]] = NODES[p[2]]
+	end
+end
+
 G.nodes = NODES
 
 -- Herb item ids (node primary drops + herb secondaries). Milling
