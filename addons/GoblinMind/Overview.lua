@@ -382,8 +382,11 @@ function OV.RefreshChart()
 	local n, st, sv, stt, stv = 0, 0, 0, 0, 0
 	for _, p in ipairs(GM.db.wealthHist or {}) do
 		-- untagged legacy samples (no c) still count; tagged ones
-		-- only count when they're THIS char — wealth is per-char
+		-- only count when they're THIS char — wealth is per-char.
+		-- Zero-total samples never draw: pre-tag alts and init races
+		-- wrote them into the shared pool as giant fake dips
 		if p.t >= cutoff
+			and (p.g or 0) + (p.a or 0) + (p.h or 0) > 0
 			and (not p.c or not me or p.c == me) then
 			hist[#hist + 1] = p
 			if p.t < tMin then tMin = p.t end
@@ -403,7 +406,11 @@ function OV.RefreshChart()
 	local midnight = time() - (d.hour * 3600 + d.min * 60 + d.sec)
 	local dayBase
 	for _, p in ipairs(GM.db.wealthHist or {}) do
-		if p.t >= midnight then dayBase = p break end
+		if p.t >= midnight
+			and (p.g or 0) + (p.a or 0) + (p.h or 0) > 0 then
+			dayBase = p
+			break
+		end
 	end
 	dayBase = dayBase or (GM.db.wealthHist or {})[1]
 	local deltaTxt = ""

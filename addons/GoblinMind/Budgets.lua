@@ -286,6 +286,11 @@ function B.Sample()
 	-- inventory instead of cratering W (the chart's giant Xs)
 	local held = GM.Inventory and GM.Inventory.HeldValue
 		and GM.Inventory.HeldValue() or 0
+	-- an all-zero sample is never information — it's a penniless alt
+	-- writing into the shared SV or an init race where money and
+	-- inventory haven't populated yet, and either way it draws as a
+	-- giant fake dip on every char's wealth chart
+	if gold + posted + held == 0 then return end
 	if #w == 0 or w[#w].g ~= gold or w[#w].a ~= posted
 		or w[#w].h ~= held or t - w[#w].t > 3600 then
 		-- c: the sampler char — wealth is per-char by nature and
