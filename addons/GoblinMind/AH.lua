@@ -296,6 +296,17 @@ end
 
 function GM.AH.ScanItem(itemID, itemName, done, key)
 	if not C_AuctionHouse then return done({}) end
+	-- the server throttles search queries — bursts (plan + market +
+	-- sniper hitting together) get dropped silently, and a dropped
+	-- query delivers an EMPTY collect that reads as "no asks".
+	-- Self-pace: never two SendSearchQuery calls inside 1.5s
+	local gap = GM.AH.lastQueryT and (GetTime() - GM.AH.lastQueryT) or math.huge
+	if gap < 1.5 then
+		return GM.After(1.5 - gap, function()
+			GM.AH.ScanItem(itemID, itemName, done, key)
+		end)
+	end
+	GM.AH.lastQueryT = GetTime()
 	-- Forever's SendSearchQuery only accepts an ItemKey — no bare itemID
 	-- path; stackables are searched the same way. Browse rows carry the
 	-- exact key (itemID+suffix) — pass it through so suffixed variants
@@ -384,6 +395,11 @@ function GM.AH.CollectCommodityAsks(itemID)
 	end
 	GM.AH.asks = asks
 	GM.AH.scanConsumed = true
+	-- diagnostic trail: ahdump surfaces why a scan delivered what it
+	-- did (throttle drop reads as both counts zero + no events)
+	GM.AH.lastScanDiag = { id = itemID, n = #asks, src = "comm",
+		itemEvt = GM.AH.itemEvtSeen or false,
+		commEvt = GM.AH.commEvtSeen or false, t = time() }
 	if GM.AH.onScanDone then GM.AH.onScanDone(asks) end
 end
 
@@ -438,6 +454,9 @@ function GM.AH.CollectItemAsks()
 	end
 	GM.AH.asks = asks
 	GM.AH.scanConsumed = true
+	GM.AH.lastScanDiag = { id = GM.AH.scanItemID, n = #asks, src = "item",
+		itemEvt = GM.AH.itemEvtSeen or false,
+		commEvt = GM.AH.commEvtSeen or false, t = time() }
 	if GM.AH.onScanDone then GM.AH.onScanDone(asks) end
 end
 
@@ -481,12 +500,13 @@ GM.AH.bookLots = nil -- iid:qty:unit lot fingerprints (others' listings)
 -- fingerprints when a targeted scan delivers empty — the replicate
 -- endpoint and SendSearchQuery fail independently, so a fresh book
 -- is often right where the item query got throttled to death.
--- <2min stale lots don't count: a genuinely cleared market should
--- show empty, not ghosts. Rows carry no seller/auctionID —
--- fromBook marks them so consumers can downgrade buy/intel
+-- Lots older than the server's own ~15m replicate throttle don't
+-- count: a genuinely cleared market should show empty, not ghosts.
+-- Rows carry no seller/auctionID — fromBook marks them so
+-- consumers can downgrade buy/intel
 function GM.AH.BookAsks(itemID)
 	if not (itemID and GM.AH.bookLots and GM.AH.bookLotsT) then return end
-	if time() - GM.AH.bookLotsT > 120 then return end
+	if time() - GM.AH.bookLotsT > 900 then return end
 	local asks = {}
 	local prefix = itemID .. ":"
 	for fp, n in pairs(GM.AH.bookLots) do
@@ -812,6 +832,23 @@ function GM.AH.DumpRows(itemID, maxRows)
 		local e = GM.AH.book[itemID]
 		GM.Print(format("book[%d]: mb=%s mbx=%s sup=%d n=%d", itemID,
 			GM.Money(e.mb), e.mbx == math.huge and "—" or GM.Money(e.mbx), e.sup, e.n))
+	end
+	-- part 4: how the last targeted scan actually delivered — a
+	-- dropped/throttled query reads as n=0 with both events false
+	local d = GM.AH.lastScanDiag
+	if d then
+		GM.Print(format("last scan: id=%s n=%d src=%s itemEvt=%s commEvt=%s · %ds ago",
+			tostring(d.id), d.n, d.src, tostring(d.itemEvt),
+			tostring(d.commEvt), time() - d.t))
+	end
+	if itemID and GM.AH.bookLots and GM.AH.bookLotsT then
+		local n = 0
+		local prefix = itemID .. ":"
+		for fp in pairs(GM.AH.bookLots) do
+			if fp:sub(1, #prefix) == prefix then n = n + 1 end
+		end
+		GM.Print(format("bookLots[%d]: %d fingerprints · %ds old",
+			itemID, n, time() - GM.AH.bookLotsT))
 	end
 end
 

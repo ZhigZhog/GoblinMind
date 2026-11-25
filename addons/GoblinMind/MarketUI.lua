@@ -526,7 +526,14 @@ local function RefreshAskBook()
 	if #asks > 0 and M.askT then
 		cnt = cnt .. "  ·  " .. floor(GetTime() - M.askT) .. "s"
 	end
-	if M.asksBook then cnt = cnt .. "  ·  book" end
+	-- book-derived rows: show the BOOK's age, not the scan's — the
+	-- tag's whole job is "this is how stale the fallback is"
+	if M.asksBook and GM.AH.bookLotsT then
+		local age = time() - GM.AH.bookLotsT
+		cnt = cnt .. "  ·  book "
+			.. (age >= 60 and format("%dm", age / 60)
+				or format("%ds", age))
+	end
 	mp.askPanel:SetCount(cnt)
 	mp.abEmpty:SetText(M.itemID and (M.askWait and BusyText()
 		or (not M.asks and "scanning…") or "no asks")
