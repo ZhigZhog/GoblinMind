@@ -618,12 +618,18 @@ GM.Cmd("mmdebug", function()
 		for _, zn in ipairs(zl) do
 			if zn.kind == "fish" and zn.n and zn.w then
 				local dx, dy = w - zn.w, n - zn.n
-				GM.Print(("zone fish: dn=%.0f dw=%.0f -> u=%.2f v=%.2f (anchor n=%.0f w=%.0f)")
+				GM.Print(("zone fish: dn=%.0f dw=%.0f -> u=%.2f v=%.2f (anchor n=%.0f w=%.0f | n=%.1f)")
 					:format(dy, dx, dx / tblR, dy / tblR,
-						zn.n, zn.w))
+						zn.n, zn.w, n))
 			end
 		end
 	end
+	-- stability probe: if a second read of the same spot differs
+	-- microseconds later, UnitPosition returns unstable values —
+	-- that alone would parallax every world-fixed element
+	local n2, w2 = UnitPosition("player")
+	GM.Print(("recheck: n=%s w=%s (first read n=%.1f w=%.1f)")
+		:format(tostring(n2), tostring(w2), n or -1, w or -1))
 end, { prefix = true })
 
 local acc = 0
