@@ -792,12 +792,8 @@ end
 
 local function AcctRefresh()
 	-- repaint every surface that might show this account
-	if GM.PlanQueue and GM.PlanQueue.Refresh then
-		GM.PlanQueue.Refresh()
-	end
-	if GM.Overview and GM.Overview.Refresh then
-		GM.Overview.Refresh()
-	end
+	GM.View.Refresh("planner")
+	GM.View.Refresh("overview")
 end
 
 -- row: name · kind cycle · group bind · alloc · remaining · reset · del

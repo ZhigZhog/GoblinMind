@@ -207,12 +207,6 @@ local function Build()
 	})
 	ui.frame = f
 	-- sells/buybacks change bags + stock — debounced repaint
-	pcall(f.RegisterEvent, f, "BAG_UPDATE")
-	pcall(f.RegisterEvent, f, "MERCHANT_UPDATE")
-	pcall(f.RegisterEvent, f, "BUYBACK_UPDATE")
-	f:SetScript("OnEvent", function()
-		if f:IsShown() then GM.View.Coalesced("vendor", VU.Refresh) end
-	end)
 
 	-- toolbar: page toggles + actions
 	local x = 12
@@ -723,6 +717,8 @@ end)
 -- destroy group — it survives switches between peers and clears
 -- when a non-peer tab wins
 GM.View.Register("vendor", { class = "peer",
+	events = { "BAG_UPDATE", "MERCHANT_UPDATE",
+		"BUYBACK_UPDATE" },
 	Show = VU.Show, Hide = VU.Hide, Toggle = VU.Toggle,
 	Refresh = VU.Refresh,
 	IsShown = function() return ui and ui.frame and ui.frame:IsShown() end })

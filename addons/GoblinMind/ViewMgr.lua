@@ -51,6 +51,18 @@ function V.Register(key, def)
 	def.key = key
 	def.class = def.class or "exclusive"
 	views[key] = def
+	-- def.events: events that mean "repaint when shown". Any firing
+	-- schedules a coalesced Refresh — the pure plumbing case needs
+	-- no per-file event frame at all
+	if def.events and def.Refresh then
+		for _, ev in ipairs(def.events) do
+			V.On(key, ev, function()
+				if not def.IsShown or def.IsShown() then
+					V.Coalesced(key, def.Refresh, def.evDelay)
+				end
+			end)
+		end
+	end
 end
 
 function V.Def(key)

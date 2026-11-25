@@ -30,8 +30,8 @@ local EMPTY_SORTS = {}
 local cancelLedger = {} -- [key] = {count, cap, t}
 
 local function RefreshUIs()
-	GM.PlanQueue.Refresh()
-	if GM.Shopping and GM.Shopping.Refresh then GM.Shopping.Refresh() end
+	GM.View.Refresh("planner")
+	GM.View.Refresh("market")
 end
 
 local f = CreateFrame("Frame")
@@ -752,7 +752,7 @@ function GM.AH.FullScan()
 				if GM.Shopping and GM.Shopping.Status then GM.Shopping.Status(warn) end
 				GM.PlanQueue.Progress(nil)
 			end
-			GM.PlanQueue.Refresh()
+			GM.View.Refresh("planner")
 		end
 	end
 	-- ReplicateItems goes out on the shared queue — a search/browse
@@ -762,12 +762,12 @@ function GM.AH.FullScan()
 		if not ok then
 			GM.AH.wantBook = nil
 			GM.PlanQueue.ScanStatus(GM.CC("warn") .. "full scan failed: " .. tostring(err) .. "|r")
-			GM.PlanQueue.Refresh()
+			GM.View.Refresh("planner")
 			return
 		end
 		GM.Time.After(0.5, Poll)
 	end)
-	GM.PlanQueue.Refresh()
+	GM.View.Refresh("planner")
 end
 
 function GM.AH.BookAge()
@@ -1000,7 +1000,7 @@ function GM.AH.CollectBook()
 		if GM.Mesh and GM.Mesh.OnBook then
 			pcall(GM.Mesh.OnBook, book, lots, prevBook, prevLots, prevT)
 		end
-		GM.PlanQueue.Refresh()
+		GM.View.Refresh("planner")
 	end
 	local function ProcessRow(idx)
 		local link = C_AuctionHouse.GetReplicateItemLink(idx)
@@ -1210,7 +1210,7 @@ function GM.AH.BrowseBook()
 		if not ok then
 			GM.AH.browse = nil
 			GM.PlanQueue.ScanStatus(GM.CC("warn") .. "browse query failed: " .. tostring(err) .. "|r")
-			GM.PlanQueue.Refresh()
+			GM.View.Refresh("planner")
 			return
 		end
 		-- stall watchdog: browse events should arrive promptly
@@ -1218,12 +1218,12 @@ function GM.AH.BrowseBook()
 			if GM.AH.browse == b and b.seen == 0 then
 				GM.AH.browse = nil
 				GM.PlanQueue.ScanStatus(GM.CC("warn") .. "the auction house isn't responding — try again later|r")
-				GM.PlanQueue.Refresh()
+				GM.View.Refresh("planner")
 			end
 		end)
-		GM.PlanQueue.Refresh()
+		GM.View.Refresh("planner")
 	end)
-	GM.PlanQueue.Refresh()
+	GM.View.Refresh("planner")
 	return true
 end
 
@@ -1246,7 +1246,7 @@ local function FinishBrowse(b)
 	GM.PlanQueue.ScanStatus(msg)
 	GM.Print(msg)
 	for _, cb in ipairs(GM.AH.bookSubs) do pcall(cb, b.rows, b.book) end
-	GM.PlanQueue.Refresh()
+	GM.View.Refresh("planner")
 end
 
 function GM.AH.OnBrowseResults()

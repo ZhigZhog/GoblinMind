@@ -625,7 +625,7 @@ local function OnCastComplete(unit, castGUID, spellID)
 	end
 	if GoblinMindCrafting.queue and GoblinMindCrafting.queue[spellID] then
 		C.QueueAdd(spellID, -1)
-		if GM.CraftingUI and GM.CraftingUI.Refresh then GM.CraftingUI.Refresh() end
+		GM.View.Refresh("crafting")
 	end
 	local step = GM.PlanQueue and GM.PlanQueue.ActiveStep
 		and GM.PlanQueue.ActiveStep()
@@ -634,7 +634,7 @@ local function OnCastComplete(unit, castGUID, spellID)
 		if step.crafted >= (step.qty or 1) then
 			GM.PlanQueue.Advance()
 		else
-			GM.PlanQueue.Refresh()
+			GM.View.Refresh("planner")
 		end
 	end
 	-- batch settle: items land cast-time APART (the engine repeats
@@ -671,9 +671,7 @@ local function OnCastComplete(unit, castGUID, spellID)
 				if GoblinMindCrafting.queue
 					and GoblinMindCrafting.queue[spellID] then
 					C.QueueAdd(spellID, -extra)
-					if GM.CraftingUI and GM.CraftingUI.Refresh then
-						GM.CraftingUI.Refresh()
-					end
+					GM.View.Refresh("crafting")
 				end
 				local st = GM.PlanQueue and GM.PlanQueue.ActiveStep
 					and GM.PlanQueue.ActiveStep()
@@ -682,7 +680,7 @@ local function OnCastComplete(unit, castGUID, spellID)
 					if st.crafted >= (st.qty or 1) then
 						GM.PlanQueue.Advance()
 					else
-						GM.PlanQueue.Refresh()
+						GM.View.Refresh("planner")
 					end
 				end
 			end
@@ -811,9 +809,7 @@ function C.Init()
 			-- the plan window's exec gate must re-evaluate on every
 			-- line change — a stale armed overlay covers the button
 			-- until something re-runs GateButton over it
-			if GM.PlanQueue and GM.PlanQueue.Refresh then
-				GM.PlanQueue.Refresh()
-			end
+			GM.View.Refresh("planner")
 			-- the OPEN overlay click cast the profession spell — now
 			-- that the line is live, fire the craft it was for (the
 			-- 0.6s tail lets the line's data land, same as the scan
@@ -838,9 +834,7 @@ function C.Init()
 					.. " open — click CRAFT for "
 					.. (rr and rr.name or "recipe")
 					.. " ×" .. (p.qty or 1) .. "|r")
-				if GM.CraftingUI and GM.CraftingUI.Refresh then
-					GM.CraftingUI.Refresh()
-				end
+				GM.View.Refresh("crafting")
 			end
 		elseif e == "TRADE_SKILL_CLOSE" then
 			Tr("TRADE_SKILL_CLOSE")
@@ -864,9 +858,7 @@ function C.Init()
 			if GM.CraftingUI and GM.CraftingUI.OnTradeSkillClose then
 				GM.CraftingUI.OnTradeSkillClose()
 			end
-			if GM.PlanQueue and GM.PlanQueue.Refresh then
-				GM.PlanQueue.Refresh()
-			end
+			GM.View.Refresh("planner")
 			return -- no scan on close
 		end
 		if e == "PLAYER_LOGIN" then
@@ -890,9 +882,7 @@ function C.Init()
 			if GM.CraftingUI then
 				if C.lastProf and GM.CraftingUI.SelectProf then
 					GM.CraftingUI.SelectProf(C.lastProf)
-				elseif GM.CraftingUI.Refresh then
-					GM.CraftingUI.Refresh()
-				end
+				else GM.View.Refresh("crafting") end
 			end
 		end)
 	end)
@@ -1728,12 +1718,8 @@ local function SecureOpenFor(btn)
 			Tr("OPEN cast produced no SHOW for", rid)
 			GM.Print(GM.CC("warn") .. (C.Prof(rid) or "tradeskill")
 				.. " didn't open — click OPEN to retry|r")
-			if GM.CraftingUI and GM.CraftingUI.Refresh then
-				GM.CraftingUI.Refresh()
-			end
-			if GM.PlanQueue and GM.PlanQueue.Refresh then
-				GM.PlanQueue.Refresh()
-			end
+			GM.View.Refresh("crafting")
+			GM.View.Refresh("planner")
 		end)
 	end)
 	ov:Hide()

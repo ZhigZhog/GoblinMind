@@ -985,7 +985,7 @@ end
 
 -- plan state changes paint the market plan pane too (same pattern
 -- AHUI uses for ScanStatus — wrap, don't edit, the engine file)
-local pqRefresh = GM.PlanQueue.Refresh
+local function pqRefresh(...) GM.View.Refresh("planner") end
 function GM.PlanQueue.Refresh(...)
 	pqRefresh(...)
 	if MU.Refresh then MU.Refresh() end

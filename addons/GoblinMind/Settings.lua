@@ -980,9 +980,7 @@ local function Build()
 				floor(rr * 255 + 0.5), floor(gg * 255 + 0.5),
 				floor(bb * 255 + 0.5)))
 			paintCharRow(r)
-			if GM.Overview and GM.Overview.Refresh then
-				pcall(GM.Overview.Refresh)
-			end
+			GM.View.Refresh("overview")
 		end
 		local CPF = ColorPickerFrame
 		if not CPF then return end
@@ -1020,9 +1018,7 @@ local function Build()
 			if btn == "RightButton" then
 				GM.Budget.SetCharColor(r.ck)
 				paintCharRow(r)
-				if GM.Overview and GM.Overview.Refresh then
-					pcall(GM.Overview.Refresh)
-				end
+				GM.View.Refresh("overview")
 			else
 				pickCharColor(r)
 			end

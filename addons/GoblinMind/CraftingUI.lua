@@ -144,16 +144,8 @@ local function BuildUI()
 		onClose = function() ui.closing = true end,
 	})
 	ui.frame = f
-	-- craftable counts move with the bags — debounced repaint
-	pcall(f.RegisterEvent, f, "BAG_UPDATE")
-	f:SetScript("OnEvent", function(_, e)
-		if not f:IsShown() or ui.bagPending then return end
-		ui.bagPending = true
-		GM.Time.After(0.3, function()
-			ui.bagPending = nil
-			CU.Refresh()
-		end)
-	end)
+	-- craftable counts move with the bags — the registry's
+	-- def.events wiring coalesces BAG_UPDATE into one repaint
 	-- closing our window: if the user asked for the Blizzard frame it
 	-- gets its spot back. CloseTradeSkill fires ONLY on a deliberate
 	-- close (ui.closing set by the X button / toggle-off) — every other
@@ -1427,6 +1419,7 @@ function CU.Toggle()
 end
 
 GM.View.Register("crafting", { class = "peer",
+	events = { "BAG_UPDATE" }, evDelay = 0.3,
 	Show = CU.Show, Hide = CU.Hide, Toggle = CU.Toggle,
 	Refresh = CU.Refresh,
 	IsShown = function() return ui and ui.frame and ui.frame:IsShown() end })

@@ -497,7 +497,7 @@ function S.Refresh()
 	for i, fs in ipairs(ui.hdrFs or {}) do fs:SetText(labels[i] or "") end
 	GM.Panel(ui.shopBtn, ui.mode == "shop" and "accent" or "contMedium")
 	GM.Panel(ui.snipeBtn,
-		(GM.SniperUI and GM.SniperUI.IsOpen and GM.SniperUI.IsOpen())
+		GM.View.IsShown("sniper")
 		and "accent" or "contMedium")
 	GM.Panel(ui.craftBtn, ui.mode == "craft" and "accent" or "contMedium")
 	ui.action.text:SetText("SCAN")

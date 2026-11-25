@@ -146,13 +146,6 @@ local function Build()
 		end,
 	})
 	ui.frame = f
-	pcall(f.RegisterEvent, f, "BAG_UPDATE")
-	pcall(f.RegisterEvent, f, "PLAYERBANKSLOTS_CHANGED")
-	pcall(f.RegisterEvent, f, "PLAYERBANKBAGSLOTS_CHANGED")
-	pcall(f.RegisterEvent, f, "PLAYERREAGENTBANKSLOTS_CHANGED")
-	f:SetScript("OnEvent", function()
-		if f:IsShown() then GM.View.Coalesced("bank", BU.Refresh) end
-	end)
 
 	-- toolbar
 	local scan = Btn(f, 120, "WAREHOUSING SCAN", function()
@@ -310,6 +303,9 @@ f:SetScript("OnEvent", function(_, e)
 end)
 
 GM.View.Register("bank", { class = "contextual",
+	events = { "BAG_UPDATE", "PLAYERBANKSLOTS_CHANGED",
+		"PLAYERBANKBAGSLOTS_CHANGED",
+		"PLAYERREAGENTBANKSLOTS_CHANGED" },
 	Show = BU.Show, Hide = BU.Hide, Toggle = BU.Toggle,
 	Refresh = BU.Refresh,
 	IsShown = function() return ui and ui.frame and ui.frame:IsShown() end })

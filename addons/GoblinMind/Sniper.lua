@@ -199,8 +199,8 @@ function N.FinishCollect(now, hadSnapshot, nRows, nFresh, bad)
 	-- through it too — otherwise the last "evaluating" line stays
 	-- frozen in the AH footer / planner summary
 	GM.PlanQueue.ScanStatus(GM.CC("textDim") .. msg .. "|r")
-	if GM.Shopping.Refresh then GM.Shopping.Refresh() end
-	if GM.SniperUI and GM.SniperUI.Refresh then GM.SniperUI.Refresh() end
+	GM.View.Refresh("market")
+	GM.View.Refresh("sniper")
 end
 
 -- ============ auto-refresh while the sniper pane is open ============
@@ -210,7 +210,7 @@ function N.AutoRunning() return autoOn end
 
 -- the auto loop lives while the sniper feed window is open
 local function AnySniperUI()
-	return GM.SniperUI and GM.SniperUI.IsOpen and GM.SniperUI.IsOpen()
+	return GM.View.IsShown("sniper")
 end
 
 function N.StartAuto()

@@ -229,14 +229,6 @@ local function Build()
 	})
 	ui.frame = f
 	-- inbox/bag changes → repaint (debounced)
-	pcall(f.RegisterEvent, f, "MAIL_INBOX_UPDATE")
-	pcall(f.RegisterEvent, f, "MAIL_SEND_INFO_UPDATE")
-	pcall(f.RegisterEvent, f, "MAIL_SEND_SUCCESS")
-	pcall(f.RegisterEvent, f, "MAIL_FAILED")
-	pcall(f.RegisterEvent, f, "BAG_UPDATE")
-	f:SetScript("OnEvent", function()
-		if f:IsShown() then GM.View.Coalesced("mail", MU.Refresh) end
-	end)
 
 	-- toolbar: page toggles + actions — PageTabs strides 62px per tab,
 	-- so host width and the button offset both follow the defs count
@@ -998,6 +990,9 @@ function MU.CodProbe()
 end
 
 GM.View.Register("mail", { class = "contextual",
+	events = { "MAIL_INBOX_UPDATE",
+		"MAIL_SEND_INFO_UPDATE", "MAIL_SEND_SUCCESS",
+		"MAIL_FAILED", "BAG_UPDATE" },
 	Show = MU.Show, Hide = MU.Hide, Toggle = MU.Toggle,
 	Refresh = MU.Refresh,
 	IsShown = function() return ui and ui.frame and ui.frame:IsShown() end })

@@ -514,7 +514,7 @@ Cmd("craftpurge", function(arg)
 	local n = GM.Crafting.PurgeProf(arg)
 	GM.Print(n > 0 and ("purged " .. n .. " recipes")
 		or "nothing purged — no recipes with that profession")
-	if GM.CraftingUI and GM.CraftingUI.Refresh then GM.CraftingUI.Refresh() end
+	GM.View.Refresh("crafting")
 end, true)
 Cmd("craftprobe", function(arg)
 	GM.Crafting.CraftProbe(arg)
@@ -583,7 +583,7 @@ Cmd("destroydemo", function()
 	if GM.Destroying.demo then
 		GM.Destroying.demo = nil
 		GM.Print("destroy demo data cleared")
-		GM.DestroyingUI.Refresh()
+		GM.View.Refresh("destroy")
 	else
 		GM.Destroying.SeedDemo()
 		GM.Print("destroy demo data seeded — /goblin destroydemo to clear")

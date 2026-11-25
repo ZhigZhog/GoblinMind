@@ -509,7 +509,7 @@ function PQ.Show()
 	-- session window is open — the standalone window keeps non-AH
 	-- modes (warehousing/mailing/craft/destroying) and everything
 	-- when the session window is down
-	if GM.AHUI and GM.AHUI.IsOpen and GM.AHUI.IsOpen()
+	if GM.View.IsShown("ah")
 		and (PQ.itemID or PQ.plan)
 		and (not PQ.plan or not PQ.plan.mode
 			or PQ.plan.mode == "postscan" or PQ.plan.mode == "cancelscan"
@@ -1805,3 +1805,16 @@ local mev = CreateFrame("Frame")
 pcall(mev.RegisterEvent, mev, "MERCHANT_SHOW")
 pcall(mev.RegisterEvent, mev, "MERCHANT_CLOSED")
 mev:SetScript("OnEvent", function() PQ.Refresh() end)
+
+-- pinned: the planner never hides on Switch — the mode keys
+-- (dash/plan) are the only navigation onto it, and tabbing to any
+-- other window leaves it open by design. Refresh/Show resolve
+-- PQ.* at CALL time, not registration — MarketUI wraps
+-- GM.PlanQueue.Refresh after load to co-repaint its pane, and a
+-- captured reference would bypass the hook
+GM.View.Register("planner", { class = "pinned",
+	Show = function(...) return PQ.Show(...) end,
+	Hide = function(...) return PQ.Hide(...) end,
+	Toggle = function(...) return PQ.Toggle(...) end,
+	Refresh = function(...) return PQ.Refresh(...) end,
+	IsShown = function(...) return PQ.IsShown(...) end })

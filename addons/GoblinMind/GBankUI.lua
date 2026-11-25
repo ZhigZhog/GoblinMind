@@ -197,13 +197,6 @@ local function Build()
 		end,
 	})
 	ui.frame = f
-	pcall(f.RegisterEvent, f, "BAG_UPDATE")
-	pcall(f.RegisterEvent, f, "GUILDBANKBAGSLOTS_CHANGED")
-	pcall(f.RegisterEvent, f, "GUILDBANKTAB_CHANGED")
-	pcall(f.RegisterEvent, f, "GUILDBANK_UPDATE_TABS")
-	f:SetScript("OnEvent", function()
-		if f:IsShown() then GM.View.Coalesced("gbank", GU.Refresh) end
-	end)
 
 	ui.summary = GM.MakeFontString(f, GM.FONT, 9, "textDim")
 	ui.summary:SetJustifyH("LEFT")
@@ -479,6 +472,8 @@ f:SetScript("OnUpdate", function(_, e)
 end)
 
 GM.View.Register("gbank", { class = "contextual",
+	events = { "BAG_UPDATE", "GUILDBANKBAGSLOTS_CHANGED",
+		"GUILDBANKTAB_CHANGED", "GUILDBANK_UPDATE_TABS" },
 	Show = GU.Show, Hide = GU.Hide, Toggle = GU.Toggle,
 	Refresh = GU.Refresh,
 	IsShown = function() return ui and ui.frame and ui.frame:IsShown() end })

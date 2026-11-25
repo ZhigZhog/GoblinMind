@@ -334,13 +334,9 @@ function GM.Inventory.MarkSold(key)
 		-- pull a fresh snapshot so the delta engine ledgers the sell
 		-- sooner — and repaint the surfaces that render the mark
 		GM.Time.After(1, GM.Inventory.QueryOwned)
-		if GM.MyAuctions and GM.MyAuctions.Refresh then
-			GM.MyAuctions.Refresh()
-		end
-		if GM.AHUI and GM.AHUI.Refresh then GM.AHUI.Refresh() end
-		if GM.PlanQueue and GM.PlanQueue.Refresh then
-			GM.PlanQueue.Refresh()
-		end
+		GM.View.Refresh("auctions")
+		GM.View.Refresh("ah")
+		GM.View.Refresh("planner")
 	end
 	return marked
 end

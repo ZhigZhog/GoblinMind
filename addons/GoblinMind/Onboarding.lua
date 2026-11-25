@@ -369,9 +369,7 @@ local function Build()
 			.. (GM.Model.Pref("hideUnlearned") and "ON" or "OFF"))
 		ui.spoiler.text:SetTextColor(GM.RGB(
 			GM.Model.Pref("hideUnlearned") and "accent" or "textDim"))
-		if GM.CraftingUI and GM.CraftingUI.Refresh then
-			GM.CraftingUI.Refresh()
-		end
+		GM.View.Refresh("crafting")
 	end)
 	spoiler:SetPoint("TOPLEFT", oBody, "BOTTOMLEFT", 0, -10)
 	spoiler.text:SetText("HIDE UNLEARNED RECIPES: "

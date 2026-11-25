@@ -188,9 +188,7 @@ function OR.LiveEvent(board, ev)
 	if not L then L = {} OR.live[board] = L end
 	L[#L + 1] = ev
 	while #L > 200 do table.remove(L, 1) end
-	if GM.OrdersUI and GM.OrdersUI.Refresh then
-		GM.OrdersUI.Refresh()
-	end
+	GM.View.Refresh("orders")
 end
 
 -- find an order id by a commit id on the pulled board — release
@@ -1402,9 +1400,7 @@ function OR.RelayIngest(kind, f, sender)
 		end
 		-- the refresh button's whole point — the snapshot just
 		-- landed live; repaint without waiting for another trigger
-		if GM.OrdersUI and GM.OrdersUI.Refresh then
-			GM.OrdersUI.Refresh()
-		end
+		GM.View.Refresh("orders")
 		return
 	end
 	if kind == "W" then
@@ -1543,9 +1539,7 @@ function OR.ItemIngest(f, sender)
 		m[sender] = { t = time() }
 		OR.relay.peers[f[3]] = m
 	end
-	if GM.OrdersUI and GM.OrdersUI.Refresh then
-		GM.OrdersUI.Refresh()
-	end
+	GM.View.Refresh("orders")
 end
 
 -- host side: 'I' record asks for open listings of one item

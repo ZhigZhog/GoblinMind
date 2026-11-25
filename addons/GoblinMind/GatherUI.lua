@@ -1213,6 +1213,9 @@ local function Toggle()
 	end
 end
 
+-- export for the view registry — V.Refresh("gather") routes here
+UI.Refresh = Refresh
+
 function UI.Toggle()
 	Toggle()
 end
@@ -1241,4 +1244,4 @@ end
 
 GM.View.Register("gather", {
 	Show = UI.Show, Hide = UI.Hide, Toggle = UI.Toggle,
-	IsShown = UI.IsShown })
+	Refresh = UI.Refresh, IsShown = UI.IsShown })
