@@ -563,6 +563,24 @@ end
 
 M.Update = Update
 
+-- radius resolution diagnostic: the live API is trusted over the
+-- zoom table — if it misreports on this client the whole overlay
+-- parallaxes against the terrain (the camp-zone drift report).
+-- /goblin mmdebug prints both sources at the current zoom
+GM.Cmd("mmdebug", function()
+	local apiR = C_Minimap and C_Minimap.GetViewRadius
+		and C_Minimap.GetViewRadius()
+	local zoom = Minimap and Minimap:GetZoom() or 0
+	local indoor = (GetCVar("minimapZoom") or 0) + 0 ~= zoom
+	local tblR = ((indoor and VIEW.indoor or VIEW.outdoor)[zoom]
+		or 0) / 2
+	GM.Print(("minimap: zoom=%s indoor=%s api=%s table=%s rotate=%s facing=%s")
+		:format(tostring(zoom), tostring(indoor),
+			tostring(apiR), tostring(tblR),
+			GetCVar("rotateMinimap") or "?",
+			tostring(GetPlayerFacing and GetPlayerFacing())))
+end, { prefix = true })
+
 local acc = 0
 local tick = CreateFrame("Frame")
 tick:SetScript("OnUpdate", function(_, dt)
