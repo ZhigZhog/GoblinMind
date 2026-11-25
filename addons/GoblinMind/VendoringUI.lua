@@ -450,28 +450,41 @@ end
 
 -- ============ refresh ============
 
-function VU.Refresh()
-	if not ui then return end
+-- view-model for the registry's Data() pass — page rows through the
+-- collapse-aware tree transform plus the repair state
+local function Data()
 	local open = MerchantOpen()
-	ui.pageTabs.set(ui.page)
-	-- repair only matters while a repairing merchant is up
+	local page
+	for _, p in ipairs(PAGES) do
+		if p.key == ui.page then page = p end
+	end
 	local canRepair = open and CanMerchantRepair and CanMerchantRepair()
 	local cost, needs = canRepair and GetRepairAllCost
 		and GetRepairAllCost() or nil
+	local rows = open and page.data() or {}
+	local disp, nItems, nGroups = FlatTree(rows)
+	return { open = open, page = page,
+		canRepair = canRepair, cost = cost, needs = needs,
+		rows = rows, disp = disp, nItems = nItems, nGroups = nGroups }
+end
+
+function VU.Refresh(vm)
+	if not ui then return end
+	vm = vm or Data()
+	local open, page = vm.open, vm.page
+	local canRepair, cost, needs = vm.canRepair, vm.cost, vm.needs
+	local rows = vm.rows
+	local disp, nItems, nGroups = vm.disp, vm.nItems, vm.nGroups
+	ui.pageTabs.set(ui.page)
+	-- repair only matters while a repairing merchant is up
 	ui.repair:SetShown(canRepair and needs)
 	if canRepair and cost then
 		ui.repair.text:SetText("REP " .. GM.Money(cost))
 	end
 
-	local page
-	for _, p in ipairs(PAGES) do
-		if p.key == ui.page then page = p end
-	end
 	for i = 1, 4 do ui.head[i]:SetText(page.head[i]) end
 
 	ui.flipsBtn:SetShown(ui.page == "buy")
-	local rows = open and page.data() or {}
-	local disp, nItems, nGroups = FlatTree(rows)
 	ui.collapseBtn.text:SetText(#rows > nItems and "EXPAND ALL"
 		or "COLLAPSE ALL")
 	ui.empty:SetText(not open
@@ -720,5 +733,6 @@ GM.View.Register("vendor", { class = "peer",
 	events = { "BAG_UPDATE", "MERCHANT_UPDATE",
 		"BUYBACK_UPDATE" },
 	Show = VU.Show, Hide = VU.Hide, Toggle = VU.Toggle,
+	Data = Data,
 	Refresh = VU.Refresh,
 	IsShown = function() return ui and ui.frame and ui.frame:IsShown() end })

@@ -156,9 +156,11 @@ local function Build()
 	f:SetScript("OnShow", function() TU.Refresh() end)
 end
 
-function TU.Refresh()
+function TU.Refresh(vm)
 	if not (ui and ui.frame:IsShown()) then return end
-	local tasks = Tasks()
+	-- vm comes from the registry's Data() pass; direct callers
+	-- (Show, the 1s poll) compute it here
+	local tasks = vm or Tasks()
 	for i, row in ipairs(ui.rows) do
 		if i > #tasks then row:Hide() end
 	end
@@ -232,4 +234,5 @@ end
 
 GM.View.Register("tasks", { class = "contextual",
 	Show = TU.Show, Hide = TU.Hide, Toggle = TU.Toggle,
+	Data = Tasks,
 	Refresh = TU.Refresh, IsShown = TU.IsOpen })

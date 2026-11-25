@@ -799,13 +799,27 @@ end
 
 local DIFF_NAMES = { "optimal", "medium", "easy", "trivial" }
 
-function CU.Refresh()
+-- view-model for the registry's Data() pass — professions/levels,
+-- the collapse-aware recipe tree, and the queue list. ui.levels is
+-- assigned in Refresh — a view-side cache the detail pane reads
+local function Data()
+	local disp, nItems = RecDisplay()
+	return {
+		profs = ProfList(),
+		levels = ProfLevels(),
+		disp = disp, nItems = nItems,
+		qs = GM.Crafting.QueueList(),
+	}
+end
+
+function CU.Refresh(vm)
 	CU._refreshes = (CU._refreshes or 0) + 1
 	if not ui then return end
+	vm = vm or Data()
 
 	-- professions + categories (scrolled)
-	local profs = ProfList()
-	ui.levels = ProfLevels()
+	local profs = vm.profs
+	ui.levels = vm.levels
 	ui.profOff = math.min(ui.profOff or 0,
 		math.max(0, #profs - PROF_ROWS))
 	W.ScrollText(ui.profP.count, ui.profOff, PROF_ROWS, #profs)
@@ -857,7 +871,7 @@ function CU.Refresh()
 	end
 
 	-- recipes → collapsible item-type tree
-	local disp, nItems = RecDisplay()
+	local disp, nItems = vm.disp, vm.nItems
 	ui.recOff = math.min(ui.recOff or 0,
 		math.max(0, #disp - LIST_ROWS))
 	W.ScrollText(ui.recP.count, ui.recOff, LIST_ROWS, #disp)
@@ -989,7 +1003,7 @@ function CU.Refresh()
 	end
 
 	-- queue
-	local qs = GM.Crafting.QueueList()
+	local qs = vm.qs
 	local totCost, totProfit, matsN = 0, 0, 0
 	for _ in pairs(GM.Crafting.QueueMissing()) do matsN = matsN + 1 end
 	ui.qOff = math.min(ui.qOff or 0, math.max(0, #qs - #ui.qRows))
@@ -1421,5 +1435,6 @@ end
 GM.View.Register("crafting", { class = "peer",
 	events = { "BAG_UPDATE" }, evDelay = 0.3,
 	Show = CU.Show, Hide = CU.Hide, Toggle = CU.Toggle,
+	Data = Data,
 	Refresh = CU.Refresh,
 	IsShown = function() return ui and ui.frame and ui.frame:IsShown() end })

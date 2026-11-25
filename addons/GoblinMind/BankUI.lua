@@ -231,11 +231,20 @@ local function Fill(rows, vis, scrollKey, toScope)
 	end
 end
 
-function BU.Refresh()
-	if not ui then return end
+-- view-model for the registry's Data() pass — pure model reads
+local function Data()
 	local open = BankOpen()
-	local bagRows = StackRows(GM.Banking.BagSlots())
-	local bankRows = open and StackRows(GM.Banking.BankSlots()) or {}
+	return {
+		open = open,
+		bagRows = StackRows(GM.Banking.BagSlots()),
+		bankRows = open and StackRows(GM.Banking.BankSlots()) or {},
+	}
+end
+
+function BU.Refresh(vm)
+	if not ui then return end
+	vm = vm or Data()
+	local open, bagRows, bankRows = vm.open, vm.bagRows, vm.bankRows
 	ui.lp.empty:SetText(#bagRows == 0 and "bags empty" or "")
 	ui.lp.empty:SetShown(#bagRows == 0)
 	ui.rp.empty:SetText(not open and "open the bank"
@@ -307,5 +316,6 @@ GM.View.Register("bank", { class = "contextual",
 		"PLAYERBANKBAGSLOTS_CHANGED",
 		"PLAYERREAGENTBANKSLOTS_CHANGED" },
 	Show = BU.Show, Hide = BU.Hide, Toggle = BU.Toggle,
+	Data = Data,
 	Refresh = BU.Refresh,
 	IsShown = function() return ui and ui.frame and ui.frame:IsShown() end })

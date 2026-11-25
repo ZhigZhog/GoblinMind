@@ -44,6 +44,9 @@ local T = GM.Time
 
 local views = {}
 
+-- forward decl: def.events closures call Paint at event time
+local Paint
+
 -- ============ registration ============
 
 function V.Register(key, def)
@@ -58,7 +61,8 @@ function V.Register(key, def)
 		for _, ev in ipairs(def.events) do
 			V.On(key, ev, function()
 				if not def.IsShown or def.IsShown() then
-					V.Coalesced(key, def.Refresh, def.evDelay)
+					V.Coalesced(key, function() Paint(def) end,
+						def.evDelay)
 				end
 			end)
 		end
@@ -100,12 +104,20 @@ function V.IsShown(key)
 	return d and d.IsShown and d.IsShown() or false
 end
 
+-- compute the view-model once (if the view declares Data) and hand
+-- it to the painter — the single point where a view-model cache or
+-- diffing could land later
+function Paint(d)
+	if d.Data then d.Refresh(d.Data())
+	else d.Refresh() end
+end
+
 -- a refresh only if the window's visible — the guard every event
 -- handler wants. Views whose IsShown isn't registered always pass.
 function V.Refresh(key)
 	local d = views[key]
 	if d and d.Refresh and (not d.IsShown or d.IsShown()) then
-		d.Refresh()
+		Paint(d)
 	end
 end
 

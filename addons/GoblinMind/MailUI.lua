@@ -578,9 +578,28 @@ end
 
 -- ============ refresh ============
 
-function MU.Refresh()
-	if not ui then return end
+-- view-model for the registry's Data() pass — rows per page plus
+-- the send page's attachment state; page is view state the vm
+-- carries through
+local function Data()
 	local open = MailOpen()
+	if ui.page == "inbox" then
+		return { open = open, rows = open and InboxRows() or {} }
+	elseif ui.page == "groups" then
+		return { open = open,
+			rows = GM.Banking.MailableGroups
+				and GM.Banking.MailableGroups() or {} }
+	end
+	local rows, pend = {}, 0
+	if open then rows, pend = SendRows() end
+	return { open = open, rows = rows, pend = pend,
+		attached = AttachedList() }
+end
+
+function MU.Refresh(vm)
+	if not ui then return end
+	vm = vm or Data()
+	local open = vm.open
 	ui.pageTabs.set(ui.page)
 	if ui.sendBarNode then
 		ui.sendBarNode:SetVisible(ui.page == "send")
@@ -617,7 +636,7 @@ function MU.Refresh()
 		for i, t in ipairs({ "SENDER", "SUBJECT", "ITEMS", "GOLD", "DAYS" }) do
 			ui.head[i]:SetText(t)
 		end
-		local rows = open and InboxRows() or {}
+		local rows = vm.rows
 		ui.empty:SetText(not open and "open the mailbox"
 			or (#rows == 0 and "inbox empty" or ""))
 		ui.empty:SetShown(#rows == 0)
@@ -692,8 +711,7 @@ function MU.Refresh()
 		for i, t in ipairs({ "GROUP", "RECIPIENT", "RULE", "PENDING", "ITEMS" }) do
 			ui.head[i]:SetText(t)
 		end
-		local rows = GM.Banking.MailableGroups and GM.Banking.MailableGroups()
-			or {}
+		local rows = vm.rows
 		ui.empty:SetText(not open and "open the mailbox"
 			or (#rows == 0 and "no mailing ops — set sendTo on a group" or ""))
 		ui.empty:SetShown(#rows == 0)
@@ -738,14 +756,13 @@ function MU.Refresh()
 		for i, t in ipairs({ "ITEM", "", "QTY", "", "" }) do
 			ui.head[i]:SetText(t)
 		end
-		local rows, pend = {}, 0
-		if open then rows, pend = SendRows() end
+		local rows, pend = vm.rows, vm.pend
 		ui.head[2]:SetText(format("%d attached", pend))
 		-- subject defaults to the first attached item — write it for
 		-- real while the box is untouched (empty/hint/our last auto
 		-- value); user-typed subjects are left alone
-		local defSubj = AttachedList()[1]
-			and AttachedList()[1].name or "GoblinMind"
+		local defSubj = vm.attached[1]
+			and vm.attached[1].name or "GoblinMind"
 		local cur = strtrim(ui.subject:GetText() or "")
 		if not ui.subject:HasFocus()
 			and (cur == "" or cur == SUBJ_HINT or cur == ui.autoSubj) then
@@ -994,5 +1011,6 @@ GM.View.Register("mail", { class = "contextual",
 		"MAIL_SEND_INFO_UPDATE", "MAIL_SEND_SUCCESS",
 		"MAIL_FAILED", "BAG_UPDATE" },
 	Show = MU.Show, Hide = MU.Hide, Toggle = MU.Toggle,
+	Data = Data,
 	Refresh = MU.Refresh,
 	IsShown = function() return ui and ui.frame and ui.frame:IsShown() end })

@@ -360,15 +360,30 @@ local function Fill(rows, vis, scrollKey, onAct, actEnabled, disabledWhy)
 	end
 end
 
-function GU.Refresh()
-	if not ui then return end
+-- view-model for the registry's Data() pass — pure model reads;
+-- CurTab/TabPerms read view-side tab state the vm carries through
+local function Data()
 	local open = GBankOpen()
-	FillTabs()
 	local tab = CurTab()
 	local canView, canDep, canWd, wdLeft = TabPerms(tab)
-	local bagRows = BagRows()
-	local gRows = (open and canView) and GBankRows(tab) or {}
-	local tabName = GetGuildBankTabInfo and GetGuildBankTabInfo(tab)
+	return {
+		open = open, tab = tab,
+		canView = canView, canDep = canDep,
+		canWd = canWd, wdLeft = wdLeft,
+		bagRows = BagRows(),
+		gRows = (open and canView) and GBankRows(tab) or {},
+		tabName = GetGuildBankTabInfo and GetGuildBankTabInfo(tab),
+	}
+end
+
+function GU.Refresh(vm)
+	if not ui then return end
+	vm = vm or Data()
+	local open, tab = vm.open, vm.tab
+	local canView, canDep, canWd, wdLeft =
+		vm.canView, vm.canDep, vm.canWd, vm.wdLeft
+	local bagRows, gRows, tabName = vm.bagRows, vm.gRows, vm.tabName
+	FillTabs()
 	ui.rHead:SetText(format("TAB %d%s → withdraw", tab,
 		tabName and (" · " .. tabName) or ""))
 	ui.summary:SetText(format("%d stacks in bags%s",
@@ -475,5 +490,6 @@ GM.View.Register("gbank", { class = "contextual",
 	events = { "BAG_UPDATE", "GUILDBANKBAGSLOTS_CHANGED",
 		"GUILDBANKTAB_CHANGED", "GUILDBANK_UPDATE_TABS" },
 	Show = GU.Show, Hide = GU.Hide, Toggle = GU.Toggle,
+	Data = Data,
 	Refresh = GU.Refresh,
 	IsShown = function() return ui and ui.frame and ui.frame:IsShown() end })
