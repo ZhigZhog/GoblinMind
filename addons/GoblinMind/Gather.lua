@@ -308,6 +308,10 @@ local function MergeNode(p, kind, name, opt)
 			end
 		end
 	end
+	-- mergeOnly = hit-test only: a miss means no KNOWN spawn here
+	-- (fishing uses it to split school catches from open water —
+	-- open water is an area, not a point)
+	if opt and opt.mergeOnly then return nil end
 	local nd = {
 		map = p.map, x = p.x, y = p.y,
 		n = p.n, w = p.w, z = p.z, c = p.c,
@@ -2569,7 +2573,32 @@ local function OnLoot()
 			-- impersonating the node
 			local nm = NodeNameFor(items)
 				or ((armValid or not srcDead) and winName)
-			local nd = MergeNode(pos, gKind, nm)
+			local nd
+			if gKind == "fish" then
+				-- school vs open water: a catch near a KNOWN pool
+				-- (imported spawn or recorded node) is that pool's
+				-- hit — 36yd because the record stores the player's
+				-- spot, not the pool's. Anything else is open-water
+				-- fishing: a fishable AREA zoned like a hunt camp —
+				-- catches are the camp's "kills", pockets are the
+				-- spots fished inside it
+				nd = MergeNode(pos, gKind, nm,
+					{ mergeOnly = true, mergeYd = 36 })
+				if not nd then
+					local zn, tail = MergeZone(pos, "fish", items)
+					UpdateYield(YieldRec("fish"), items, tail)
+					Journal(tail and "tail" or "zone",
+						{ kind = "fish", mob = zn and zn.area,
+							items = ItemStr(items),
+							k = zn and zn.kills })
+					if GM.GatherMap then
+						GM.GatherMap.Refresh()
+					end
+					return
+				end
+			else
+				nd = MergeNode(pos, gKind, nm)
+			end
 			UpdateYield(YieldRec(
 				nd and nd.name or gKind), items)
 			Journal("node", { kind = gKind, mob = nm or winName,
