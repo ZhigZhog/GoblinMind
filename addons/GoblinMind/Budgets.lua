@@ -98,29 +98,50 @@ function B.Crest(ck)
 	return "|TInterface\\TargetingFrame\\UI-PVP-" .. fac .. ":13|t "
 end
 
--- color mode: "class" = RAID_CLASS_COLORS, "char" = a stable hue per
--- character picked by key hash — legend lives in the gold strip
+-- char colors: a per-char override (ch.col = "rrggbb"), else the
+-- class color, else a stable palette hash for classless snapshots.
+-- Settings exposes the pick; rows just ask CharCC/CharRGB.
 local CHAR_PALETTE = {
 	"ffd24a", "4ad2ff", "7be382", "c08cff", "ff9a5c",
 	"ff7bd0", "4ae3c3", "ff6b6b", "7aa8ff", "c8e34a",
 }
-function B.ColorMode() return GM.db.acctColorMode or "class" end
-function B.SetColorMode(m)
-	GM.db.acctColorMode = (m == "char") and "char" or "class"
+local function HexRGB(hex)
+	return tonumber("0x" .. hex:sub(1, 2)) / 255,
+		tonumber("0x" .. hex:sub(3, 4)) / 255,
+		tonumber("0x" .. hex:sub(5, 6)) / 255
 end
 
--- "|cffRRGGBB" for a char — class color when known in class mode,
--- palette hash otherwise (also the classless-alt fallback)
-function B.CharCC(ck)
-	if B.ColorMode() == "class" then
-		local ch = B.CharInfo(ck)
-		local col = ch and ch.cls and RAID_CLASS_COLORS
-			and RAID_CLASS_COLORS[ch.cls]
-		if col and col.colorStr then return "|c" .. col.colorStr end
+function B.CharRGB(ck)
+	local ch = B.CharInfo(ck)
+	local col = ch and ch.col
+	if type(col) == "string" and col:match("^%x%x%x%x%x%x$") then
+		return HexRGB(col)
 	end
+	local cc = ch and ch.cls and RAID_CLASS_COLORS
+		and RAID_CLASS_COLORS[ch.cls]
+	if cc then return cc.r, cc.g, cc.b end
 	local h = 5381
 	for i = 1, #ck do h = (h * 33 + ck:byte(i)) % 16777216 end
-	return "|cff" .. CHAR_PALETTE[h % #CHAR_PALETTE + 1]
+	return HexRGB(CHAR_PALETTE[h % #CHAR_PALETTE + 1])
+end
+
+-- "|cffRRGGBB" for inline fontstring coloring
+function B.CharCC(ck)
+	local r, g, b = B.CharRGB(ck)
+	return format("|cff%02x%02x%02x",
+		floor(r * 255 + 0.5), floor(g * 255 + 0.5), floor(b * 255 + 0.5))
+end
+
+-- hex "rrggbb" = custom override, nil = back to class color
+function B.SetCharColor(ck, hex)
+	for k, ch in pairs(Chars()) do
+		if SameKey(k, ck) then ch.col = hex end
+	end
+end
+
+function B.CharColorMode(ck)
+	local ch = B.CharInfo(ck)
+	return ch and ch.col and "custom" or "class"
 end
 
 -- account display order: this char's accounts first, then alts by
@@ -501,8 +522,41 @@ function B.MigrateKeys()
 	end
 end
 
+-- one-shot wealth-buffer repair: the enum-flap era left single-
+-- sample excursions in the persisted series — a or g spiking for
+-- ONE sample while the neighbors hold an identical vector. A real
+-- wealth event can't make that shape: buys/sells/posts move two
+-- fields at once, and single-field events (expires, loot) persist
+-- into the next sample instead of snapping back. Interior samples
+-- whose neighbors match each other on every field are deleted —
+-- multi-sample flap runs need a few passes to collapse.
+local function RepairWealthHist()
+	local w = GM.db.wealthHist
+	if not w or #w < 3 then return end
+	local changed, passes = true, 0
+	while changed and passes < 8 do
+		changed = false
+		passes = passes + 1
+		local i = 2
+		while i < #w do
+			local p, n1, n2 = w[i], w[i - 1], w[i + 1]
+			if (p.c or "") == (n1.c or "")
+				and (n1.c or "") == (n2.c or "")
+				and n1.g == n2.g and n1.a == n2.a and n1.h == n2.h
+				and (p.g ~= n1.g or p.a ~= n1.a or p.h ~= n1.h) then
+				tremove(w, i)
+				changed = true
+			else
+				i = i + 1
+			end
+		end
+	end
+end
+
 function B.Init()
 	DB()
+	RepairWealthHist()
+	GM.db.acctColorMode = nil -- replaced by per-char ch.col
 	local me = GM.CharKey()
 	local myName = (UnitName and UnitName("player")) or me
 	-- legacy accounts carry no owner — whoever loads first after the

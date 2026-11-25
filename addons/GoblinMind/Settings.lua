@@ -954,6 +954,91 @@ local function Build()
 		end)
 	ui.tkClick:SetPoint("TOPLEFT", 500, -44)
 
+	-- ===== CHARACTERS · LEDGER =====
+	-- one row per char the budget registry knows: crest + name in
+	-- the char's ledger color, a swatch to pick a custom color,
+	-- right-click returns to class color. The ledger's account
+	-- rows and gold strip read B.CharCC, so a pick repaints both.
+	ui.charRows = {}
+	local cks = GM.Budget and GM.Budget.CharsOrdered
+		and GM.Budget.CharsOrdered() or {}
+	local cpH = 30 + math.max(1, #cks) * 22
+	local cp = Panel(f, 10, -1036, 600, cpH, "CHARACTERS · LEDGER")
+	local function paintCharRow(r)
+		r.name:SetText(GM.Budget.Crest(r.ck)
+			.. GM.Budget.CharCC(r.ck) .. GM.Budget.CharName(r.ck)
+			.. "|r")
+		local cr, cg, cb = GM.Budget.CharRGB(r.ck)
+		r.sw._gmBg:SetColorTexture(cr, cg, cb)
+		r.mode:SetText(GM.Budget.CharColorMode(r.ck) == "custom"
+			and "CUSTOM" or "CLASS")
+	end
+	local function pickCharColor(r)
+		local cr, cg, cb = GM.Budget.CharRGB(r.ck)
+		local function apply(rr, gg, bb)
+			GM.Budget.SetCharColor(r.ck, format("%02x%02x%02x",
+				floor(rr * 255 + 0.5), floor(gg * 255 + 0.5),
+				floor(bb * 255 + 0.5)))
+			paintCharRow(r)
+			if GM.Overview and GM.Overview.Refresh then
+				pcall(GM.Overview.Refresh)
+			end
+		end
+		local CPF = ColorPickerFrame
+		if not CPF then return end
+		if CPF.SetupColorPickerAndShow then
+			CPF:SetupColorPickerAndShow({
+				r = cr, g = cg, b = cb,
+				swatchFunc = function() apply(CPF:GetColorRGB()) end,
+				cancelFunc = function(prev)
+					apply(prev.r, prev.g, prev.b)
+				end,
+			})
+		else
+			CPF.func = function() apply(CPF:GetColorRGB()) end
+			CPF.cancelFunc = function(prev)
+				apply(prev.r, prev.g, prev.b)
+			end
+			CPF.previousValues = { r = cr, g = cg, b = cb }
+			CPF:SetColorRGB(cr, cg, cb)
+			CPF:Show()
+		end
+	end
+	for i, ck in ipairs(cks) do
+		local r = { ck = ck }
+		r.name = GM.MakeFontString(cp, GM.FONT, 10, "text")
+		r.name:SetPoint("TOPLEFT", 14, -20 - (i - 1) * 22)
+		r.name:SetWidth(220)
+		r.name:SetJustifyH("LEFT")
+		r.name:SetWordWrap(false)
+		r.sw = CreateFrame("Button", nil, cp)
+		r.sw:SetSize(16, 16)
+		r.sw:SetPoint("TOPLEFT", 244, -22 - (i - 1) * 22)
+		GM.Panel(r.sw, "contHigh")
+		r.sw:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+		r.sw:SetScript("OnClick", function(_, btn)
+			if btn == "RightButton" then
+				GM.Budget.SetCharColor(r.ck)
+				paintCharRow(r)
+				if GM.Overview and GM.Overview.Refresh then
+					pcall(GM.Overview.Refresh)
+				end
+			else
+				pickCharColor(r)
+			end
+		end)
+		W.Tip(r.sw, function() return {
+			"Ledger color for " .. GM.Budget.CharName(ck),
+			"click = pick a custom color",
+			"right-click = class color" } end)
+		r.mode = GM.MakeFontString(cp, GM.FONT, 9, "textDim")
+		r.mode:SetPoint("LEFT", r.sw, "RIGHT", 8, 0)
+		r.mode:SetJustifyH("LEFT")
+		ui.charRows[i] = r
+		paintCharRow(r)
+	end
+	ui.paintCharRow = paintCharRow
+
 	local imp = Panel(f, 10, -1036, 600, 60,
 		"IMPORT FROM OTHER ADDONS")
 	ui.impScan = CreateFrame("Button", nil, imp)
@@ -999,6 +1084,7 @@ local function Build()
 	StackPanel(gt, 78)
 	StackPanel(ov, 142)
 	StackPanel(tk, 88)
+	StackPanel(cp, cpH)
 	StackPanel(imp, 60)
 	-- the tooltip panel's height is layout-owned now — keep the clip
 	-- viewport tracking it (Relayout used to resize it by hand)
@@ -1086,6 +1172,9 @@ function S.Refresh()
 	end
 	for _, r in ipairs(ui.ttRows or {}) do
 		if r.ctl.paint then r.ctl.paint() end
+	end
+	if ui.charRows and ui.paintCharRow then
+		for _, r in ipairs(ui.charRows) do ui.paintCharRow(r) end
 	end
 	-- custom price source rows
 	if ui.srcRows then

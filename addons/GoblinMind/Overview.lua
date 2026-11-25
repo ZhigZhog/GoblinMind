@@ -945,28 +945,6 @@ local function Build()
 		ui.acctSegs[i] = seg
 		W.PaintSeg(seg, i == 1)
 	end
-	-- color mode cycler: class colors vs a stable per-char hue —
-	-- sits with the view segs in the title band
-	local colSeg = W.Segment(accts, "COL:CLASS", 82, 16)
-	colSeg:SetPoint("TOPRIGHT", -10 - #avs * 76 - 6, -4)
-	local function PaintColSeg()
-		colSeg.text:SetText(L(GM.Budget.ColorMode() == "class"
-			and "COL:CLASS" or "COL:CHAR"))
-	end
-	PaintColSeg()
-	W.PaintSeg(colSeg, true)
-	colSeg:SetScript("OnClick", function()
-		GM.Budget.SetColorMode(GM.Budget.ColorMode() == "class"
-			and "char" or "class")
-		PaintColSeg()
-		if GM.PlanQueue and GM.PlanQueue.Refresh then
-			GM.PlanQueue.Refresh()
-		end
-		RefreshAccounts()
-	end)
-	W.Tip(colSeg, function() return {
-		L("Account coloring"),
-		L("class: WoW class colors · char: per-character hue") } end)
 	-- accounts-mode strip: combined gold across every registered
 	-- char — the journal's balance line lives in the same slot
 	ui.acctGold = GM.MakeFontString(accts, GM.FONT, 9, "secondary")
