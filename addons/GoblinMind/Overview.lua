@@ -30,7 +30,9 @@ local function Panel(f, x, y, w, h, title)
 	return p, t
 end
 
--- rotated-texture line segment (chart series / pie spokes)
+-- rotated-texture line segment (chart series / pie spokes) —
+-- key = theme color name or an {r,g,b} triple (per-char wealth
+-- series ride the char's own color, not the theme accent)
 local function Line(parent, x1, y1, x2, y2, key, thick)
 	local t = parent:CreateTexture(nil, "ARTWORK")
 	local dx, dy = x2 - x1, y2 - y1
@@ -38,7 +40,11 @@ local function Line(parent, x1, y1, x2, y2, key, thick)
 	t:SetSize(len, thick or 1.5)
 	t:SetPoint("CENTER", parent, "BOTTOMLEFT", (x1 + x2) / 2, (y1 + y2) / 2)
 	t:SetRotation(atan2(dy, dx))
-	t:SetColorTexture(GM.RGB(key))
+	if type(key) == "table" then
+		t:SetColorTexture(key[1], key[2], key[3])
+	else
+		t:SetColorTexture(GM.RGB(key))
+	end
 	return t
 end
 
@@ -564,11 +570,14 @@ function OV.RefreshChart()
 	AxisLabel(date("%H:%M", tMin), gx, 4)
 	AxisLabel(date("%H:%M", tMax), gx + w, 4, "BOTTOMRIGHT")
 
-	-- pending-AH band: a low-alpha-tinted accent fill under each step,
-	-- from gold up to gold+posted — "the slice that's listings now".
-	-- Manual tint (accent * 0.22 toward the near-black panel) rather
-	-- than texture alpha — deterministic on every client.
-	local ar, ag, ab = GM.RGB("accent")
+	-- pending-AH band + wealth line ride the VIEWED char's ledger
+	-- color (class default or custom pick) — the series belongs to
+	-- that char, so it wears their color the way the account rows
+	-- and the gold strip already do
+	local cr, cg, cb = GM.Budget.CharRGB
+		and GM.Budget.CharRGB(ViewChar()) or GM.RGB("accent")
+	local cc = { cr, cg, cb }
+	local ar, ag, ab = cr * 0.22, cg * 0.22, cb * 0.22
 	local px, pgy, pwv
 	for _, p in ipairs(hist) do
 		local x = gx + (p.t - tMin) / (tMax - tMin) * w
@@ -578,7 +587,7 @@ function OV.RefreshChart()
 			local band = chart:CreateTexture(nil, "BACKGROUND")
 			band:SetPoint("BOTTOMLEFT", chart, "BOTTOMLEFT", px, pgy)
 			band:SetPoint("TOPRIGHT", chart, "BOTTOMLEFT", x, pwv)
-			band:SetColorTexture(ar * 0.22, ag * 0.22, ab * 0.22)
+			band:SetColorTexture(ar, ag, ab)
 			tinsert(ui.art, band)
 		end
 		px, pgy, pwv = x, yg, yw
@@ -590,9 +599,9 @@ function OV.RefreshChart()
 		local x = gx + (p.t - tMin) / (tMax - tMin) * w
 		local yw = wy((p.g or 0) + (p.a or 0))
 		if px then
-			tinsert(ui.art, Line(chart, px, pwv, x, pwv, "accent"))
+			tinsert(ui.art, Line(chart, px, pwv, x, pwv, cc))
 			if yw ~= pwv then
-				tinsert(ui.art, Line(chart, x, pwv, x, yw, "accent"))
+				tinsert(ui.art, Line(chart, x, pwv, x, yw, cc))
 			end
 		end
 		px, pwv = x, yw

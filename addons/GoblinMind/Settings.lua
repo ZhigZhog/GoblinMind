@@ -970,8 +970,9 @@ local function Build()
 			.. "|r")
 		local cr, cg, cb = GM.Budget.CharRGB(r.ck)
 		r.sw._gmBg:SetColorTexture(cr, cg, cb)
-		r.mode:SetText(GM.Budget.CharColorMode(r.ck) == "custom"
-			and "CUSTOM" or "CLASS")
+		local cls = GM.Budget.CharColorMode(r.ck) ~= "custom"
+		r.chk._gmTick:SetShown(cls)
+		r.sw:SetAlpha(cls and 0.45 or 1)
 	end
 	local function pickCharColor(r)
 		local cr, cg, cb = GM.Budget.CharRGB(r.ck)
@@ -1026,10 +1027,34 @@ local function Build()
 		W.Tip(r.sw, function() return {
 			"Ledger color for " .. GM.Budget.CharName(ck),
 			"click = pick a custom color",
-			"right-click = class color" } end)
-		r.mode = GM.MakeFontString(cp, GM.FONT, 9, "textDim")
-		r.mode:SetPoint("LEFT", r.sw, "RIGHT", 8, 0)
-		r.mode:SetJustifyH("LEFT")
+			"class default box = Blizzard class color" } end)
+		-- class-default checkbox: checked = Blizzard class color
+		-- wins over the box; unchecking pins the current color as
+		-- custom so the box becomes editable in place
+		r.chk = CreateFrame("Button", nil, cp)
+		r.chk:SetSize(12, 12)
+		r.chk:SetPoint("LEFT", r.sw, "RIGHT", 8, 0)
+		GM.Panel(r.chk, "contHigh")
+		r.chk._gmTick = r.chk:CreateTexture(nil, "OVERLAY")
+		r.chk._gmTick:SetSize(6, 6)
+		r.chk._gmTick:SetPoint("CENTER")
+		r.chk._gmTick:SetColorTexture(GM.RGB("accent"))
+		r.chkLab = GM.MakeFontString(cp, GM.FONT, 9, "textDim")
+		r.chkLab:SetPoint("LEFT", r.chk, "RIGHT", 5, 0)
+		r.chkLab:SetJustifyH("LEFT")
+		r.chkLab:SetText(L("class default"))
+		r.chk:SetScript("OnClick", function()
+			if GM.Budget.CharColorMode(r.ck) == "custom" then
+				GM.Budget.SetCharColor(r.ck)
+			else
+				local cr, cg, cb = GM.Budget.CharRGB(r.ck)
+				GM.Budget.SetCharColor(r.ck,
+					format("%02x%02x%02x", floor(cr * 255 + 0.5),
+						floor(cg * 255 + 0.5), floor(cb * 255 + 0.5)))
+			end
+			paintCharRow(r)
+			GM.View.Refresh("overview")
+		end)
 		ui.charRows[i] = r
 		paintCharRow(r)
 	end
