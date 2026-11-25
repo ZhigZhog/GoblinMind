@@ -158,7 +158,11 @@ Primary data = the in-house book feed below.
     writes. `V.Refresh`/event repaints compute it once and call
     `def.Refresh(vm)` — Refresh is pure paint; `vm or Data()`
     fallback keeps direct callers working. Converted: tasks,
-    bank, gbank, mail, vendor, crafting.
+    bank, gbank, mail, vendor, crafting, auctions, destroy.
+    **After any UI-string pass run `python
+    scripts\extract-lkeys.py`** — labels reaching `LT`/`L()`
+    with no literal `L("x")` site warn "unregistered L key"
+    until the enUS table regenerates.
   - **`GM.Model`** (Model.lua): the view layer's data front door.
     `Item/Price/ItemName/Gold/Posted/Receivable/Mine/Bids/
     Wealth/WealthHist/Chars/CharKey/Accounts/TxFor` delegate to

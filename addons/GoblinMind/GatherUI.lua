@@ -264,8 +264,10 @@ end
 
 -- lite skips the map-pane rebuild — the solve pump streams route
 -- rows in through OnRouteSolved and only the list needs repainting
-local function Refresh(lite)
-	if not ui or not ui:IsShown() then return end
+-- view-model for the registry's Data() pass — the filtered/sorted
+-- row list plus the expanded row's detail content (expansion is
+-- view state the vm resolves against)
+local function Data()
 	local tid = GM.Gather.TargetID()
 	local rows = {}
 	if tid then
@@ -296,17 +298,12 @@ local function Refresh(lite)
 			if RowKeep(r) then rows[#rows + 1] = r end
 		end
 	end
-	ui.rows = rows
 	-- content model: every row 20px; the expanded row adds its
-	-- tree's full height right below it. Rows + tree live on the
-	-- scroll child's content plane — ui.scroll is a PIXEL offset
-	-- and the clip culls the edges, so truncated content is always
-	-- reachable by wheel
+	-- tree's full height right below it
 	local exIdx, exLines, extra = nil, nil, 0
 	for i, r in ipairs(rows) do
 		if RowID(r) == ui.expanded then exIdx = i break end
 	end
-	if not exIdx then ui.expanded = nil end
 	if exIdx then
 		exLines = DetailLines(rows[exIdx])
 		for _, ln in ipairs(exLines) do
@@ -314,6 +311,21 @@ local function Refresh(lite)
 		end
 		extra = extra + 6
 	end
+	return { tid = tid, rows = rows,
+		exIdx = exIdx, exLines = exLines, extra = extra }
+end
+
+local function Refresh(lite, vm)
+	if not ui or not ui:IsShown() then return end
+	vm = vm or Data()
+	local tid, rows = vm.tid, vm.rows
+	local exIdx, exLines, extra = vm.exIdx, vm.exLines, vm.extra
+	ui.rows = rows
+	if not exIdx then ui.expanded = nil end
+	-- Rows + tree live on the
+	-- scroll child's content plane — ui.scroll is a PIXEL offset
+	-- and the clip culls the edges, so truncated content is always
+	-- reachable by wheel
 	local viewH = ui.clip and ui.clip:GetHeight() or 0
 	if viewH <= 0 then viewH = 400 end   -- anchors unresolved yet
 	local contentH = #rows * 20 + extra
@@ -1213,8 +1225,10 @@ local function Toggle()
 	end
 end
 
--- export for the view registry — V.Refresh("gather") routes here
-UI.Refresh = Refresh
+-- export for the view registry — V.Refresh("gather") routes here.
+-- lite is an internal paint flag (route pump); the registry passes
+-- only the vm
+UI.Refresh = function(vm) Refresh(false, vm) end
 
 function UI.Toggle()
 	Toggle()
@@ -1244,4 +1258,5 @@ end
 
 GM.View.Register("gather", {
 	Show = UI.Show, Hide = UI.Hide, Toggle = UI.Toggle,
+	Data = Data,
 	Refresh = UI.Refresh, IsShown = UI.IsShown })
