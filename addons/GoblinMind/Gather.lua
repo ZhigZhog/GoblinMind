@@ -43,6 +43,22 @@ if (db.nodeV or 0) < NODE_V then
 	db.nodeV = NODE_V
 end
 
+-- fish nodes recorded before the school/open-water split can't be
+-- trusted as pools — a lone moat spot would classify every future
+-- open-water catch as a "school hit" forever via the proximity
+-- test. Imported pool spawns (src="gl") keep; recorded fish nodes
+-- reset once so live catches re-decide under the new classifier
+if not db.fishSplitV then
+	for _, list in pairs(db.nodes or {}) do
+		for i = #list, 1, -1 do
+			if list[i].kind == "fish" and list[i].src ~= "gl" then
+				tremove(list, i)
+			end
+		end
+	end
+	db.fishSplitV = true
+end
+
 -- ======================== constants ========================
 
 -- ======================== kind registry ========================
