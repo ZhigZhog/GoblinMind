@@ -311,9 +311,9 @@ local function DisplayList(ck)
 	return out
 end
 
-function OV.RefreshLog()
+function OV.RefreshLog(vm)
 	if not ui then return end
-	local list = DisplayList(ViewChar())
+	local list = (vm and vm.list) or DisplayList(ViewChar())
 	local maxOff = math.max(0, #list - ROWS)
 	if ui.scroll > maxOff then ui.scroll = maxOff end
 	for i, fs in ipairs(ui.logRows) do
@@ -1186,10 +1186,33 @@ end
 
 -- ============ refresh ============
 
-function OV.Refresh()
+-- view-model for the registry's Data() pass — the viewed char plus
+-- only the ACTIVE page's row set (each Build* scans the ledger —
+-- computing all six every refresh pays 5 dead scans)
+local function Data()
+	local vm = { char = ViewChar() }
+	local p = ui.page
+	if p == "inventory" then
+		vm.list, vm.total = BuildInventory()
+	elseif p == "sales" then
+		vm.list, vm.total = BuildSales(TxAgg(vm.char))
+	elseif p == "resale" then
+		vm.list, vm.total = BuildResale(TxAgg(vm.char))
+	elseif p == "expenses" then
+		vm.list, vm.total = BuildExpenses(TxAgg(vm.char))
+	elseif p == "failed" then
+		vm.list = BuildFailed(TxAgg(vm.char))
+	elseif p == "activity" then
+		vm.list = DisplayList(vm.char)
+	end
+	return vm
+end
+
+function OV.Refresh(vm)
 	if not ui then return end
+	vm = vm or Data()
 	ui.charBtn.text:SetText(
-		(ViewChar() or "?"):match("^[^-]+") or ViewChar() or "?")
+		(vm.char or "?"):match("^[^-]+") or vm.char or "?")
 	for _, nb in ipairs(ui.navBtns) do
 		nb.btn.text:SetTextColor(GM.RGB(
 			nb.key == ui.page and "accent" or "textDim"))
@@ -1204,9 +1227,9 @@ function OV.Refresh()
 	ui.pageItem:SetShown(ui.page == "item")
 
 	if ui.page == "activity" then
-		OV.RefreshLog()
+		OV.RefreshLog(vm)
 	elseif ui.page == "inventory" then
-		ui.tInventory.list, ui.tInventory.total = BuildInventory()
+		ui.tInventory.list, ui.tInventory.total = vm.list, vm.total
 		ui.tInventory.footer:SetText(
 			format("%d items · stock value %s%s", #ui.tInventory.list,
 				GM.Money(ui.tInventory.total),
@@ -1214,22 +1237,22 @@ function OV.Refresh()
 					or " · bank counts while open only"))
 		ui.tInventory.paint()
 	elseif ui.page == "sales" then
-		ui.tSales.list, ui.tSales.total = BuildSales(TxAgg(ViewChar()))
+		ui.tSales.list, ui.tSales.total = vm.list, vm.total
 		ui.tSales.footer:SetText(format("%d items · revenue %s",
 			#ui.tSales.list, GM.Money(ui.tSales.total)))
 		ui.tSales.paint()
 	elseif ui.page == "resale" then
-		ui.tResale.list, ui.tResale.total = BuildResale(TxAgg(ViewChar()))
+		ui.tResale.list, ui.tResale.total = vm.list, vm.total
 		ui.tResale.footer:SetText(format("%d items · profit %s",
 			#ui.tResale.list, GM.Money(ui.tResale.total)))
 		ui.tResale.paint()
 	elseif ui.page == "expenses" then
-		ui.tExpenses.list, ui.tExpenses.total = BuildExpenses(TxAgg(ViewChar()))
+		ui.tExpenses.list, ui.tExpenses.total = vm.list, vm.total
 		ui.tExpenses.footer:SetText(format("%d items · spent %s",
 			#ui.tExpenses.list, GM.Money(ui.tExpenses.total)))
 		ui.tExpenses.paint()
 	elseif ui.page == "failed" then
-		ui.tFailed.list = BuildFailed(TxAgg(ViewChar()))
+		ui.tFailed.list = vm.list
 		ui.tFailed.footer:SetText(format("%d items with failed auctions",
 			#ui.tFailed.list))
 		ui.tFailed.paint()
@@ -1267,5 +1290,6 @@ end
 
 GM.View.Register("overview", {
 	Show = OV.Show, Hide = OV.Hide, Toggle = OV.Toggle,
+	Data = Data,
 	Refresh = OV.Refresh,
 	IsShown = function() return ui and ui.frame and ui.frame:IsShown() end })
