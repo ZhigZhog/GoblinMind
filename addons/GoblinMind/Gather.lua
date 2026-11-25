@@ -2278,6 +2278,7 @@ end)
 -- ======================== loot capture ========================
 
 local arm -- { kind, pos, until_ }
+local Journal -- forward decl: ArmWindow runs before its definition
 
 local function ArmWindow(kind, until_)
 	arm = {
@@ -2285,6 +2286,8 @@ local function ArmWindow(kind, until_)
 		until_ = until_ or (GetTime() + (G.KindDefs[kind]
 			and G.KindDefs[kind].armSec or WINDOW_SEC)),
 	}
+	Journal("arm", { mob = kind,
+		items = format("%.1fs", arm.until_ - GetTime()) })
 end
 
 local function ItemOfLink(link)
@@ -2320,7 +2323,7 @@ local lastLootSig, lastLootT
 -- with it — the "where did that number come from" surface.
 -- Bounded + persisted; /goblin gatherlog prints it.
 local JOURNAL_MAX = 60
-local function Journal(what, e)
+function Journal(what, e)
 	db.journal = db.journal or {}
 	local j = db.journal
 	e = e or {}
@@ -2517,6 +2520,10 @@ local function OnLoot()
 	else
 		gKind = wkind
 	end
+	if arm and not armValid then
+		Journal("expired", { mob = arm.kind,
+			items = format("%.1fs", t - arm.until_) })
+	end
 	local gPos = arm and arm.pos or nil
 	arm = nil
 
@@ -2636,10 +2643,12 @@ evf:SetScript("OnEvent", function(_, e, ...)
 		-- past GetTime() can't be seconds
 		local kind = spellID and CAST_KIND[spellID]
 		local endS
+		local cnm
 		if UnitChannelInfo then
-			local ok, nm, a4, a5, a6 = pcall(UnitChannelInfo,
-				"player")
+			local ok, nm, a4, a5, a6, a7, a8, a9, a10 =
+				pcall(UnitChannelInfo, "player")
 			if ok and nm then
+				cnm = nm
 				local l = nm:lower()
 				for k, pat in pairs(CAST_NAME) do
 					if l:find(pat, 1, true) then
@@ -2652,7 +2661,7 @@ evf:SetScript("OnEvent", function(_, e, ...)
 				-- it 6th, retail 5th), and units differ too: a
 				-- value orders of magnitude past GetTime() is ms
 				local et
-				for _, v in ipairs({ a4, a5, a6 }) do
+				for _, v in ipairs({ a4, a5, a6, a7, a8, a9, a10 }) do
 					if type(v) == "number"
 						and (not et or v > et) then
 						et = v
@@ -2664,13 +2673,23 @@ evf:SetScript("OnEvent", function(_, e, ...)
 				endS = et
 			end
 		end
-		if kind then ArmWindow(kind, endS and endS + 1.5) end
+		if kind then
+			ArmWindow(kind, endS and endS + 1.5)
+		else
+			Journal("chan", { mob = tostring(spellID or "?"),
+				items = tostring(cnm or "no-info") })
+		end
 		return
 	end
 	if e == "UNIT_SPELLCAST_FAILED"
 		or e == "UNIT_SPELLCAST_INTERRUPTED" then
 		local unit = ...
-		if unit == "player" then arm = nil end
+		if unit == "player" then
+			if arm then
+				Journal("disarm", { mob = arm.kind })
+				arm = nil
+			end
+		end
 		return
 	end
 	if e == "LOOT_OPENED" or e == "LOOT_READY" then
