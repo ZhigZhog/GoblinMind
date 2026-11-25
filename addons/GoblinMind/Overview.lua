@@ -600,8 +600,80 @@ end
 
 -- ============ accounts ============
 
+-- journal legs render in canonical account order, positive delta =
+-- debit (money/value arriving), negative = credit
+local JE_ORDER = { "cash", "stock", "posted", "dep", "pnl", "ext" }
+
+local function JournalRowText(e)
+	local money = e.u and e.u * e.q
+	local base = format("%s  %s %s|r · %s ×%d%s",
+		date("%H:%M", e.t),
+		e.ty == "sell" and GM.CC("pos") or
+			e.ty == "buy" and GM.CC("warn") or GM.CC("textDim"),
+		TX_LABEL[e.ty] or e.ty, QName(e.i), e.q,
+		money and (" · " .. GM.Money(money)) or "")
+	if not e.je then return base end
+	local dr, cr = {}, {}
+	for _, a in ipairs(JE_ORDER) do
+		local d = e.je[a]
+		if d and d ~= 0 then
+			tinsert(d > 0 and dr or cr,
+				a .. " " .. GM.MoneyShort(math.abs(d)))
+		end
+	end
+	return base .. GM.CC("textDim") .. "   —  dr|r "
+		.. table.concat(dr, " · ") .. GM.CC("textDim")
+		.. "   cr|r " .. table.concat(cr, " · ")
+end
+
 local function RefreshAccounts()
 	if not ui then return end
+	local journal = ui.acctView == "journal"
+	if ui.acctTitle then
+		ui.acctTitle:SetText(journal and "JOURNAL"
+			or "ACCOUNTS · FUNCTION")
+	end
+	-- journal chrome
+	ui.journalBal:SetShown(journal)
+	for _, fs in ipairs(ui.journalRows) do fs:SetShown(journal) end
+	ui.acctAdd:SetShown(not journal)
+	ui.acctHint:SetShown(not journal)
+	if journal then
+		for _, row in ipairs(ui.acctRows) do row:Hide() end
+		ui.acctOnboard:Hide()
+		local bal = GM.Ledger.Accounts
+			and GM.Ledger.Accounts(ViewChar()) or {}
+		local parts = { "cash " .. GM.MoneyShort(bal.cash or 0) }
+		if (bal.stock or 0) > 0 then
+			parts[#parts + 1] = "stock " .. GM.MoneyShort(bal.stock)
+		end
+		if (bal.posted or 0) > 0 then
+			parts[#parts + 1] = "posted " .. GM.MoneyShort(bal.posted)
+		end
+		if (bal.dep or 0) > 0 then
+			parts[#parts + 1] = "dep " .. GM.MoneyShort(bal.dep) .. " out"
+		end
+		if (bal.pnl or 0) ~= 0 then
+			-- pnl is a credit account: negative balance = profit,
+			-- so display flips the sign to read as P&L
+			parts[#parts + 1] = "realized " .. GM.Signed(-bal.pnl)
+		end
+		if (bal.ext or 0) ~= 0 then
+			parts[#parts + 1] = "ext " .. GM.Signed(bal.ext)
+		end
+		ui.journalBal:SetText(table.concat(parts, "   "))
+		local tx = GM.Ledger.TxFor(ViewChar())
+		local maxOff = math.max(0, #tx - #ui.journalRows)
+		if ui.jScroll > maxOff then ui.jScroll = maxOff end
+		for i, fs in ipairs(ui.journalRows) do
+			local e = tx[#tx - (i - 1 + ui.jScroll)]
+			fs:SetText(e and JournalRowText(e)
+				or (i == 1 and #tx == 0
+					and "no transactions yet — the journal fills as you trade"
+					or ""))
+		end
+		return
+	end
 	local list = GM.Budget.List()
 	for i, row in ipairs(ui.acctRows) do
 		local a = list[i]
@@ -797,7 +869,50 @@ local function Build()
 		ui.winSegs[i] = seg
 		W.PaintSeg(seg, lab == "ALL")
 	end
-	local accts = Panel(acctP, 6, -240, 712, 270, "ACCOUNTS · FUNCTION")
+	local accts, acctT = Panel(acctP, 6, -240, 712, 270,
+		"ACCOUNTS · FUNCTION")
+	ui.acctTitle = acctT
+	-- view toggle: budget accounts vs the double-entry journal —
+	-- one panel, same char filter; journal rows carry each tx's
+	-- debit/credit legs so the books read back
+	ui.acctView = "accounts"
+	ui.jScroll = 0
+	ui.acctSegs = {}
+	local avs = { L("ACCOUNTS"), L("JOURNAL") }
+	for i, lab in ipairs(avs) do
+		local seg = W.Segment(accts, lab, 72, 16)
+		seg:SetPoint("TOPRIGHT", -10 - (#avs - i) * 76, -20)
+		local idx = i
+		seg:SetScript("OnClick", function()
+			ui.acctView = idx == 2 and "journal" or "accounts"
+			for j, s in ipairs(ui.acctSegs) do
+				W.PaintSeg(s, j == idx)
+			end
+			RefreshAccounts()
+		end)
+		ui.acctSegs[i] = seg
+		W.PaintSeg(seg, i == 1)
+	end
+	ui.journalBal = GM.MakeFontString(accts, GM.FONT, 9, "secondary")
+	ui.journalBal:SetPoint("TOPLEFT", 8, -20)
+	ui.journalBal:SetWordWrap(false)
+	ui.journalRows = {}
+	for i = 1, 9 do
+		local fs = GM.MakeFontString(accts, GM.FONT, 9, "textDim")
+		fs:SetPoint("TOPLEFT", 8, -40 - (i - 1) * 24)
+		fs:SetWidth(696)
+		fs:SetJustifyH("LEFT")
+		fs:SetWordWrap(false)
+		ui.journalRows[i] = fs
+	end
+	-- wheel scrubs back through the journal while that view is up
+	accts:EnableMouseWheel(true)
+	accts:SetScript("OnMouseWheel", function(_, d)
+		if ui.acctView == "journal" then
+			ui.jScroll = math.max(0, ui.jScroll - d * 3)
+			RefreshAccounts()
+		end
+	end)
 	ui.acctRows = {}
 	local ACCT_ROWS = 7
 	for i = 1, ACCT_ROWS do
