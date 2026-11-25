@@ -477,6 +477,36 @@ GM.AH.bookT = 0
 GM.AH.bookSubs = {}
 GM.AH.bookLots = nil -- iid:qty:unit lot fingerprints (others' listings)
 
+-- rebuild a display ladder from the persisted book's lot
+-- fingerprints when a targeted scan delivers empty — the replicate
+-- endpoint and SendSearchQuery fail independently, so a fresh book
+-- is often right where the item query got throttled to death.
+-- <2min stale lots don't count: a genuinely cleared market should
+-- show empty, not ghosts. Rows carry no seller/auctionID —
+-- fromBook marks them so consumers can downgrade buy/intel
+function GM.AH.BookAsks(itemID)
+	if not (itemID and GM.AH.bookLots and GM.AH.bookLotsT) then return end
+	if time() - GM.AH.bookLotsT > 120 then return end
+	local asks = {}
+	local prefix = itemID .. ":"
+	for fp, n in pairs(GM.AH.bookLots) do
+		if fp:sub(1, #prefix) == prefix then
+			local _, qty, unit, tlb = strsplit(":", fp)
+			qty, unit = tonumber(qty), tonumber(unit)
+			if qty and unit then
+				for _ = 1, n do
+					tinsert(asks, { qty = qty, unit = unit,
+						tl = NormTl(tonumber(tlb)),
+						fromBook = true })
+				end
+			end
+		end
+	end
+	if #asks == 0 then return end
+	table.sort(asks, function(a, b) return a.unit < b.unit end)
+	return asks
+end
+
 -- The aggregate book persists in SavedVariables across sessions so a
 -- login doesn't force a fresh full scan. Per-auction rows are
 -- session-only — the sniper diff wants live listings anyway.

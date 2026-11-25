@@ -131,6 +131,20 @@ local function ScanAsks()
 		if M.itemID ~= id then return end -- retargeted mid-scan
 		M.asks = asks or {}
 		M.askT = GetTime()
+		-- live scan says empty but a just-built book says lots — the
+		-- targeted query got throttled/refused more often than a whole
+		-- book cleared in seconds. Rebuild the ladder from the book's
+		-- own lot fingerprints (tagged · book) until the next scan
+		if #M.asks == 0 then
+			local fb = GM.AH.BookAsks and GM.AH.BookAsks(id)
+			if fb then
+				M.asks, M.asksBook = fb, true
+				M.askTries = 0 -- the book row already answered —
+				-- don't burn retries on a pane that isn't empty
+			end
+		else
+			M.asksBook = nil
+		end
 		-- the retry budget covers CONSECUTIVE lost scans, not the
 		-- item's lifetime — a real delivery refills it, otherwise the
 		-- auto-refresh burns all 3 tries on good scans and a later
@@ -177,7 +191,8 @@ function MU.SetItem(id, link, key)
 			~= (key and key.itemSuffix or 0)
 	M.itemID, M.itemLink, M.itemKey = id, link, key
 	if changed then
-		M.asks, M.askT, M.askTries, M.askWait = nil, nil, nil, nil
+		M.asks, M.askT, M.askTries, M.askWait, M.asksBook =
+			nil, nil, nil, nil, nil
 		ScanAsks()
 	end
 	-- the planner target follows the market slot — a change to one
@@ -482,7 +497,8 @@ local function BindAskRow(row, a, idx)
 		or "?"
 	row.c3:SetText(seller .. (#flags > 0 and "  " .. table.concat(flags, " ") or ""))
 	row.c4:SetText(a.tl and GM.FmtAge(a.tl) or "")
-	if a.own then row.act:Hide()
+	-- book-rebuilt rows have no auctionID — nothing to click-buy
+	if a.own or a.fromBook then row.act:Hide()
 	else
 		row.act:Show()
 		row.act.text:SetText("BUY")
@@ -510,6 +526,7 @@ local function RefreshAskBook()
 	if #asks > 0 and M.askT then
 		cnt = cnt .. "  ·  " .. floor(GetTime() - M.askT) .. "s"
 	end
+	if M.asksBook then cnt = cnt .. "  ·  book" end
 	mp.askPanel:SetCount(cnt)
 	mp.abEmpty:SetText(M.itemID and (M.askWait and BusyText()
 		or (not M.asks and "scanning…") or "no asks")
