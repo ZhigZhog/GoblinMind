@@ -565,6 +565,8 @@ end
 
 M.Update = Update
 
+local mmDebugT0, mmDebugN, mmDebugW
+
 -- radius resolution diagnostic: the live API is trusted over the
 -- zoom table — if it misreports on this client the whole overlay
 -- parallaxes against the terrain (the camp-zone drift report).
@@ -599,6 +601,15 @@ GM.Cmd("mmdebug", function()
 		:format(n or -1, w or -1, tostring(c), tostring(mapID),
 			x or -1, y or -1,
 			tostring(wpn), tostring(wpw), tostring(wpc)))
+	-- axis-identity probe: field NAMES may not match field
+	-- MEANINGS. Run once, walk ~20yd in a known direction, run
+	-- again — the field that moved is that axis
+	local dt = mmDebugT0 and (GetTime() - mmDebugT0)
+	if mmDebugT0 then
+		GM.Print(("delta since last call (%.0fs): dn=%.1f dw=%.1f")
+			:format(dt or 0, n - mmDebugN, w - mmDebugW))
+	end
+	mmDebugT0, mmDebugN, mmDebugW = GetTime(), n, w
 end, { prefix = true })
 
 local acc = 0
