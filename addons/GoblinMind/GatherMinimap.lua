@@ -610,6 +610,20 @@ GM.Cmd("mmdebug", function()
 			:format(dt or 0, n - mmDebugN, w - mmDebugW))
 	end
 	mmDebugT0, mmDebugN, mmDebugW = GetTime(), n, w
+	-- live projection dump for fish zones: what the renderer
+	-- computes for the anchor — if u0 barely moves while you
+	-- walk E-W, the horizontal displacement is dead at runtime
+	for _, zl in pairs(GoblinMindGather
+			and GoblinMindGather.zones or {}) do
+		for _, zn in ipairs(zl) do
+			if zn.kind == "fish" and zn.n and zn.w then
+				local dx, dy = w - zn.w, n - zn.n
+				GM.Print(("zone fish: dn=%.0f dw=%.0f -> u=%.2f v=%.2f (anchor n=%.0f w=%.0f)")
+					:format(dy, dx, dx / tblR, dy / tblR,
+						zn.n, zn.w))
+			end
+		end
+	end
 end, { prefix = true })
 
 local acc = 0
