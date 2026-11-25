@@ -177,7 +177,9 @@ end
 function GM.Solver.Verdict(plan, opts)
 	opts = opts or {}
 	local maxDays = opts.maxDaysToClear or 7
-	if not plan then return "none", "no plan" end
+	-- scan plans (mode set — vendoring/shopscan/cancelscan) carry no
+	-- ev to judge; callers may hand them in from shared plan slots
+	if not (plan and plan.ev) then return "none", "no plan" end
 	if plan.ev <= 0 then return "bad", "expected loss" end
 	if plan.daysToClear and plan.daysToClear > maxDays then
 		return "slow", format("~%.1f days to clear", plan.daysToClear)

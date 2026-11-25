@@ -1465,8 +1465,10 @@ local function Data()
 	end
 	vm.sub = sub
 	-- the summary's solver verdict — one call for both the edge
-	-- color and the headline
-	if PQ.plan then
+	-- color and the headline. Scan plans (mode set — vendoring,
+	-- shopscan, cancelscan…) have no ev to verdict — the loss
+	-- gate's own rule at the confirm path is the same check
+	if PQ.plan and not PQ.plan.mode then
 		vm.verdict, vm.verdictNote =
 			GM.Solver.Verdict(PQ.plan, GM.db)
 	end
