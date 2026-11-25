@@ -109,7 +109,7 @@ local function Build()
 	-- MaybeShow re-opens it at login until the wizard is finished
 	f:SetScript("OnHide", function()
 		if f._done then return end
-		if GM.db then GM.db.obDismissed = time() end
+		GM.Model.SetPref("obDismissed", time())
 	end)
 	-- page-1 status is live — a D-probe answer can land while the
 	-- wizard sits open; refresh at a lazy cadence so the mesh line
@@ -190,13 +190,13 @@ local function Build()
 		GM.StageBackendReq(url, strtrim(nameEb:GetText() or ""),
 			GM.Scope and GM.Scope() or "",
 			strtrim(keyEb:GetText() or ""))
-		GM.db.backendReq = { at = time(), url = url }
+		GM.Model.SetPref("backendReq", { at = time(), url = url })
 		SetPage("api")
 	end)
 	connect:SetPoint("BOTTOMLEFT", 12, 10)
 
 	local skip = Btn(p1, 90, "NEXT >", function()
-		GM.db.backendSkip = true
+		GM.Model.SetPref("backendSkip", true)
 		SetPage("api")
 	end)
 	skip:SetPoint("LEFT", connect, "RIGHT", 8, 0)
@@ -270,13 +270,13 @@ local function Build()
 		end
 		GM.StageApiReq(cid, sec, strtrim(regEb:GetText() or ""):lower(),
 			GM.Scope and GM.Scope() or "")
-		GM.db.apiReq = { at = time() }
+		GM.Model.SetPref("apiReq", { at = time() })
 		SetPage("import")
 	end)
 	aSave:SetPoint("BOTTOMLEFT", 12, 10)
 
 	local aSkip = Btn(p2, 90, "SKIP", function()
-		GM.db.apiSkip = true
+		GM.Model.SetPref("apiSkip", true)
 		SetPage("import")
 	end)
 	aSkip:SetPoint("LEFT", aSave, "RIGHT", 8, 0)
@@ -364,18 +364,18 @@ local function Build()
 		.. "visible.|r")
 
 	local spoiler = Btn(p5, 220, "", function()
-		GM.db.hideUnlearned = not GM.db.hideUnlearned
+		GM.Model.SetPref("hideUnlearned", not GM.Model.Pref("hideUnlearned"))
 		ui.spoiler.text:SetText("HIDE UNLEARNED RECIPES: "
-			.. (GM.db.hideUnlearned and "ON" or "OFF"))
+			.. (GM.Model.Pref("hideUnlearned") and "ON" or "OFF"))
 		ui.spoiler.text:SetTextColor(GM.RGB(
-			GM.db.hideUnlearned and "accent" or "textDim"))
+			GM.Model.Pref("hideUnlearned") and "accent" or "textDim"))
 		if GM.CraftingUI and GM.CraftingUI.Refresh then
 			GM.CraftingUI.Refresh()
 		end
 	end)
 	spoiler:SetPoint("TOPLEFT", oBody, "BOTTOMLEFT", 0, -10)
 	spoiler.text:SetText("HIDE UNLEARNED RECIPES: "
-		.. (GM.db.hideUnlearned and "ON" or "OFF"))
+		.. (GM.Model.Pref("hideUnlearned") and "ON" or "OFF"))
 	ui.spoiler = spoiler
 
 	ui.watch5 = WatchHint(p5)
@@ -383,8 +383,8 @@ local function Build()
 	local done = Btn(p5, 90, "DONE", function()
 		f._done = true
 		if GM.db then
-			GM.db.obDone = true
-			GM.db.obDismissed = nil
+			GM.Model.SetPref("obDone", true)
+			GM.Model.SetPref("obDismissed", nil)
 		end
 		f:Hide()
 	end)
@@ -486,7 +486,7 @@ local STAGED = "saved — the companion app picks this up within "
 
 function Refresh()
 	if not ui then return end
-	local req = GM.db and GM.db.backendReq
+	local req = GM.Model.Pref("backendReq")
 	local be = GoblinMindDB and GoblinMindDB.backend
 	if be and be.lastError then
 		ui.status:SetText(GM.CC("warn")
@@ -532,7 +532,7 @@ function Refresh()
 	elseif ap and ap.configured then
 		ui.aStatus:SetText(GM.CC("pos")
 			.. "blizzard api configured|r")
-	elseif GM.db and GM.db.apiReq then
+	elseif GM.Model.Pref("apiReq") then
 		ui.aStatus:SetText(GM.CC("warn") .. STAGED .. "|r")
 	else
 		ui.aStatus:SetText("not configured")
@@ -577,8 +577,8 @@ function OB.MaybeShow()
 	-- in-game flow IS the primary path (install.py exists for the
 	-- server host + autostart, not for the connect step itself).
 	-- Flag before Show so a mid-login crash can't loop the prompt.
-	if not GM.db.onboarded then
-		GM.db.onboarded = true
+	if not GM.Model.Pref("onboarded") then
+		GM.Model.SetPref("onboarded", true)
 		OB.Show()
 		return
 	end
@@ -586,59 +586,60 @@ function OB.MaybeShow()
 	-- block: a missing/stale DB isn't "not configured" — don't nag.
 	-- (backend={} in the emit IS a determination — watcher checked.)
 	if not (GoblinMindDB and GoblinMindDB.backend) then
-		GM.db.obDbg = { t = time(), why = "no backend block",
-			gen = GoblinMindDB and GoblinMindDB.generated }
+		GM.Model.SetPref("obDbg", { t = time(), why = "no backend block",
+			gen = GoblinMindDB and GoblinMindDB.generated })
 		return
 	end
 	-- consumed-request acks: drop staged requests the watcher already
 	-- folded into feeds.json, and confirm the pending flags
 	local be = GoblinMindDB.backend
-	local req = GM.db.backendReq
+	local req = GM.Model.Pref("backendReq")
 	if be and be.ack then
-		local list = GM.db.backendReqs
+		local list = GM.Model.Pref("backendReqs")
 		for i = list and #list or 0, 1, -1 do
 			local ts = tonumber(list[i]:match("^bm%-(%d+)"))
 			if ts and ts <= be.ack then tremove(list, i) end
 		end
 		if req and be.ack >= req.at then
-			GM.db.backendReq = nil
+			GM.Model.SetPref("backendReq", nil)
 			GM.Print("backend connected — "
 				.. tostring(be.url or req.url))
 		end
 	end
 	local ap = GoblinMindDB.api
-	if ap and ap.ack and GM.db.apiReqs then
-		for i = #GM.db.apiReqs, 1, -1 do
-			local ts = tonumber(GM.db.apiReqs[i]:match("^api%-(%d+)"))
-			if ts and ts <= ap.ack then tremove(GM.db.apiReqs, i) end
+	if ap and ap.ack and GM.Model.Pref("apiReqs") then
+		for i = #(GM.Model.Pref("apiReqs") or {}), 1, -1 do
+			local ts = tonumber((GM.Model.Pref("apiReqs") or {})[i]:match("^api%-(%d+)"))
+			if ts and ts <= ap.ack then tremove(GM.Model.Pref("apiReqs") or {}, i) end
 		end
-		if GM.db.apiReq and ap.ack >= GM.db.apiReq.at then
-			GM.db.apiReq = nil
+		local ar = GM.Model.Pref("apiReq")
+		if ar and ap.ack >= ar.at then
+			GM.Model.SetPref("apiReq", nil)
 			GM.Print("blizzard api configured")
 		end
 	end
 	-- DONE on the last page = finished — never auto-show again
-	if GM.db.obDone then
+	if GM.Model.Pref("obDone") then
 		return
 	end
 	-- closed mid-flow (x / ESC / LATER): re-show each login until the
 	-- wizard is completed, whatever the config state — dismissing a
 	-- half-finished wizard mustn't count as finishing it
-	if GM.db.obDismissed then
-		GM.db.obDbg = { t = time(), why = "reshow-dismissed",
-			gen = GoblinMindDB.generated }
+	if GM.Model.Pref("obDismissed") then
+		GM.Model.SetPref("obDbg", { t = time(), why = "reshow-dismissed",
+			gen = GoblinMindDB.generated })
 		OB.Show()
 		return
 	end
-	if Configured() or GM.db.backendSkip or GM.db.backendReq then
+	if Configured() or GM.Model.Pref("backendSkip") or GM.Model.Pref("backendReq") then
 		return
 	end
 	-- capture what the emit said when we decided to prompt — if this
 	-- ever fires on a configured install, obDbg holds the evidence
-	GM.db.obDbg = { t = time(), why = "shown",
+	GM.Model.SetPref("obDbg", { t = time(), why = "shown",
 		gen = GoblinMindDB and GoblinMindDB.generated,
 		url = be.url, ack = be.ack,
-		up = be.up and be.up.ok, pull = be.pull and be.pull.ok }
+		up = be.up and be.up.ok, pull = be.pull and be.pull.ok })
 	OB.Show()
 end
 
@@ -646,5 +647,5 @@ end
 local ev = CreateFrame("Frame")
 pcall(ev.RegisterEvent, ev, "PLAYER_LOGIN")
 ev:SetScript("OnEvent", function()
-	if GM.After then GM.After(6, OB.MaybeShow) end
+	if GM.Time then GM.Time.After(6, OB.MaybeShow) end
 end)

@@ -1238,3 +1238,7 @@ end
 function UI.IsShown()
 	return ui and ui:IsShown()
 end
+
+GM.View.Register("gather", {
+	Show = UI.Show, Hide = UI.Hide, Toggle = UI.Toggle,
+	IsShown = UI.IsShown })

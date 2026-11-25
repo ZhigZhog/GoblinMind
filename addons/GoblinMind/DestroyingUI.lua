@@ -219,7 +219,7 @@ function DU.Refresh()
 				end
 				act.armed = nil
 				if GM.Destroying.SellOne(id) ~= false then
-					GM.After(0.3, DU.Refresh)
+					GM.Time.After(0.3, DU.Refresh)
 				end
 				DU.Refresh()
 			end)
@@ -259,3 +259,8 @@ if GM.OnItemInfoLoaded then
 		if ui and ui.frame and ui.frame:IsShown() then DU.Refresh() end
 	end)
 end
+
+GM.View.Register("destroy", { class = "peer",
+	Show = DU.Show, Hide = DU.Hide, Toggle = DU.Toggle,
+	Refresh = DU.Refresh,
+	IsShown = function() return ui and ui.frame and ui.frame:IsShown() end })

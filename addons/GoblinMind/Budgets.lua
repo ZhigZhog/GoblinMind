@@ -598,9 +598,9 @@ function B.Init()
 	-- background sampler keeps the trend lines honest while idle
 	local function tick()
 		B.Sample()
-		GM.After(300, tick)
+		GM.Time.After(300, tick)
 	end
-	GM.After(300, tick)
+	GM.Time.After(300, tick)
 end
 
 -- display helper: "5g" for budgets, "30%" for saves

@@ -723,3 +723,8 @@ function OU.OpenGroup(path, opType)
 	ui.selGroup = path or "Base Group"
 	GM.Dashboard.Switch("ops")
 end
+
+GM.View.Register("ops", {
+	Show = OU.Show, Hide = OU.Hide, Toggle = OU.Toggle,
+	Refresh = OU.Refresh,
+	IsShown = function() return ui and ui.frame and ui.frame:IsShown() end })

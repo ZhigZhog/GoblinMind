@@ -1193,7 +1193,7 @@ function OR.RelayAsk(board, force)
 		local askT = ((OR.Board(board) or {}).t) or 0
 		GM.Mesh.Send("Q", { board .. ";" .. gen
 			.. ";" .. tag .. ";" .. askT })
-		GM.After(OFFER_WIN, function()
+		GM.Time.After(OFFER_WIN, function()
 			local ask = OR.relay.asks[gen]
 			OR.relay.asks[gen] = nil
 			if ask and ask.best and GM.Mesh.Send then
@@ -1594,7 +1594,7 @@ function OR.ItemServe(sender, iid, gen, tag)
 	-- wire, further replies are duplicates, not coverage
 	if #rows > 0 then
 		local ikey = tostring(gen)
-		GM.After(math.random(), function()
+		GM.Time.After(math.random(), function()
 			local e = OR.relay.ians[ikey]
 			if e and (e.n or 0) >= K_I then return end
 			GM.Mesh.Send("i", rows)
@@ -1647,7 +1647,7 @@ function OR.MeshProbe(body, sender)
 	OR.relay.lastD = time()
 	OR.relay.heard[sender] = time()
 	if not OR.BeaconNeeded() then return end
-	GM.After(math.random() * 3, function()
+	GM.Time.After(math.random() * 3, function()
 		if OR.BeaconNeeded() and GM.Mesh
 				and GM.Mesh.Advertise then
 			GM.Mesh.Advertise()
@@ -1685,7 +1685,7 @@ function OR.MeshQuery(body, sender)
 	-- can't see each other (transmitted-but-undelivered) and a
 	-- duplicate escapes — bounded residual, not a flaw; OFFER_WIN
 	-- must stay > jitter+gap
-	GM.After(math.random() * 2, function()
+	GM.Time.After(math.random() * 2, function()
 		-- a fresher-or-equal offer already on the wire wins; ours
 		-- dies in the queue (dequeue pred) or never queues at all
 		if (OR.relay.dom[key] or 0) >= t then return end
@@ -1785,7 +1785,7 @@ end
 -- open since the host half has a duty even when we're not looking
 local _relayTick = false
 function OR.RelayStart()
-	if _relayTick or not (GM.After and GM.db) then return end
+	if _relayTick or not (GM.Time and GM.db) then return end
 	_relayTick = true
 	-- purge phantom remote boards — junk entries old ingest paths
 	-- persisted (t=0, no orders: never populated by a real stream)
@@ -1804,14 +1804,14 @@ function OR.RelayStart()
 			GM.db.refPend = nil
 		else
 			rp.fired = true
-			GM.After(20, ReloadUI)
+			GM.Time.After(20, ReloadUI)
 		end
 	end
 	local function loop()
 		OR.RelayScanResults()
-		GM.After(15, loop)
+		GM.Time.After(15, loop)
 	end
-	GM.After(15, loop)
+	GM.Time.After(15, loop)
 end
 
 -- unified REFRESH entry — first the distributed ask (broadcast Q,
@@ -1823,7 +1823,7 @@ function OR.RefreshBoard(board)
 	local t0 = (OR.Board(board) or {}).t or 0
 	local asked = OR.RelayAsk(board, true)
 	if not OR.IsRemote(board) then
-		GM.After(8, function()
+		GM.Time.After(8, function()
 			local b = OR.Board(board)
 			if b and (b.t or 0) > t0 then return end -- a peer answered
 			OR.RefreshLocal()

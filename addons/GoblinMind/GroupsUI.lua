@@ -955,3 +955,8 @@ function GU.Toggle()
 	if ui.frame:IsShown() then ui.frame:Hide() else GU.Show() end
 end
 
+
+GM.View.Register("groups", {
+	Show = GU.Show, Hide = GU.Hide, Toggle = GU.Toggle,
+	Refresh = GU.Refresh,
+	IsShown = function() return ui and ui.frame and ui.frame:IsShown() end })

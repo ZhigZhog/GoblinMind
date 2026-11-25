@@ -35,7 +35,7 @@ local function Tasks()
 			go = AHOpen() and "CANCEL SCAN" or "open AH",
 			fn = function()
 				if AHOpen() then GM.Auctioning.CancelScan()
-				elseif GM.AHUI and GM.AHUI.Toggle then GM.AHUI.Toggle() end
+				elseif GM.View then GM.View.Toggle("ah") end
 			end,
 		}
 	elseif posted > 0 then
@@ -59,7 +59,7 @@ local function Tasks()
 			key = "warn",
 			go = AHOpen() and "MINE" or "open AH",
 			fn = function()
-				if GM.AHUI and GM.AHUI.Toggle then GM.AHUI.Toggle() end
+				GM.View.Toggle("ah")
 			end,
 		}
 	end
@@ -72,7 +72,7 @@ local function Tasks()
 				hits == 1 and "" or "s"),
 			key = "pos",
 			go = "SNIPER",
-			fn = function() GM.SniperUI.Toggle() end,
+			fn = function() GM.View.Toggle("sniper") end,
 		}
 	end
 	-- active plan
@@ -95,7 +95,7 @@ local function Tasks()
 				mail == 1 and "" or "s"),
 			key = "text",
 			go = "MAIL",
-			fn = function() GM.MailUI.Toggle() end,
+			fn = function() GM.View.Toggle("mail") end,
 		}
 	end
 	-- craft queue
@@ -109,7 +109,7 @@ local function Tasks()
 				queued == 1 and "" or "s"),
 			key = "text",
 			go = "CRAFTS",
-			fn = function() GM.CraftingUI.Toggle() end,
+			fn = function() GM.View.Toggle("crafting") end,
 		}
 	end
 	-- profitable craftable recipes
@@ -126,7 +126,7 @@ local function Tasks()
 			key = "pos",
 			go = "MARKET",
 			fn = function()
-				GM.Shopping.Show()
+				GM.View.Show("market")
 				GM.Shopping.SetMode("craft")
 			end,
 		}
@@ -221,7 +221,15 @@ function TU.Show()
 	TU.Refresh()
 end
 
+function TU.Hide()
+	if ui and ui.frame then ui.frame:Hide() end
+end
+
 function TU.Toggle()
 	Build()
 	if ui.frame:IsShown() then ui.frame:Hide() else TU.Show() end
 end
+
+GM.View.Register("tasks", { class = "contextual",
+	Show = TU.Show, Hide = TU.Hide, Toggle = TU.Toggle,
+	Refresh = TU.Refresh, IsShown = TU.IsOpen })

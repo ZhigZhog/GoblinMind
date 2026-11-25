@@ -113,7 +113,7 @@ local function SendPendingBrowse()
 			ui.status = "query error: " .. tostring(err)
 		else
 			ui.status = "waiting for results…"
-			GM.After(8, function()
+			GM.Time.After(8, function()
 				if ui.pendingBrowse == p and p.gen == gen then
 					ui.pendingBrowse = nil
 					ui.status = "query went unanswered — try again"
@@ -380,12 +380,7 @@ local function Build()
 			-- once the pipe reports ready (send-side gates + cap)
 			if ui.pendingBrowse then SendPendingBrowse() return end
 		end
-		if not f:IsShown() or ui.evPending then return end
-		ui.evPending = true
-		GM.After(0.2, function()
-			ui.evPending = nil
-			AU.Refresh()
-		end)
+		if f:IsShown() then GM.View.Coalesced("ah", AU.Refresh) end
 	end)
 
 	-- toolbar: search + page toggles + scan shortcuts — positions are
@@ -428,7 +423,7 @@ local function Build()
 			"Cancels your undercut auctions (ops-gated).",
 			"With GROUPS checked, only their listings scan." }
 	end)
-	local snip = Btn(f, 56, "SNIPER", function() GM.SniperUI.Toggle() end)
+	local snip = Btn(f, 56, "SNIPER", function() GM.View.Toggle("sniper") end)
 	Tip(snip, function()
 		return { "Sniper",
 			"Opens the deal panel — soon-expiring auctions priced",
@@ -1041,10 +1036,10 @@ local function Build()
 	nb.ok = Btn(nb, 40, "OK", function()
 		local name = strtrim(nb.eb:GetText() or "")
 		if name ~= "" and name ~= "name…" then
-			GM.db.ahSearches = GM.db.ahSearches or {}
+			local svs = GM.Model.Pref("ahSearches", {})
 			local flt = {}
 			for k, v in pairs(ui.filters or {}) do flt[k] = v end
-			tinsert(GM.db.ahSearches, {
+			tinsert(svs, {
 				name = name,
 				q = strtrim(ui.search:GetText() or ""),
 				f = flt,
@@ -1229,7 +1224,7 @@ local function Build()
 		end
 		GM.AH.Execute({ kind = "post", itemID = id, qty = qty,
 			unit = unit, duration = pd.durIx })
-		GM.After(0.3, function()
+		GM.Time.After(0.3, function()
 			pd.have:SetText(format("%d in bags", GM.BagCount(id) or 0))
 			if (GM.BagCount(id) or 0) < 1 then pd:Hide() end
 		end)
@@ -1294,7 +1289,7 @@ function BuildSavedBox()
 		ui.savedBox = sb
 	end
 	local sb = ui.savedBox
-	local list = (GM.db and GM.db.ahSearches) or {}
+	local list = GM.Model.Pref("ahSearches") or {}
 	sb.empty:SetShown(#list == 0)
 	for i, r in ipairs(sb.rows) do
 		local sv = list[i]
@@ -1312,7 +1307,7 @@ function BuildSavedBox()
 			end)
 			local ix = i
 			r.x:SetScript("OnClick", function()
-				tremove(GM.db.ahSearches, ix)
+				tremove(GM.Model.Pref("ahSearches") or {}, ix)
 				BuildSavedBox()
 			end)
 		else
@@ -1349,7 +1344,7 @@ function BuildGroupsBox()
 			BuildGroupsBox()
 		end)
 		local clear = Btn(gb, 48, "CLEAR", function()
-			GM.db.scanGroups = nil
+			GM.Model.SetPref("scanGroups", nil)
 			BuildGroupsBox()
 			AU.Refresh()
 		end)
@@ -1378,18 +1373,18 @@ function BuildGroupsBox()
 		local g = list[i + off]
 		if g then
 			b:Show()
-			local sel = GM.db.scanGroups and GM.db.scanGroups[g.path]
+			local sg = GM.Model.Pref("scanGroups")
+			local sel = sg and sg[g.path]
 			local depth = select(2, g.path:gsub("/", ""))
 			b.text:SetText((sel and GM.CC("accent") .. "[x] |r"
 				or GM.CC("textDim") .. "[ ] |r")
 				.. strrep("  ", depth) .. GM.Groups.Leaf(g.path)
 				.. GM.CC("secondary") .. "  ×" .. g.n .. "|r")
 			b:SetScript("OnClick", function()
-				GM.db.scanGroups = GM.db.scanGroups or {}
-				GM.db.scanGroups[g.path] =
-					(not GM.db.scanGroups[g.path]) or nil
-				if not next(GM.db.scanGroups) then
-					GM.db.scanGroups = nil
+				local sg = GM.Model.Pref("scanGroups", {})
+				sg[g.path] = (not sg[g.path]) or nil
+				if not next(sg) then
+					GM.Model.SetPref("scanGroups", nil)
 				end
 				BuildGroupsBox()
 				AU.Refresh()
@@ -1409,7 +1404,7 @@ function AU.Refresh()
 	-- GROUPS reads accent when a scan scope is active — otherwise
 	-- scans cover everything and the button stays plain text
 	if ui.grpBtn and ui.grpBtn.text then
-		local scoped = GM.db.scanGroups and next(GM.db.scanGroups)
+		local scoped = next(GM.Model.Pref("scanGroups") or {})
 		ui.grpBtn.text:SetTextColor(GM.RGB(scoped and "accent" or "text"))
 	end
 
@@ -1634,7 +1629,7 @@ function AU.Refresh()
 					row.act:SetScript("OnClick", function()
 						GM.AH.Execute({ kind = "bid", itemID = id,
 							auctionID = aid, total = cur + 1 })
-						GM.After(0.5, AU.Refresh)
+						GM.Time.After(0.5, AU.Refresh)
 					end)
 				else
 					row.act:Hide()
@@ -1679,7 +1674,7 @@ do
 		-- lapses — one armed timer per burst, not per message
 		if not ui.scanRevert then
 			ui.scanRevert = true
-			GM.After(15, function()
+			GM.Time.After(15, function()
 				ui.scanRevert = nil
 				if ui.frame and ui.frame:IsShown() then AU.Refresh() end
 			end)
@@ -1704,7 +1699,7 @@ function AU.OnAHOpen()
 	AU.Refresh()
 	-- the panel manager may still be positioning it; park now + retry
 	GM.FramePark.Park(AuctionHouseFrame)
-	GM.After(0.3, function() GM.FramePark.Park(AuctionHouseFrame) end)
+	GM.Time.After(0.3, function() GM.FramePark.Park(AuctionHouseFrame) end)
 end
 
 function AU.Show()
@@ -1805,3 +1800,9 @@ if type(ChatEdit_InsertLink) == "function" then
 		return r or LinkHook(link)
 	end
 end
+
+-- view registry: contextual takeover window — bound to the native
+-- AH session, never touched by tab switches
+GM.View.Register("ah", { class = "contextual",
+	Show = AU.Show, Hide = AU.Hide, Toggle = AU.Toggle,
+	Refresh = AU.Refresh, IsShown = AU.IsOpen })

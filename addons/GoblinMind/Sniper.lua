@@ -155,7 +155,7 @@ function N.Collect(rows)
 				GM.PlanQueue.ScanStatus(GM.CC("textDim") ..
 					format("sniper: evaluating %d/%d listings|r", i, #fresh))
 			end
-			GM.After(0.03, ChunkEval)
+			GM.Time.After(0.03, ChunkEval)
 		else
 			GM.PlanQueue.Progress(nil)
 			N.FinishCollect(now, hadSnapshot, #rows, #fresh, bad)
@@ -224,7 +224,7 @@ function N.StartAuto()
 		if GM.AH.open then N.Scan() end
 		local rt = tonumber(GM.Groups.GetOps(nil, "sniper").refreshTime) or 60
 		-- replicate scans are the heaviest thing we do — 5 min floor
-		GM.After(math.max(rt, 300), loop)
+		GM.Time.After(math.max(rt, 300), loop)
 	end
 	loop()
 end

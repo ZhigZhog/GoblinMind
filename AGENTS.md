@@ -116,6 +116,52 @@ Primary data = the in-house book feed below.
   `GM.AH.ScanAge(itemID)` / `GM.AH.FreshSource(itemID)` answer
   "how long since X / where do I read this" — consumers must NOT
   keep their own `GetTime()`/`time()` freshness snapshots.
+- **MVC layer contract** (2026-11-25 refactor): three singletons
+  own the seams; every file belongs to exactly one layer.
+  **Models** own data + the WoW API surface (AH, Inventory,
+  Ledger, Budget, Pricing, Groups, Orders, Crafting, AH, Mesh,
+  Banking, Sniper, History, Solver, Intel, Auctioning,
+  Destroying, Vendoring, Shopping, Gather*, Drops, Import).
+  **Views** own frames and repaints (the `*UI.lua` files plus
+  Overview, Dashboard, Shopping-as-window, Ticker, Tooltip,
+  Settings, Onboarding, Minimap, PlanQueue's window half,
+  GatherMap/GatherMinimap). **Controllers** route: `GM.Cmd`
+  (slash commands), `GM.View` (window lifecycle), model-side
+  event frames.
+  - **`GM.Time`** (Time.lua, loads right after Libs/Theme): the
+    singleton clock + scheduler. `Now/Since/Age/Fresh/After/
+    Every/Stop/Debounce/Coalesced/Throttle`. Every timed wait,
+    debounce, repeat timer, and staleness check goes through it
+    — no bare `C_Timer` calls in new code. `GM.After` survives
+    as a delegating alias for console muscle memory.
+  - **`GM.View`** (ViewMgr.lua): the singleton view registry /
+    window manager. Every window calls `GM.View.Register(key,
+    {Show, Hide, Toggle, Refresh, IsShown, class})` at file end.
+    Classes: `exclusive` (one-at-a-time tab set), `peer`
+    (auctions/crafting/destroy/vendor — keep each other open,
+    clear on non-peer switch), `contextual` (takeover windows
+    bound to a native frame — ah/bank/gbank/mail/sniper/tasks;
+    Switch never touches them), `mode` (tab keys flipping one
+    window's mode — dash/plan on the planner). The planner is
+    deliberately UNREGISTERED as a window — nothing can hide it.
+    `View.Switch(key)` replaced Dashboard.Switch's hardcoded
+    hide-lists; `View.Coalesced(key, fn)` replaced each view's
+    hand-rolled evPending refresh-guard; `View.On/Off` is shared
+    event dispatch. Slash commands and cross-view calls route
+    `GM.View.Toggle("key")`, never `GM.XUI.Toggle()`.
+  - **`GM.Model`** (Model.lua): the view layer's data front door.
+    `Item/Price/ItemName/Gold/Posted/Receivable/Mine/Bids/
+    Wealth/WealthHist/Chars/CharKey/Accounts/TxFor` delegate to
+    the canonical models; `Pref(key[, default])`/`SetPref` are
+    the ONLY path for view-facing settings (search history,
+    scan-groups, autoscan flags, tooltip opts, minimap pos,
+    onboarding flags). **Views must not name `GM.db`,
+    `GoblinMindSettings`, or `GoblinMindLedger`** — a missing
+    accessor means extend the facade, never reach around it.
+  - **`GM.Model.Gate(name)` + `GM.Model.GateCommit(g, prev,
+    cand, opts)`**: the snapshot contract below as a reusable
+    mechanism — new snapshot writers gate through it instead of
+    hand-rolling `emptySince` timers.
 - **Snapshot-gate contract** (Inventory.lua + everywhere an API
   snapshot becomes state): enumerate into a STAGING table, gate on
   the OUTCOME, then swap — never wipe-then-fill in place. A result

@@ -402,7 +402,7 @@ function OV.RefreshChart()
 		{}, math.huge, 0, math.huge, 0
 	local vals = {}
 	local n, st, sv, stt, stv = 0, 0, 0, 0, 0
-	for _, p in ipairs(GM.db.wealthHist or {}) do
+	for _, p in ipairs(GM.Model.WealthHist()) do
 		-- untagged legacy samples (no c) still count; tagged ones
 		-- only count when they're THIS char — IsSelfCharKey matches
 		-- bare-name tags too (realm never resolves on this client).
@@ -428,14 +428,14 @@ function OV.RefreshChart()
 	local d = date("*t")
 	local midnight = time() - (d.hour * 3600 + d.min * 60 + d.sec)
 	local dayBase
-	for _, p in ipairs(GM.db.wealthHist or {}) do
+	for _, p in ipairs(GM.Model.WealthHist()) do
 		if p.t >= midnight
 			and (p.g or 0) + (p.a or 0) + (p.h or 0) + (p.r or 0) > 0 then
 			dayBase = p
 			break
 		end
 	end
-	dayBase = dayBase or (GM.db.wealthHist or {})[1]
+	dayBase = dayBase or GM.Model.WealthHist()[1]
 	local deltaTxt = ""
 	if dayBase then
 		local dv = now - (dayBase.g or 0) - (dayBase.a or 0)
@@ -1250,10 +1250,10 @@ function OV.Show()
 	local function tick()
 		if ui.frame:IsShown() then
 			OV.Refresh()
-			GM.After(5, tick)
+			GM.Time.After(5, tick)
 		end
 	end
-	GM.After(5, tick)
+	GM.Time.After(5, tick)
 end
 
 function OV.Hide()
@@ -1264,3 +1264,8 @@ function OV.Toggle()
 	Build()
 	if ui.frame:IsShown() then ui.frame:Hide() else OV.Show() end
 end
+
+GM.View.Register("overview", {
+	Show = OV.Show, Hide = OV.Hide, Toggle = OV.Toggle,
+	Refresh = OV.Refresh,
+	IsShown = function() return ui and ui.frame and ui.frame:IsShown() end })

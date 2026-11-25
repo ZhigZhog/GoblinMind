@@ -333,7 +333,7 @@ function GM.Inventory.MarkSold(key)
 	if marked > 0 then
 		-- pull a fresh snapshot so the delta engine ledgers the sell
 		-- sooner — and repaint the surfaces that render the mark
-		GM.After(1, GM.Inventory.QueryOwned)
+		GM.Time.After(1, GM.Inventory.QueryOwned)
 		if GM.MyAuctions and GM.MyAuctions.Refresh then
 			GM.MyAuctions.Refresh()
 		end
@@ -473,7 +473,7 @@ local function LoadOwned()
 		-- every login
 		for _, e in ipairs(dead) do snap.rows[e.fp] = nil end
 		-- defer: the ledger isn't guaranteed primed at PLAYER_LOGIN
-		GM.After(2, function()
+		GM.Time.After(2, function()
 			for _, e in ipairs(dead) do
 				if GM.Ledger and GM.Ledger.Add then
 					local dep = e.dep or (GM.AH.DepositCost
@@ -533,7 +533,7 @@ function GM.Inventory.RefreshOwned()
 		if time() - partialSince < 10 then
 			if not rearmQueued then
 				rearmQueued = true
-				GM.After(0.75, function()
+				GM.Time.After(0.75, function()
 					rearmQueued = nil
 					GM.Inventory.RefreshOwned()
 				end)
@@ -821,7 +821,7 @@ function GM.Inventory.CancelProbe()
 		tostring(ok), tostring(err)))
 	local t0 = time()
 	GM.Inventory.QueryOwned()
-	GM.After(3, function()
+	GM.Time.After(3, function()
 		local fresh = GM.Inventory.OwnedAt() or 0
 		local e = GM.Inventory.OwnedByKey
 			and GM.Inventory.OwnedByKey(row.aid)
@@ -832,7 +832,7 @@ function GM.Inventory.CancelProbe()
 			local ok2, err2 = pcall(fn, e.idx)
 			GM.Print(format("  CancelAuction(idx=%s): ok=%s err=%s",
 				tostring(e.idx), tostring(ok2), tostring(err2)))
-			GM.After(2, GM.Inventory.QueryOwned)
+			GM.Time.After(2, GM.Inventory.QueryOwned)
 		elseif e then
 			GM.Print("  still listed — aid call did not take")
 		end
@@ -847,7 +847,7 @@ function GM.Inventory.QueryOwned()
 	-- belt-and-suspenders: if the event name differs on this client the
 	-- list still lands; GetNumOwnedAuctions returns what's loaded
 	for _, d in ipairs({ 0.5, 1.5, 4 }) do
-		GM.After(d, GM.Inventory.RefreshOwned)
+		GM.Time.After(d, GM.Inventory.RefreshOwned)
 	end
 end
 
@@ -915,7 +915,7 @@ function GM.Inventory.QueryBids()
 	if not (C_AuctionHouse and C_AuctionHouse.QueryBids) then return end
 	pcall(C_AuctionHouse.QueryBids, OWNER_SORTS)
 	for _, d in ipairs({ 0.5, 1.5 }) do
-		GM.After(d, GM.Inventory.RefreshBids)
+		GM.Time.After(d, GM.Inventory.RefreshBids)
 	end
 end
 
@@ -1103,7 +1103,7 @@ if C_AuctionHouse and C_AuctionHouse.PlaceBid
 		and hooksecurefunc then
 	hooksecurefunc(C_AuctionHouse, "PlaceBid", function(aid, amt)
 		if aid then TrackBid(aid, amt) end
-		GM.After(1, GM.Inventory.RefreshBids)
+		GM.Time.After(1, GM.Inventory.RefreshBids)
 	end)
 end
 
@@ -1281,7 +1281,7 @@ f:SetScript("OnEvent", function(_, event, ...)
 	elseif event == "BANKFRAME_OPENED" then
 		-- bank contents resolve async after the frame opens — the
 		-- instant read can be empty, so snapshot on a beat
-		GM.After(0.5, function()
+		GM.Time.After(0.5, function()
 			if BankFrame and BankFrame:IsShown() then
 				Snapshot("bank")
 			end
@@ -1290,7 +1290,7 @@ f:SetScript("OnEvent", function(_, event, ...)
 		-- coalesce bag churn into one snapshot; bank only while open
 		if f._snapPending then return end
 		f._snapPending = true
-		GM.After(0.5, function()
+		GM.Time.After(0.5, function()
 			f._snapPending = nil
 			Snapshot("bags")
 			if BankFrame and BankFrame:IsShown() then Snapshot("bank") end

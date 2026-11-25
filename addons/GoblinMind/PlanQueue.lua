@@ -816,7 +816,7 @@ function PQ.Solve(asks, workID)
 		end
 	end
 	local plan, err = GM.Solver.Plan(asks, p50, entry and entry.p90, gold, vel, {
-		riskBudget = GM.db.riskBudget,
+		riskBudget = GM.Model.Pref("riskBudget"),
 		minProfitMargin = (tonumber(sOps.belowPct) or 10) / 100,
 		commodity = isCommodity,
 		owned = GM.BagCount(workID) + pending,
@@ -972,7 +972,7 @@ function PQ.ExecuteNext()
 				-- skip rescan by design; this matches that.
 				if not (PQ.plan and PQ.plan.mode) then
 					local p = PQ.plan
-					GM.After(1.0, function()
+					GM.Time.After(1.0, function()
 						-- a plan loaded in the gap must not eat a rescan
 						-- fired under the old one — identity, not presence
 						if PQ.plan == p then PQ.Rescan() end
@@ -1136,7 +1136,7 @@ function PQ.ExecuteNext()
 		-- plan would re-emit/re-scan over it and wipe its progress
 		if not (PQ.plan and PQ.plan.mode) then
 			local p = PQ.plan
-			GM.After(1.0, function()
+			GM.Time.After(1.0, function()
 				if PQ.plan == p then PQ.Rescan() end
 			end)
 		end
@@ -1162,7 +1162,7 @@ function PQ.OnOwnedRefresh()
 	PQ.stepIndex = PQ.stepIndex + 1
 	if not plan.mode then
 		local p = plan
-		GM.After(1.0, function()
+		GM.Time.After(1.0, function()
 			if PQ.plan == p then PQ.Rescan() end
 		end)
 	end
@@ -1410,7 +1410,7 @@ function PQ.Refresh()
 	end
 	local sync = AgeTxt(GM.SyncAge and GM.SyncAge(), 2100)
 	local realm = AgeTxt(GM.RealmAge and GM.RealmAge(),
-		GM.db and GM.db.dataMaxAge or 7200)
+		GM.Model.Pref("dataMaxAge") or 7200)
 	local region = AgeTxt(GM.RegionAge and GM.RegionAge())
 	local parts = {}
 	if not (sync or realm) then
@@ -1544,8 +1544,8 @@ function PQ.Refresh()
 		and GM.Money(rs) or nil)
 	set("gold", GM.Money(GetMoney()))
 	-- the cap is a fraction of gold, not a currency amount
-	set("spend limit", GM.db and format("%.0f%%", (GM.db.riskBudget or 0) * 100))
-	set("min profit", GM.db and format("%.0f%%", (GM.db.minProfitMargin or 0) * 100))
+	set("spend limit", format("%.0f%%", (GM.Model.Pref("riskBudget") or 0) * 100))
+	set("min profit", format("%.0f%%", (GM.Model.Pref("minProfitMargin") or 0) * 100))
 
 	DrawChart(entry, dispID)
 

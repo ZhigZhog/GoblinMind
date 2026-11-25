@@ -26,8 +26,7 @@ if seterrorhandler and geterrorhandler then
 	local prev = geterrorhandler()
 	seterrorhandler(function(msg, ...)
 		if GM.db then
-			GM.db.errLog = GM.db.errLog or {}
-			local log = GM.db.errLog
+			local log = GM.Model.Pref("errLog", {})
 			log[#log + 1] = date("%H:%M:%S") .. " " .. tostring(msg)
 			while #log > 20 do tremove(log, 1) end
 		end
@@ -37,21 +36,22 @@ end
 
 local function ClearFiledBugs()
 	local filed = GoblinMindDB and GoblinMindDB.filedBugs
-	if not filed or not (GM.db and GM.db.bugReports) then return end
+	if not filed or not GM.Model.Pref("bugReports") then return end
 	local urls = {}
 	for _, f in ipairs(filed) do urls[f.id] = f.url end
-	local announced = GM.db.bugsAnnounced or {}
-	for i = #GM.db.bugReports, 1, -1 do
-		local rid = GM.db.bugReports[i]:match("^(gm%-%d+%-%d+)|")
+	local announced = GM.Model.Pref("bugsAnnounced") or {}
+	local reps = GM.Model.Pref("bugReports") or {}
+	for i = #reps, 1, -1 do
+		local rid = reps[i]:match("^(gm%-%d+%-%d+)|")
 		if rid and urls[rid] then
 			if not announced[rid] then
 				announced[rid] = true
 				GM.Print("bug report filed — " .. urls[rid])
 			end
-			tremove(GM.db.bugReports, i)
+			tremove(reps, i)
 		end
 	end
-	GM.db.bugsAnnounced = announced
+	GM.Model.SetPref("bugsAnnounced", announced)
 end
 
 local bugEv = CreateFrame("Frame")
@@ -228,15 +228,15 @@ function StageReport(desc, title)
 		"- sniper hits: " .. #(GM.Sniper and GM.Sniper.hits or {}),
 		"", "recent lua errors:",
 	}
-	for _, e in ipairs(GM.db.errLog or {}) do
+	for _, e in ipairs(GM.Model.Pref("errLog") or {}) do
 		body[#body + 1] = "- " .. e
 	end
 	local payload = table.concat(body, "\n")
 	title = title and strtrim(title) or strtrim(desc:gsub("\n.*", ""))
 	if title == "" then title = "In-game bug report" end
 	if #title > 80 then title = title:sub(1, 77) .. "..." end
-	GM.db.bugReports = GM.db.bugReports or {}
-	GM.db.bugReports[#GM.db.bugReports + 1] =
+	local br = GM.Model.Pref("bugReports", {})
+	br[#br + 1] =
 		id .. "|" .. HexEnc(title .. "\n" .. payload)
 	return id
 end
@@ -248,8 +248,8 @@ GM.StageReport = StageReport
 -- block; GoblinMindDB.backend.url + .ack confirm it landed
 local function StageBackendReq(url, name, scope, key)
 	local id = format("bm-%d-%d", time(), math.random(100, 999))
-	GM.db.backendReqs = GM.db.backendReqs or {}
-	GM.db.backendReqs[#GM.db.backendReqs + 1] = id .. "|"
+	local breq = GM.Model.Pref("backendReqs", {})
+	breq[#breq + 1] = id .. "|"
 		.. HexEnc(url .. "\n" .. name .. "\n" .. scope .. "\n" .. (key or ""))
 	return id
 end
@@ -260,8 +260,8 @@ GM.StageBackendReq = StageBackendReq
 -- 'api' block; GoblinMindDB.api.ack confirms it landed
 local function StageApiReq(clientId, secret, region, scope)
 	local id = format("api-%d-%d", time(), math.random(100, 999))
-	GM.db.apiReqs = GM.db.apiReqs or {}
-	GM.db.apiReqs[#GM.db.apiReqs + 1] = id .. "|"
+	local areq = GM.Model.Pref("apiReqs", {})
+	areq[#areq + 1] = id .. "|"
 		.. HexEnc((clientId or "") .. "\n" .. (secret or "")
 			.. "\n" .. (region or "") .. "\n" .. (scope or ""))
 	return id
@@ -308,8 +308,8 @@ local function ApplyImport(str)
 	-- snapshot reload-gated values so an import that changes them
 	-- surfaces the reload prompt
 	local before = {
-		embeddedTooltip = GM.db.tooltip and GM.db.tooltip.embeddedTooltip,
-		minimapAngle = GM.db.minimapAngle,
+		embeddedTooltip = (GM.Model.Pref("tooltip") or {}).embeddedTooltip,
+		minimapAngle = GM.Model.Pref("minimapAngle"),
 	}
 	local ok, err = ImportProfile(str)
 	if ui and ui.profMsg then
@@ -320,12 +320,12 @@ local function ApplyImport(str)
 	if ok then
 		S.Refresh()
 		if GM.minimapBtn then
-			GM.minimapBtn:SetShown(not GM.db.minimapHide)
+			GM.minimapBtn:SetShown(not GM.Model.Pref("minimapHide"))
 		end
 		for k, v in pairs(before) do
 			local now = k == "embeddedTooltip"
-				and GM.db.tooltip and GM.db.tooltip.embeddedTooltip
-				or GM.db[k]
+				and (GM.Model.Pref("tooltip") or {}).embeddedTooltip
+				or GM.Model.Pref(k)
 			if now ~= v then S.FlagReload() break end
 		end
 	end
@@ -552,7 +552,7 @@ local function Build()
 	ui.risk:SetPoint("TOPLEFT", 240, -22)
 	ui.risk:SetScript("OnEnterPressed", function(self)
 		local v = tonumber(self:GetText())
-		if v then GM.db.riskBudget = max(0, min(1, v / 100)) end
+		if v then GM.Model.SetPref("riskBudget", max(0, min(1, v / 100))) end
 		self:ClearFocus()
 		S.Refresh()
 	end)
@@ -561,7 +561,7 @@ local function Build()
 	ui.margin:SetPoint("TOPLEFT", 240, -46)
 	ui.margin:SetScript("OnEnterPressed", function(self)
 		local v = tonumber(self:GetText())
-		if v then GM.db.minProfitMargin = max(0, v / 100) end
+		if v then GM.Model.SetPref("minProfitMargin", max(0, v / 100)) end
 		self:ClearFocus()
 		S.Refresh()
 	end)
@@ -570,7 +570,7 @@ local function Build()
 	ui.days:SetPoint("TOPLEFT", 240, -70)
 	ui.days:SetScript("OnEnterPressed", function(self)
 		local v = tonumber(self:GetText())
-		if v then GM.db.maxDaysToClear = max(1, floor(v)) end
+		if v then GM.Model.SetPref("maxDaysToClear", max(1, floor(v))) end
 		self:ClearFocus()
 		S.Refresh()
 	end)
@@ -579,16 +579,16 @@ local function Build()
 	ui.age:SetPoint("TOPLEFT", 240, -94)
 	ui.age:SetScript("OnEnterPressed", function(self)
 		local v = tonumber(self:GetText())
-		if v then GM.db.dataMaxAge = max(60, floor(v)) end
+		if v then GM.Model.SetPref("dataMaxAge", max(60, floor(v))) end
 		self:ClearFocus()
 		S.Refresh()
 	end)
 
 	RowAt(gen, "Minimap button", 320, 26)
 	ui.mmHide = BoolSeg(gen,
-		function() return not GM.db.minimapHide end,
+		function() return not GM.Model.Pref("minimapHide") end,
 		function(v)
-			GM.db.minimapHide = not v
+			GM.Model.SetPref("minimapHide", not v)
 			if GM.minimapBtn then GM.minimapBtn:SetShown(v) end
 		end)
 	ui.mmHide:SetPoint("TOPLEFT", 500, -24)
@@ -596,19 +596,19 @@ local function Build()
 	ui.embed = BoolSeg(gen,
 		-- the stored flag is INVERTED (embeddedTooltip=true embeds
 		-- into the native tip); the checkbox reads as "side panel"
-		function() return not (GM.db.tooltip and GM.db.tooltip.embeddedTooltip) end,
+		function() return not (GM.Model.Pref("tooltip") or {}).embeddedTooltip end,
 		function(v) GM.Tooltip.SetOption("embeddedTooltip", nil, not v) end)
 	ui.embed:SetPoint("TOPLEFT", 500, -48)
 	RowAt(gen, "Show on modifier", 320, 74)
 	ui.mod = CycleBtn(gen, 76,
-		function() return (GM.db.tooltip and GM.db.tooltip.tooltipShowModifier) or "none" end,
+		function() return (GM.Model.Pref("tooltip") or {}).tooltipShowModifier or "none" end,
 		function(v) GM.Tooltip.SetOption("tooltipShowModifier", nil, v) end,
 		{ "none", "alt", "ctrl" },
 		{ none = "always", alt = "hold Alt", ctrl = "hold Ctrl" })
 	ui.mod:SetPoint("TOPLEFT", 500, -72)
 	RowAt(gen, "Price format", 320, 98)
 	ui.fmt = CycleBtn(gen, 76,
-		function() return (GM.db.tooltip and GM.db.tooltip.tooltipPriceFormat) or "text" end,
+		function() return (GM.Model.Pref("tooltip") or {}).tooltipPriceFormat or "text" end,
 		function(v) GM.Tooltip.SetOption("tooltipPriceFormat", nil, v) end,
 		{ "text", "icon" }, { text = "text", icon = "coin icons" })
 	ui.fmt:SetPoint("TOPLEFT", 500, -96)
@@ -1150,10 +1150,10 @@ end
 
 function S.Refresh()
 	if not ui then return end
-	ui.risk:SetText(tostring(floor((GM.db.riskBudget or 0) * 100 + 0.5)))
-	ui.margin:SetText(tostring(floor((GM.db.minProfitMargin or 0) * 100 + 0.5)))
-	ui.days:SetText(tostring(GM.db.maxDaysToClear or ""))
-	ui.age:SetText(tostring(GM.db.dataMaxAge or ""))
+	ui.risk:SetText(tostring(floor((GM.Model.Pref("riskBudget") or 0) * 100 + 0.5)))
+	ui.margin:SetText(tostring(floor((GM.Model.Pref("minProfitMargin") or 0) * 100 + 0.5)))
+	ui.days:SetText(tostring(GM.Model.Pref("maxDaysToClear") or ""))
+	ui.age:SetText(tostring(GM.Model.Pref("dataMaxAge") or ""))
 	ui.mmHide.paint()
 	ui.embed.paint()
 	ui.mod.paint()
@@ -1231,3 +1231,8 @@ function S.Toggle()
 	Build()
 	if ui.frame:IsShown() then ui.frame:Hide() else S.Show() end
 end
+
+GM.View.Register("settings", {
+	Show = S.Show, Hide = S.Hide, Toggle = S.Toggle,
+	Refresh = S.Refresh,
+	IsShown = function() return ui and ui.frame and ui.frame:IsShown() end })

@@ -55,7 +55,7 @@ local function Build()
 	-- toolbar
 	local refresh = Btn(f, 66, "REFRESH", function()
 		GM.Inventory.QueryOwned()
-		GM.After(0.5, MA.Refresh)
+		GM.Time.After(0.5, MA.Refresh)
 	end)
 	local post = Btn(f, 78, "POST SCAN", function()
 		if ui.page == "bags" then
@@ -496,7 +496,7 @@ function MA.RefreshPosted()
 				row.act:SetScript("OnClick", function()
 					GM.AH.Execute({ kind = "bid", itemID = id,
 						auctionID = aid, total = cur + 1 })
-					GM.After(0.5, MA.Refresh)
+					GM.Time.After(0.5, MA.Refresh)
 				end)
 			else
 				row.act:Hide()
@@ -605,7 +605,7 @@ function MA.Show()
 	GM.Inventory.QueryBids()
 	ui.frame:Show()
 	MA.Refresh()
-	GM.After(0.5, MA.Refresh)
+	GM.Time.After(0.5, MA.Refresh)
 end
 
 function MA.Hide()
@@ -629,3 +629,8 @@ function GM.Inventory.RefreshBids(...)
 	baseRefreshBids(...)
 	if ui and ui.frame:IsShown() then MA.Refresh() end
 end
+
+GM.View.Register("auctions", { class = "peer",
+	Show = MA.Show, Hide = MA.Hide, Toggle = MA.Toggle,
+	Refresh = MA.Refresh,
+	IsShown = function() return ui and ui.frame and ui.frame:IsShown() end })

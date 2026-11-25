@@ -149,7 +149,7 @@ local function BuildUI()
 	f:SetScript("OnEvent", function(_, e)
 		if not f:IsShown() or ui.bagPending then return end
 		ui.bagPending = true
-		GM.After(0.3, function()
+		GM.Time.After(0.3, function()
 			ui.bagPending = nil
 			CU.Refresh()
 		end)
@@ -747,7 +747,7 @@ local function RecipeRows()
 		if inSel
 			-- spoiler-free mode (options page / settings): unlearned
 			-- recipes drop out of the list entirely
-			and not (GM.db and GM.db.hideUnlearned and row.unlearned)
+			and not (GM.Model.Pref("hideUnlearned") and row.unlearned)
 			and (not ui.matsOnly
 				or (not row.unlearned and (row.craftable or 0) > 0))
 			and (not ui.canLearn or row.unlearned)
@@ -1317,8 +1317,8 @@ function CU.HookDefault()
 	local pf = DefaultFrame()
 	if not pf then
 		CU._hookTries = (CU._hookTries or 0) + 1
-		if CU._hookTries < 30 and GM.After then
-			GM.After(1, CU.HookDefault)
+		if CU._hookTries < 30 and GM.Time then
+			GM.Time.After(1, CU.HookDefault)
 		elseif GM.Crafting and GM.Crafting.Tr then
 			GM.Crafting.Tr("HookDefault gave up — no ProfessionsFrame")
 		end
@@ -1397,7 +1397,7 @@ function CU.OnTradeSkillOpen()
 		.. " open — BLIZZARD UI gives the default frame back")
 	-- the frame may not be shown at event time; park now and retry
 	CU.ParkDefault()
-	GM.After(0.3, CU.ParkDefault)
+	GM.Time.After(0.3, CU.ParkDefault)
 end
 
 function CU.SelectProf(name)
@@ -1425,3 +1425,8 @@ function CU.Toggle()
 		ui.frame:Hide()
 	else CU.Show() end
 end
+
+GM.View.Register("crafting", { class = "peer",
+	Show = CU.Show, Hide = CU.Hide, Toggle = CU.Toggle,
+	Refresh = CU.Refresh,
+	IsShown = function() return ui and ui.frame and ui.frame:IsShown() end })

@@ -90,9 +90,9 @@ end
 
 local function Opts()
 	if not GM.db then return OPT_DEFAULTS end
-	GM.db.tooltip = GM.db.tooltip or {}
-	Merge(GM.db.tooltip, OPT_DEFAULTS)
-	return GM.db.tooltip
+	local o = GM.Model.Pref("tooltip", {})
+	Merge(o, OPT_DEFAULTS)
+	return o
 end
 
 -- entry enabled check: module entries read moduleTooltips[module],
@@ -358,7 +358,7 @@ local function A_RightText(id)
 	local n = e and e.sup or 0
 	local src, srcT = e and e._src, e and e._srcT
 	local age = srcT and (time() - srcT) or GM.DataAge()
-	local maxAge = GM.db and GM.db.dataMaxAge or 7200
+	local maxAge = GM.Model.Pref("dataMaxAge") or 7200
 	-- one threshold rule (F6): textDim until dataMaxAge, warn past it
 	local tag = src == "book" and " · your scan"
 		or src == "mesh" and " · shared" or ""
@@ -948,7 +948,7 @@ local function Fill(itemID, tooltip)
 	-- freshness is per-leg: the backend feed (RealmAge) and the local
 	-- book have separate clocks — a fresh DB next to a stale book is
 	-- not stale data, it's a stale book
-	local maxAge = GM.db and GM.db.dataMaxAge or 7200
+	local maxAge = GM.Model.Pref("dataMaxAge") or 7200
 	local dbAge = GM.RealmAge() or GM.DataAge()
 	local bAge = GM.AH and GM.AH.BookAge and GM.AH.BookAge() or math.huge
 	local fresh = math.min(dbAge or math.huge, bAge)

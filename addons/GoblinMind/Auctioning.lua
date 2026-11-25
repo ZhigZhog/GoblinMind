@@ -40,7 +40,7 @@ local function Pump()
 			Pump()
 		end, job.key)
 	-- no response (or a thrown call) within 5s: empty book, keep moving
-	GM.After(5, function()
+	GM.Time.After(5, function()
 		if scanning == job then
 			scanning = nil
 			job.done({})
@@ -400,7 +400,7 @@ function A.CancelScan()
 	GM.PlanQueue.ScanStatus(GM.CC("textDim") .. "refreshing owned auctions…|r")
 	GM.Inventory.onOwned = function() A.CancelScanNow() end
 	GM.Inventory.QueryOwned()
-	GM.After(1.5, function()
+	GM.Time.After(1.5, function()
 		if GM.Inventory.onOwned then
 			GM.Inventory.onOwned = nil
 			A.CancelScanNow()

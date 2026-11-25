@@ -89,7 +89,7 @@ local function PollResults(itemID, waited)
 		return
 	end
 	if waited < 3 then
-		GM.After(0.5, function() PollResults(itemID, waited + 0.5) end)
+		GM.Time.After(0.5, function() PollResults(itemID, waited + 0.5) end)
 		return
 	end
 	-- deadline: partial data beats none
@@ -107,7 +107,7 @@ f:SetScript("OnEvent", function(_, event, ...)
 		-- covers everything in between. Delayed so it doesn't stack on
 		-- top of TSM's own AH-open work
 		if GM.AH.BookAge() > 86400 then
-			GM.After(3, function()
+			GM.Time.After(3, function()
 				if GM.AH.open and GM.AH.BookAge() > 86400 then GM.AH.FullScan() end
 			end)
 		end
@@ -138,10 +138,10 @@ f:SetScript("OnEvent", function(_, event, ...)
 					GM.AH.CollectBook()
 				elseif tries < 8 then
 					GM.AH.bookPending = true
-					GM.After(0.5, TryCollect)
+					GM.Time.After(0.5, TryCollect)
 				end
 			end
-			GM.After(0.5, TryCollect)
+			GM.Time.After(0.5, TryCollect)
 		end
 	elseif event == "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED"
 		or event == "AUCTION_HOUSE_BROWSE_RESULTS_ADDED" then
@@ -324,7 +324,7 @@ local function PumpQ()
 		and not GM.AH.scanConsumed
 		and GetTime() - (GM.AH.scanItemT or 0) < 10 then
 		pumpArmed = true
-		GM.After(0.3, PumpQ)
+		GM.Time.After(0.3, PumpQ)
 		return
 	end
 	-- the server reports its own pipe readiness — the fixed gap is a
@@ -332,13 +332,13 @@ local function PumpQ()
 	if C_AuctionHouse.IsThrottledMessageSystemReady
 		and not C_AuctionHouse.IsThrottledMessageSystemReady() then
 		pumpArmed = true
-		GM.After(0.3, PumpQ)
+		GM.Time.After(0.3, PumpQ)
 		return
 	end
 	local wait = QGAP - (GetTime() - lastDispatch)
 	if wait > 0 then
 		pumpArmed = true
-		GM.After(wait, PumpQ)
+		GM.Time.After(wait, PumpQ)
 		return
 	end
 	table.remove(queryQ, 1)
@@ -346,7 +346,7 @@ local function PumpQ()
 	job.fn()
 	if queryQ[1] then
 		pumpArmed = true
-		GM.After(QGAP, PumpQ)
+		GM.Time.After(QGAP, PumpQ)
 	end
 end
 
@@ -740,7 +740,7 @@ function GM.AH.FullScan()
 		-- and the only bail left is a 4m absolute cap on a stream
 		-- that never finishes trickling
 		if polls < 480 and not (lastN <= 0 and polls >= 40) then
-			GM.After(0.5, Poll)
+			GM.Time.After(0.5, Poll)
 		else
 			GM.AH.wantBook = nil
 			if GM.AH.bookT == prevT and GM.AH.open and not GM.AH.browse then
@@ -765,7 +765,7 @@ function GM.AH.FullScan()
 			GM.PlanQueue.Refresh()
 			return
 		end
-		GM.After(0.5, Poll)
+		GM.Time.After(0.5, Poll)
 	end)
 	GM.PlanQueue.Refresh()
 end
@@ -892,7 +892,7 @@ function GM.AH.DumpRows(itemID, maxRows)
 		-- commodity side of the same item — what CollectCommodityAsks
 		-- would have consumed if the event fired
 		if C_AuctionHouse.GetCommoditySearchResultInfo then
-			GM.After(1.5, function()
+			GM.Time.After(1.5, function()
 				local n = C_AuctionHouse.GetNumCommoditySearchResults
 					and C_AuctionHouse.GetNumCommoditySearchResults(itemID) or 0
 				GM.Print(format("commodity-search results: %d (maxStack check: %s)",
@@ -920,7 +920,7 @@ function GM.AH.DumpRows(itemID, maxRows)
 		if n == 0 and GM.AH.open and C_AuctionHouse.ReplicateItems then
 			GM.Print("snapshot empty — calling ReplicateItems, retrying in 4s…")
 			pcall(C_AuctionHouse.ReplicateItems)
-			GM.After(4, function() DumpReplicate(itemID, maxRows) end)
+			GM.Time.After(4, function() DumpReplicate(itemID, maxRows) end)
 		else
 			DumpReplicate(itemID, maxRows)
 		end
@@ -1150,7 +1150,7 @@ function GM.AH.CollectBook()
 				GM.PlanQueue.ScanStatus(GM.CC("textDim") ..
 					format("processing results — %d/%d|r", i, n))
 			end
-			GM.After(0.03, Chunk)
+			GM.Time.After(0.03, Chunk)
 		else
 			Finish()
 		end
@@ -1158,7 +1158,7 @@ function GM.AH.CollectBook()
 	Chunk()
 	-- watchdog: if the chunk chain died silently (i stops advancing),
 	-- restart it rather than leaving collect stuck forever
-	GM.After(3, function()
+	GM.Time.After(3, function()
 		if gen ~= collectGen or not GM.AH.collecting then return end
 		local function Dog()
 			if gen ~= collectGen or not GM.AH.collecting then return end
@@ -1176,10 +1176,10 @@ function GM.AH.CollectBook()
 			else
 				lastI, stalled = i, 0
 			end
-			GM.After(5, Dog)
+			GM.Time.After(5, Dog)
 		end
 		lastI = i
-		GM.After(5, Dog)
+		GM.Time.After(5, Dog)
 	end)
 end
 
@@ -1214,7 +1214,7 @@ function GM.AH.BrowseBook()
 			return
 		end
 		-- stall watchdog: browse events should arrive promptly
-		GM.After(6, function()
+		GM.Time.After(6, function()
 			if GM.AH.browse == b and b.seen == 0 then
 				GM.AH.browse = nil
 				GM.PlanQueue.ScanStatus(GM.CC("warn") .. "the auction house isn't responding — try again later|r")
@@ -1294,7 +1294,7 @@ function GM.AH.OnBrowseResults()
 		-- retry once after 4s if the event never comes
 		pcall(C_AuctionHouse.RequestMoreBrowseResults)
 		local mySeen = b.seen
-		GM.After(4, function()
+		GM.Time.After(4, function()
 			if GM.AH.browse == b and b.seen == mySeen then
 				b.tries = b.tries + 1
 				if b.tries <= 3 then
@@ -1363,7 +1363,7 @@ function GM.AH.Execute(step)
 		GM.AH.pendingConfirm = pc
 		-- if no quote lands the staged flow is dead on this client —
 		-- splice in per-lot buyouts automatically
-		GM.After(4, function()
+		GM.Time.After(4, function()
 			if GM.AH.pendingConfirm == pc and not pc.quote then
 				GM.AH.pendingConfirm = nil
 				GM.Print(GM.CC("warn") .. "no commodity quote — falling back to per-lot buyouts|r")

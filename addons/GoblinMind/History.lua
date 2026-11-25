@@ -17,12 +17,12 @@ function GM.History.Init()
 	GoblinMindHistory = GoblinMindHistory or { items = {}, lastT = 0 }
 	GM.History.db = GoblinMindHistory
 	GM.History.Snapshot()
-	GM.After(3600, GM.History.Tick)
+	GM.Time.After(3600, GM.History.Tick)
 end
 
 function GM.History.Tick()
 	GM.History.Snapshot()
-	GM.After(3600, GM.History.Tick)
+	GM.Time.After(3600, GM.History.Tick)
 end
 
 function GM.History.Snapshot()

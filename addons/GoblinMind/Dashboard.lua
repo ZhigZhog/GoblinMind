@@ -25,59 +25,25 @@ local TABS = {
 	{ key = "settings", label = "SETTINGS", short = "SET" },
 }
 
--- window classes: the planner is a peer of every window — tabbing
--- never closes it. auctions/crafting/destroy also keep each other
--- open; the rest swap one-for-one. (vendor is a contextual takeover
--- window, not a tab — it hides with the exclusive set below.)
-local PEERS = { auctions = true, crafting = true, destroy = true }
-
+-- window classes live on each view's GM.View registration now
+-- (exclusive/peer/contextual/mode — see ViewMgr.lua). DB.Switch is
+-- kept as the tab-strip call shape; the registry decides who a
+-- switch disturbs. The planner itself never registers a window
+-- def, so nothing can hide it — tabbing never closes it.
 function DB.Switch(key)
-	-- HOME/PLAN is a mode toggle on the planner itself — it must not
-	-- disturb any other window
-	if key == "dash" or key == "plan" then
-		GM.PlanQueue.SetHome(key == "dash")
-		GM.PlanQueue.Show()
-		return
-	end
-	-- the planner is a peer of everything — tabbing never closes it.
-	-- Exclusive/session windows still go away on a non-peer switch.
-	if not PEERS[key] then
-		if GM.MyAuctions then GM.MyAuctions.Hide() end
-		if GM.CraftingUI then GM.CraftingUI.Hide() end
-		if GM.DestroyingUI then GM.DestroyingUI.Hide() end
-		if GM.VendoringUI then GM.VendoringUI.Hide() end
-	end
-	GM.Shopping.Hide()
-	GM.GroupsUI.Hide()
-	if GM.OpsUI then GM.OpsUI.Hide() end
-	if GM.Overview then GM.Overview.Hide() end
-	if GM.OrdersUI then GM.OrdersUI.Hide() end
-	if GM.GatherUI then GM.GatherUI.Hide() end
-	if GM.Settings then GM.Settings.Hide() end
-	if key == "market" then
-		GM.Shopping.Show()
-	elseif key == "groups" then
-		GM.GroupsUI.Show()
-	elseif key == "ops" then
-		if GM.OpsUI then GM.OpsUI.Show() end
-	elseif key == "crafting" then
-		if GM.CraftingUI then GM.CraftingUI.Show() end
-	elseif key == "overview" then
-		if GM.Overview then GM.Overview.Show() end
-	elseif key == "orders" then
-		if GM.OrdersUI then GM.OrdersUI.Show() end
-	elseif key == "gather" then
-		if GM.GatherUI then GM.GatherUI.Show() end
-	elseif key == "auctions" then
-		if GM.MyAuctions then GM.MyAuctions.Show() end
-	elseif key == "destroy" then
-		if GM.DestroyingUI then GM.DestroyingUI.Show() end
-	elseif key == "vendor" then
-		if GM.VendoringUI then GM.VendoringUI.Show() end
-	elseif key == "settings" then
-		if GM.Settings then GM.Settings.Show() end
-	end
+	GM.View.Switch(key)
 end
+
+-- the planner's two tab keys are modes on one window, registered
+-- here where the tab strip lives
+GM.View.Register("dash", { class = "mode", Show = function()
+	GM.PlanQueue.SetHome(true)
+	GM.PlanQueue.Show()
+end })
+GM.View.Register("plan", { class = "mode", Show = function()
+	GM.PlanQueue.SetHome(false)
+	GM.PlanQueue.Show()
+end })
 
 -- shared tab strip: small text tabs anchored after the window's
 -- title fontstring. The current window's tab renders selected
@@ -182,13 +148,13 @@ function DB.AddTabs(frame, titleFs, currentKey)
 		local b = StripBound()
 		if lr and b then
 			if lr > b - 2 and mode < 2 then
-				GM.After(0, function() VerifyFit(build(mode + 1), retries) end)
+				GM.Time.After(0, function() VerifyFit(build(mode + 1), retries) end)
 			end
-		elseif retries > 0 and GM.After then
-			GM.After(0.2, function() VerifyFit(mode, retries - 1) end)
+		elseif retries > 0 and GM.Time then
+			GM.Time.After(0.2, function() VerifyFit(mode, retries - 1) end)
 		end
 	end
-	if GM.After then GM.After(0, function() VerifyFit(mode, 2) end) end
+	if GM.Time then GM.Time.After(0, function() VerifyFit(mode, 2) end) end
 end
 
 -- ============ home view ============
@@ -299,7 +265,7 @@ function DB.MountHome(host)
 	toLedger.text:SetPoint("CENTER")
 	toLedger.text:SetText("LEDGER →")
 	toLedger:SetScript("OnClick", function()
-		if GM.Overview then GM.Overview.Show() end
+		GM.View.Show("overview")
 	end)
 	toLedger:SetScript("OnEnter", function()
 		toLedger.text:SetTextColor(GM.RGB("accent"))

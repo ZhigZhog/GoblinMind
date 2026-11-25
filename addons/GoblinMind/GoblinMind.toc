@@ -11,8 +11,11 @@ Libs\LibDeflate.lua
 Libs\LibSerialize.lua
 Theme.lua
 GoblinUIHost.lua
+Time.lua
 Core.lua
 FramePark.lua
+Model.lua
+ViewMgr.lua
 Inventory.lua
 Ledger.lua
 History.lua

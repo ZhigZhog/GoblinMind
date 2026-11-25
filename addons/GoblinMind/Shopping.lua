@@ -147,7 +147,7 @@ local function Build()
 	-- window's action strip) — the title row is title + module tabs
 	ui.shopBtn = TitleBtn("SHOP", 52, function() S.SetMode("shop") end)
 	ui.snipeBtn = TitleBtn("SNIPER", 60, function()
-		if GM.SniperUI then GM.SniperUI.Toggle() end
+		GM.View.Toggle("sniper")
 	end)
 	ui.craftBtn = TitleBtn("CRAFT", 52, function() S.SetMode("craft") end)
 	-- primary action lives at the bottom-right — the title row is
@@ -626,3 +626,8 @@ function S.Refresh()
 		end
 	end
 end
+
+GM.View.Register("market", {
+	Show = S.Show, Hide = S.Hide, Toggle = S.Toggle,
+	Refresh = S.Refresh,
+	IsShown = function() return ui and ui.frame and ui.frame:IsShown() end })

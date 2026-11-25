@@ -392,7 +392,7 @@ function C.CraftProbe(match)
 				tostring(ok), tostring(r1), tostring(r2)))
 			if not ok then return end
 			C._probe = { id = id, saw = 0 }
-			GM.After(4.5, function()
+			GM.Time.After(4.5, function()
 				local p = C._probe
 				if p and p.id == id then
 					C._probe = nil
@@ -405,7 +405,7 @@ function C.CraftProbe(match)
 		end
 		if flag == "t" then
 			GM.Print("timer-context cast in 0.4s")
-			C_Timer.After(0.4, function() call() end)
+			GM.Time.After(0.4, function() call() end)
 		elseif flag == "n" then
 			call(2)
 		elseif flag == "r" then
@@ -656,7 +656,7 @@ local function OnCastComplete(unit, castGUID, spellID)
 					or (UnitChannelInfo and UnitChannelInfo("player"))
 				if busy or (b.lastEvent
 						and GetTime() - b.lastEvent < 1.0) then
-					GM.After(0.4, settle)
+					GM.Time.After(0.4, settle)
 					return
 				end
 				C.batchQty = nil
@@ -686,7 +686,7 @@ local function OnCastComplete(unit, castGUID, spellID)
 					end
 				end
 			end
-			GM.After(1.0, settle)
+			GM.Time.After(1.0, settle)
 		end
 	end
 end
@@ -874,7 +874,7 @@ function C.Init()
 			-- a fresh profile captures nothing until each prof has
 			-- been opened once, so pump the missing lines ourselves
 			-- (delayed: the login event burst races profession data)
-			GM.After(6, ProfPump)
+			GM.Time.After(6, ProfPump)
 			return
 		end
 		-- trailing debounce: profession context settles sometime during
@@ -882,7 +882,7 @@ function C.Init()
 		-- the first. DATA_SOURCE_CHANGED can land after LIST_UPDATE.
 		C.scanGen = (C.scanGen or 0) + 1
 		local gen = C.scanGen
-		GM.After(0.5, function()
+		GM.Time.After(0.5, function()
 			if gen ~= C.scanGen then return end
 			Scan()
 			-- the scan knows which profession just opened — point the
@@ -1720,7 +1720,7 @@ local function SecureOpenFor(btn)
 		-- gate eval re-arms honestly instead of sitting on a
 		-- phantom "open" for the stamp's full 12s
 		local rid = ov._rid
-		GM.After(4.5, function()
+		GM.Time.After(4.5, function()
 			local p = C.pendingOpenCraft
 			if not (p and p.id == rid) then return end
 			C.pendingOpenCraft = nil
@@ -1773,7 +1773,7 @@ end
 -- link: a call that produces no UNIT_SPELLCAST_START within 0.6s
 -- never ran — report it and stop any batch in flight.
 function C.WatchCast(recipeID)
-	GM.After(0.6, function()
+	GM.Time.After(0.6, function()
 		if not (C.pendingCast and C.pendingCast.id == recipeID) then return end
 		C.pendingCast = nil
 		Tr("watchdog — no cast started for", recipeID)

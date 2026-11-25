@@ -53,8 +53,7 @@ local function Store()
 		GM.Print("ticker: settings not loaded yet")
 		return { items = {} }
 	end
-	local st = GM.db.ticker
-	if not st then st = {} GM.db.ticker = st end
+	local st = GM.Model.Pref("ticker", {})
 	if type(st.items) ~= "table" then st.items = {} end
 	if st.alpha == nil then st.alpha = 70 end   -- resting dim, % opacity
 	if st.hover == nil then st.hover = 100 end  -- lit under the cursor

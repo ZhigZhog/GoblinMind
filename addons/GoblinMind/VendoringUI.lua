@@ -211,12 +211,7 @@ local function Build()
 	pcall(f.RegisterEvent, f, "MERCHANT_UPDATE")
 	pcall(f.RegisterEvent, f, "BUYBACK_UPDATE")
 	f:SetScript("OnEvent", function()
-		if not f:IsShown() or ui.evPending then return end
-		ui.evPending = true
-		GM.After(0.2, function()
-			ui.evPending = nil
-			VU.Refresh()
-		end)
+		if f:IsShown() then GM.View.Coalesced("vendor", VU.Refresh) end
 	end)
 
 	-- toolbar: page toggles + actions
@@ -685,7 +680,7 @@ function VU.OnMerchantOpen()
 	VU.Refresh()
 	-- the frame may not be positioned at event time; park now + retry
 	GM.FramePark.Park(MerchantFrame)
-	GM.After(0.3, function() GM.FramePark.Park(MerchantFrame) end)
+	GM.Time.After(0.3, function() GM.FramePark.Park(MerchantFrame) end)
 end
 
 function VU.Show()
@@ -723,3 +718,11 @@ f:SetScript("OnEvent", function(_, e)
 		ui.frame:Hide()
 	end
 end)
+
+-- peer-class: the vendor window rides with the auctions/crafting/
+-- destroy group — it survives switches between peers and clears
+-- when a non-peer tab wins
+GM.View.Register("vendor", { class = "peer",
+	Show = VU.Show, Hide = VU.Hide, Toggle = VU.Toggle,
+	Refresh = VU.Refresh,
+	IsShown = function() return ui and ui.frame and ui.frame:IsShown() end })

@@ -105,10 +105,10 @@ local function ScanAsks()
 				end
 				if GM.AH.Busy and GM.AH.Busy()
 					and GetTime() - M.askWait < 90 then
-					GM.After(2, retry)
+					GM.Time.After(2, retry)
 				else ScanAsks() end
 			end
-			GM.After(2, retry)
+			GM.Time.After(2, retry)
 		end
 		return
 	end
@@ -117,7 +117,7 @@ local function ScanAsks()
 	-- throttle-dropped searches answer nothing — retry once before
 	-- declaring the book empty so a lost query doesn't read as "no asks"
 	M.askTries = (M.askTries or 0) + 1
-	GM.After(6, function()
+	GM.Time.After(6, function()
 		-- a dropped query never calls back (M.asks stays nil); an
 		-- empty callback while the book insists lots exist is a lost
 		-- race — both deserve the retry, a truly unlisted item doesn't
@@ -575,7 +575,7 @@ end
 -- cadence stays on /goblin autoscan — it feeds sniper/mesh/book
 -- marks, not this page
 local function AutoItemOn()
-	return GM.db and GM.db.mktAutoscan and true or false
+	return GM.Model.Pref("mktAutoscan") and true or false
 end
 
 local function PaintAuto()
@@ -587,9 +587,9 @@ end
 -- "scanning… → ladder" cycle is the feedback that the toggle works
 local function ToggleAuto()
 	if not GM.db then return end
-	GM.db.mktAutoscan = not GM.db.mktAutoscan or nil
+	GM.Model.SetPref("mktAutoscan", not GM.Model.Pref("mktAutoscan") or nil)
 	PaintAuto()
-	if GM.db.mktAutoscan and M.itemID then
+	if GM.Model.Pref("mktAutoscan") and M.itemID then
 		M.asks = nil
 		ScanAsks()
 	end

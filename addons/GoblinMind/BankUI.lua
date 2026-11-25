@@ -151,12 +151,7 @@ local function Build()
 	pcall(f.RegisterEvent, f, "PLAYERBANKBAGSLOTS_CHANGED")
 	pcall(f.RegisterEvent, f, "PLAYERREAGENTBANKSLOTS_CHANGED")
 	f:SetScript("OnEvent", function()
-		if not f:IsShown() or ui.evPending then return end
-		ui.evPending = true
-		GM.After(0.2, function()
-			ui.evPending = nil
-			BU.Refresh()
-		end)
+		if f:IsShown() then GM.View.Coalesced("bank", BU.Refresh) end
 	end)
 
 	-- toolbar
@@ -234,7 +229,7 @@ local function Fill(rows, vis, scrollKey, toScope)
 			local src = { bag = r.bag, slot = r.slot, itemID = r.id, count = r.qty }
 			row.act:SetScript("OnClick", function()
 				if GM.Banking.MoveTo(src, toScope) then
-					GM.After(0.2, BU.Refresh)
+					GM.Time.After(0.2, BU.Refresh)
 				end
 			end)
 		else
@@ -273,7 +268,7 @@ function BU.OnBankOpen()
 	ui.frame:Show()
 	BU.Refresh()
 	GM.FramePark.Park(BankFrame)
-	GM.After(0.3, function() GM.FramePark.Park(BankFrame) end)
+	GM.Time.After(0.3, function() GM.FramePark.Park(BankFrame) end)
 end
 
 function BU.Show()
@@ -313,3 +308,8 @@ f:SetScript("OnEvent", function(_, e)
 		end
 	end
 end)
+
+GM.View.Register("bank", { class = "contextual",
+	Show = BU.Show, Hide = BU.Hide, Toggle = BU.Toggle,
+	Refresh = BU.Refresh,
+	IsShown = function() return ui and ui.frame and ui.frame:IsShown() end })

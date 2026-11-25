@@ -2727,5 +2727,5 @@ GM.Cmd("navdebug", function()
 		.. " running=" .. tostring(d.run))
 end, { help = "dump the navigation chain state" })
 
-GM.Cmd({ "gather", "farm" }, function() GM.GatherUI.Toggle() end,
+GM.Cmd({ "gather", "farm" }, function() GM.View.Toggle("gather") end,
 	{ prefix = true, help = "gather window" })

@@ -339,7 +339,7 @@ function SU.Refresh()
 				row.lastClick = now
 				row.pend = (row.pend or 0) + 1
 				local pend = row.pend
-				GM.After(0.35, function()
+				GM.Time.After(0.35, function()
 					if row.pend ~= pend then return end -- a 2nd tap took over
 					row.pend = nil
 					if hit.wantBid then GM.Shopping.BidHit(hit)
@@ -388,3 +388,7 @@ if GM.OnItemInfoLoaded then
 		if ui and ui.frame:IsShown() then SU.Refresh() end
 	end)
 end
+
+GM.View.Register("sniper", { class = "contextual",
+	Show = SU.Show, Hide = SU.Hide, Toggle = SU.Toggle,
+	Refresh = SU.Refresh, IsShown = SU.IsOpen })

@@ -109,7 +109,7 @@ local function Deposit(r, tab)
 	PickupItem(r.bag, r.slot)
 	PickupGuildBankItem(tab, dst)
 	if GetCursorInfo and GetCursorInfo() then ClearCursor() end
-	GM.After(0.3, GU.Refresh)
+	GM.Time.After(0.3, GU.Refresh)
 end
 
 -- withdraw one gbank stack into bags — merge onto a bag partial first
@@ -131,7 +131,7 @@ local function Withdraw(r, tab)
 	PickupGuildBankItem(tab, r.slot)
 	PickupItem(dst.bag, dst.slot)
 	if GetCursorInfo and GetCursorInfo() then ClearCursor() end
-	GM.After(0.3, GU.Refresh)
+	GM.Time.After(0.3, GU.Refresh)
 end
 
 local function MakeRow(parent, i, arrow)
@@ -202,12 +202,7 @@ local function Build()
 	pcall(f.RegisterEvent, f, "GUILDBANKTAB_CHANGED")
 	pcall(f.RegisterEvent, f, "GUILDBANK_UPDATE_TABS")
 	f:SetScript("OnEvent", function()
-		if not f:IsShown() or ui.evPending then return end
-		ui.evPending = true
-		GM.After(0.2, function()
-			ui.evPending = nil
-			GU.Refresh()
-		end)
+		if f:IsShown() then GM.View.Coalesced("gbank", GU.Refresh) end
 	end)
 
 	ui.summary = GM.MakeFontString(f, GM.FONT, 9, "textDim")
@@ -324,7 +319,7 @@ local function FillTabs()
 			b:SetScript("OnClick", function()
 				pcall(SetCurrentGuildBankTab, t)
 				pcall(QueryGuildBankTab, t)
-				GM.After(0.3, GU.Refresh)
+				GM.Time.After(0.3, GU.Refresh)
 			end)
 			-- install once and read the live tab name at hover — Tip()
 			-- hooks OnEnter, so installing per refresh accumulated
@@ -422,7 +417,7 @@ function GU.OnGBankOpen()
 	pcall(QueryGuildBankTab, CurTab())
 	GU.Refresh()
 	GM.FramePark.Park(GuildBankFrame)
-	GM.After(0.3, function() GM.FramePark.Park(GuildBankFrame) end)
+	GM.Time.After(0.3, function() GM.FramePark.Park(GuildBankFrame) end)
 end
 
 function GU.Show()
@@ -482,3 +477,8 @@ f:SetScript("OnUpdate", function(_, e)
 		ui.frame:Hide()
 	end
 end)
+
+GM.View.Register("gbank", { class = "contextual",
+	Show = GU.Show, Hide = GU.Hide, Toggle = GU.Toggle,
+	Refresh = GU.Refresh,
+	IsShown = function() return ui and ui.frame and ui.frame:IsShown() end })

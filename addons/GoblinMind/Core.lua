@@ -48,7 +48,7 @@ GM.frame:SetScript("OnEvent", function(_, event, arg1)
 		if GM.PlanQueue and GM.PlanQueue.Prewarm then pcall(GM.PlanQueue.Prewarm) end
 		-- a first-load dead font (FONT_MED blanks until /reload) gets a
 		-- second shot after Prewarm once the client is fully up
-		if GM.FixupFonts then GM.After(1, GM.FixupFonts) end
+		if GM.FixupFonts then GM.Time.After(1, GM.FixupFonts) end
 		GM.Print("loaded — /goblin for the plan window")
 	end
 end)
@@ -228,7 +228,7 @@ local function CmdPerf()
 	}
 	if t0.ev then for k, v in pairs(c._ev) do t0.ev[k] = v end end
 	GM.Print("perf — sampling " .. dur .. "s…")
-	GM.After(dur, function()
+	GM.Time.After(dur, function()
 		local function rate(n) return format("%.1f/s", (n or 0) / dur) end
 		local fps = GetFramerate and GetFramerate() or -1
 		local tk = (g._ticks or 0) - t0.ticks
@@ -504,9 +504,9 @@ Cmd("minimap", function()
 	if GM.minimapBtn then GM.minimapBtn:SetShown(not GM.db.minimapHide) end
 	GM.Print("minimap button " .. (GM.db.minimapHide and "hidden" or "shown"))
 end)
-Cmd("groups", function() GM.GroupsUI.Toggle() end, true)
-Cmd({ "ops", "operations" }, function() GM.OpsUI.Toggle() end, true)
-Cmd("crafts", function() GM.CraftingUI.Toggle() end, true)
+Cmd("groups", function() GM.View.Toggle("groups") end, true)
+Cmd({ "ops", "operations" }, function() GM.View.Toggle("ops") end, true)
+Cmd("crafts", function() GM.View.Toggle("crafting") end, true)
 Cmd("craftdebug", function(arg)
 	GM.Crafting.Debug(arg)
 end, true)
@@ -524,7 +524,7 @@ Cmd({ "help", "?" }, function()
 	GM.Print(table.concat(GM.CmdList(), "  ·  "))
 end, { prefix = true, help = "command list" })
 Cmd({ "orders", "writs", "writ" }, function()
-	if GM.OrdersUI then GM.OrdersUI.Toggle() end
+	GM.View.Toggle("orders")
 end)
 Cmd("board ", function(arg)
 	local name = arg
@@ -572,13 +572,13 @@ Cmd("fontcheck", function()
 			pair[1], tostring(ok), tostring(w)))
 	end
 end, true)
-Cmd({ "market", "shop" }, function() GM.Shopping.Toggle() end, true)
+Cmd({ "market", "shop" }, function() GM.View.Toggle("market") end, true)
 Cmd("warehouse", function() GM.Banking.WarehousingScan() end, true)
 Cmd("bankdebug", function()
 	GM.Banking.debug = not GM.Banking.debug
 	GM.Print("bank debug " .. (GM.Banking.debug and "ON" or "off"))
 end, true)
-Cmd("destroy", function() GM.DestroyingUI.Toggle() end, true)
+Cmd("destroy", function() GM.View.Toggle("destroy") end, true)
 Cmd("destroydemo", function()
 	if GM.Destroying.demo then
 		GM.Destroying.demo = nil
@@ -587,13 +587,13 @@ Cmd("destroydemo", function()
 	else
 		GM.Destroying.SeedDemo()
 		GM.Print("destroy demo data seeded — /goblin destroydemo to clear")
-		GM.DestroyingUI.Show()
+		GM.View.Show("destroy")
 	end
 end)
-Cmd({ "sett", "options" }, function() GM.Settings.Toggle() end, true)
-Cmd({ "ledger", "overview" }, function() GM.Overview.Toggle() end, true)
-Cmd("ah", function() GM.AHUI.Toggle() end)
-Cmd({ "auctions", "myauctions" }, function() GM.MyAuctions.Toggle() end, true)
+Cmd({ "sett", "options" }, function() GM.View.Toggle("settings") end, true)
+Cmd({ "ledger", "overview" }, function() GM.View.Toggle("overview") end, true)
+Cmd("ah", function() GM.View.Toggle("ah") end)
+Cmd({ "auctions", "myauctions" }, function() GM.View.Toggle("auctions") end, true)
 Cmd({ "dash", "home", "budget" }, function()
 	GM.PlanQueue.SetHome(true)
 	GM.PlanQueue.Show()
@@ -617,14 +617,14 @@ Cmd("vendor", function(arg)
 		end
 		return
 	end
-	GM.VendoringUI.Toggle()
+	GM.View.Toggle("vendor")
 end, true)
-Cmd("bank", function() GM.BankUI.Toggle() end, true)
-Cmd("gbank", function() GM.GBankUI.Toggle() end, true)
-Cmd("mail", function() GM.MailUI.Toggle() end, true)
-Cmd("snip", function() GM.SniperUI.Toggle() end, true)
+Cmd("bank", function() GM.View.Toggle("bank") end, true)
+Cmd("gbank", function() GM.View.Toggle("gbank") end, true)
+Cmd("mail", function() GM.View.Toggle("mail") end, true)
+Cmd("snip", function() GM.View.Toggle("sniper") end, true)
 Cmd("intel", function() GM.Intel.Dump() end, true)
-Cmd("tasks", function() GM.TaskListUI.Toggle() end, true)
+Cmd("tasks", function() GM.View.Toggle("tasks") end, true)
 Cmd("uidump", CmdUiDump, true)
 Cmd("ahdump", function(arg)
 	local pid = tonumber(arg) or ParseItemRef(arg)
@@ -701,7 +701,7 @@ local pullArmed
 function GM.PullInbox()
 	if pullArmed or not CheckInbox then return end
 	pullArmed = true
-	GM.After(0.7, function()
+	GM.Time.After(0.7, function()
 		pullArmed = nil
 		pcall(CheckInbox)
 		-- the new-mail flag only re-evaluates on UPDATE_PENDING_MAIL,
@@ -709,7 +709,7 @@ function GM.PullInbox()
 		-- report an empty inbox, hide the minimap icon ourselves
 		-- (harmless if headers lag: it re-arms on the next genuine
 		-- pending-mail event)
-		GM.After(0.5, function()
+		GM.Time.After(0.5, function()
 			-- the flag follows UNREAD headers, not inbox count — a
 			-- text-only mail lingers after looting without relighting
 			-- the icon. Resolve the mail frame on either minimap
@@ -1354,7 +1354,7 @@ iw:SetScript("OnEvent", function(_, e)
 	if GM.itemWatch.sched then return end
 	GM.itemWatch.sched = true
 	GM.itemWatch.bursts = (GM.itemWatch.bursts or 0) + 1
-	GM.After(0.25, function()
+	GM.Time.After(0.25, function()
 		GM.itemWatch.sched = nil
 		for _, fn in ipairs(GM.itemWatch.cbs) do pcall(fn) end
 	end)

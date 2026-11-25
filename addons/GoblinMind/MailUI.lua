@@ -69,7 +69,7 @@ local function RecipientNames()
 		local k = n:lower()
 		if not seen[k] then seen[k] = true names[#names + 1] = n end
 	end
-	for _, r in ipairs(GM.db and GM.db.mailRecent or {}) do add(r) end
+	for _, r in ipairs(GM.Model.Pref("mailRecent") or {}) do add(r) end
 	for _, ck in ipairs(GM.Ledger and GM.Ledger.Chars() or {}) do add(ck) end
 	local nf = C_FriendList and C_FriendList.GetNumFriends
 		and C_FriendList.GetNumFriends() or 0
@@ -103,8 +103,7 @@ end
 -- remember a recipient after a successful send (dedup, cap 10)
 local function PushRecent(to)
 	if not GM.db then return end
-	local rec = GM.db.mailRecent
-	if not rec then rec = {} GM.db.mailRecent = rec end
+	local rec = GM.Model.Pref("mailRecent", {})
 	for i, r in ipairs(rec) do
 		if r:lower() == to:lower() then tremove(rec, i) break end
 	end
@@ -236,12 +235,7 @@ local function Build()
 	pcall(f.RegisterEvent, f, "MAIL_FAILED")
 	pcall(f.RegisterEvent, f, "BAG_UPDATE")
 	f:SetScript("OnEvent", function()
-		if not f:IsShown() or ui.evPending then return end
-		ui.evPending = true
-		GM.After(0.2, function()
-			ui.evPending = nil
-			MU.Refresh()
-		end)
+		if f:IsShown() then GM.View.Coalesced("mail", MU.Refresh) end
 	end)
 
 	-- toolbar: page toggles + actions — PageTabs strides 62px per tab,
@@ -512,14 +506,14 @@ function MU.OpenAll()
 			return
 		end
 		if CommandPending() then
-			GM.After(0.4, step) -- server busy — retry shortly
+			GM.Time.After(0.4, step) -- server busy — retry shortly
 			return
 		end
 		pcall(AutoLootMailItem, next_i)
 		PullInbox()
 		ui.openedCount = (ui.openedCount or 0) + 1
 		ui.openAllBtn.text:SetText("OPENING · " .. ui.openedCount)
-		GM.After(0.45, step)
+		GM.Time.After(0.45, step)
 	end
 	step()
 end
@@ -821,11 +815,11 @@ function MU.OnMailOpen()
 	ui.frame:Show()
 	pcall(CheckInbox)
 	PullInbox() -- pending mail often lands a beat after MAIL_SHOW
-	GM.After(2.0, function() pcall(CheckInbox) end)
+	GM.Time.After(2.0, function() pcall(CheckInbox) end)
 	MU.Refresh()
 	-- the panel manager may still be positioning it; park now + retry
 	GM.FramePark.Park(MailFrame)
-	GM.After(0.3, function() GM.FramePark.Park(MailFrame) end)
+	GM.Time.After(0.3, function() GM.FramePark.Park(MailFrame) end)
 end
 
 function MU.Show()
@@ -997,8 +991,13 @@ function MU.CodProbe()
 			.. tostring(err))
 	end
 	if GM.db then
-		GM.db.dbgDump = table.concat(GM.dbgCap, "\n")
+		GM.Model.SetPref("dbgDump", table.concat(GM.dbgCap, "\n"))
 	end
 	GM.dbgCap = nil
 	GM.Print("captured — /reload flushes to SavedVariables (dbgDump)")
 end
+
+GM.View.Register("mail", { class = "contextual",
+	Show = MU.Show, Hide = MU.Hide, Toggle = MU.Toggle,
+	Refresh = MU.Refresh,
+	IsShown = function() return ui and ui.frame and ui.frame:IsShown() end })

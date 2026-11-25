@@ -181,12 +181,4 @@ function GM.FixupFonts()
 	end
 end
 
--- C_Timer exists on modern clients; fall back to a no-op rescan delay.
-function GM.After(delay, fn)
-	GM._afterCalls = (GM._afterCalls or 0) + 1
-	if C_Timer and C_Timer.After then
-		C_Timer.After(delay, fn)
-	else
-		fn()
-	end
-end
+

@@ -9,7 +9,7 @@ local RADIUS = 80
 local atan2 = atan2 or function(y, x) return math.atan(y, x) end
 
 local function Place()
-	local a = (GM.db and GM.db.minimapAngle) or -0.785
+	local a = GM.Model.Pref("minimapAngle") or -0.785
 	GM.minimapBtn:ClearAllPoints()
 	GM.minimapBtn:SetPoint("CENTER", Minimap, "CENTER", cos(a) * RADIUS, sin(a) * RADIUS)
 end
@@ -19,7 +19,7 @@ local function UpdatePositionFromCursor()
 	local cx, cy = GetCursorPosition()
 	local s = Minimap:GetEffectiveScale()
 	cx, cy = cx / s, cy / s
-	GM.db.minimapAngle = atan2(cy - my, cx - mx)
+	GM.Model.SetPref("minimapAngle", atan2(cy - my, cx - mx))
 	Place()
 end
 
@@ -77,6 +77,6 @@ function GM.MinimapInit()
 	b:SetScript("OnLeave", GM.Widgets.HintHide)
 
 	GM.minimapBtn = b
-	b:SetShown(not (GM.db and GM.db.minimapHide))
+	b:SetShown(not GM.Model.Pref("minimapHide"))
 	Place()
 end

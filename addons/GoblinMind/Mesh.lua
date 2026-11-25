@@ -64,7 +64,7 @@ local function TryJoin(tries)
 		end
 	end
 	if missing and tries < 5 then
-		GM.After(5, function() TryJoin(tries + 1) end)
+		GM.Time.After(5, function() TryJoin(tries + 1) end)
 	end
 end
 
@@ -90,7 +90,7 @@ local function Pump()
 		-- un-sent once Pump takes it)
 		local dead = msg.pred and msg.pred()
 		if dead then
-			GM.After(SEND_GAP, Pump)
+			GM.Time.After(SEND_GAP, Pump)
 			return
 		end
 		local ch = ChanID(msg.ch)
@@ -125,7 +125,7 @@ local function Pump()
 			tinsert(sendQ, 1, msg)
 		end
 	end
-	GM.After(SEND_GAP, Pump)
+	GM.Time.After(SEND_GAP, Pump)
 end
 
 -- walk the queue and drop entries whose suppress key matches —
@@ -642,8 +642,8 @@ f:SetScript("OnEvent", function(_, ev, ...)
 		OnAddon(nil, ...)
 	elseif ev == "PLAYER_LOGIN" then
 		if RegPrefix then pcall(RegPrefix, PREFIX) end
-		GM.After(4, function() TryJoin(0) end)
-		GM.After(8, M.Purge)
+		GM.Time.After(4, function() TryJoin(0) end)
+		GM.Time.After(8, M.Purge)
 		if GM.Orders and GM.Orders.RelayStart then
 			GM.Orders.RelayStart()
 		end
@@ -653,7 +653,7 @@ f:SetScript("OnEvent", function(_, ev, ...)
 		-- board we serve is already covered by enough fresh
 		-- beaconers (Trickle-lite — small swarms keep total
 		-- coverage, big swarms stay quiet)
-		GM.After(30, function()
+		GM.Time.After(30, function()
 			if not (GM.Orders and GM.Orders.BeaconNeeded
 				and not GM.Orders.BeaconNeeded()) then
 				M.Advertise()
@@ -663,16 +663,16 @@ f:SetScript("OnEvent", function(_, ev, ...)
 					and not GM.Orders.BeaconNeeded()) then
 					M.Advertise()
 				end
-				GM.After(280, advTick)
+				GM.Time.After(280, advTick)
 			end
-			GM.After(280, advTick)
+			GM.Time.After(280, advTick)
 		end)
 		-- discovery probe: if no peer advertised a board we care
 		-- about by the time we've settled, ask the channel. v2:
 		-- DiscoveryNeeded() — covered boards don't probe, and a
 		-- probe that got answered in the last 30s coalesces with
 		-- the next asker's instead of stacking
-		GM.After(40, function()
+		GM.Time.After(40, function()
 			if not (GM.Orders and GM.Orders.DiscoveryNeeded
 				and not GM.Orders.DiscoveryNeeded()) then
 				M.Send("D", { "x" })

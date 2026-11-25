@@ -972,3 +972,8 @@ if GM.OnItemInfoLoaded then
 		if ui and ui.frame and ui.frame:IsShown() then OU.Refresh() end
 	end)
 end
+
+GM.View.Register("orders", {
+	Show = OU.Show, Hide = OU.Hide, Toggle = OU.Toggle,
+	Refresh = OU.Refresh,
+	IsShown = function() return ui and ui.frame and ui.frame:IsShown() end })
