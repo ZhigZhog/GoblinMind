@@ -695,16 +695,41 @@ end
 -- the indentation + fade is what makes nesting readable at a glance
 local TREE_DEPTH_COLOR = { "text", "text", "textDim", "secondary" }
 
-function GU.RefreshTree()
+-- view-model for the registry's Data() pass — the tree list, the
+-- selected group's protected flag, and the items page's member/
+-- catalogue lists. Per-row ItemEntry/Count enrichment stays in
+-- the painters on purpose: it runs per VISIBLE row only, and a
+-- 700-item catalogue would pay 700 lookups for a 12-row viewport
+local function Data()
+	-- the registry computes Data() before Refresh — apply the same
+	-- selection default here or protOn goes nil on first show
+	local path = ui.editPath or "Base Group"
+	local g = GM.Groups.db.groups[path]
+	local vm = {
+		groups = TreeList(),
+		protOn = g and g.protected,
+	}
+	if ui.page == "items" then
+		vm.ids = MemberList()
+		vm.catList = CatList()
+		local ungrouped = 0
+		for _, e in ipairs(vm.catList or {}) do
+			if not e.grp then ungrouped = ungrouped + 1 end
+		end
+		vm.ungrouped = ungrouped
+	end
+	return vm
+end
+
+function GU.RefreshTree(vm)
 	-- PROT toggle mirrors the selected group's protected flag —
 	-- accent when the subtree shields its items from sell/post
 	if ui.protBtn then
-		local g = ui.editPath and GM.Groups.db.groups[ui.editPath]
-		local on = g and g.protected
+		local on = vm and vm.protOn
 		ui.protBtn.text:SetText(on and "ON" or "PROT")
 		ui.protBtn.text:SetTextColor(GM.RGB(on and "accent" or "textDim"))
 	end
-	local groups = TreeList()
+	local groups = (vm and vm.groups) or TreeList()
 	local maxOff = math.max(0, #groups - TREE_ROWS)
 	if ui.treeOff > maxOff then ui.treeOff = maxOff end
 	W.ScrollText(ui.treePanel.count, ui.treeOff, TREE_ROWS, #groups)
@@ -781,8 +806,8 @@ local function MemberList()
 	return ids
 end
 
-function GU.RefreshMembers()
-	local ids = MemberList()
+function GU.RefreshMembers(vm)
+	local ids = (vm and vm.ids) or MemberList()
 	ui.memTitle:SetText(format("ITEMS IN %s (%d)", editPath(), #ids))
 	local maxOff = math.max(0, #ids - LIST_ROWS)
 	if ui.memOff > maxOff then ui.memOff = maxOff end
@@ -847,8 +872,9 @@ local function CatList()
 	return out
 end
 
-function GU.RefreshCatalogue(skipRebuild)
-	local list = skipRebuild and ui.catList or CatList()
+function GU.RefreshCatalogue(skipRebuild, vm)
+	local list = skipRebuild and ui.catList
+		or (vm and vm.catList) or CatList()
 	if not list then return end
 	local ungrouped = 0
 	for _, e in ipairs(list) do if not e.grp then ungrouped = ungrouped + 1 end end
@@ -911,8 +937,10 @@ end
 
 -- ============ refresh orchestrator ============
 
-function GU.Refresh()
+function GU.Refresh(vm)
 	if not ui then return end
+	ui.editPath = ui.editPath or "Base Group"
+	vm = vm or Data()
 	if ui.itemsNode then
 		ui.itemsNode:SetVisible(ui.page == "items")
 		ui.opsNode:SetVisible(ui.page == "ops")
@@ -924,11 +952,10 @@ function GU.Refresh()
 		b.text:SetTextColor(GM.RGB(b.key == ui.page and "accent" or "textDim"))
 		GM.Panel(b, b.key == ui.page and "contHighest" or "contHigh")
 	end
-	ui.editPath = ui.editPath or "Base Group"
-	GU.RefreshTree()
+	GU.RefreshTree(vm)
 	if ui.page == "items" then
-		GU.RefreshMembers()
-		GU.RefreshCatalogue()
+		GU.RefreshMembers(vm)
+		GU.RefreshCatalogue(false, vm)
 	else
 		RefreshOps()
 	end
@@ -958,5 +985,6 @@ end
 
 GM.View.Register("groups", {
 	Show = GU.Show, Hide = GU.Hide, Toggle = GU.Toggle,
+	Data = Data,
 	Refresh = GU.Refresh,
 	IsShown = function() return ui and ui.frame and ui.frame:IsShown() end })

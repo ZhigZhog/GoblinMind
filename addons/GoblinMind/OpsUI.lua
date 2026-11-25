@@ -562,22 +562,77 @@ local function BuildFieldRow(fldP, fd, idx)
 	return row
 end
 
-local function RefreshFields()
+-- view-model for the registry's Data() pass — ops list, repaired
+-- selection, per-field effective/raw values, and the protected
+-- lookup so the painter never calls back into GM.Groups
+local function Data()
+	local selType = SelType()
+	local ops = GM.Groups.Ops(selType)
+	-- selection repair as vm: default to the first op, drop a name
+	-- whose op no longer exists — the painter writes ui.selName
+	local selName = ui.selName
+	if not selName and ops[1] then selName = ops[1].name end
+	if selName and not GM.Groups.OpFields(selType, selName) then
+		selName = ops[1] and ops[1].name or nil
+	end
+	local groupMode = ui.groupMode and ui.selGroup
+	local vm = {
+		selType = selType, ops = ops, selName = selName,
+		groupMode = groupMode, group = ui.selGroup,
+		prot = {},
+	}
+	for _, o in ipairs(ops) do
+		if GM.Groups.OpProtected(o.name) then
+			vm.prot[o.name] = true
+		end
+	end
+	if not groupMode then
+		vm.op = selName and GM.Groups.OpFields(selType, selName)
+		if vm.op then
+			for _, o in ipairs(ops) do
+				if o.name == selName then vm.paths = o.userPaths end
+			end
+		end
+	end
+	vm.defs = {}
+	for _, fd in ipairs(GM.Groups.OP_FIELDS) do
+		if fd[2] == selType then vm.defs[#vm.defs + 1] = fd end
+	end
+	vm.fields = {}
+	for i, fd in ipairs(vm.defs) do
+		local eff, raw
+		if groupMode then
+			eff = GM.Groups.OpResolve(ui.selGroup, fd[2], fd[3])
+			raw = GM.Groups.OpRawLocal(ui.selGroup, fd[2], fd[3])
+		else
+			raw = vm.op and vm.op[fd[3]]
+			eff = raw
+			if eff == nil then
+				local d = GM.Groups.OP_DEFAULTS[fd[2]]
+				eff = d and d[fd[3]]
+			end
+		end
+		vm.fields[i] = { eff = eff, raw = raw, owned = raw ~= nil }
+	end
+	return vm
+end
+
+local function RefreshFields(vm)
 	-- hide all existing rows, build/refresh rows for the selected type
 	for _, r in ipairs(ui.fieldRows) do r.host:Hide() end
-	local op = CurOp()
-	local n = SelName()
-	local groupMode = ui.groupMode and ui.selGroup
+	local op = vm.op
+	local n = vm.selName
+	local groupMode = vm.groupMode
 	ui.grpBtn:SetShown(groupMode and true or false)
 
 	if groupMode then
-		ui.fldHeader:SetText("FIELDS — " .. ui.selGroup)
+		ui.fldHeader:SetText("FIELDS — " .. vm.group)
 		ui.assignedFs:SetText(
 			"local overrides — I = inherited · O = local (click to reset)")
 		ui.assignedFs:Show()
 		ui.renEb:Hide() ui.delBtn:Hide() ui.assignBtn:Hide()
 	else
-		local prot = op and GM.Groups.OpProtected(n)
+		local prot = op and vm.prot[n]
 		ui.fldHeader:SetText(n and ("FIELDS — " .. n
 			.. (prot and "  (protected)" or "")) or "FIELDS — select an op")
 		ui.renEb:SetShown(op and not prot)
@@ -589,10 +644,7 @@ local function RefreshFields()
 
 		-- assignment summary — count + a bounded preview, not the full
 		-- path dump (a 194-group TSM import overflows the whole panel)
-		local paths
-		for _, o in ipairs(GM.Groups.Ops(SelType())) do
-			if o.name == n then paths = o.userPaths end
-		end
+		local paths = vm.paths
 		if paths and #paths > 0 then
 			local prev = {}
 			for i = 1, math.min(#paths, 3) do prev[i] = paths[i] end
@@ -606,12 +658,8 @@ local function RefreshFields()
 	end
 
 	-- rows for this type's fields
-	local defs = {}
-	for _, fd in ipairs(GM.Groups.OP_FIELDS) do
-		if fd[2] == SelType() then defs[#defs + 1] = fd end
-	end
 	local idx = 0
-	for _, fd in ipairs(defs) do
+	for _, fd in ipairs(vm.defs) do
 		idx = idx + 1
 		local r = ui.fieldRows[idx]
 		if not r or r.def ~= fd then
@@ -620,22 +668,14 @@ local function RefreshFields()
 			ui.fieldRows[idx] = r
 		end
 		r.host:Show()
-		local eff, owned
+		local fv = vm.fields[idx]
+		local eff, owned = fv.eff, fv.owned
+		r.effRaw = fv.raw
 		if groupMode then
-			eff = GM.Groups.OpResolve(ui.selGroup, fd[2], fd[3])
-			r.effRaw = GM.Groups.OpRawLocal(ui.selGroup, fd[2], fd[3])
-			owned = r.effRaw ~= nil
 			r.io:Show()
 			r.io.text:SetText(owned and "O" or "I")
 			r.io.text:SetTextColor(GM.RGB(owned and "accent" or "textDim"))
 		else
-			eff = op[fd[3]]
-			if eff == nil then
-				local d = GM.Groups.OP_DEFAULTS[fd[2]]
-				eff = d and d[fd[3]]
-			end
-			r.effRaw = op[fd[3]]
-			owned = r.effRaw ~= nil
 			r.io:Hide()
 		end
 		if not (r.eb and r.eb.dirty) then
@@ -655,8 +695,9 @@ end
 
 -- ============ refresh ============
 
-function OU.Refresh()
+function OU.Refresh(vm)
 	if not ui then return end
+	vm = vm or Data()
 	for _, r in ipairs(ui.typeRows) do
 		local sel = r.key == SelType()
 		r._gmBg:SetColorTexture(GM.RGB(sel and "contHighest" or "contLowest"))
@@ -667,12 +708,9 @@ function OU.Refresh()
 		ui.groupMode and "contHighest" or "contLowest"))
 	ui.groupRow.text:SetTextColor(GM.RGB(
 		ui.groupMode and "accent" or "textDim"))
-	-- default selection: first op of the type
-	local ops = GM.Groups.Ops(SelType())
-	if not ui.selName and ops[1] then ui.selName = ops[1].name end
-	if ui.selName and not GM.Groups.OpFields(SelType(), ui.selName) then
-		ui.selName = ops[1] and ops[1].name or nil
-	end
+	-- selection repair happened in Data() — write the resolved name
+	ui.selName = vm.selName
+	local ops = vm.ops
 	for i, r in ipairs(ui.opRows) do
 		local o = ops[i]
 		if o then
@@ -683,7 +721,7 @@ function OU.Refresh()
 			r.text:SetTextColor(GM.RGB(sel and "accent" or "text"))
 			r.sub:SetText((o.users > 0
 				and (o.users .. (o.users == 1 and " grp" or " grps")) or "")
-				.. (GM.Groups.OpProtected(o.name) and " ·" or ""))
+				.. (vm.prot[o.name] and " ·" or ""))
 			local name = o.name
 			r:SetScript("OnClick", function()
 				ui.selName = name
@@ -696,7 +734,7 @@ function OU.Refresh()
 	end
 	ui.delBtn.armed = nil
 	ui.delBtn.text:SetText("DEL")
-	RefreshFields()
+	RefreshFields(vm)
 end
 
 function OU.Show()
@@ -726,5 +764,6 @@ end
 
 GM.View.Register("ops", {
 	Show = OU.Show, Hide = OU.Hide, Toggle = OU.Toggle,
+	Data = Data,
 	Refresh = OU.Refresh,
 	IsShown = function() return ui and ui.frame and ui.frame:IsShown() end })

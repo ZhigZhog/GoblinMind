@@ -768,21 +768,61 @@ local function SearchPaint()
 	end
 end
 
-function OU.Refresh()
-	if not ui then return end
+-- view-model for the registry's Data() pass — boards, the active
+-- board's order rows (mine-aggregated when toggled), the expanded
+-- flatten, reserve/inbox state. ClearAcked/ReserveSync reconcile
+-- the model itself; they run HERE so the vm never reads pre-sync
+-- state (the registry computes Data before Refresh)
+local function Data()
 	OR.ClearAcked()
 	OR.ReserveSync()
+	local boards = OR.Boards()
+	local board = ui.board
+	if not board or not has(boards, board) then
+		board = boards[1]
+	end
+	local remote = board and OR.IsRemote(board)
+	local orders
+	if ui.mineOnly then
+		orders = {}
+		local me = OR.MyUUID()
+		for _, b in ipairs(boards) do
+			for _, o in ipairs(OR.Orders(b)) do
+				if o.posterUUID == me then orders[#orders + 1] = o end
+			end
+		end
+	else
+		orders = board and OR.Orders(board) or {}
+	end
+	local disp = {}
+	for _, o in ipairs(orders) do
+		disp[#disp + 1] = o
+		if ui.expanded and ui.expanded[o.id] then
+			for _, c in ipairs(o.commits or {}) do
+				disp[#disp + 1] = { order = o, commit = c }
+			end
+		end
+	end
+	return {
+		boards = boards, board = board, remote = remote,
+		reserve = OR.ReserveTotal(),
+		underfunded = OR.Underfunded(),
+		orders = orders, disp = disp, me = OR.MyUUID(),
+		mine = board and OR.MyCommits(board) or {},
+		cods = OR.InboxCODs(),
+	}
+end
+
+function OU.Refresh(vm)
+	if not ui then return end
+	vm = vm or Data()
 
 	-- board buttons
-	local boards = OR.Boards()
-	if not ui.board or not has(boards, ui.board) then
-		ui.board = boards[1]
-	end
+	local boards = vm.boards
+	ui.board = vm.board
 	-- a remote board needs its snapshot asked over the tunnel —
 	-- throttled inside RelayAsk (60s per board)
-	if ui.board and OR.IsRemote(ui.board) then
-		OR.RelayAsk(ui.board)
-	end
+	if vm.remote then OR.RelayAsk(ui.board) end
 	for i, b in ipairs(ui.boardBtns) do b:Hide() end
 	ui.boardBtns = {}
 	ui.boardBar:SetText("boards:")
@@ -808,12 +848,12 @@ function OU.Refresh()
 	end
 
 	-- hint: reserve state + refresh semantics
-	local res = OR.ReserveTotal()
+	local res = vm.reserve
 	local h = "live via mesh · pull reconciles"
 	if res > 0 then
 		h = ("reserved %s — "):format(GoldText(res)) .. h
 	end
-	if OR.Underfunded() then
+	if vm.underfunded then
 		h = GM.CC("warn") .. "UNDERFUNDED RESERVES — " .. h .. "|r"
 	end
 	ui.hint:SetText(h)
@@ -837,38 +877,16 @@ function OU.Refresh()
 		SearchPaint()
 	else
 		for i = 1, BROWSEROWS do ui.browseRows[i]:Hide() end
-		local orders
-		if ui.mineOnly then
-			-- MY BUY ORDERS: aggregate every board, keep only mine
-			orders = {}
-			local me2 = OR.MyUUID()
-			for _, b in ipairs(OR.Boards()) do
-				for _, o in ipairs(OR.Orders(b)) do
-					if o.posterUUID == me2 then
-						orders[#orders + 1] = o
-					end
-				end
-			end
-		else
-			orders = ui.board and OR.Orders(ui.board) or {}
-		end
-		-- flatten: each expanded order's commits nest under it and
-		-- consume row-pool slots; scroll just pages the flat list
-		local disp = {}
-		for _, o in ipairs(orders) do
-			disp[#disp + 1] = o
-			if ui.expanded and ui.expanded[o.id] then
-				for _, c in ipairs(o.commits or {}) do
-					disp[#disp + 1] = { order = o, commit = c }
-				end
-			end
-		end
+		local orders = vm.orders
+		-- flatten happened in Data() — commits nest under expanded
+		-- orders and consume row-pool slots
+		local disp = vm.disp
 		ui.listP.title:SetText(ui.mineOnly
 			and ("MY BUY ORDERS · " .. #orders)
 			or ("BOARD — " .. tostring(ui.board or "none")
 				.. " · " .. #orders .. " open"))
 		ui.listP.count:SetText("")
-		local me = OR.MyUUID()
+		local me = vm.me
 		for i = 1, ROWS do
 			local r = ui.rows[i]
 			local e = disp[i + (ui.scroll or 0)]
@@ -888,7 +906,7 @@ function OU.Refresh()
 	end
 
 	-- my commits
-	local mine = ui.board and OR.MyCommits(ui.board) or {}
+	local mine = vm.mine
 	ui.mineP.count:SetText(tostring(#mine))
 	ui.mineEmpty:SetShown(#mine == 0)
 	for i = 1, 6 do
@@ -920,7 +938,7 @@ function OU.Refresh()
 	end
 
 	-- inbound CODs
-	local hits = OR.InboxCODs()
+	local hits = vm.cods
 	ui.incP.count:SetText(tostring(#hits))
 	ui.incEmpty:SetShown(#hits == 0)
 	for i = 1, 6 do
@@ -975,5 +993,6 @@ end
 
 GM.View.Register("orders", {
 	Show = OU.Show, Hide = OU.Hide, Toggle = OU.Toggle,
+	Data = Data,
 	Refresh = OU.Refresh,
 	IsShown = function() return ui and ui.frame and ui.frame:IsShown() end })
