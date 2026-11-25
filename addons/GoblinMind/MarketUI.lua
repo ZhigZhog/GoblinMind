@@ -331,7 +331,10 @@ local function DrawPrice(entry)
 		end
 		local lastB = occ[#occ]
 		Dot(ch, px((lastB - 0.5) / NB), py(cs[lastB].c), 5, "accent")
-		axisLabel(py(cs[lastB].c) - 5, GM.Money(cs[lastB].c), "text", 10)
+		-- the -5 baseline can sink below the floor-pinned lo label —
+		-- clamp so the current price never sorts under the scale low
+		axisLabel(math.max(py(cs[lastB].c) - 5, base + 12),
+			GM.Money(cs[lastB].c), "text", 10)
 	else
 		for i = 2, #pts do
 			Segment(ch, px(pts[i - 1].x), py(pts[i - 1].v),
@@ -339,7 +342,8 @@ local function DrawPrice(entry)
 		end
 		local last = pts[#pts]
 		Dot(ch, px(last.x), py(last.v), 5, "accent")
-		axisLabel(py(last.v) - 5, GM.Money(last.v), "text", 10)
+		axisLabel(math.max(py(last.v) - 5, base + 12),
+			GM.Money(last.v), "text", 10)
 	end
 	axisLabel(top + 1, GM.Money(hi), "textDim", 9)
 	axisLabel(base + 2, GM.Money(lo), "textDim", 9)
