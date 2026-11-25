@@ -36,27 +36,24 @@ function GM.Solver.Plan(asks, p50, p90, gold, vel, opts)
 	local resale       = floor(postTarget * (1 - ahCut))
 	local guard        = opts.normal and postTarget
 		or (p90 and math.min(p50, p90) or p50)
-	-- drag-lot live: posting inside the bait→wall trap gap or below
-	-- the bait is a dominated position — the gap is the same queue
-	-- slot as the wall undercut at a worse price, and below-bait is
-	-- the same first slot at whatever discount the model picked.
-	-- Lift to the appropriate reference instead of feeding the
-	-- manipulator's buy; at/above the wall is normal pricing
+	-- drag-lot live: undercut the honest ask, period. Posting inside
+	-- the bait→wall gap or below the bait is dominated — the gap is
+	-- the same queue position at a worse price, and below-bait
+	-- engages the drag on its terms (it re-drags under you, or its
+	-- sniper collects the discount). Wall-undercut sits behind the
+	-- bait at near-market and sells the moment it clears
 	local baitUnit, wall
 	for _, a in ipairs(asks) do
 		if a.bait then baitUnit = baitUnit or a.unit
 		elseif not wall then wall = a.unit end
 	end
 	if baitUnit then
-		local u = opts.undercut or 0
-		if guard <= baitUnit then
-			-- below the bait entirely: every price under it claims the
-			-- same first queue slot — take the max price for it
-			guard = baitUnit - u
-		elseif wall and guard < wall then
-			guard = wall - u
+		local ref = wall or baitUnit -- all-bait book: the drag itself
+		-- is the only reference left
+		if guard < ref then
+			guard = ref - (opts.undercut or 0)
+			if opts.maxP then guard = math.min(guard, opts.maxP) end
 		end
-		if opts.maxP then guard = math.min(guard, opts.maxP) end
 	end
 	local buyCap       = math.max(0, postCap - owned)
 	local spend, qty   = 0, 0

@@ -118,18 +118,15 @@ function A.PriceFor(aOps, itemID, normal, cheapest, baitUnit)
 	if minP and normal < minP then normal = minP end
 	if maxP and normal > maxP then normal = maxP end
 	local unit = normal
-	-- undercut the first honest ask — and when a drag lot is live, a
-	-- normal price inside the bait→wall gap gets lifted to the wall
-	-- undercut: posting in the gap is the same queue position at a
-	-- worse price, and the lot fills the manipulator's buy
+	-- undercut the first honest ask — with a drag lot live that's
+	-- EVERYTHING below the wall: gap posts and below-bait posts are
+	-- both dominated positions that feed the trap
 	if cheapest and (cheapest - undercut < normal
-		or (baitUnit and normal > baitUnit
-			and normal <= cheapest - undercut)) then
+		or (baitUnit and normal < cheapest)) then
 		unit = cheapest - undercut
-	elseif baitUnit and normal <= baitUnit then
-		-- below the drag entirely: every price under it claims the
-		-- same first slot — the discount just feeds the manipulator's
-		-- sniper. Undercut the bait by the op amount instead
+	elseif baitUnit and not cheapest and normal < baitUnit then
+		-- all-bait book: the drag itself is the only reference —
+		-- take its queue slot by the op amount, no deeper
 		unit = baitUnit - undercut
 	end
 	if minP and unit < minP then
