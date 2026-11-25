@@ -392,12 +392,28 @@ local function Refresh(lite, vm)
 	local all = GM.Gather.Leaderboard()
 	ui._all = all
 	local filtered = ui.zoneFilter or ui.kindFilter
-	ui.count:SetText(tid
+	local countTxt = tid
 		and (#rows .. " producers of " .. TargetName(tid)
 			.. "  (" .. #all .. " hidden)")
 		or (filtered and (#rows .. " of " .. #all .. " shown"))
 		or (#rows > 0 and (#rows .. " farms")
-			or "no data yet — gather nodes or farm mobs to seed"))
+			or "no data yet — gather nodes or farm mobs to seed")
+	if #rows == 0 and not tid then
+		-- a scoped map can hold recorded nodes yet produce no row —
+		-- the solver needs 3+ records of one kind to loop. Say so
+		-- or an active gatherer reads "0 of N shown" as not
+		-- recording
+		local m = ui.zoneFilter or (ui.contFilter and ui.contFilter.id)
+		local recs = m and GoblinMindGather.nodes
+			and GoblinMindGather.nodes[m]
+		if recs and #recs > 0 then
+			countTxt = (#all > 0 and "0 of " .. #all .. " shown — "
+				or "")
+				.. #recs .. " nodes recorded here — "
+				.. "need 3+ of a kind for a loop"
+		end
+	end
+	ui.count:SetText(countTxt)
 	W.ScrollText(ui.scrollFs, (firstVis or 1) - 1,
 		math.max(0, (lastVis or 0) - (firstVis or 1) + 1), #rows)
 	-- detail line for the selected/current-map route

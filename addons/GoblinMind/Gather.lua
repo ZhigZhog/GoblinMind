@@ -2281,11 +2281,19 @@ local arm -- { kind, pos, until_ }
 local Journal -- forward decl: ArmWindow runs before its definition
 
 local function ArmWindow(kind, until_)
+	local prev = arm
 	arm = {
 		kind = kind, pos = PosNow(),
 		until_ = until_ or (GetTime() + (G.KindDefs[kind]
 			and G.KindDefs[kind].armSec or WINDOW_SEC)),
 	}
+	-- a second source may arm the same cast (SUCCEEDED's fixed
+	-- fallback lands after CHANNEL_START's channel-derived end —
+	-- the shorter window must not clobber the longer one
+	if prev and prev.kind == kind and prev.until_ > arm.until_ then
+		arm = prev
+		return
+	end
 	Journal("arm", { mob = kind,
 		items = format("%.1fs", arm.until_ - GetTime()) })
 end
