@@ -810,6 +810,9 @@ function GM.MigrateCharKeys()
 	if GM.Inventory and GM.Inventory.MigrateKeys then
 		pcall(GM.Inventory.MigrateKeys)
 	end
+	if GM.Budget and GM.Budget.MigrateKeys then
+		pcall(GM.Budget.MigrateKeys)
+	end
 end
 
 -- Realm key matching AppData scopes, e.g. "Normal-Alliance"

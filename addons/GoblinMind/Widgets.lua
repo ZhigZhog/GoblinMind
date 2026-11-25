@@ -824,7 +824,7 @@ function W.AcctRow(parent, idx, compact)
 	eb:Hide()
 	row.nameEdit = eb
 	nameBtn:SetScript("OnClick", function()
-		local a = GM.Budget.List()[idx]
+		local a = GM.Budget.List()[row._idx or idx]
 		if not a then return end
 		eb:SetText(a.name)
 		eb:SetTextColor(GM.RGB("text"))
@@ -835,7 +835,7 @@ function W.AcctRow(parent, idx, compact)
 	W.Tip(nameBtn, function() return {
 		"Rename account", "click to edit the name" } end)
 	eb:SetScript("OnEnterPressed", function(self)
-		GM.Budget.Rename(idx, self:GetText())
+		GM.Budget.Rename(row._idx or idx, self:GetText())
 		self:Hide()
 		self:ClearFocus()
 		AcctRefresh()
@@ -854,7 +854,7 @@ function W.AcctRow(parent, idx, compact)
 	kind.text:SetWidth(46)
 	kind.text:SetWordWrap(false)
 	kind:SetScript("OnClick", function()
-		local a = GM.Budget.List()[idx]
+		local a = GM.Budget.List()[row._idx or idx]
 		if not a then return end
 		local order = GM.Budget.KIND_ORDER
 		for j, k in ipairs(order) do
@@ -882,7 +882,7 @@ function W.AcctRow(parent, idx, compact)
 	grp.text:SetJustifyH("LEFT")
 	grp.text:SetWordWrap(false)
 	grp:SetScript("OnClick", function()
-		local a = GM.Budget.List()[idx]
+		local a = GM.Budget.List()[row._idx or idx]
 		if not a then return end
 		local paths = GM.Budget.GroupPaths()
 		local cur, nextPath = a.group, nil
@@ -922,7 +922,7 @@ function W.AcctRow(parent, idx, compact)
 	del.text:SetPoint("CENTER")
 	del.text:SetText("x")
 	del:SetScript("OnClick", function()
-		GM.Budget.Del(idx)
+		GM.Budget.Del(row._idx or idx)
 		AcctRefresh()
 	end)
 	W.Tip(del, function() return { "Delete account" } end)
@@ -935,7 +935,7 @@ function W.AcctRow(parent, idx, compact)
 	rst.text:SetPoint("CENTER")
 	rst.text:SetText("r")
 	rst:SetScript("OnClick", function()
-		GM.Budget.ResetSpent(idx)
+		GM.Budget.ResetSpent(row._idx or idx)
 		AcctRefresh()
 	end)
 	W.Tip(rst, function() return { "Reset spent to zero" } end)
@@ -956,8 +956,22 @@ end
 
 -- unified paint: alloc text per kind, save accounts show "reserved",
 -- spend accounts show left + spent (red when overdrawn)
-function W.PaintAcctRow(row, a)
-	row.name:SetText(a.name)
+function W.PaintAcctRow(row, a, idx)
+	row._idx = idx
+	local ck = GM.Budget.OwnerKey and GM.Budget.OwnerKey(a)
+	local label = a.name
+	if ck then
+		label = (GM.Budget.Crest(ck) or "")
+			.. GM.Budget.CharCC(ck) .. a.name .. "|r"
+		-- an alt's named account needs its owner spelled out — the
+		-- pool's name already IS the char's, so it skips the tag
+		if not GM.IsSelfCharKey(ck)
+			and a.name ~= GM.Budget.CharName(ck) then
+			label = label .. GM.CC("textDim") .. " · "
+				.. GM.Budget.CharName(ck) .. "|r"
+		end
+	end
+	row.name:SetText(label)
 	row.kind.text:SetText(a.pool and "POOL" or GM.Budget.KINDS[a.kind])
 	row.grp.text:SetText(a.group or "—")
 	row.grp.text:SetTextColor(GM.RGB(a.group and "accent" or "textDim"))

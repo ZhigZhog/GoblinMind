@@ -651,6 +651,7 @@ local function RefreshAccounts()
 	for _, r in ipairs(ui.journalRows) do
 		for _, fs in ipairs(r) do fs:SetShown(journal) end
 	end
+	ui.acctGold:SetShown(not journal)
 	ui.acctAdd:SetShown(not journal)
 	ui.acctHint:SetShown(not journal)
 	if journal then
@@ -697,19 +698,45 @@ local function RefreshAccounts()
 		end
 		return
 	end
+	-- combined-gold legend: every known char's purse in its own
+	-- color — the strip doubles as the color-mode legend
+	local total, parts = 0, {}
+	for _, ck in ipairs(GM.Budget.CharsOrdered()) do
+		local ch = GM.Budget.CharInfo(ck)
+		if ch and (ch.g or 0) > 0 then
+			total = total + ch.g
+			parts[#parts + 1] = GM.Budget.Crest(ck)
+				.. GM.Budget.CharCC(ck) .. GM.Budget.CharName(ck)
+				.. "|r " .. GM.MoneyShort(ch.g)
+		end
+	end
+	ui.acctGold:SetText(GM.MoneyShort(total) .. "  "
+		.. GM.CC("textDim") .. "across|r   "
+		.. table.concat(parts, "   "))
 	local list = GM.Budget.List()
+	local order = GM.Budget.Order()
+	local maxOff = math.max(0, #list - #ui.acctRows)
+	if (ui.aScroll or 0) > maxOff then ui.aScroll = maxOff end
 	for i, row in ipairs(ui.acctRows) do
-		local a = list[i]
+		local idx = order[i + (ui.aScroll or 0)]
+		local a = idx and list[idx]
 		if a then
 			row:Show()
-			W.PaintAcctRow(row, a)
+			W.PaintAcctRow(row, a, idx)
 		else
 			row:Hide()
 		end
 	end
-	-- nudge toward the first real account while the auto-seeded pool
-	-- is the whole list
-	ui.acctOnboard:SetShown(#list == 1 and list[1].pool ~= nil)
+	-- nudge toward the first real account while this char's seeded
+	-- pool is the whole self-owned list
+	local selfAccts = {}
+	for _, a in ipairs(list) do
+		if GM.IsSelfCharKey(GM.Budget.OwnerKey(a)) then
+			selfAccts[#selfAccts + 1] = a
+		end
+	end
+	ui.acctOnboard:SetShown(#selfAccts == 1
+		and selfAccts[1].pool ~= nil)
 end
 
 -- ============ window ============
@@ -918,6 +945,33 @@ local function Build()
 		ui.acctSegs[i] = seg
 		W.PaintSeg(seg, i == 1)
 	end
+	-- color mode cycler: class colors vs a stable per-char hue —
+	-- sits with the view segs in the title band
+	local colSeg = W.Segment(accts, "COL:CLASS", 82, 16)
+	colSeg:SetPoint("TOPRIGHT", -10 - #avs * 76 - 6, -4)
+	local function PaintColSeg()
+		colSeg.text:SetText(L(GM.Budget.ColorMode() == "class"
+			and "COL:CLASS" or "COL:CHAR"))
+	end
+	PaintColSeg()
+	W.PaintSeg(colSeg, true)
+	colSeg:SetScript("OnClick", function()
+		GM.Budget.SetColorMode(GM.Budget.ColorMode() == "class"
+			and "char" or "class")
+		PaintColSeg()
+		if GM.PlanQueue and GM.PlanQueue.Refresh then
+			GM.PlanQueue.Refresh()
+		end
+		RefreshAccounts()
+	end)
+	W.Tip(colSeg, function() return {
+		L("Account coloring"),
+		L("class: WoW class colors · char: per-character hue") } end)
+	-- accounts-mode strip: combined gold across every registered
+	-- char — the journal's balance line lives in the same slot
+	ui.acctGold = GM.MakeFontString(accts, GM.FONT, 9, "secondary")
+	ui.acctGold:SetPoint("TOPLEFT", 8, -20)
+	ui.acctGold:SetWordWrap(false)
 	ui.journalBal = GM.MakeFontString(accts, GM.FONT, 9, "secondary")
 	ui.journalBal:SetPoint("TOPLEFT", 8, -20)
 	ui.journalBal:SetWordWrap(false)
@@ -952,11 +1006,15 @@ local function Build()
 		end
 		ui.journalRows[i] = r
 	end
-	-- wheel scrubs back through the journal while that view is up
+	-- wheel scrubs: back through the journal in journal view, down
+	-- the combined account list in accounts view
 	accts:EnableMouseWheel(true)
 	accts:SetScript("OnMouseWheel", function(_, d)
 		if ui.acctView == "journal" then
 			ui.jScroll = math.max(0, ui.jScroll - d * 3)
+			RefreshAccounts()
+		else
+			ui.aScroll = math.max(0, (ui.aScroll or 0) - d * 2)
 			RefreshAccounts()
 		end
 	end)
@@ -964,14 +1022,16 @@ local function Build()
 	local ACCT_ROWS = 7
 	for i = 1, ACCT_ROWS do
 		local row = W.AcctRow(accts, i, false)
-		row:SetPoint("TOPLEFT", 8, -20 - (i - 1) * 26)
+		-- past the gold strip: rows hang under it like journal rows
+		-- hang under their headers
+		row:SetPoint("TOPLEFT", 8, -44 - (i - 1) * 26)
 		row:SetWidth(696)
 		ui.acctRows[i] = row
 	end
 	-- onboarding line: shows only while the auto-seeded pool is the
 	-- whole list — the add-row is already right there
 	ui.acctOnboard = GM.MakeFontString(accts, GM.FONT, 9, "secondary")
-	ui.acctOnboard:SetPoint("TOPLEFT", 8, -50)
+	ui.acctOnboard:SetPoint("TOPLEFT", 8, -72)
 	ui.acctOnboard:SetWordWrap(false)
 	ui.acctOnboard:SetText("create an account below to earmark gold — "
 		.. "e.g. a 10% SAVE or an AH float")

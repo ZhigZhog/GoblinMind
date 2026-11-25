@@ -339,15 +339,17 @@ function DB.MountHome(host)
 
 		if GM.Budget then
 			local list = GM.Budget.List()
+			local order = GM.Budget.Order and GM.Budget.Order()
 			for i, row in ipairs(bRows) do
-				local a = list[i]
+				local idx = order and order[i] or i
+				local a = list[idx]
 				if a then
 					row:Show()
 					row.rst:Show()
 					row.del:Show()
 					row.kind:Show()
 					row.grp:Show()
-					Wd.PaintAcctRow(row, a)
+					Wd.PaintAcctRow(row, a, idx)
 				else
 					row:Hide()
 				end

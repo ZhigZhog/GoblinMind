@@ -18,6 +18,146 @@ local function DB()
 	return GM.db.budgets
 end
 
+-- char registry: GM.db.chars[charKey] = { n=name, cls=class token,
+-- fac="Horde"/"Alliance", g=copper snapshot, t } — the gold half of
+-- what inv[] snapshots do for bags/banks: every char's purse reads
+-- back on one screen even though the money itself can't cross chars.
+-- Books stay per-char (the AH is per-faction anyway); only the gold
+-- side compiles.
+local function Chars()
+	if not GM.db.chars then GM.db.chars = {} end
+	return GM.db.chars
+end
+
+-- same character iff the name parts match and neither key's realm
+-- part disproves it — IsSelfCharKey's rule generalized to any pair,
+-- since stored keys can be bare-name or Name-Realm
+local function SameKey(a, b)
+	if a == b then return true end
+	if type(a) ~= "string" or type(b) ~= "string" then return false end
+	local an, ar = a:match("^(.-)%-(.*)$")
+	local bn, br = b:match("^(.-)%-(.*)$")
+	if (an or a) ~= (bn or b) then return false end
+	return not (ar and ar ~= "" and br and br ~= "") or ar == br
+end
+
+-- snapshot the current char into the registry; runs on every Sample
+-- plus PLAYER_MONEY so the combined-gold strip stays live
+local function StampChar()
+	if not GM.db then return end
+	local ck = GM.CharKey()
+	local name = UnitName and UnitName("player") or ck
+	local _, cls = UnitClass and UnitClass("player")
+	local fac = UnitFactionGroup and UnitFactionGroup("player")
+	local ch = Chars()[ck]
+	if not ch then ch = {} Chars()[ck] = ch end
+	ch.n = name and name ~= "" and name or ch.n
+	ch.cls = cls or ch.cls
+	ch.fac = fac or ch.fac
+	ch.g = GetMoney and GetMoney() or 0
+	ch.t = time()
+end
+
+-- the char an account belongs to; legacy rows without a stamp behave
+-- as owned by whoever is looking (they get claimed at Init)
+local function OwnerKey(a) return a.c or GM.CharKey() end
+local function IsSelf(a) return GM.IsSelfCharKey(OwnerKey(a)) end
+function B.OwnerKey(a) return OwnerKey(a) end
+
+-- the owner's purse: live for this char, last snapshot for alts
+local function OwnerGold(a)
+	if IsSelf(a) then
+		return GetMoney and GetMoney() or 0
+	end
+	local k = OwnerKey(a)
+	for ck, ch in pairs(Chars()) do
+		if SameKey(ck, k) then return ch.g or 0 end
+	end
+	return 0
+end
+
+-- registry entry for any spelling of a char key
+function B.CharInfo(ck)
+	for k, ch in pairs(Chars()) do
+		if SameKey(k, ck) then return ch end
+	end
+	return nil
+end
+
+function B.CharName(ck)
+	local n = ck and ck:match("^(.-)%-") or ck
+	return n or "?"
+end
+
+-- faction crest as a fontstring texture escape — renders inline in
+-- any SetText, no widget needed
+function B.Crest(ck)
+	local ch = B.CharInfo(ck)
+	local fac = ch and ch.fac
+	if fac ~= "Alliance" and fac ~= "Horde" then return "" end
+	return "|TInterface\\TargetingFrame\\UI-PVP-" .. fac .. ":13|t "
+end
+
+-- color mode: "class" = RAID_CLASS_COLORS, "char" = a stable hue per
+-- character picked by key hash — legend lives in the gold strip
+local CHAR_PALETTE = {
+	"ffd24a", "4ad2ff", "7be382", "c08cff", "ff9a5c",
+	"ff7bd0", "4ae3c3", "ff6b6b", "7aa8ff", "c8e34a",
+}
+function B.ColorMode() return GM.db.acctColorMode or "class" end
+function B.SetColorMode(m)
+	GM.db.acctColorMode = (m == "char") and "char" or "class"
+end
+
+-- "|cffRRGGBB" for a char — class color when known in class mode,
+-- palette hash otherwise (also the classless-alt fallback)
+function B.CharCC(ck)
+	if B.ColorMode() == "class" then
+		local ch = B.CharInfo(ck)
+		local col = ch and ch.cls and RAID_CLASS_COLORS
+			and RAID_CLASS_COLORS[ch.cls]
+		if col and col.colorStr then return "|c" .. col.colorStr end
+	end
+	local h = 5381
+	for i = 1, #ck do h = (h * 33 + ck:byte(i)) % 16777216 end
+	return "|cff" .. CHAR_PALETTE[h % #CHAR_PALETTE + 1]
+end
+
+-- account display order: this char's accounts first, then alts by
+-- name; returns indices into B.List() so row ops still hit the real
+-- positions
+function B.Order()
+	local out = {}
+	for i in ipairs(DB()) do out[#out + 1] = i end
+	local function rank(i)
+		local a = DB()[i]
+		return IsSelf(a) and 0 or 1,
+			B.CharName(OwnerKey(a)):lower(), i
+	end
+	sort(out, function(x, y)
+		local xs, xn, xi = rank(x)
+		local ys, yn, yi = rank(y)
+		if xs ~= ys then return xs < ys end
+		if xn ~= yn then return xn < yn end
+		return xi < yi
+	end)
+	return out
+end
+
+-- every char key the registry knows, self first then by name —
+-- drives the combined-gold legend
+function B.CharsOrdered()
+	local out = {}
+	for ck in pairs(Chars()) do out[#out + 1] = ck end
+	sort(out, function(a, b)
+		local as = GM.IsSelfCharKey(a) and 0 or 1
+		local bs = GM.IsSelfCharKey(b) and 0 or 1
+		if as ~= bs then return as < bs end
+		return B.CharName(a):lower() < B.CharName(b):lower()
+	end)
+	return out
+end
+
 -- "12g50s25c" / "12g 50s" / "1.5g" / "5000" (bare number = copper) →
 -- copper or nil. Whitespace- and case-tolerant.
 function B.ParseMoney(str)
@@ -45,7 +185,11 @@ function B.List() return DB() end
 
 function B.Add(name, kind, alloc)
 	if not (name and name ~= "" and B.KINDS[kind]) then return nil end
-	local a = { name = name, kind = kind, spent = 0, income = 0 }
+	-- c: owning char — envelopes are per-char purses even though the
+	-- list is account-wide, so a spend can only draw its own char's
+	-- allocation
+	local a = { name = name, kind = kind, spent = 0, income = 0,
+		c = GM.CharKey() }
 	if kind == "save" then
 		a.pct = math.max(0, math.min(100, floor(tonumber(alloc) or 0)))
 	else
@@ -112,15 +256,19 @@ local function Gold() return GetMoney and GetMoney() or 0 end
 -- effective reserve/allocation in copper right now
 function B.Alloc(a)
 	-- the base pool is every copper no other envelope claims — it
-	-- reads live gold instead of a stored alloc so it never drifts
+	-- reads live gold instead of a stored alloc so it never drifts.
+	-- Multi-char: only the OWNER's accounts deduct — an alt's
+	-- envelopes can't carve pieces out of this char's pool
 	if a.pool then
-		local g = Gold()
+		local g = OwnerGold(a)
 		for _, o in ipairs(DB()) do
-			if o ~= a then g = g - B.Remaining(o) end
+			if o ~= a and SameKey(OwnerKey(o), OwnerKey(a)) then
+				g = g - B.Remaining(o)
+			end
 		end
 		return math.max(0, g)
 	end
-	if a.pct then return floor(Gold() * a.pct / 100) end
+	if a.pct then return floor(OwnerGold(a) * a.pct / 100) end
 	return a.alloc or 0
 end
 
@@ -132,11 +280,12 @@ function B.Remaining(a)
 end
 
 -- gold with no claim on it: minus save reserves, minus everything
--- still earmarked in spendable accounts
+-- still earmarked in spendable accounts — this char's purse only;
+-- an alt's envelopes ride on the alt's snapshot gold
 function B.Free()
 	local free = Gold()
 	for _, a in ipairs(DB()) do
-		free = free - B.Remaining(a)
+		if IsSelf(a) then free = free - B.Remaining(a) end
 	end
 	return math.max(0, free)
 end
@@ -155,7 +304,7 @@ local function StepAccount(step)
 		local path = GM.Groups.GroupForItem(step.itemID)
 		if path then
 			for _, a in ipairs(DB()) do
-				if a.group == path then return a end
+				if a.group == path and IsSelf(a) then return a end
 			end
 		end
 	end
@@ -169,14 +318,14 @@ local function MatchingAccounts(step)
 	local out = {}
 	if tag then
 		for _, a in ipairs(DB()) do
-			if a.kind == tag then tinsert(out, a) end
+			if a.kind == tag and IsSelf(a) then tinsert(out, a) end
 		end
 	end
 	-- nothing kind-matched: the base pool is the catch-all — every
 	-- spend draws gold, so every spend may draw the pool down
 	if #out == 0 then
 		for _, a in ipairs(DB()) do
-			if a.pool then tinsert(out, a) end
+			if a.pool and IsSelf(a) then tinsert(out, a) end
 		end
 	end
 	return out, false
@@ -235,13 +384,13 @@ function B.CreditSale(itemID, amount)
 		local path = GM.Groups.GroupForItem(itemID)
 		if path then
 			for _, a in ipairs(DB()) do
-				if a.group == path then target = a break end
+				if a.group == path and IsSelf(a) then target = a break end
 			end
 		end
 	end
 	if not target then
 		for _, a in ipairs(DB()) do
-			if a.kind == "ah" then target = a break end
+			if a.kind == "ah" and IsSelf(a) then target = a break end
 		end
 	end
 	if target then
@@ -254,6 +403,7 @@ end
 -- free-gold series — capped rolling buffers in the SV
 local HIST_CAP = 200
 function B.Sample()
+	StampChar()
 	local t = time()
 	for _, a in ipairs(DB()) do
 		a.hist = a.hist or {}
@@ -326,16 +476,59 @@ function B.Flow(a, days)
 	       math.max(0, (a.spent or 0) - base.out)
 end
 
+-- fold bare-name keys written in the empty-realm window into
+-- Name-Realm form once the realm resolves — registry keys via the
+-- canonicalizer, a.c owner stamps by the same rule
+function B.MigrateKeys()
+	if not GM.db then return end
+	GM.CanonicalizeCharKeys(Chars(), function(a, b)
+		if not a then return b end
+		if not b then return a end
+		return ((a.t or 0) >= (b.t or 0)) and a or b
+	end)
+	local realm = GetRealmName and GetRealmName() or ""
+	if realm == "" then return end
+	for _, a in ipairs(DB()) do
+		if a.c and not a.c:find("-", 1, true) then
+			a.c = a.c .. "-" .. realm
+		end
+	end
+end
+
 function B.Init()
 	DB()
-	-- fresh installs start with one account: the base pool — a live
-	-- envelope over all unearmarked gold so the ledger's spend math
-	-- has a home before the player creates their own budgets
-	if not next(DB()) then
-		tinsert(DB(), { name = "Base Pool", kind = "ah", pool = true,
-			spent = 0, income = 0 })
+	local me = GM.CharKey()
+	local myName = (UnitName and UnitName("player")) or me
+	-- legacy accounts carry no owner — whoever loads first after the
+	-- migration claims them; that char was the de-facto owner anyway
+	-- since the envelope math always used the live purse
+	for _, a in ipairs(DB()) do
+		if not a.c then a.c = me end
+	end
+	-- "Base Pool" → the owner's name: the pool IS the char's purse,
+	-- so the row reads "Zhig" not a feature label
+	for _, a in ipairs(DB()) do
+		if a.pool and IsSelf(a) and a.name == "Base Pool" then
+			a.name = myName
+		end
+	end
+	-- every char gets its own pool on first post-migration login —
+	-- a live envelope over all unearmarked gold so the ledger's
+	-- spend math has a home before the player creates budgets
+	local hasPool = false
+	for _, a in ipairs(DB()) do
+		if a.pool and IsSelf(a) then hasPool = true break end
+	end
+	if not hasPool then
+		tinsert(DB(), { name = myName, kind = "ah", pool = true,
+			spent = 0, income = 0, c = me })
 	end
 	B.Sample()
+	-- PLAYER_MONEY keeps the registry's gold cell live between
+	-- samples — the combined strip reads it every repaint
+	local mf = CreateFrame("Frame")
+	pcall(mf.RegisterEvent, mf, "PLAYER_MONEY")
+	mf:SetScript("OnEvent", function() StampChar() end)
 	-- background sampler keeps the trend lines honest while idle
 	local function tick()
 		B.Sample()
