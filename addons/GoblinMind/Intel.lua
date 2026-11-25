@@ -139,15 +139,34 @@ local function AnalyzeLadder(id, l, scanT)
 	end
 	-- step chains: long runs of asks 1c apart (or a uniform micro-
 	-- stride — same small delta repeated) read as repricing bots;
-	-- humans round to silver
+	-- humans round to silver. Attribution gate: the rungs have to be
+	-- one seller's ladder — a chain spread across many sellers is an
+	-- organic staircase (a 14-seller price tier isn't bot work), and
+	-- a fully anonymous run can't be exonerated so it still flags
 	local run, prevGap = 1, nil
 	local function CloseRun(hi)
 		if run >= STEP_MIN then
+			local byS, named, top = {}, 0, 0
 			for j = hi - run + 1, hi do
-				l[j].step = true
-				Bump(l[j].seller, 1, scanB)
+				local s = l[j].seller
+				if s and s ~= "?" then
+					byS[s] = (byS[s] or 0) + 1
+					named = named + 1
+				end
 			end
-			m.steps = (m.steps or 0) + run
+			local topS
+			for s, n in pairs(byS) do
+				if n > top then top, topS = n, s end
+			end
+			if named == 0 or top >= math.ceil(run * 0.5) then
+				for j = hi - run + 1, hi do
+					l[j].step = true
+				end
+				-- the suspect point belongs to the laddering account —
+				-- a bystander lot inside its rungs isn't evidence
+				Bump(topS or "?", 1, scanB)
+				m.steps = (m.steps or 0) + run
+			end
 		end
 		run = 1
 	end
