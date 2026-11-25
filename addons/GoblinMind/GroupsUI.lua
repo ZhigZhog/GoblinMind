@@ -695,32 +695,6 @@ end
 -- the indentation + fade is what makes nesting readable at a glance
 local TREE_DEPTH_COLOR = { "text", "text", "textDim", "secondary" }
 
--- view-model for the registry's Data() pass — the tree list, the
--- selected group's protected flag, and the items page's member/
--- catalogue lists. Per-row ItemEntry/Count enrichment stays in
--- the painters on purpose: it runs per VISIBLE row only, and a
--- 700-item catalogue would pay 700 lookups for a 12-row viewport
-local function Data()
-	-- the registry computes Data() before Refresh — apply the same
-	-- selection default here or protOn goes nil on first show
-	local path = ui.editPath or "Base Group"
-	local g = GM.Groups.db.groups[path]
-	local vm = {
-		groups = TreeList(),
-		protOn = g and g.protected,
-	}
-	if ui.page == "items" then
-		vm.ids = MemberList()
-		vm.catList = CatList()
-		local ungrouped = 0
-		for _, e in ipairs(vm.catList or {}) do
-			if not e.grp then ungrouped = ungrouped + 1 end
-		end
-		vm.ungrouped = ungrouped
-	end
-	return vm
-end
-
 function GU.RefreshTree(vm)
 	-- PROT toggle mirrors the selected group's protected flag —
 	-- accent when the subtree shields its items from sell/post
@@ -936,6 +910,33 @@ local function RefreshOps()
 end
 
 -- ============ refresh orchestrator ============
+
+-- view-model for the registry's Data() pass — the tree list, the
+-- selected group's protected flag, and the items page's member/
+-- catalogue lists. Per-row ItemEntry/Count enrichment stays in
+-- the painters on purpose: it runs per VISIBLE row only, and a
+-- 700-item catalogue would pay 700 lookups for a 12-row viewport.
+-- Lives below MemberList/CatList — both are upvalues
+local function Data()
+	-- the registry computes Data() before Refresh — apply the same
+	-- selection default here or protOn goes nil on first show
+	local path = ui.editPath or "Base Group"
+	local g = GM.Groups.db.groups[path]
+	local vm = {
+		groups = TreeList(),
+		protOn = g and g.protected,
+	}
+	if ui.page == "items" then
+		vm.ids = MemberList()
+		vm.catList = CatList()
+		local ungrouped = 0
+		for _, e in ipairs(vm.catList or {}) do
+			if not e.grp then ungrouped = ungrouped + 1 end
+		end
+		vm.ungrouped = ungrouped
+	end
+	return vm
+end
 
 function GU.Refresh(vm)
 	if not ui then return end
