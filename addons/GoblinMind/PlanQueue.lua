@@ -1623,6 +1623,10 @@ function PQ.Refresh()
 	end
 
 	if PQ.plan then
+		-- the summary line is ours now — the no-plan branch clears it
+		-- once on the transition so a mid-scan ScanStatus isn't
+		-- clobbered but a finished plan's headline never goes stale
+		ui.planHeadline = true
 		if ui.headerCols then
 			local hc = PQ.plan.mode
 				and (HEAD_COLS[PQ.plan.mode] or { "ITEM", "DETAIL" })
@@ -1781,6 +1785,11 @@ function PQ.Refresh()
 		ui.clear:Show()
 	else
 		ui.sumEdge:SetColorTexture(GM.RGB("outlineVar"))
+		if ui.planHeadline then
+			ui.planHeadline = nil
+			ui.summary:SetText(GM.CC("textDim")
+				.. "no plan — run a scan or drop an item in the header|r")
+		end
 		ui.summary2:SetText("")
 		ui.exec:Hide()
 		ui.skip:Hide()
