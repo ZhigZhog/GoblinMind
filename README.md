@@ -3,10 +3,10 @@
 A standalone auction-house intelligence addon for **World of Warcraft:
 Forever** (interface `16001`). Price model, execution planner, player
 buy-order boards, crafting planner, ledger, gathering routes +
-map overlays, group/operation system, session takeovers — TSM-styled
-dark UI, **no TSM required**.
+map overlays, group/operation system, market terminal, session
+takeovers — TSM-styled dark UI, **no TSM required**.
 
-**0.2.0-beta** — live on
+**0.3.0-beta** — live on
 [CurseForge](https://www.curseforge.com/wow/addons/goblinmind) and
 [Releases](https://github.com/ZhigZhog/GoblinMind/releases).
 Expect rough edges; bug reports file themselves to the issue
@@ -107,6 +107,20 @@ your active listings with undercut flags (sorted undercut-first), plus
 a BAGS page that previews the post decision for every bag item using
 the shared book — no scan needed. POST SCAN walks checked items.
 
+### Market terminal (MARKET tab in the AH window)
+
+A trading-desk page for the targeted item: **price chart** (I-beam
+candles over book history, fair-price marker, min-buyout bounds),
+**depth chart** of the live ask ladder with your own market point,
+and a **numbers grid** — velocity, spread, supply, sale stats. An
+**intel pane** pools manipulation signals across scans: bait walls,
+step-chains, one-seller dominance — and the same flags feed the
+posting/undercut engine so plans never undercut a bait step into
+the wall trap. **AUTO** runs an item-scoped market scan on a
+visible cadence. A detachable **ticker tape** watchlist strip
+(stock-strip sized, move/lock/dim/click-through in settings)
+follows prices on whatever you're watching.
+
 ### Buy-order boards (`/goblin writs`)
 
 Standing buy orders for anything — including items you don't own.
@@ -158,24 +172,6 @@ otherwise); world map and minimap overlays show node pins, camp
 blobs, and the route loop, each on its own opacity channel in
 settings. `/goblin gatherimport` pulls in GatherLite data.
 
-### Gathering (`/goblin gather`)
-
-Node and farm tracking that learns as you play. Herb, mine, and fish
-nodes record as exact spawn points; killing mobs builds **farm zones**
-with observed drop rates, kill rates, and expected value per hour
-(sustained GPM — spawn capacity and respawn bounds included, not just
-raw yield). The leaderboard ranks camps by real money rate; click a
-row to inspect, double-click to plant a waypoint.
-
-**BUILD** solves the most profitable loop in the scoped zone and
-starts running it immediately — an in-world **marker** (pulse ring +
-distance readout) chases you stop to stop, advancing as you arrive.
-Routes save/load per zone. The map pane inside the window shows real
-terrain (MapWise when installed, parchment + explored tiles
-otherwise); world map and minimap overlays show node pins, camp
-blobs, and the route loop, each on its own opacity channel in
-settings. `/goblin gatherimport` pulls in GatherLite data.
-
 ### Groups & operations (`/goblin groups`, `/goblin ops`)
 
 TSM-style group trees. Groups contain items; **operations** (auctioning,
@@ -188,9 +184,13 @@ TSM-compatible expressions like `min(dbmarket, 120% crafting)`.
 
 ### Ledger (`/goblin ledger`)
 
-Every buy/sell/cancel GoblinMind performs is recorded per character and
-per account. The overview shows balance trends, income/spend pie
-charts, budgets, and the transaction history. `/goblin ledger N`
+Every buy/sell/cancel GoblinMind performs is recorded **double-entry**,
+per character and per account — including a receivable account for
+auctions sold but not yet paid, and mail-invoice records when the
+payment lands. The accounts pane shows combined gold across all your
+characters (crest + class colors); the wealth chart tracks gold on
+hand plus the value of everything listed; the journal view is a
+columnar transaction history. `/goblin ledger N`
 dumps the last N raw transactions to chat.
 
 ### Destroying (`/goblin destroy`)
@@ -259,8 +259,6 @@ over the mesh when the backend is unreachable.
 | `/goblin writs` / `orders` | buy-order boards + your orders |
 | `/goblin snipe` | sniper |
 | `/goblin crafts` | crafting planner |
-| `/goblin gather` / `farm` | gathering leaderboard + route controls |
-| `/goblin gatherimport` / `glimport` | import GatherLite node data |
 | `/goblin gather` / `farm` | gathering leaderboard + route controls |
 | `/goblin gatherimport` / `glimport` | import GatherLite node data |
 | `/goblin groups` | group tree |
