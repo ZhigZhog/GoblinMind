@@ -1061,45 +1061,46 @@ local function Build()
 	-- itemClassFilters query on an empty search string, which is what
 	-- Blizzard's own tree clicks send. classID/subClassID = Blizzard's
 	-- stable itemClass/itemSubClass enum values (1.60 taxonomy).
+	local L = GM.L or function(s) return s end
 	local BROWSE_TREE = {
-		{ "All Items" },
-		{ "Weapons", 2, {
-			{ "1H Axes", 0 }, { "2H Axes", 1 }, { "Bows", 2 },
-			{ "Guns", 3 }, { "1H Maces", 4 }, { "2H Maces", 5 },
-			{ "Polearms", 6 }, { "1H Swords", 7 }, { "2H Swords", 8 },
-			{ "Staves", 10 }, { "Fist", 13 }, { "Daggers", 15 },
-			{ "Thrown", 16 }, { "Crossbows", 18 }, { "Wands", 19 },
-			{ "Fishing", 20 }, { "Other", 14 } } },
-		{ "Armor", 4, {
-			{ "Cloth", 1 }, { "Leather", 2 }, { "Mail", 3 },
-			{ "Shields", 4 }, { "Librams", 5 }, { "Idols", 6 },
-			{ "Totems", 7 }, { "Misc", 0 } } },
-		{ "Containers", 1, {
-			{ "Bags", 0 }, { "Soul", 1 }, { "Herb", 2 },
-			{ "Enchanting", 3 }, { "Engineering", 4 }, { "Gem", 5 },
-			{ "Mining", 6 }, { "Leatherworking", 7 } } },
-		{ "Consumables", 0, {
-			{ "Potions", 1 }, { "Elixirs", 2 }, { "Flasks", 3 },
-			{ "Scrolls", 4 }, { "Food & Drink", 5 },
-			{ "Item Enhancements", 6 }, { "Bandages", 7 },
-			{ "Other", 8 } } },
-		{ "Trade Goods", 7, {
-			{ "Parts", 1 }, { "Explosives", 2 }, { "Devices", 3 },
-			{ "Cloth", 5 }, { "Leather", 6 }, { "Metal & Stone", 7 },
-			{ "Meat", 8 }, { "Herbs", 9 }, { "Elemental", 10 },
-			{ "Enchanting", 12 }, { "Other", 11 } } },
-		{ "Ammo", 6, {
-			{ "Arrows", 2 }, { "Bullets", 3 } } },
-		{ "Recipes", 9, {
-			{ "Books", 0 }, { "Leatherworking", 1 }, { "Tailoring", 2 },
-			{ "Engineering", 3 }, { "Blacksmithing", 4 },
-			{ "Cooking", 5 }, { "Alchemy", 6 }, { "First Aid", 7 },
-			{ "Enchanting", 8 }, { "Fishing", 9 },
-			{ "Jewelcrafting", 10 } } },
-		{ "Quest Items", 12 },
-		{ "Miscellaneous", 15, {
-			{ "Junk", 0 }, { "Reagents", 1 }, { "Pets", 2 },
-			{ "Holiday", 3 }, { "Mounts", 5 }, { "Other", 4 } } },
+		{ L("All Items") },
+		{ L("Weapons"), 2, {
+			{ L("1H Axes"), 0 }, { L("2H Axes"), 1 }, { L("Bows"), 2 },
+			{ L("Guns"), 3 }, { L("1H Maces"), 4 }, { L("2H Maces"), 5 },
+			{ L("Polearms"), 6 }, { L("1H Swords"), 7 }, { L("2H Swords"), 8 },
+			{ L("Staves"), 10 }, { L("Fist"), 13 }, { L("Daggers"), 15 },
+			{ L("Thrown"), 16 }, { L("Crossbows"), 18 }, { L("Wands"), 19 },
+			{ L("Fishing"), 20 }, { L("Other"), 14 } } },
+		{ L("Armor"), 4, {
+			{ L("Cloth"), 1 }, { L("Leather"), 2 }, { L("Mail"), 3 },
+			{ L("Shields"), 4 }, { L("Librams"), 5 }, { L("Idols"), 6 },
+			{ L("Totems"), 7 }, { L("Misc"), 0 } } },
+		{ L("Containers"), 1, {
+			{ L("Bags"), 0 }, { L("Soul"), 1 }, { L("Herb"), 2 },
+			{ L("Enchanting"), 3 }, { L("Engineering"), 4 }, { L("Gem"), 5 },
+			{ L("Mining"), 6 }, { L("Leatherworking"), 7 } } },
+		{ L("Consumables"), 0, {
+			{ L("Potions"), 1 }, { L("Elixirs"), 2 }, { L("Flasks"), 3 },
+			{ L("Scrolls"), 4 }, { L("Food & Drink"), 5 },
+			{ L("Item Enhancements"), 6 }, { L("Bandages"), 7 },
+			{ L("Other"), 8 } } },
+		{ L("Trade Goods"), 7, {
+			{ L("Parts"), 1 }, { L("Explosives"), 2 }, { L("Devices"), 3 },
+			{ L("Cloth"), 5 }, { L("Leather"), 6 }, { L("Metal & Stone"), 7 },
+			{ L("Meat"), 8 }, { L("Herbs"), 9 }, { L("Elemental"), 10 },
+			{ L("Enchanting"), 12 }, { L("Other"), 11 } } },
+		{ L("Ammo"), 6, {
+			{ L("Arrows"), 2 }, { L("Bullets"), 3 } } },
+		{ L("Recipes"), 9, {
+			{ L("Books"), 0 }, { L("Leatherworking"), 1 }, { L("Tailoring"), 2 },
+			{ L("Engineering"), 3 }, { L("Blacksmithing"), 4 },
+			{ L("Cooking"), 5 }, { L("Alchemy"), 6 }, { L("First Aid"), 7 },
+			{ L("Enchanting"), 8 }, { L("Fishing"), 9 },
+			{ L("Jewelcrafting"), 10 } } },
+		{ L("Quest Items"), 12 },
+		{ L("Miscellaneous"), 15, {
+			{ L("Junk"), 0 }, { L("Reagents"), 1 }, { L("Pets"), 2 },
+			{ L("Holiday"), 3 }, { L("Mounts"), 5 }, { L("Other"), 4 } } },
 	}
 	local bb = CreateFrame("Frame", nil, f)
 	bb:SetSize(336, 24 + 17 * 18 + 8)
