@@ -126,6 +126,11 @@ function A.PriceFor(aOps, itemID, normal, cheapest, baitUnit)
 		or (baitUnit and normal > baitUnit
 			and normal <= cheapest - undercut)) then
 		unit = cheapest - undercut
+	elseif baitUnit and normal <= baitUnit then
+		-- below the drag entirely: every price under it claims the
+		-- same first slot — the discount just feeds the manipulator's
+		-- sniper. Undercut the bait by the op amount instead
+		unit = baitUnit - undercut
 	end
 	if minP and unit < minP then
 		return nil, "market below min"
