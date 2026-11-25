@@ -375,11 +375,16 @@ function OV.RefreshChart()
 		and GM.Inventory.PostedValue() or 0
 	local held = GM.Inventory and GM.Inventory.HeldValue
 		and GM.Inventory.HeldValue() or 0
-	local now = gold + posted + held
+	local rcbl = GM.Ledger and GM.Ledger.Accounts
+		and (GM.Ledger.Accounts().rcbl or 0) or 0
+	local now = gold + posted + held + rcbl
 	ui.kpiTotal:SetText("TOTAL " .. GM.Money(now))
 	local split = "on hand " .. GM.MoneyShort(gold)
 	if held > 0 then
 		split = split .. " + stock " .. GM.MoneyShort(held)
+	end
+	if rcbl > 0 then
+		split = split .. " + incoming " .. GM.MoneyShort(rcbl)
 	end
 	if posted > 0 then
 		split = split .. " + posted " .. GM.MoneyShort(posted)
@@ -404,12 +409,12 @@ function OV.RefreshChart()
 		-- Zero-total samples never draw: pre-tag alts and init races
 		-- wrote them into the shared pool as giant fake dips
 		if p.t >= cutoff
-			and (p.g or 0) + (p.a or 0) + (p.h or 0) > 0
+			and (p.g or 0) + (p.a or 0) + (p.h or 0) + (p.r or 0) > 0
 			and (not p.c or GM.IsSelfCharKey(p.c)) then
 			hist[#hist + 1] = p
 			if p.t < tMin then tMin = p.t end
 			if p.t > tMax then tMax = p.t end
-			local wv = (p.g or 0) + (p.a or 0) + (p.h or 0)
+			local wv = (p.g or 0) + (p.a or 0) + (p.h or 0) + (p.r or 0)
 			vals[#vals + 1] = wv
 			if wv > vMax then vMax = wv end
 			if wv < vMin then vMin = wv end
@@ -425,7 +430,7 @@ function OV.RefreshChart()
 	local dayBase
 	for _, p in ipairs(GM.db.wealthHist or {}) do
 		if p.t >= midnight
-			and (p.g or 0) + (p.a or 0) + (p.h or 0) > 0 then
+			and (p.g or 0) + (p.a or 0) + (p.h or 0) + (p.r or 0) > 0 then
 			dayBase = p
 			break
 		end
@@ -492,6 +497,9 @@ function OV.RefreshChart()
 			end
 			if bal.dep > 0 then
 				parts[#parts + 1] = "dep " .. GM.MoneyShort(bal.dep) .. " out"
+			end
+			if bal.rcbl > 0 then
+				parts[#parts + 1] = "incoming " .. GM.MoneyShort(bal.rcbl)
 			end
 			if bal.pnl ~= 0 then
 				parts[#parts + 1] = "realized " .. GM.Signed(-bal.pnl)
@@ -611,7 +619,8 @@ end
 
 -- journal legs render in canonical account order, positive delta =
 -- debit (money/value arriving), negative = credit
-local JE_ORDER = { "cash", "stock", "posted", "dep", "pnl", "ext" }
+local JE_ORDER = { "cash", "stock", "posted", "dep", "rcbl",
+	"pnl", "ext" }
 
 local function PaintJournalRow(r, e)
 	local money = e.u and e.u * e.q
@@ -668,6 +677,9 @@ local function RefreshAccounts()
 		end
 		if (bal.dep or 0) > 0 then
 			parts[#parts + 1] = "dep " .. GM.MoneyShort(bal.dep) .. " out"
+		end
+		if (bal.rcbl or 0) > 0 then
+			parts[#parts + 1] = "incoming " .. GM.MoneyShort(bal.rcbl)
 		end
 		if (bal.pnl or 0) ~= 0 then
 			-- pnl is a credit account: negative balance = profit,

@@ -457,11 +457,16 @@ function B.Sample()
 	-- inventory instead of cratering W (the chart's giant Xs)
 	local held = GM.Inventory and GM.Inventory.HeldValue
 		and GM.Inventory.HeldValue() or 0
+	-- r: uncollected auction proceeds — at sale the posted term drops
+	-- but gold hasn't arrived; without the receivable the line dips
+	-- for the whole mail window then jumps back
+	local rcbl = GM.Ledger and GM.Ledger.Accounts
+		and (GM.Ledger.Accounts().rcbl or 0) or 0
 	-- an all-zero sample is never information — it's a penniless alt
 	-- writing into the shared SV or an init race where money and
 	-- inventory haven't populated yet, and either way it draws as a
 	-- giant fake dip on every char's wealth chart
-	if gold + posted + held == 0 then return end
+	if gold + posted + held + rcbl == 0 then return end
 	-- the init sample lands at ADDON_LOADED — before PLAYER_LOGIN's
 	-- LoadOwned rehydrates the owned-auction snapshot — so it would
 	-- write a=0/h=0 against real gold and dip every reload. "Not
@@ -469,14 +474,15 @@ function B.Sample()
 	if GM.Inventory.OwnedLoaded
 		and not GM.Inventory.OwnedLoaded() then return end
 	if #w == 0 or w[#w].g ~= gold or w[#w].a ~= posted
-		or w[#w].h ~= held or t - w[#w].t > 3600 then
+		or w[#w].h ~= held or (w[#w].r or 0) ~= rcbl
+		or t - w[#w].t > 3600 then
 		-- c: the sampler char — wealth is per-char by nature and
 		-- untagged mixing drew alt logins as giant fake dips.
 		-- CharKey() not Qualified: the realm stays empty on this
 		-- client and a nil tag makes the chart filter toothless —
 		-- IsSelfCharKey matches a bare name fine
 		w[#w + 1] = { t = t, g = gold, a = posted, h = held,
-			c = GM.CharKey() }
+			r = rcbl, c = GM.CharKey() }
 		if #w > HIST_CAP then tremove(w, 1) end
 	end
 end

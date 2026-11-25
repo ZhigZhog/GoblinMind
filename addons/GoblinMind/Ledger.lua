@@ -55,6 +55,7 @@ end
 -- delta} summing to zero, so a full replay reproduces balances:
 --   cash   gold on hand          stock  inventory at cost in bags
 --   posted AH escrow at cost     dep    listing deposits outstanding
+--   rcbl   auction receivable — sold, proceeds not yet collected
 --   pnl    realized trading P&L — CREDIT balance: negative = profit
 --   ext    outside world (loot, vendors, mail, unseen gold flows)
 local function Journal(kind, s, qty, unit, extra)
@@ -67,8 +68,11 @@ local function Journal(kind, s, qty, unit, extra)
 	elseif kind == "post" then
 		return { stock = -cost, posted = cost, cash = -dep, dep = dep }
 	elseif kind == "sell" then
+		-- a sale is unrealized income at verdict time: proceeds ride
+		-- the mail until collected, so the debit lands on rcbl and
+		-- settles to cash when gold actually arrives (Ledger.Gold)
 		local net = qty * (unit or 0)
-		return { cash = net + dep, posted = -cost, dep = -dep,
+		return { rcbl = net + dep, posted = -cost, dep = -dep,
 			pnl = cost - net }
 	elseif kind == "cancel" or kind == "expire" then
 		return { posted = -cost, stock = cost, dep = -dep, pnl = dep }
@@ -177,8 +181,20 @@ function GM.Ledger.Gold(delta, source)
 	local L = GM.Ledger.db
 	if not L then return end
 	local g = L.gold
-	g[#g + 1] = { t = time(), d = delta, src = source,
-		je = { cash = delta, ext = -delta } }
+	local je = { cash = delta, ext = -delta }
+	if delta > 0 then
+		-- settle outstanding auction receivables first: positive
+		-- inflow is attributed to uncollected proceeds up to the rcbl
+		-- balance, remainder stays untracked (ext). Aggregate, not
+		-- per-sale — a bare money message can't name its auction.
+		local owe = GM.Ledger.Accounts
+			and (GM.Ledger.Accounts().rcbl or 0) or 0
+		local x = math.min(delta, owe)
+		if x > 0 then
+			je = { cash = delta, rcbl = -x, ext = -(delta - x) }
+		end
+	end
+	g[#g + 1] = { t = time(), d = delta, src = source, je = je }
 	if #g > GOLD_CAP then table.remove(g, 1) end
 end
 
@@ -188,7 +204,7 @@ end
 -- the journal can't see (untracked gold flow).
 function GM.Ledger.Accounts(charKey)
 	local bal = { cash = 0, stock = 0, posted = 0, dep = 0,
-		pnl = 0, ext = 0 }
+		rcbl = 0, pnl = 0, ext = 0 }
 	local c = GoblinMindLedger and GoblinMindLedger.byChar
 		and GoblinMindLedger.byChar[charKey or GM.Ledger._ck]
 	if not c then return bal end

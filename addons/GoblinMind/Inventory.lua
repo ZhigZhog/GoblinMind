@@ -289,16 +289,19 @@ function GM.Inventory.RefreshOwned()
 	if not GM.AH.open then return end
 	local ok, n = pcall(C_AuctionHouse.GetNumOwnedAuctions)
 	if not ok or not n then return end
-	-- first pass: collect rows + detect a reliable status field (only
-	-- filter sold/history rows when some row actually reports active=0 —
-	-- guards an inverted enum on this unverified client)
+	-- first pass: collect rows. A nonzero info.status marks
+	-- sold/history rows and is filtered below — no "some row reports
+	-- status==0" precondition: a sole SOLD row has no active sibling
+	-- to prove the field, so it sailed through as active and sat
+	-- POSTED until collection dropped it (missed-completion bug).
+	-- If a client ever reports status always-nonzero garbage the
+	-- cache goes empty — but that's exactly the shape the 15s
+	-- sustained-empty gate exists to catch.
 	local infos = {}
-	local anyActive = false
 	for i = 1, n do
 		local ok2, info = pcall(C_AuctionHouse.GetOwnedAuctionInfo, i)
 		if ok2 and type(info) == "table" then
 			infos[#infos + 1] = { i = i, info = info }
-			if info.status == 0 then anyActive = true end
 		end
 	end
 	-- completeness gate, same shape as the empty gate below: the enum
@@ -337,8 +340,7 @@ function GM.Inventory.RefreshOwned()
 		local aid = info.auctionID or info.auctionId
 		if type(aid) ~= "number" and type(aid) ~= "string" then aid = nil end
 		local dupAid = aid and seenAid[aid]  -- same id twice = ghost row
-		local inactive = anyActive
-			and info.status ~= nil and info.status ~= 0
+		local inactive = info.status ~= nil and info.status ~= 0
 		if id and not dupAid and not inactive then
 			if aid then seenAid[aid] = true end
 			local e = {
