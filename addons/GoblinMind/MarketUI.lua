@@ -204,12 +204,13 @@ end
 -- ============ price chart ============
 
 local WEEK = 7 * 86400
-local function DrawPrice(entry)
+local function DrawPrice(vm)
+	local entry = vm.entry
 	local ch = mp.priceContent
 	ch.msg:SetText("")
 	local pts, seriesMode, window = {}, false, WEEK
-	if M.itemID and GM.History then
-		local s = GM.History.Points(M.itemID, WEEK)
+	if M.itemID and vm.hist then
+		local s = vm.hist
 		if #s >= 2 then
 			seriesMode = true
 			local span = s[#s].t - s[1].t
@@ -381,7 +382,7 @@ end
 
 -- ============ depth chart ============
 
-local function DrawDepth()
+local function DrawDepth(vm)
 	local ch = mp.depthContent
 	ch.msg:SetText("")
 	local asks = M.asks
@@ -420,7 +421,7 @@ local function DrawDepth()
 				or "textDim", 0.9, "ARTWORK")
 	end
 	-- mkt vertical
-	local entry = M.itemID and GM.ItemEntry(M.itemID)
+	local entry = vm.entry
 	if entry and entry.p and entry.p > pmin and entry.p < pmax then
 		local x = px(entry.p)
 		Bar(ch, x, base, 1, top - base, "secondary", 0.8, "ARTWORK")
@@ -434,13 +435,13 @@ end
 
 -- ============ pane repaints ============
 
-local function RefreshHeader()
+local function RefreshHeader(vm)
 	local id = M.itemID
 	mp.icon:SetTexture(id and GM.ItemIcon(id) or 134400)
 	mp.name:SetText(id and (GM.ItemName(id) or ("item " .. id))
 		or "no item targeted")
 	mp.name.fontString:SetTextColor(GM.NameColor(id))
-	local entry = id and GM.ItemEntry(id)
+	local entry = vm.entry
 	local chips = {}
 	if entry then
 		if entry.mb then tinsert(chips, "mb " .. GM.Money(entry.mb)) end
@@ -511,7 +512,7 @@ local function BindAskRow(row, a, idx)
 	row.a = a
 end
 
-local function RefreshAskBook()
+local function RefreshAskBook(vm)
 	local asks = M.asks or {}
 	mp.askPanel:SetTitle("Ask Book")
 	-- scan age rides the count — AUTO's cycle becomes visible: the
@@ -522,8 +523,8 @@ local function RefreshAskBook()
 	end
 	-- book-derived rows: show the BOOK's age, not the scan's — the
 	-- tag's whole job is "this is how stale the fallback is"
-	if M.asksBook and GM.AH.bookLotsT then
-		local age = time() - GM.AH.bookLotsT
+	if M.asksBook and vm.bookLotsT then
+		local age = time() - vm.bookLotsT
 		cnt = cnt .. "  ·  book "
 			.. (age >= 60 and format("%dm", age / 60)
 				or format("%ds", age))
@@ -553,14 +554,14 @@ local NUM_FIELDS = {
 	{ "rmkt", "Region market", function(e) return e.rmkt and GM.Money(e.rmkt) end },
 	{ "src", "Source", function(e) return e._src or "emit" end },
 }
-local function RefreshNumbers()
-	local entry = M.itemID and GM.ItemEntry(M.itemID)
+local function RefreshNumbers(vm)
+	local entry = vm.entry
 	for i, f in ipairs(NUM_FIELDS) do
 		local r = mp.numRows[i]
 		r.val:SetText(entry and tostring(f[3](entry) or "—") or "—")
 	end
 	if entry then
-		local bAge = GM.AH.BookAge and GM.AH.BookAge()
+		local bAge = vm.bookAge
 		mp.numFoot:SetText(bAge and bAge < math.huge
 			and ("book " .. (bAge >= 60 and format("%dm", bAge / 60)
 				or format("%ds", bAge)) .. " old")
@@ -614,13 +615,13 @@ autoF:SetScript("OnUpdate", function(_, dt)
 	end
 end)
 
-local function RefreshIntel()
+local function RefreshIntel(vm)
 	local lines = {}
 	local id = M.itemID
-	local marks = id and GM.Intel and GM.Intel.marks[id]
+	local marks = vm.marks
 	-- marks are book-derived — a stale book can't claim a bait lot
 	-- is "live" (a dead drag stays flagged long after it's bought)
-	local live = GM.AH.BookLive and GM.AH.BookLive()
+	local live = vm.bookLive
 	if marks and not live then
 		tinsert(lines, GM.CC("textDim")
 			.. "book stale — marks may be outdated|r")
@@ -696,11 +697,11 @@ local function StepLabel(s)
 		.. (s.desc and GM.CC("textDim") .. " — " .. s.desc .. "|r" or "")
 end
 
-local function RefreshPlan()
-	local plan = GM.PlanQueue.plan
+local function RefreshPlan(vm)
+	local plan = vm.plan
 	local steps = plan and plan.steps
 	local total = steps and #steps or 0
-	local idx = plan and GM.PlanQueue.stepIndex or 0
+	local idx = plan and vm.stepIndex or 0
 	local armed = steps and idx <= total and steps[idx]
 	local showBtns = false
 	if plan and plan.mode and plan.mode ~= "postscan"
@@ -724,7 +725,7 @@ local function RefreshPlan()
 			.. (idx + 2 <= total
 				and format("  …+%d more", total - idx - 1) or "")
 			.. "|r" or "")
-		mp.exec:SetText(GM.AH.pendingConfirm and "Confirm"
+		mp.exec:SetText(vm.pendingConfirm and "Confirm"
 			or GM.PlanQueue.lossConfirm and "Confirm" or "Execute")
 		mp.prog:SetValue(total > 0 and (idx - 1) / total or 0)
 	end
@@ -732,6 +733,26 @@ local function RefreshPlan()
 	mp.skip:SetVisible(showBtns)
 	mp.rescan:SetVisible(showBtns)
 	mp.prog:SetVisible(showBtns)
+end
+
+-- view-model — not registry-driven (this page is embedded in the
+-- AH window), same contract: the shared model reads computed once
+-- and handed to every painter. Fixed a live bug it exposed:
+-- DrawPrice was called with no entry — its fair-price marker,
+-- fallback dot series, and mb bounds were dead code
+local function Data()
+	local id = M.itemID
+	return {
+		entry = id and GM.ItemEntry(id),
+		hist = id and GM.History and GM.History.Points(id, WEEK),
+		marks = id and GM.Intel and GM.Intel.marks[id],
+		bookLive = GM.AH.BookLive and GM.AH.BookLive(),
+		bookAge = GM.AH.BookAge and GM.AH.BookAge(),
+		bookLotsT = GM.AH.bookLotsT,
+		plan = GM.PlanQueue.plan,
+		stepIndex = GM.PlanQueue.stepIndex,
+		pendingConfirm = GM.AH.pendingConfirm,
+	}
 end
 
 function MU.Refresh()
@@ -759,14 +780,15 @@ function MU.Refresh()
 		M.askWait = nil
 		ScanAsks()
 	end
+	local vm = Data()
 	FreeArt()
-	RefreshHeader()
-	DrawPrice()
-	DrawDepth()
-	RefreshAskBook()
-	RefreshNumbers()
-	RefreshIntel()
-	RefreshPlan()
+	RefreshHeader(vm)
+	DrawPrice(vm)
+	DrawDepth(vm)
+	RefreshAskBook(vm)
+	RefreshNumbers(vm)
+	RefreshIntel(vm)
+	RefreshPlan(vm)
 end
 
 -- ============ build ============
