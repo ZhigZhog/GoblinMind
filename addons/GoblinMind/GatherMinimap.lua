@@ -581,6 +581,21 @@ GM.Cmd("mmdebug", function()
 			tostring(apiR), tostring(tblR),
 			GetCVar("rotateMinimap") or "?",
 			tostring(GetPlayerFacing and GetPlayerFacing())))
+	-- axis-swap probe: UnitPosition's (n,w) vs the world-space
+	-- re-projection of the same spot. If unitN tracks wpW instead
+	-- of wpN the client's returns are (east,north), not
+	-- (north,west) — the whole overlay is axis-swapped and a
+	-- world-fixed point drifts on one screen axis only
+	local n, w, z, c = UnitPosition("player")
+	local mapID = C_Map and C_Map.GetBestMapForUnit
+		and C_Map.GetBestMapForUnit("player")
+	local x, y = mapID and GM.MapPos(c, n, w, mapID)
+	local wpn, wpw, wpc = (x and GM.WorldPos) and
+		GM.WorldPos(mapID, x, y)
+	GM.Print(("unit: n=%.1f w=%.1f c=%s | map=%s x=%.3f y=%.3f | wp: n=%s w=%s c=%s")
+		:format(n or -1, w or -1, tostring(c), tostring(mapID),
+			x or -1, y or -1,
+			tostring(wpn), tostring(wpw), tostring(wpc)))
 end, { prefix = true })
 
 local acc = 0
