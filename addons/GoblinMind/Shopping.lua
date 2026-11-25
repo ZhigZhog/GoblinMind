@@ -491,20 +491,11 @@ local HDR_LABELS = {
 	craft = { "ITEM", "CAN", "COST", "PROFIT", "PROF" },
 }
 
-function S.Refresh()
-	if not ui then return end
-	local labels = HDR_LABELS[ui.mode] or HDR_LABELS.shop
-	for i, fs in ipairs(ui.hdrFs or {}) do fs:SetText(labels[i] or "") end
-	GM.Panel(ui.shopBtn, ui.mode == "shop" and "accent" or "contMedium")
-	GM.Panel(ui.snipeBtn,
-		GM.View.IsShown("sniper")
-		and "accent" or "contMedium")
-	GM.Panel(ui.craftBtn, ui.mode == "craft" and "accent" or "contMedium")
-	ui.action.text:SetText("SCAN")
-	ui.action:SetEnabled(GM.AH.open and ui.mode ~= "craft")
-
-	local pc = GM.AH.pendingConfirm
-	-- ============ tree display: group into item headers + children ============
+-- view-model for the registry's Data() pass — the grouped display
+-- list (asks grouped into item headers + children, or flat craft
+-- rows). S.asks/S.expanded are view state the vm reads; per-row
+-- icon/name enrichment stays in the painter (per-visible-row only)
+local function Data()
 	-- entries: { header=true, itemID, count, totalQty, cheapest, ownCount,
 	--            name, m, cap } or { child=true, d = ask-or-hit }
 	local display = {}
@@ -540,18 +531,41 @@ function S.Refresh()
 
 	if ui.mode == "shop" then
 		local asks = S.asks or {}
-		if #asks == 0 then
-			S.Status(GM.CC("textDim") .. (S.itemID and "no asks listed" or
-				"SHOP — SCAN the targeted item's book|r"))
-		end
 		PushGroup(asks, function(a) return a.itemID end)
-	else
-		-- CRAFT mode: flat recipe rows sorted by profit
-		local recs = GM.Crafting and GM.Crafting.List() or {}
-		if #recs == 0 then
-			S.Status(GM.CC("textDim") .. "CRAFT — open a profession to capture its recipes|r")
-		end
-		for _, r in ipairs(recs) do tinsert(display, { craft = r }) end
+		return {
+			display = display, mode = "shop",
+			empty = #asks == 0 and (S.itemID and "no asks listed"
+				or "SHOP — SCAN the targeted item's book|r"),
+		}
+	end
+	-- CRAFT mode: flat recipe rows sorted by profit
+	local recs = GM.Crafting and GM.Crafting.List() or {}
+	for _, r in ipairs(recs) do tinsert(display, { craft = r }) end
+	return {
+		display = display, mode = "craft",
+		empty = #recs == 0
+			and "CRAFT — open a profession to capture its recipes",
+	}
+end
+
+function S.Refresh(vm)
+	if not ui then return end
+	vm = vm or Data()
+	local labels = HDR_LABELS[ui.mode] or HDR_LABELS.shop
+	for i, fs in ipairs(ui.hdrFs or {}) do fs:SetText(labels[i] or "") end
+	GM.Panel(ui.shopBtn, ui.mode == "shop" and "accent" or "contMedium")
+	GM.Panel(ui.snipeBtn,
+		GM.View.IsShown("sniper")
+		and "accent" or "contMedium")
+	GM.Panel(ui.craftBtn, ui.mode == "craft" and "accent" or "contMedium")
+	ui.action.text:SetText("SCAN")
+	ui.action:SetEnabled(GM.AH.open and ui.mode ~= "craft")
+
+	local pc = GM.AH.pendingConfirm
+	-- ============ tree display from the vm ============
+	local display = vm.display
+	if vm.empty then
+		S.Status(GM.CC("textDim") .. vm.empty .. "|r")
 	end
 
 	for i = 1, ROWS do
@@ -629,5 +643,6 @@ end
 
 GM.View.Register("market", {
 	Show = S.Show, Hide = S.Hide, Toggle = S.Toggle,
+	Data = Data,
 	Refresh = S.Refresh,
 	IsShown = function() return ui and ui.frame and ui.frame:IsShown() end })
