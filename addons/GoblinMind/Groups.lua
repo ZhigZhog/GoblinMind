@@ -32,6 +32,11 @@ GM.Groups.OP_DEFAULTS = OP_DEFAULTS
 GM.Groups.OP_TYPES = { "auctioning", "shopping", "sniper", "crafting",
 	"mailing", "vendoring", "warehousing", "destroying" }
 
+-- module-level L: GM.L doesn't exist at file load — identity is all
+-- the literal-site wraps need (extraction registers the key, LT
+-- resolves it for real when the row renders)
+local L = GM.L or function(s) return s end
+
 -- { label, opType, field, kind, widget, extra } — shared by GroupsUI's
 -- per-group OPS page and OpsUI's named-operation editor.
 -- widget: bool | seg{opts} | stepper{min} | num{min,max} | expr | recip
