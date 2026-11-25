@@ -182,6 +182,12 @@ end
 -- surfaces run it in map-fraction space) — same routine either way
 local cluMap, cluN, cluSig, cluList
 
+-- per-record zone blob fits, in anchor-relative world yards.
+-- Keyed weakly by the SV record (zones persist for the session;
+-- the fit only changes when pockets/kills/radius do, so a
+-- signature check rebuilds it — movement alone can never reshape)
+local zoneFit = setmetatable({}, { __mode = "k" })
+
 
 
 local function WrapNodes(mapID, recs, mmSet)
@@ -345,50 +351,87 @@ local function Update()
 		local zc = G.ZoneCat(zn)
 		local znN, znW = zn.n, zn.w
 		if not (znN and znW) and zn.x and zn.y and zn.map then
+			-- memoize the projection onto the record — an
+			-- intermittent WorldPos failure must not flap the
+			-- fit's inputs between frames (the blob visibly
+			-- jumps when a pocket drops out for one repaint)
 			znN, znW = GM.WorldPos(zn.map, zn.x, zn.y)
+			if znN and znW then zn.n, zn.w = znN, znW end
 		end
-		if znN and znW and mmSet[zc] ~= false
+		-- continent guard: foreign-continent records carry that
+		-- continent's yard space — without this a Kalimdor camp
+		-- ghost-renders on the EK radar at whatever position the
+		-- overlapping ranges land, sliding with the player
+		if znN and znW and (zn.c or c) == c
+			and mmSet[zc] ~= false
 			and ZP and ZP.ZonePoly and GM.Widgets then
-			local u0, v0, px0, py0 = uv(znW, znN)
+			local u0, v0 = uv(znW, znN)
 			if sqrt(u0 * u0 + v0 * v0)
 				- ZP.DispR(zn) / radius <= 0.9 then
-				local rPx = function(yd)
-					return yd / radius * hw
-				end
 				local col = G.KindCol(zc)
-				-- TOPLEFT-px pocket points for the shared fit —
-				-- own-frame x,y hops through WorldPos like the
-				-- map surfaces' MapXY does
-				local pts = {}
-				for _, pk in ipairs(zn.pockets or {}) do
-					local pn, pw = pk.n, pk.w
-					if not (pn and pw) and pk.x and pk.y
-						and pk.map then
-						pn, pw = GM.WorldPos(pk.map,
-							pk.x, pk.y)
+				-- fit in ANCHOR-RELATIVE WORLD YARDS, not screen
+				-- px — the support-function fit re-derived in
+				-- player-relative screen space every repaint is
+				-- what let the blob drift: any per-frame input
+				-- wobble (pocket projections flapping, zoom
+				-- radius noise) reshaped it. Yard space is
+				-- world-fixed; only the render transform moves it
+				local sig = (zn.kills or 0) .. ":"
+					.. (zn.r or 0) .. ":"
+					.. #(zn.pockets or {})
+				local fit = zoneFit[zn]
+				if not (fit and fit.sig == sig) then
+					local pts = {}
+					for _, pk in ipairs(zn.pockets or {}) do
+						local pn, pw = pk.n, pk.w
+						if not (pn and pw) and pk.x and pk.y
+							and pk.map then
+							pn, pw = GM.WorldPos(pk.map,
+								pk.x, pk.y)
+							if pn and pw then
+								pk.n, pk.w = pn, pw
+							end
+						end
+						if pn and pw and (pk.c or c) == c then
+							pts[#pts + 1] = { x = pw - znW,
+								y = pn - znN }
+						end
 					end
-					if pn and pw then
-						local _, _, px, py = uv(pw, pn)
-						pts[#pts + 1] = { x = hw + px,
+					if #pts < 3 then
+						local r0 = max(20 * radius / hw,
+							ZP.DispR(zn)
+							- ZP.POCKET_PAD_YD)
+						local skew = (zn.kills or 1) * 0.7
+						for i = 0, 5 do
+							local a = skew + i / 6
+								* 6.2831853
+							pts[#pts + 1] = {
+								x = cos(a) * r0,
+								y = sin(a) * r0 }
+						end
+					end
+					local poly, cx, cy = ZP.ZonePoly(pts,
+						ZP.POCKET_PAD_YD, ZP.ZONE_MIN_YD,
+						ZP.ZONE_DRAW_MAX_YD)
+					fit = { sig = sig, poly = poly,
+						cx = cx, cy = cy }
+					zoneFit[zn] = fit
+				end
+				if fit.poly then
+					-- yard-space verts -> TOPLEFT px through
+					-- the same uv transform every other
+					-- layer takes
+					local spoly = {}
+					for i, p in ipairs(fit.poly) do
+						local _, _, px, py = uv(znW + p.x,
+							znN + p.y)
+						spoly[i] = { x = hw + px,
 							y = hh + py }
 					end
-				end
-				local zx, zy = hw + px0, hh + py0
-				if #pts < 3 then
-					local r0 = max(20, rPx(ZP.DispR(zn)
-						- ZP.POCKET_PAD_YD))
-					local skew = (zn.kills or 1) * 0.7
-					for i = 0, 5 do
-						local a = skew + i / 6 * 6.2831853
-						pts[#pts + 1] = { x = zx + cos(a) * r0,
-							y = zy + sin(a) * r0 }
-					end
-				end
-				local poly, cx, cy = ZP.ZonePoly(pts,
-					rPx(ZP.POCKET_PAD_YD), rPx(ZP.ZONE_MIN_YD),
-					rPx(ZP.ZONE_DRAW_MAX_YD))
-				if poly then
-					GM.Widgets.PolyFill(host, poly, 6,
+					local _, _, pcx, pcy = uv(znW + fit.cx,
+						znN + fit.cy)
+					local scx, scy = hw + pcx, hh + pcy
+					GM.Widgets.PolyFill(host, spoly, 6,
 						col[1], col[2], col[3],
 						SA.zoneRing * oaZ,
 						function()
@@ -397,8 +440,8 @@ local function Update()
 					-- interior copy shrunk toward the centroid —
 					-- the same border-band trick L:blob runs
 					GM.Widgets.PolyFill(host,
-						GM.Widgets.PolyShrink(poly,
-							cx, cy, -2), 6,
+						GM.Widgets.PolyShrink(spoly,
+							scx, scy, -2), 6,
 						col[1], col[2], col[3],
 						SA.zoneFill * oaZ,
 						function()
@@ -414,8 +457,7 @@ local function Update()
 							.ZONE_ICON_MM
 						ic:SetSize(zsz, zsz)
 						ic:SetPoint("CENTER", host,
-							"CENTER",
-							cx - hw, cy - hh)
+							"CENTER", pcx, pcy)
 						ic:SetTexture(it)
 						ic:SetVertexColor(1, 1, 1,
 							SA.full * oaI)
