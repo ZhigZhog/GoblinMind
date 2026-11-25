@@ -85,14 +85,23 @@ local function BuildRow(parent, i)
 	return row
 end
 
--- grouped label/value rows for the stats column. Labels are dynamic
--- where the source varies (live book vs DB snapshot) — ui.statLabel.
+-- grouped label/value rows for the stats column. First element is the
+-- internal English key (indexes ui.statText/statLabel); second is the
+-- literal L() display label so the extractor registers it. The source
+-- label still flips dynamically — see ui.statLabel["listed"].
+local L = GM.L or function(s) return s end
 local STAT_SECTIONS = {
-	{ "VALUE",   { "ref price", "ref ±15%" } },
-	{ "TREND",   { "hist", "recent" } },
-	{ "MARKET",  { "min buy", "region/day", "units" } },
-	{ "SIGNAL",  { "reset" } },
-	{ "ACCOUNT", { "gold", "budget cap", "margin" } },
+	{ L("PRICE"),   { { "fair price",    L("fair price") },
+		{ "fair range",   L("fair range") } } },
+	{ L("TREND"),   { { "long-run avg",  L("long-run avg") },
+		{ "recent change", L("recent change") } } },
+	{ L("MARKET"),  { { "lowest ask",    L("lowest ask") },
+		{ "sells/day",    L("sells/day") },
+		{ "listed",       L("listed") } } },
+	{ L("SIGNAL"),  { { "reset signal",  L("reset signal") } } },
+	{ L("ACCOUNT"), { { "gold",          L("gold") },
+		{ "spend limit",  L("spend limit") },
+		{ "min profit",   L("min profit") } } },
 }
 local function BuildStats(parent)
 	ui.statText = {}
@@ -103,7 +112,8 @@ local function BuildStats(parent)
 		h:SetPoint("TOPLEFT", 8, y)
 		h:SetText(sec[1])
 		y = y - 15
-		for i, key in ipairs(sec[2]) do
+		for i, rowDef in ipairs(sec[2]) do
+			local key = rowDef[1]
 			if i % 2 == 1 then
 				local bg = parent:CreateTexture(nil, "BACKGROUND")
 				bg:SetPoint("TOPLEFT", 4, y)
@@ -114,7 +124,7 @@ local function BuildStats(parent)
 			end
 			local lab = GM.MakeFontString(parent, GM.FONT, 11, "textDim")
 			lab:SetPoint("TOPLEFT", 10, y - 4)
-			lab:SetText(key)
+			lab:SetText(rowDef[2])
 			ui.statLabel[key] = lab
 			local val = GM.MakeFontString(parent, GM.FONT_MED, 11, "text")
 			val:SetPoint("TOPRIGHT", -10, y - 4)
@@ -126,7 +136,7 @@ local function BuildStats(parent)
 	end
 	local hint = GM.MakeFontString(parent, GM.FONT, 10, "textDim")
 	hint:SetPoint("BOTTOMLEFT", 10, 8)
-	hint:SetText("drop · shift-click · /goblin [link]")
+	hint:SetText(GM.L("drop · shift-click · /goblin [link]"))
 end
 
 local PAD, GAP = 10, 8
@@ -227,20 +237,23 @@ local function Build()
 	ui.age:SetJustifyH("LEFT")
 	ui.age:SetWordWrap(false)
 
+	-- close X rides the title corner like every other window —
+	-- frame.closeBtn also gives the module tab strip its right bound
 	local close = CreateFrame("Button", nil, frame)
-	close:SetSize(22, 22)
-	close:SetPoint("TOPRIGHT", -PAD, -26)
+	close:SetSize(16, 16)
+	close:SetPoint("TOPRIGHT", -6, -6)
 	close.text = GM.MakeFontString(close, GM.FONT_BOLD, 12, "textDim")
 	close.text:SetPoint("CENTER")
 	close.text:SetWordWrap(false)
-	close.text:SetText("×")
+	close.text:SetText("x")
 	close:SetScript("OnClick", function() frame:Hide() end)
 	close:SetScript("OnEnter", function() close.text:SetTextColor(GM.RGB("text")) end)
 	close:SetScript("OnLeave", function() close.text:SetTextColor(GM.RGB("textDim")) end)
+	frame.closeBtn = close
 	-- freshness text lives on the action-strip row's right edge —
 	-- the title row is title + module tabs now and a long age string
 	-- collides with the last tabs
-	ui.age:SetPoint("TOPRIGHT", -40, -33)
+	ui.age:SetPoint("TOPRIGHT", -14, -33)
 
 	local rule = frame:CreateTexture(nil, "BORDER")
 	rule:SetColorTexture(GM.RGB("outlineVar"))
@@ -1254,7 +1267,7 @@ local function DrawChart(entry, itemID)
 		tinsert(pts, { x = 0.95, v = entry.p, tag = "est" })
 		ui.chart.tipLines = {
 			"Price references — not a time series",
-			"anchors: hist · recent · live estimate",
+			"anchors: long-run · recent · live estimate",
 		}
 	end
 	local fullWeek = seriesMode and window >= WEEK
@@ -1487,7 +1500,7 @@ function PQ.Refresh()
 		end
 	end
 	if entry and entry.vel then
-		tinsert(sub, "region sales ~" .. (GM.VelRate(entry.vel)
+		tinsert(sub, "sales ~" .. (GM.VelRate(entry.vel)
 			or "?") .. "/day")
 	end
 	if book and #book > 0 then tinsert(sub, strtrim(book:gsub("· ", "", 1))) end
@@ -1504,33 +1517,34 @@ function PQ.Refresh()
 		local key = d > 0 and "pos" or "err"
 		return GM.CC(key) .. format("%+.0f%%", d) .. "|r"
 	end
-	set("ref price", p and GM.Money(p))
-	set("ref ±15%", (entry and entry.p10 and entry.p90) and (GM.Money(entry.p10) .. "–" .. GM.Money(entry.p90)))
-	set("hist", (entry and entry.hist)
+	set("fair price", p and GM.Money(p))
+	set("fair range", (entry and entry.p10 and entry.p90) and (GM.Money(entry.p10) .. "–" .. GM.Money(entry.p90)))
+	set("long-run avg", (entry and entry.hist)
 		and (GM.Money(entry.hist) .. " " .. (pct(p, entry.hist) or "")))
-	set("recent", entry and pct(entry.recent, p))
+	set("recent change", entry and pct(entry.recent, p))
 	-- in-flight scan result is fresher than any stored source;
 	-- entry.mb otherwise (book/mesh overlay already applied by ItemEntry)
 	local minBuy = (scanMode and curStep.cheapest)
 		or (PQ.scan and PQ.scan.cheapest)
 		or (entry and entry.mb)
-	set("min buy", minBuy and GM.Money(minBuy))
-	-- velocity is regional volume, not realm-local sell-time certainty
-	set("region/day", entry and entry.vel and (entry.vel >= 1000
+	set("lowest ask", minBuy and GM.Money(minBuy))
+	-- velocity = sales/day from the freshest feed (realm book or
+	-- region backend), not a sell-time promise
+	set("sells/day", entry and entry.vel and (entry.vel >= 1000
 		and format("%.0fk", entry.vel / 1000) or tostring(entry.vel)))
 	local obsSrc = entry and entry._src
-	ui.statLabel["units"]:SetText(obsSrc == "book" and "live units"
-		or obsSrc == "mesh" and "mesh units" or "DB auctions")
-	set("units", entry and entry.sup and tostring(entry.sup))
+	ui.statLabel["listed"]:SetText(obsSrc == "book" and GM.L("listed · live")
+		or obsSrc == "mesh" and GM.L("listed · mesh") or GM.L("listed · saved"))
+	set("listed", entry and entry.sup and tostring(entry.sup))
 	local rs = entry and entry.reset
-	set("reset", type(rs) == "table"
-		and (GM.Money(rs.below) .. " · ev " .. GM.Money(rs.ev))
+	set("reset signal", type(rs) == "table"
+		and (GM.Money(rs.below) .. " · worth " .. GM.Money(rs.ev))
 		or type(rs) == "number" and rs > 0
 		and GM.Money(rs) or nil)
 	set("gold", GM.Money(GetMoney()))
 	-- the cap is a fraction of gold, not a currency amount
-	set("budget cap", GM.db and format("%.0f%%", (GM.db.riskBudget or 0) * 100))
-	set("margin", GM.db and format("%.0f%%", (GM.db.minProfitMargin or 0) * 100))
+	set("spend limit", GM.db and format("%.0f%%", (GM.db.riskBudget or 0) * 100))
+	set("min profit", GM.db and format("%.0f%%", (GM.db.minProfitMargin or 0) * 100))
 
 	DrawChart(entry, dispID)
 
