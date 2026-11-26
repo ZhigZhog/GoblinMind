@@ -755,7 +755,10 @@ function W.PopupMenu(btn, entries, opts)
 			b:SetWidth(w)
 			b:SetPoint("TOPLEFT", 2, -2 - (i - 1) * 18)
 			b.text:SetJustifyH(opts.justify or "LEFT")
-			b.text:SetText(LT(e.label))
+			-- raw: dynamic data (group paths, zone names) — LT on
+			-- those logs "unregistered L key" against the strict
+			-- localizer for every entry, every open
+			b.text:SetText((opts.raw or e.raw) and e.label or LT(e.label))
 			b.text:SetTextColor(GM.RGB(e.checked and "accent" or "text"))
 			b:SetScript("OnClick", function()
 				m:Hide()
@@ -940,7 +943,8 @@ function W.AcctRow(parent, idx, compact)
 				end,
 			}
 		end
-		W.PopupMenu(grp, entries, { w = math.max(160, grpW + 40) })
+		W.PopupMenu(grp, entries,
+			{ w = math.max(160, grpW + 40), raw = true })
 	end)
 	W.Tip(grp, function() return {
 		"Group binding",
@@ -1032,6 +1036,14 @@ function W.PaintAcctRow(row, a, idx, opts)
 	end
 	row.name:SetText(label)
 	row.kind.text:SetText(a.pool and "POOL" or GM.Budget.KINDS[a.kind])
+	-- the pool IS every group — it can't be deleted or rebound, so
+	-- both controls hide on pool rows; a stale binding left by the
+	-- old cycler gets cleared for honesty
+	if a.pool and a.group then
+		a.group = nil
+	end
+	row.grp:SetShown(not a.pool)
+	row.del:SetShown(not a.pool)
 	row.grp.text:SetText(a.group or "—")
 	row.grp.text:SetTextColor(GM.RGB(a.group and "accent" or "textDim"))
 	row.alloc:SetText(GM.Budget.AllocText(a))

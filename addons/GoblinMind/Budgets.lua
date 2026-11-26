@@ -112,7 +112,11 @@ function B.Crest(ck)
 	local ch = B.CharInfo(ck)
 	local fac = ch and ch.fac
 	if fac ~= "Alliance" and fac ~= "Horde" then return "" end
-	return "|TInterface\\TargetingFrame\\UI-PVP-" .. fac .. ":16|t "
+	-- 18px, dropped 3 below baseline — the escape default sits the
+	-- texture's bottom ON the baseline, which reads low next to
+	-- x-height text; negative yofs centers it visually
+	return "|TInterface\\TargetingFrame\\UI-PVP-" .. fac
+		.. ":18:18:0:-3|t "
 end
 
 -- char colors: a per-char override (ch.col = "rrggbb"), else the
@@ -250,7 +254,13 @@ function B.Add(name, kind, alloc)
 	return a
 end
 
-function B.Del(i) tremove(DB(), i) end
+-- the pool is the char's purse itself — undeletable, unbindable,
+-- un-rekindable. Data-level guards so no caller (row widgets
+-- included) can violate the invariants.
+function B.Del(i)
+	local a = DB()[i]
+	if a and not a.pool then tremove(DB(), i) end
+end
 
 -- rename keeps the account record (spent/income/group all survive) —
 -- rejects empty names and dupes
@@ -271,7 +281,7 @@ end
 
 function B.SetKind(i, kind)
 	local a = DB()[i]
-	if not (a and B.KINDS[kind]) then return end
+	if not (a and B.KINDS[kind]) or a.pool then return end
 	a.kind = kind
 	-- kind swap reinterprets the allocation field
 	if kind == "save" and not a.pct then
@@ -288,7 +298,8 @@ end
 -- sales of items in that group route here regardless of step kind
 function B.SetGroup(i, path)
 	local a = DB()[i]
-	if a then a.group = (path ~= "" and path) or nil end
+	-- pools apply to every group by definition — no binding
+	if a and not a.pool then a.group = (path ~= "" and path) or nil end
 end
 
 -- sorted list of assignable group paths for the function picker
