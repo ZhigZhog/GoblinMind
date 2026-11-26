@@ -308,6 +308,7 @@ local TX_LABEL = {
 	loot = "Looted", bid = "Bid", bidwon = "Bid won",
 	transfer = "Transfer",
 	tradein = "Trade in", tradeout = "Trade out",
+	trainer = "Trained",
 }
 
 local function DisplayList(ck)

@@ -1185,8 +1185,10 @@ function W.AcctRow(parent, idx, compact)
 	end)
 	W.Tip(grp, function() return {
 		"Group binding",
-		"items in this group route their",
-		"spends and sales to this account",
+		"items in this group route flows",
+		"here — the account kind picks",
+		"which transactions land (ah=sales,",
+		"vendor=merchant buys/sells)",
 		"click for the group list" } end)
 	row.grp = grp
 

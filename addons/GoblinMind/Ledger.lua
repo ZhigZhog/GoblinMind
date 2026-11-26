@@ -107,6 +107,11 @@ local function Journal(kind, s, qty, unit, extra)
 	if kind == "buy" or kind == "vendorbuy" then
 		local tot = qty * (unit or 0)
 		return { cash = -tot, stock = tot }
+	elseif kind == "trainer" then
+		-- a learned recipe is a service, not stock — a realized
+		-- expense with no basis to carry (pnl positive = loss)
+		local tot = qty * (unit or 0)
+		return { cash = -tot, pnl = tot }
 	elseif kind == "post" then
 		return { stock = -cost, posted = cost, cash = -dep, dep = dep }
 	elseif kind == "sell" then
@@ -214,10 +219,10 @@ end
 function GM.Ledger.Add(kind, itemID, qty, unit, extra)
 	local L = GM.Ledger.db
 	if not L then return end
-	-- transfer is the one item-less kind: a copper-only journal
-	-- line moving value between budget envelopes — everything else
-	-- needs an item and a positive qty
-	if kind ~= "transfer"
+	-- item-less kinds carry identity in extra: transfer is a
+	-- copper-only line (from/to), trainer buys a service (nm).
+	-- Everything else needs an item and a positive qty.
+	if kind ~= "transfer" and not (extra and extra.nm)
 		and (not itemID or not qty or qty <= 0) then return end
 	local tx = L.transactions
 	local s
@@ -312,12 +317,13 @@ function GM.Ledger.Add(kind, itemID, qty, unit, extra)
 		GM.Budget.CreditSale(itemID, qty * (unit or 0))
 	end
 	-- vendor movements ride the vendor envelope: sales credit it,
-	-- merchant buys draw it down
+	-- merchant buys draw it down — group-bound accounts route the
+	-- item's flows to their own purse first
 	if kind == "vendor" and GM.Budget and GM.Budget.CreditVendor then
-		GM.Budget.CreditVendor(qty * (unit or 0))
-	elseif kind == "vendorbuy" and GM.Budget
+		GM.Budget.CreditVendor(itemID, qty * (unit or 0))
+	elseif (kind == "vendorbuy" or kind == "trainer") and GM.Budget
 		and GM.Budget.DebitVendor then
-		GM.Budget.DebitVendor(qty * (unit or 0))
+		GM.Budget.DebitVendor(itemID, qty * (unit or 0))
 	end
 	-- resample wealth on stock txns — buys/posts change the held vs
 	-- posted split at event resolution, not just the 5-min tick
@@ -404,10 +410,13 @@ end
 local pendingBuy = {}
 local BUY_WINDOW = 15
 
-function GM.Ledger.ExpectBuy(itemID, qty, unit)
-	if not (itemID and qty and qty > 0) then return end
+function GM.Ledger.ExpectBuy(itemID, qty, unit, extra)
+	-- item-less buys (trainer services) pass extra.nm + extra.kind
+	if not ((itemID or (extra and extra.nm))
+		and qty and qty > 0) then return end
 	pendingBuy[#pendingBuy + 1] = { id = itemID, qty = qty,
-		unit = unit, t = time() }
+		unit = unit, t = time(),
+		kind = extra and extra.kind, nm = extra and extra.nm }
 end
 
 function GM.Ledger.Gold(delta, source)
@@ -425,8 +434,8 @@ function GM.Ledger.Gold(delta, source)
 			-- the outflow IS its basis. FIFO — oldest pending first.
 			local pb = pendingBuy[1]
 			while pb and time() - pb.t > BUY_WINDOW do
-				GM.Ledger.Add("vendorbuy", pb.id, pb.qty,
-					pb.unit, { noOut = true })
+				GM.Ledger.Add(pb.kind or "vendorbuy", pb.id, pb.qty,
+					pb.unit, { noOut = true, nm = pb.nm })
 				table.remove(pendingBuy, 1)
 				pb = pendingBuy[1]
 			end
@@ -434,8 +443,8 @@ function GM.Ledger.Gold(delta, source)
 				table.remove(pendingBuy, 1)
 				-- fractional unit is fine: qty*unit lands on the
 				-- delta exactly, no rounding drift in cash
-				GM.Ledger.Add("vendorbuy", pb.id, pb.qty,
-					un / pb.qty, { noOut = true })
+				GM.Ledger.Add(pb.kind or "vendorbuy", pb.id, pb.qty,
+					un / pb.qty, { noOut = true, nm = pb.nm })
 				un = 0
 			end
 		end

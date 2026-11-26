@@ -425,17 +425,40 @@ end
 
 -- the specific account a step/item draws on: a group-bound account
 -- takes precedence over kind matching (an "ammo" envelope pays for
--- ammo whether the buy is at the AH or a vendor)
-local function StepAccount(step)
-	if step.itemID and GM.Groups and GM.Groups.GroupForItem then
-		local path = GM.Groups.GroupForItem(step.itemID)
-		if path then
-			for _, a in ipairs(DB()) do
-				if a.group == path and IsSelf(a) then return a end
+-- ammo whether the buy is at the AH or a vendor). Bound-path match
+-- follows op-cascade semantics — an envelope bound to "Engineering"
+-- covers "Engineering/Schematics". When several envelopes bind the
+-- item's path, kind-matching wins first, then deepest path — so a
+-- group can split its flows: an "ah" envelope for sales, a "vendor"
+-- one for merchant moves, both bound to the same group.
+local function BoundAccount(itemID, kind)
+	if not (itemID and GM.Groups and GM.Groups.GroupForItem) then return end
+	local path = GM.Groups.GroupForItem(itemID)
+	if not path then return end
+	local best, bestScore
+	for _, a in ipairs(DB()) do
+		local g = a.group
+		if g and IsSelf(a)
+			and (path == g or path:sub(1, #g + 1) == g .. "/") then
+			-- kind match is worth more than any depth difference
+			local score = ((not kind or a.kind == kind) and 1 or 0)
+				* 100000 + #g
+			if not bestScore or score > bestScore then
+				best, bestScore = a, score
 			end
 		end
 	end
-	return nil
+	return best
+end
+
+local function StepAccount(step)
+	-- kind preference for bound matching: a vendbuy step prefers a
+	-- vendor envelope, a buy an AH one (the unbound tag maps both
+	-- to "ah" — bound matching wants the flow's real home)
+	local pref = (step.btag and B.KINDS[step.btag] and step.btag)
+		or (step.kind == "vendbuy" and "vendor")
+		or (step.kind == "buy" and "ah")
+	return BoundAccount(step.itemID, pref)
 end
 
 local function MatchingAccounts(step)
@@ -507,15 +530,7 @@ end
 -- account for the item's group, else the first AH account
 function B.CreditSale(itemID, amount)
 	if not amount or amount <= 0 then return end
-	local target
-	if itemID and GM.Groups and GM.Groups.GroupForItem then
-		local path = GM.Groups.GroupForItem(itemID)
-		if path then
-			for _, a in ipairs(DB()) do
-				if a.group == path and IsSelf(a) then target = a break end
-			end
-		end
-	end
+	local target = BoundAccount(itemID, "ah")
 	if not target then
 		for _, a in ipairs(DB()) do
 			if a.kind == "ah" and IsSelf(a) then target = a break end
@@ -529,19 +544,34 @@ end
 
 -- NPC-vendor envelope: vendor sales credit it, vendor buys draw it
 -- down — separate from AH so flip margins don't pollute the
--- auction float. First self-owned vendor account takes both.
-function B.CreditVendor(amount)
+-- auction float. A group-bound account takes the item's flows
+-- first (an "Ammo" envelope buys ammo, sells ammo); unbound falls
+-- back to the first self-owned vendor account.
+function B.CreditVendor(itemID, amount)
 	if not amount or amount <= 0 then return end
-	for _, a in ipairs(DB()) do
-		if a.kind == "vendor" and IsSelf(a) then
-			a.income = (a.income or 0) + amount
-			B.Sample()
-			return
+	local target = BoundAccount(itemID, "vendor")
+	if not target then
+		for _, a in ipairs(DB()) do
+			if a.kind == "vendor" and IsSelf(a) then target = a break end
 		end
 	end
+	if target then
+		target.income = (target.income or 0) + amount
+		B.Sample()
+	end
 end
-function B.DebitVendor(amount)
+function B.DebitVendor(itemID, amount)
 	if not amount or amount <= 0 then return end
+	-- a bound account is the designated purse for this item's
+	-- spends — the hole lands there even when it can't cover
+	-- (save accounts never pay spends, same rule as B.Record)
+	local bound = BoundAccount(itemID, "vendor")
+	if bound and bound.kind ~= "save" then
+		bound.spent = (bound.spent or 0) + amount
+		B.WarnOverdrawn(bound)
+		B.Sample()
+		return
+	end
 	local owed = amount
 	for _, a in ipairs(DB()) do
 		if a.kind == "vendor" and IsSelf(a) and owed > 0 then

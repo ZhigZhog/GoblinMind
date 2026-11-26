@@ -303,4 +303,40 @@ if hooksecurefunc then
 			end)
 		end)
 	end
+	-- trainer services (learned schematics/recipes) are their own
+	-- purchase call — no merchant slot, usually no item. A service
+	-- that resolves to an item link journals as a vendorbuy (group
+	-- routing still works); a learned spell journals as a "trainer"
+	-- expense by name. Cost basis still rides the money outflow.
+	if type(BuyTrainerService) == "function" then
+		hooksecurefunc("BuyTrainerService", function(idx)
+			if V._hookSkip then return end
+			pcall(function()
+				local link = GetTrainerServiceItemLink
+					and GetTrainerServiceItemLink(idx)
+				local id = link and GM.LinkID(link)
+				local unit
+				if GetTrainerServiceCost then
+					local ok, c = pcall(GetTrainerServiceCost, idx)
+					if ok and type(c) == "number" and c > 0 then
+						unit = c
+					end
+				end
+				if id then
+					GM.Ledger.ExpectBuy(id, 1, unit)
+					return
+				end
+				local nm
+				if GetTrainerServiceInfo then
+					local ok, n = pcall(function()
+						return (GetTrainerServiceInfo(idx)) end)
+					if ok and type(n) == "string" and n ~= "" then
+						nm = n
+					end
+				end
+				GM.Ledger.ExpectBuy(nil, 1, unit,
+					{ kind = "trainer", nm = nm or "service" })
+			end)
+		end)
+	end
 end
