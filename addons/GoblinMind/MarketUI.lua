@@ -185,7 +185,12 @@ function MU.SetItem(id, link, key)
 	local changed = M.itemID ~= id
 		or (M.itemKey and M.itemKey.itemSuffix or 0)
 			~= (key and key.itemSuffix or 0)
-	M.itemID, M.itemLink, M.itemKey = id, link, key
+	-- normalize the stored link once: suffix spliced into a bare
+	-- itemString, bracket text corrected to the variant name — every
+	-- downstream read (header, pill, pastes) sees the same shape
+	M.itemID, M.itemKey = id, key
+	M.itemLink = GM.ItemDisplayLink(id, link, key,
+		GM.ItemDisplayName(id, link, key))
 	if changed then
 		M.asks, M.askT, M.askTries, M.askWait, M.asksBook =
 			nil, nil, nil, nil, nil
@@ -440,20 +445,12 @@ end
 local function RefreshHeader(vm)
 	local id = M.itemID
 	mp.icon:SetTexture(id and GM.ItemIcon(id) or 134400)
-	-- the targeted link carries the real display name ("Hillborne
-	-- Axe of Defense", not the base "Hillborne Axe") AND its quality
-	-- hex — ItemName/ItemQuality only know the base item
-	local linkName = M.itemLink and M.itemLink:match("%[(.-)%]")
-	local linkHex = M.itemLink and M.itemLink:match("|cff(%x%x%x%x%x%x)")
-	mp.name:SetText(id and (linkName or GM.ItemName(id) or ("item " .. id))
-		or "no item targeted")
-	if linkHex then
-		local r, g, b = tonumber(linkHex:sub(1, 2), 16),
-			tonumber(linkHex:sub(3, 4), 16), tonumber(linkHex:sub(5, 6), 16)
-		mp.name.fontString:SetTextColor(r / 255, g / 255, b / 255)
-	else
-		mp.name.fontString:SetTextColor(GM.NameColor(id))
-	end
+	-- the shared resolver: the targeted link/key gives "Hillborne
+	-- Axe of Defense" (and its quality hex) where ItemName/
+	-- ItemQuality only know the base item
+	mp.name:SetText(id and (GM.ItemDisplayName(id, M.itemLink, M.itemKey)
+		or ("item " .. id)) or "no item targeted")
+	mp.name.fontString:SetTextColor(GM.ItemDisplayColor(id, M.itemLink))
 	local entry = vm.entry
 	local chips = {}
 	if entry then

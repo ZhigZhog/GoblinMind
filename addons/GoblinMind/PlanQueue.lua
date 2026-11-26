@@ -690,12 +690,15 @@ function PQ.SetItem(itemID, itemLink, key)
 	Build()
 	PQ.homeMode = false
 	PQ.itemID = itemID
-	PQ.item = itemLink
 	-- suffixed variants ("of the Bear") need their exact ItemKey —
 	-- suffix-0 scans return zero listings. Callers hand the key from
 	-- browse/owned rows; links carry it in itemString field 8.
 	PQ.itemKey = key or (GM.AH.ItemKeyFromLink
 		and GM.AH.ItemKeyFromLink(itemLink)) or nil
+	-- normalize once: suffix spliced into a bare itemString, bracket
+	-- corrected — pill/header/pastes all read the same shape
+	PQ.item = GM.ItemDisplayLink(itemID, itemLink, PQ.itemKey,
+		GM.ItemDisplayName(itemID, itemLink, PQ.itemKey))
 	PQ.scan = nil
 	PQ.scanMode = nil -- retargeting supersedes "rerun last scan"
 	PQ.itemFresh = true -- and outranks the armed plan's mode on rescan
@@ -934,8 +937,10 @@ end
 function PQ.ProtectedConfirm(step)
 	local d = BuildProtDialog()
 	d._step = step
-	d.item:SetText((GM.ItemNameOr(step.itemID) or "item")
-		.. GM.CC("textDim") .. "  (protected group)|r")
+	local stepKey = (PQ.plan and PQ.plan.itemKey
+		and step.itemID == PQ.plan.itemID and PQ.plan.itemKey) or nil
+	d.item:SetText((GM.ItemDisplayName(step.itemID, nil, stepKey)
+		or "item") .. GM.CC("textDim") .. "  (protected group)|r")
 	d.item:SetTextColor(GM.NameColor(step.itemID))
 	d.act.text:SetText(step.kind == "post" and "POST ANYWAY"
 		or step.kind == "vendsell" and "SELL ANYWAY"
@@ -1406,7 +1411,8 @@ local function Data()
 	local dispLink = scanMode and (curStep.item or curStep.name) or PQ.item
 	vm.stepN, vm.curStep, vm.scanMode = stepN, curStep, scanMode
 	vm.dispID, vm.dispLink = dispID, dispLink
-	vm.entry = dispID and GM.ItemEntry(dispID)
+	vm.entry = dispID and GM.ItemEntry(dispID,
+		(dispID == PQ.itemID and PQ.itemKey) or nil)
 	vm.market = dispID and GM.TSMMarket(dispID)
 	vm.bookTxt = scanMode
 		and format(" · step %d/%d", stepN, #PQ.plan.steps)
@@ -1420,7 +1426,8 @@ local function Data()
 	-- a proper link renders its own name — bare "4238" targets fall
 	-- back to the resolved item name
 	vm.nameTxt = (dispLink and dispLink:find("%[") and dispLink)
-		or (dispID and GM.ItemName(dispID))
+		or (dispID and GM.ItemDisplayName(dispID, nil,
+			(dispID == PQ.itemID and PQ.itemKey) or nil))
 		or dispLink
 		or (dispID and ("item " .. dispID))
 	vm.icon = dispID and GM.ItemIcon and GM.ItemIcon(dispID)
@@ -1647,8 +1654,11 @@ function PQ.Refresh(vm)
 				-- it meant the row never called ItemName, never issued
 				-- the load request, and could never resolve. Shopping
 				-- rows already order it this way.
-				local nm = (step.itemID and GM.ItemName
-						and GM.ItemName(step.itemID))
+				local stepKey = (PQ.plan.itemKey and PQ.plan.itemID
+					and step.itemID == PQ.plan.itemID
+					and PQ.plan.itemKey) or nil
+				local nm = (step.itemID and GM.ItemDisplayName
+						and GM.ItemDisplayName(step.itemID, nil, stepKey))
 					or step.name or ""
 				if #nm > 16 then nm = nm:sub(1, 15) .. "…" end
 				row.qty:SetText((GM.QHex(step.itemID) or "")

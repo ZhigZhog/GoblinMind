@@ -1098,7 +1098,8 @@ function GM.Inventory.MineRows()
 				unit = a.buyout, tLeft = remain,
 				mkt = mkt, cheap = cheap, undercut = undercut,
 				sold = a.sold,
-				name = a.name or GM.ItemName(a.itemID)
+				name = GM.ItemDisplayName(a.itemID, a.itemLink,
+					a.itemKey) or a.name
 					or ("item " .. a.itemID),
 			}
 		end
@@ -1124,7 +1125,8 @@ function GM.Inventory.BidRows()
 				ourBid = b.ourBid, curBid = b.curBid or b.ourBid,
 				buyout = b.buyout, status = b.status or "winning",
 				remain = remain,
-				name = GM.ItemName(b.itemID) or ("item " .. b.itemID),
+				name = GM.ItemDisplayName(b.itemID, b.itemLink,
+					b.itemKey) or ("item " .. b.itemID),
 			}
 		end
 	end

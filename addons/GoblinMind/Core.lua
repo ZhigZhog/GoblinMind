@@ -1240,6 +1240,61 @@ function GM.ItemNameOr(id)
 	return GM.ItemName(id) or ("item " .. id)
 end
 
+-- ============ variant-aware display resolution ============
+-- ONE resolver for every surface: suffixed items ("…of Defense")
+-- resolve their own name/link/color — never the base item's.
+-- Order: the link's own bracket text → GetItemKeyInfo(key) → a
+-- rebuilt suffixed itemString → the base item name. Callers that
+-- pass neither link nor key get the base item's answer.
+function GM.ItemDisplayName(id, link, key)
+	-- a suffixed key is authoritative — the link's bracket text can
+	-- be a bare-name stub even when its itemString carries nothing
+	if key and (key.itemSuffix or 0) ~= 0 then
+		if C_AuctionHouse and C_AuctionHouse.GetItemKeyInfo then
+			local ok, ki = pcall(C_AuctionHouse.GetItemKeyInfo,
+				key, true)
+			local n = ok and ki and ki.itemName
+			if type(n) == "string" and n ~= "" then return n end
+		end
+		-- a rebuilt itemString carries the suffix alone — GetInfo
+		-- resolves the variant's own name when the item is cached
+		local ok, n = pcall(function()
+			return GetInfo and select(1, GetInfo(format(
+				"item:%d:0:0:0:0:0:%d",
+				(id or key.itemID) or 0, key.itemSuffix)))
+		end)
+		n = ok and n or nil
+		if type(n) == "string" and n ~= "" then return n end
+	end
+	if link then
+		local n = link:match("%[(.-)%]")
+		if n then return n end
+	end
+	return GM.ItemName(id)
+end
+
+-- the display/paste-grade link: base link + itemKey splice (fixes
+-- bare API itemStrings), bracket corrected by the variant name
+function GM.ItemDisplayLink(id, link, key, name)
+	link = link or (id and GM.ItemLink(id))
+	if GM.AH and GM.AH.LinkWithKey then
+		link = GM.AH.LinkWithKey(link, key, name)
+	end
+	return link
+end
+
+-- name text color: the link embeds its own quality hex (survives
+-- items ItemQuality can't resolve); item quality color otherwise
+function GM.ItemDisplayColor(id, link)
+	local hex = link and link:match("|cff(%x%x%x%x%x%x)")
+	if hex then
+		return tonumber(hex:sub(1, 2), 16) / 255,
+			tonumber(hex:sub(3, 4), 16) / 255,
+			tonumber(hex:sub(5, 6), 16) / 255
+	end
+	return GM.NameColor(id)
+end
+
 function GM.ItemQuality(id)
 	if not id then return end
 	local ok, q = pcall(function()
@@ -1383,12 +1438,9 @@ end
 local rawHMIC = HandleModifiedItemClick
 -- callers holding a variant link/key pass it — rebuilding from the
 -- id loses itemString field 7 (the suffix) and the pasted link
--- reads as the base item ("Hillborne Axe", never "…of Defense").
--- LinkWithKey also repairs API links whose itemString is bare
+-- reads as the base item ("Hillborne Axe", never "…of Defense")
 function GM.ModifiedItemClick(id, variantLink, itemKey, name)
-	local link = variantLink or (id and GM.ItemLink(id))
-	link = GM.AH and GM.AH.LinkWithKey
-		and GM.AH.LinkWithKey(link, itemKey, name) or link
+	local link = GM.ItemDisplayLink(id, variantLink, itemKey, name)
 	local h = rawHMIC or HandleModifiedItemClick
 	if link and h and h(link) then
 		return true

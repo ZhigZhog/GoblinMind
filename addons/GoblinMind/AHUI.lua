@@ -202,19 +202,14 @@ local function Results()
 		local r = rs[i]
 		local id = r.itemKey and r.itemKey.itemID
 		if id and PassFilters(id, r.minPrice) then
-			local e = GM.ItemEntry(id)
+			local e = GM.ItemEntry(id, r.itemKey)
 			local mkt = GM.Price("dbmarket", id)
-			-- itemKey pins the suffix variant — GetItemKeyInfo resolves
-			-- "of the Bear" names where the bare id only gives the base
-			-- name (fallback while the key info is still uncached)
-			local name
-			if C_AuctionHouse.GetItemKeyInfo then
-				local ok, ki = pcall(C_AuctionHouse.GetItemKeyInfo, r.itemKey, true)
-				name = ok and ki and ki.itemName or nil
-			end
+			-- itemKey pins the suffix variant — the shared resolver
+			-- gives "of the Bear" names where the bare id gives base
 			rows[#rows + 1] = {
 				id = id, key = r.itemKey,
-				name = name or GM.ItemName(id) or ("item " .. id),
+				name = GM.ItemDisplayName(id, nil, r.itemKey)
+					or ("item " .. id),
 				qty = r.totalQuantity or 1, unit = r.minPrice,
 				mkt = mkt,
 				low = mkt and r.minPrice and r.minPrice < mkt * 0.9 or nil,
@@ -273,7 +268,7 @@ end
 -- it and rescans while the AH is open). A live chat editbox keeps
 -- the native insert-link priority; other modifiers keep Blizzard's
 -- chain (ctrl=dressup etc.) via ModifiedItemClick.
-local function RowModClick(id, link, key)
+local function RowModClick(id, link, key, name)
 	if IsShiftKeyDown() then
 		local chat = ChatEdit_GetActiveWindow
 			and ChatEdit_GetActiveWindow()
@@ -282,7 +277,7 @@ local function RowModClick(id, link, key)
 			return
 		end
 	end
-	GM.ModifiedItemClick(id, link, key)
+	GM.ModifiedItemClick(id, link, key, name)
 end
 
 -- drill into a result: per-listing asks land in the right pane
@@ -1506,7 +1501,7 @@ function AU.Refresh(vm)
 				local sel = r
 				row:SetScript("OnClick", function()
 					if IsModifiedClick() then
-						if sel.id then RowModClick(sel.id, nil, sel.key) end
+						if sel.id then RowModClick(sel.id, sel.link, sel.key, sel.name) end
 						return
 					end
 					ui.askScroll = 0
@@ -1634,7 +1629,7 @@ function AU.Refresh(vm)
 				end)
 				row:SetScript("OnClick", function()
 					if not r.id then return end
-					if IsModifiedClick() then RowModClick(r.id, r.link, r.key)
+					if IsModifiedClick() then RowModClick(r.id, r.link, r.key, r.name)
 					else GM.TargetItem(r.id, r.link, r.key) end
 				end)
 			else
@@ -1684,7 +1679,7 @@ function AU.Refresh(vm)
 				end
 				row:SetScript("OnClick", function()
 					if not r.id then return end
-					if IsModifiedClick() then RowModClick(r.id, r.link, r.key)
+					if IsModifiedClick() then RowModClick(r.id, r.link, r.key, r.name)
 					else GM.TargetItem(r.id, r.link, r.key) end
 				end)
 			else

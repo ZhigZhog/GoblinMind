@@ -268,7 +268,8 @@ function SU.Refresh()
 		row:Show()
 			row:SetItem({ itemID = h.itemID, name = h.name })
 			local flags = GM.Intel and GM.Intel.FlagsFor(h)
-			local nm = GM.ItemName(h.itemID)
+			local nm = GM.ItemDisplayName(h.itemID, h.link,
+					h.link and GM.AH.ItemKeyFromLink(h.link))
 				or (type(h.name) == "string" and h.name ~= ""
 					and h.name)
 				or ("item " .. (h.itemID or "?"))

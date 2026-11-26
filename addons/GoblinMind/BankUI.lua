@@ -59,7 +59,9 @@ local function StackRows(slots)
 			rows[#rows + 1] = {
 				bag = s.bag, slot = s.slot, id = s.itemID,
 				qty = s.count,
-				name = GM.ItemName(s.itemID) or ("item " .. s.itemID),
+				name = GM.ItemDisplayName(s.itemID, s.link,
+					s.link and GM.AH.ItemKeyFromLink(s.link))
+					or ("item " .. s.itemID),
 				wh = WhHint(s.itemID),
 			}
 		end

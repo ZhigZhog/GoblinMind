@@ -94,6 +94,8 @@ local function Slots(scope)
 			local info = C_Container.GetContainerItemInfo(bag, slot)
 			tinsert(out, { bag = bag, slot = slot, itemID = info and info.itemID,
 				count = info and info.stackCount or 0,
+				-- slot links carry the suffix for variant display
+				link = info and info.hyperlink or nil,
 				locked = info and info.isLocked or nil })
 		end
 	end
