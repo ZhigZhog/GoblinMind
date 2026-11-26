@@ -133,8 +133,15 @@ function W.Tip(f, linesFn)
 		linesFn = function() return t end
 	end
 	if type(linesFn) ~= "function" then return end
+	-- idempotent: the hooks bind ONCE per frame and read the fn at
+	-- hover. Re-calling swaps the data, never stacks — a Tip() left
+	-- inside a render loop piled a hook pair per refresh until the
+	-- hover chain blew the C stack mid-craft-run
+	f._gmTipFn = linesFn
+	if f._gmTipBound then return end
+	f._gmTipBound = true
 	f:HookScript("OnEnter", function()
-		W.HintShow(f, linesFn())
+		W.HintShow(f, f._gmTipFn and f._gmTipFn())
 	end)
 	f:HookScript("OnLeave", W.HintHide)
 end
@@ -145,9 +152,14 @@ end
 -- their handler instead. idFn may be an id or fn() -> id, resolved
 -- at click time.
 function W.ModifiedClick(f, idFn)
+	-- same idempotence as Tip — the fn is data, not a new hook
+	f._gmClickFn = idFn
+	if f._gmClickBound then return end
+	f._gmClickBound = true
 	f:HookScript("OnMouseDown", function(_, btn)
 		if btn ~= "LeftButton" or not IsModifiedClick() then return end
-		local id = type(idFn) == "function" and idFn() or idFn
+		local fn = f._gmClickFn
+		local id = type(fn) == "function" and fn() or fn
 		if id then GM.ModifiedItemClick(id) end
 	end)
 end
