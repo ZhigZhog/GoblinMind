@@ -104,7 +104,16 @@ function W.HintShow(f, lines)
 			fs:SetPoint("TOPLEFT", 8, -7 - (i - 1) * 13)
 			tip.lines[i] = fs
 		end
-		fs:SetText(tostring(lines[i]):sub(1, 96))
+		-- truncate on DISPLAY length: a byte-wise sub() can sever a
+		-- |cff…|r escape mid-code or a UTF-8 glyph mid-sequence, and
+		-- the remainder renders as literal "|cff…" text in the tip.
+		-- Escapes are free — they occupy bytes but no pixels
+		local s = tostring(lines[i])
+		if #s:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "") > 96 then
+			s = s:gsub("|c%x%x%x%x%x%x%x%x", "")
+				:gsub("|r", ""):sub(1, 96)
+		end
+		fs:SetText(s)
 		fs:SetTextColor(i == 1 and 1 or 0.8,
 			i == 1 and 1 or 0.8, i == 1 and 1 or 0.75)
 		fs:Show()
