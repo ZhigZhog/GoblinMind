@@ -84,11 +84,14 @@ local function Build()
 
 	local host = CreateFrame("Frame", nil, f)
 	if host.SetClipsChildren then host:SetClipsChildren(true) end
-	host:EnableMouseWheel(true)
-	host:SetScript("OnMouseWheel", function(_, d)
+	-- bag rows blanket the host the same way — shared wheel handler,
+	-- rows forward it below
+	local function BagWheel(_, d)
 		ui.bagScroll = math.max(0, (ui.bagScroll or 0) - d * 3)
 		MA.Refresh()
-	end)
+	end
+	host:EnableMouseWheel(true)
+	host:SetScript("OnMouseWheel", BagWheel)
 	ui.host = host
 
 	-- POSTED page mirrors the AH window's MINE tab columns but is a
@@ -97,11 +100,15 @@ local function Build()
 	local PANE_H = 22 + MINE_VISIBLE * ROW_H + 8
 	local fp = CreateFrame("Frame", nil, f)
 	GM.Panel(fp, "contLowest")
-	fp:EnableMouseWheel(true)
-	fp:SetScript("OnMouseWheel", function(_, d)
+	-- rows are mouse-enabled Buttons that blanket the pane — wheel
+	-- events land on THEM, not the pane, so the row pool forwards
+	-- the same handler or rows 7+ stay unreachable
+	local function PostedWheel(_, d)
 		ui.scroll = math.max(0, (ui.scroll or 0) - d * 3)
 		MA.Refresh()
-	end)
+	end
+	fp:EnableMouseWheel(true)
+	fp:SetScript("OnMouseWheel", PostedWheel)
 	ui.fp = fp
 	for i, h in ipairs({
 		{ "POSTED — ITEM", 26 }, { "QTY", 218 }, { "UNIT", 260 },
@@ -119,6 +126,10 @@ local function Build()
 		local row = CreateFrame("Button", nil, fp)
 		row:SetSize(760, ROW_H - 2)
 		row:SetPoint("TOPLEFT", 8, -22 - ((i - 1) * ROW_H))
+		-- rows blanket the pane — forward the wheel so scrolling
+		-- works over a row, not just the gutters
+		row:EnableMouseWheel(true)
+		row:SetScript("OnMouseWheel", PostedWheel)
 		row.bg = row:CreateTexture(nil, "BACKGROUND")
 		row.bg:SetAllPoints()
 		row.bg:SetColorTexture(GM.RGB(i % 2 == 0 and "contMedium" or "contLowest"))
@@ -172,11 +183,14 @@ local function Build()
 
 	local bp = CreateFrame("Frame", nil, f)
 	GM.Panel(bp, "contLowest")
-	bp:EnableMouseWheel(true)
-	bp:SetScript("OnMouseWheel", function(_, d)
+	-- same blanket-row problem as the posted pane — shared handler,
+	-- rows forward it below
+	local function BidWheel(_, d)
 		ui.bidScroll = math.max(0, (ui.bidScroll or 0) - d * 3)
 		MA.Refresh()
-	end)
+	end
+	bp:EnableMouseWheel(true)
+	bp:SetScript("OnMouseWheel", BidWheel)
 	ui.bp = bp
 	for i, h in ipairs({
 		{ "BIDS — ITEM", 26 }, { "OUR BID", 218 }, { "CURRENT", 300 },
@@ -193,6 +207,8 @@ local function Build()
 		local row = CreateFrame("Button", nil, bp)
 		row:SetSize(760, ROW_H - 2)
 		row:SetPoint("TOPLEFT", 8, -22 - ((i - 1) * ROW_H))
+		row:EnableMouseWheel(true)
+		row:SetScript("OnMouseWheel", BidWheel)
 		row.bg = row:CreateTexture(nil, "BACKGROUND")
 		row.bg:SetAllPoints()
 		row.bg:SetColorTexture(GM.RGB(i % 2 == 0 and "contMedium" or "contLowest"))
@@ -248,6 +264,8 @@ local function Build()
 		local row = CreateFrame("Button", nil, host)
 		row:SetSize(768, ROW_H - 2)
 		row:SetPoint("TOPLEFT", 0, -((i - 1) * ROW_H))
+		row:EnableMouseWheel(true)
+		row:SetScript("OnMouseWheel", BagWheel)
 		row.bg = row:CreateTexture(nil, "BACKGROUND")
 		row.bg:SetAllPoints()
 		row.bg:SetColorTexture(GM.RGB(i % 2 == 0 and "contMedium" or "contLowest"))
