@@ -73,6 +73,26 @@ local CHECKS = {
 			return nil, "no merchant slot" end
 		return true
 	end,
+	destroy = function(ctx, a)
+		if (ctx.bags or 0) < (a and a.qty or 1) then
+			return nil, "nothing in bags to destroy" end
+		return true
+	end,
+	move = function(ctx, a)
+		-- bank↔bags warehousing — the source scope must hold the qty
+		local have = (a and a.from == "bank")
+			and (ctx.bank or 0) or (ctx.bags or 0)
+		if have < (a and a.qty or 1) then
+			return nil, "nothing in " .. ((a and a.from) or "bags")
+				.. " to move"
+		end
+		return true
+	end,
+	collect = function(ctx, a)
+		if not (MailFrame and MailFrame:IsShown()) then
+			return nil, "mailbox is closed" end
+		return true
+	end,
 }
 
 -- normalize once: callers may pass a ctx, a row, or a bare id
@@ -259,6 +279,66 @@ function O.Vendor(ctx, a)
 	if (r == false or r == nil)
 			and GM.Ledger and GM.Ledger.Unexpect then
 		GM.Ledger.Unexpect(ctx.id, "vendsell") end
+	return r
+end
+
+-- destroy-value sell (max of vendor/DE/auction floor) — one unit per
+-- Execute tick; the planner re-ticks for multi-unit destroys
+function O.Destroy(ctx, a)
+	ctx = AsCtx(ctx)
+	a = a or {}
+	local ok, reason = O.Check(ctx, "destroy", a)
+	if not ok then return fail(reason) end
+	if GM.Ledger and GM.Ledger.Expect then
+		GM.Ledger.Expect(ctx, { kind = "destroy",
+			qty = a.qty or 1, dir = "out" })
+	end
+	local r = GM.Destroying and GM.Destroying.Execute
+		and GM.Destroying.Execute({ kind = "destroy",
+			itemID = ctx.id, qty = a.qty or 1, name = ctx.name })
+	if (r == false or r == nil)
+			and GM.Ledger and GM.Ledger.Unexpect then
+		GM.Ledger.Unexpect(ctx.id, "destroy") end
+	return r
+end
+
+-- bank↔bags move — the warehousing verb. Direction lives on the
+-- step, not the verb: from="bank" deposits-to-bags, from="bags"
+-- carries-to-bank; the expectation watches the BAG side either way
+function O.Move(ctx, a)
+	ctx = AsCtx(ctx)
+	a = a or {}
+	local ok, reason = O.Check(ctx, "move", a)
+	if not ok then return fail(reason) end
+	local toBags = a.from == "bank"
+	if GM.Ledger and GM.Ledger.Expect then
+		GM.Ledger.Expect(ctx, { kind = "move",
+			qty = a.qty or 1, dir = toBags and "in" or "out" })
+	end
+	local r = GM.Banking.Execute({ kind = "move", itemID = ctx.id,
+		qty = a.qty or 1, from = a.from or "bags",
+		to = a.to or (toBags and "bags" or "bank") })
+	if r == nil and GM.Ledger and GM.Ledger.Unexpect then
+		GM.Ledger.Unexpect(ctx.id, "move") end
+	return r
+end
+
+-- collect this item's inbox mail — the fetch leg of buy→mailbox→
+-- bags. bagBase bakes now so a partial collect still verifies
+function O.Collect(ctx, a)
+	ctx = AsCtx(ctx)
+	a = a or {}
+	local ok, reason = O.Check(ctx, "collect", a)
+	if not ok then return fail(reason) end
+	if GM.Ledger and GM.Ledger.Expect then
+		GM.Ledger.Expect(ctx, { kind = "mailin",
+			qty = a.qty or ctx.mail or 1, dir = "in" })
+	end
+	local r = GM.Banking.Execute({ kind = "mailcollect",
+		itemID = ctx.id, qty = a.qty or ctx.mail or 1,
+		bagBase = ctx.bags })
+	if r == nil and GM.Ledger and GM.Ledger.Unexpect then
+		GM.Ledger.Unexpect(ctx.id, "mailin") end
 	return r
 end
 

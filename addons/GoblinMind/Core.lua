@@ -1327,7 +1327,11 @@ end
 -- Any of the three may be missing; the ctx fills them in. Views
 -- read ctx fields only — never compose/link/key plumbing — so no
 -- surface can produce a bare itemString or a base-name paste.
--- Lazy fields: a 200-row list pays only for what it paints.
+-- Identity fields (link/name/bookKey/rgb) memoize — immutable.
+-- Live fields (counts, asks, ledger, prices) read through on every
+-- access — the BucketCache layers underneath keep repeat reads
+-- cheap; a ctx held across an action must never serve a stale
+-- count. A 200-row list still pays only for what it paints.
 local ctxMT = {}
 ctxMT.__index = function(c, k)
 	if k == "link" then
@@ -1348,22 +1352,28 @@ ctxMT.__index = function(c, k)
 		c.rgb = v return v
 	elseif k == "entry" then
 		local v = GM.ItemEntry(c.id, c.bookKey)
-		c.entry = v return v
+		return v
 	elseif k == "asks" then
 		local v = GM.AH and GM.AH.BookAsks
 			and GM.AH.BookAsks(c.bookKey)
-		c.asks = v return v
+		return v
 	elseif k == "bags" then
 		local v = GM.BagCount and GM.BagCount(c.id) or 0
-		c.bags = v return v
+		return v
 	elseif k == "mail" then
 		-- inbox contents mirror (Inventory.Count owns the caches) —
 		-- goods bought, canceled, or mailed sit HERE between the
 		-- transaction and the bags; owned-but-not-carried
-		local s = GM.Inventory and GM.Inventory.Count
-			and GM.Inventory.Count(c.id)
-		local v = (s and s.mail) or 0
-		c.mail = v return v
+		local v = (c.stock and c.stock.mail) or 0
+		return v
+	elseif k == "bank" or k == "gbank" or k == "alts"
+		or k == "owned" then
+		-- per-location counts off the same Inventory.Count row —
+		-- bank is live-or-snapshot, alts is every other character
+		local s = c.stock or {}
+		local v = k == "bank" and s.bank or k == "gbank" and s.guild
+			or k == "alts" and s.alts or s.total or 0
+		return v
 	elseif k == "mine" or k == "bids" then
 		-- our posted lots / open bids whose bookKey matches — the
 		-- same-variant rule: a suffixed ctx only sees its own rows
@@ -1378,16 +1388,44 @@ ctxMT.__index = function(c, k)
 				v[#v + 1] = r
 			end
 		end
-		c[k] = v return v
+		return v
 	elseif k == "stock" then
+		-- every-location inventory row {bags bank mail guild auction
+		-- alts total allTotal} — Inventory.Count owns the caches,
+		-- views ask the ctx
+		local v = (GM.Inventory and GM.Inventory.Count
+			and GM.Inventory.Count(c.id))
+			or { bags = 0, bank = 0, mail = 0, guild = 0,
+				auction = 0, alts = 0, total = 0, allTotal = 0 }
+		return v
+	elseif k == "lstats" then
+		-- ledger per-item counters (buyQ/mailOutQ/paidQ…) — the raw
+		-- itemStats row; renamed off "stock" which is the inventory
+		-- row. Ledger.Stats() is the filtered display aggregate
 		local v = GM.Ledger and GM.Ledger.db
 			and GM.Ledger.db.itemStats
 			and GM.Ledger.db.itemStats[c.id]
-		c.stock = v return v
+		return v
+	elseif k == "points" then
+		-- price-history series for charts — History owns the db
+		local v = (GM.History and GM.History.Points
+			and GM.History.Points(c.bookKey, nil)) or {}
+		return v
+	elseif k == "value" then
+		-- farm-value composition: lowest corroborated market quote
+		-- floored at vendor sell — the zone-value/pricing answer
+		local v = GM.FarmValue and GM.FarmValue(c.id)
+		return v
+	elseif k == "vsell" then
+		local v = GM.VendorSellPrice and GM.VendorSellPrice(c.id)
+		return v
+	elseif k == "quality" then
+		local v = GM.ItemQuality and GM.ItemQuality(c.id)
+		return v
 	elseif k == "basis" then
 		local v = GM.Ledger and GM.Ledger.Basis
 			and GM.Ledger.Basis(c.id) or 0
-		c.basis = v return v
+		return v
 	end
 end
 

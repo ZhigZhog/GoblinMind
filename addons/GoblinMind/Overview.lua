@@ -1315,17 +1315,25 @@ end
 local function RefreshItem()
 	local itP, id = ui.pageItem, ui.itemID
 	if not id then return end
+	-- one ctx answers every item question this pane asks — name,
+	-- color, market entry, every-location stock, ledger stats
+	local ctx = GM.Ctx and GM.Ctx(id)
 	itP.icon:SetTexture(GM.ItemIcon and GM.ItemIcon(id)
 		or "Interface\\Icons\\INV_Misc_QuestionMark")
-	itP.name:SetText(ItemName(id))
-	itP.name:SetTextColor(GM.NameColor(id))
-	local e = GM.ItemEntry(id)
-	local m = GM.Price("dbmarket", id)
+	itP.name:SetText(ctx and ctx.name or ItemName(id))
+	if ctx then
+		local r = ctx.rgb
+		itP.name:SetTextColor(r[1], r[2], r[3])
+	else
+		itP.name:SetTextColor(GM.NameColor(id))
+	end
+	local e = ctx and ctx.entry or GM.ItemEntry(id)
+	local m = e and e.p or GM.Price("dbmarket", id)
 	itP.mkt:SetText(m and ("market " .. GM.Money(m)) or "no market data")
 
 	-- account-global aggregates (itemStats is shared by design)
 	local s = GM.Ledger.Stats(id)
-	local c = GM.Inventory.Count(id)
+	local c = ctx and ctx.stock or GM.Inventory.Count(id)
 	local lines = {
 		format("on hand: %d  (bags %d · bank %d · mail %d · gbank %d · ah %d)",
 			c.total, c.bags, c.bank, c.mail, c.guild, c.auction),
@@ -1341,8 +1349,8 @@ local function RefreshItem()
 				s.sellQ, GM.Money(s.sellAvg or 0),
 				GM.Money(s.sellMin or 0), GM.Money(s.sellMax or 0))
 		end
-		local paid = GM.Ledger.Avg(id, "paid")
-		if paid then
+		local paid = (ctx and ctx.basis) or GM.Ledger.Avg(id, "paid")
+		if paid and paid > 0 then
 			lines[#lines + 1] = "stock cost basis " .. GM.Money(paid)
 		end
 		if s.saleRate then

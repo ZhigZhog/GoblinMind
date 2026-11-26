@@ -1220,8 +1220,10 @@ local function Build()
 		GM.Ops.Post(pd.ctx or id, { qty = qty,
 			unit = unit, dur = pd.durIx })
 		GM.Time.After(0.3, function()
-			pd.have:SetText(format("%d in bags", GM.BagCount(id) or 0))
-			if (GM.BagCount(id) or 0) < 1 then pd:Hide() end
+			local bags = pd.ctx and pd.ctx.bags
+				or GM.BagCount(id) or 0
+			pd.have:SetText(format("%d in bags", bags))
+			if bags < 1 then pd:Hide() end
 		end)
 	end)
 	pd.post:SetSize(70, 20)
@@ -1244,7 +1246,8 @@ function AU.OpenPost(id)
 		or (GM.ItemName and GM.ItemName(id)) or ("item " .. id))
 	pd.name:SetTextColor(GM.NameColor(id))
 	local loc, stack = GM.AH.FindInBags(id)
-	pd.have:SetText(format("%d in bags%s", GM.BagCount(id) or 0,
+	pd.have:SetText(format("%d in bags%s",
+		(ctx and ctx.bags) or GM.BagCount(id) or 0,
 		not loc and " (none unlocked)" or ""))
 	pd.qty:SetText(tostring(stack or 1))
 	local unit = GM.Auctioning and GM.Auctioning.PreviewPost
@@ -1472,7 +1475,8 @@ function AU.Refresh(vm)
 					.. (r.mkt and " · mkt " .. GM.Money(r.mkt) or ""))
 				-- POST appears when bags hold the item — opens the
 				-- post dialog (qty/price/duration, one call per click)
-				if r.id and (GM.BagCount(r.id) or 0) > 0 then
+				if r.id and ((r.ctx and r.ctx.bags)
+						or GM.BagCount(r.id) or 0) > 0 then
 					row.act:Show()
 					row.act.text:SetText("POST")
 					row.act.text:SetTextColor(GM.RGB("accent"))

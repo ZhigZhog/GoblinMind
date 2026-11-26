@@ -682,31 +682,10 @@ end
 -- can never be more optimistic than the most pessimistic source.
 -- what one unit of an item is worth to a farmer, the GoldScout
 -- way: grays are vendor trash — sell price only, never an auction
--- quote. Everything else takes the LOWER of min-buyout and market
--- floored at vendor sell — a fantasy listing can never beat the
--- guaranteed price a vendor always pays.
-ItemVal = function(id)
-	local quality, sell = GM.ItemQuality(id), GM.VendorSellPrice(id)
-	-- index 11 is sellPrice on standard clients — on Forever it
-	-- sometimes returns an unrelated field (appearance/spell ids
-	-- land in the millions). Nothing a farm mob drops legitimately
-	-- vendors above 5g, so the floor caps there — a garbage field
-	-- can never price a drop again
-	if sell and sell > 50000 then sell = nil end
-	if quality == 0 then return sell end
-	local a = GM.Price and GM.Price("dbminbuyout", id)
-	local b = GM.Price and GM.Price("dbmarket", id)
-	-- a lone min-buyout with NO market history is an asking price,
-	-- not a price — one dreamer listing a custom item at 3000g is
-	-- not a farm value. Corroborated quotes use the lower bound;
-	-- unvalidated mb caps at 50g
-	local best
-	if a and b then best = min(a, b)
-	elseif a then best = min(a, 500000)
-	else best = b end
-	if sell and sell > (best or 0) then return sell end
-	return best or sell
-end
+-- quote. The policy itself lives on the pricing spine
+-- (GM.FarmValue in Pricing.lua) — ctx.value, zone records, and
+-- farm-EV math all read the same number.
+ItemVal = function(id) return GM.FarmValue and GM.FarmValue(id) end
 G.ItemVal = ItemVal -- Drops.FarmCost prices windows identically
 
 -- copper value of one loot window at record time — empty corpses
