@@ -1,0 +1,204 @@
+local _, GM = ...
+
+-- ============ action spine ============
+-- EVERY transaction the mod performs is requested through GM.Ops —
+-- the verb owns one validate→expect→execute pipeline so a button's
+-- gray state and the commit share the same check, and the ledger's
+-- expectation register turns each one-sided log into a verified
+-- two-event transaction (buy→item lands, post→item leaves, COD→
+-- gold returns). Views never call C_AuctionHouse/SendMail/merchant
+-- APIs directly; the engines (AH.Execute, Banking.Execute,
+-- Vendoring.Execute) stay the protected-call owners — Ops is the
+-- dispatcher in front of them.
+GM.Ops = GM.Ops or {}
+local O = GM.Ops
+
+local function fail(reason)
+	GM.Print(GM.CC("warn") .. (reason or "can't do that") .. "|r")
+	return false
+end
+
+-- ============ validate ============
+-- ONE check per intent — Ops.Can (the button probe) and the verb's
+-- own pre-flight run the same function, so a surface can't light up
+-- on a rule the commit would fail.
+local CHECKS = {
+	post = function(ctx, a)
+		if not GM.AH.open then return nil, "open the auction house first" end
+		if (ctx.bags or 0) < 1 then
+			return nil, "nothing in bags to post" end
+		if not (a.unit and a.unit > 0) then
+			return nil, "post needs a unit price" end
+		return true
+	end,
+	buy = function(ctx, lot)
+		if not GM.AH.open then return nil, "open the auction house first" end
+		if not lot then return nil, "no lot" end
+		if lot.commodity then return true end
+		if not (lot.auctionID or lot.aid or lot.id) then
+			return nil, "missing auction id — rescan first" end
+		return true
+	end,
+	bid = function(ctx, lot)
+		if not GM.AH.open then return nil, "open the auction house first" end
+		if not lot then return nil, "no lot" end
+		if not (lot.auctionID or lot.aid) then
+			return nil, "missing auction id — rescan first" end
+		if not (lot.total and lot.total > 0) then
+			return nil, "bid needs an amount" end
+		if GetMoney and (GetMoney() or 0) < lot.total then
+			return nil, "not enough gold" end
+		return true
+	end,
+	cancel = function(ctx, lot)
+		if not GM.AH.open then return nil, "open the auction house first" end
+		if not (lot and (lot.auctionID or lot.aid)) then
+			return nil, "missing auction id" end
+		return true
+	end,
+	mail = function(ctx, a)
+		if not (a and a.to and a.to ~= "") then
+			return nil, "mail needs a recipient" end
+		if (ctx.bags or 0) < (a.qty or 1) then
+			return nil, "not enough in bags" end
+		return true
+	end,
+	vendsell = function(ctx, a)
+		if (ctx.bags or 0) < 1 then
+			return nil, "nothing in bags to sell" end
+		return true
+	end,
+	vendbuy = function(ctx, a)
+		if not (a and (a.index or a.itemID or ctx.id)) then
+			return nil, "no merchant slot" end
+		return true
+	end,
+}
+
+-- normalize once: callers may pass a ctx, a row, or a bare id
+local function AsCtx(v)
+	return (type(v) == "table" and v.id and v.bookKey ~= nil) and v
+		or GM.Ctx(v)
+end
+
+-- dry-run for UI state AND the verb's pre-flight — one validator
+function O.Check(ctx, intent, a)
+	ctx = AsCtx(ctx)
+	if not ctx then return nil, "no item" end
+	local f = CHECKS[intent]
+	if not f then return nil, "unknown op " .. tostring(intent) end
+	return f(ctx, a or {})
+end
+
+function O.Can(ctx, intent, a)
+	return (O.Check(ctx, intent, a))
+end
+
+-- ============ verbs ============
+-- Each builds the same step the planner emits and hands it to the
+-- engine that already owns the protected call. Expectations ride
+-- alongside — the journal rows the engines write close when the
+-- arrival detector sees the goods move.
+
+-- post a stack (or the whole ctx.bags when qty omitted)
+function O.Post(ctx, a)
+	ctx = AsCtx(ctx)
+	a = a or {}
+	local ok, reason = O.Check(ctx, "post", a)
+	if not ok then return fail(reason) end
+	local qty = a.qty or ctx.bags
+	if GM.Ledger and GM.Ledger.Expect then
+		-- posting moves the stack out of bags — verify the departure
+		GM.Ledger.Expect(ctx, { kind = "post", qty = qty,
+			dir = "out", unit = a.unit })
+	end
+	return GM.AH.Execute({ kind = "post", itemID = ctx.id,
+		item = ctx.link, name = ctx.name,
+		qty = qty, unit = a.unit, bid = a.bid,
+		duration = a.dur or a.duration })
+end
+
+-- buyout a lot (non-commodity: lot.auctionID; commodity:
+-- lot.commodity + lot.unit expected-price)
+function O.Buy(ctx, lot)
+	ctx = AsCtx(ctx)
+	local ok, reason = O.Check(ctx, "buy", lot)
+	if not ok then return fail(reason) end
+	local qty = lot.qty or 1
+	if GM.Ledger and GM.Ledger.Expect then
+		-- the goods arrive via mail — an uncollected expectation is
+		-- an audit finding, not silent drift
+		GM.Ledger.Expect(ctx, { kind = "buy", qty = qty,
+			dir = "in", unit = lot.unit or lot.price })
+	end
+	if lot.commodity then
+		return GM.AH.Execute({ kind = "buy", commodity = true,
+			itemID = ctx.id, qty = qty, unit = lot.unit })
+	end
+	return GM.AH.Execute({ kind = "buy", itemID = ctx.id,
+		qty = qty, unit = lot.unit or lot.price,
+		total = lot.total,
+		auctionID = lot.auctionID or lot.aid or lot.id })
+end
+
+-- real bid (escrow, not buyout) — lot.total is the bid amount
+function O.Bid(ctx, lot)
+	ctx = AsCtx(ctx)
+	local ok, reason = O.Check(ctx, "bid", lot)
+	if not ok then return fail(reason) end
+	return GM.AH.Execute({ kind = "bid", itemID = ctx.id,
+		qty = lot.qty or 1, total = lot.total,
+		auctionID = lot.auctionID or lot.aid })
+end
+
+-- cancel one of our listings — the engine journals cancel and the
+-- item returns by mail (the enum owns detecting that)
+function O.Cancel(ctx, lot)
+	ctx = AsCtx(ctx)
+	local ok, reason = O.Check(ctx, "cancel", lot)
+	if not ok then return fail(reason) end
+	if GM.Ledger and GM.Ledger.Expect and lot.qty then
+		GM.Ledger.Expect(ctx, { kind = "cancel", qty = lot.qty,
+			dir = "in" })
+	end
+	return GM.AH.Execute({ kind = "cancel",
+		auctionID = lot.auctionID or lot.aid })
+end
+
+-- mail items — one Execute tick attaches + sends; multi-stack sends
+-- still belong to the planner (it re-ticks until the step completes)
+function O.Mail(ctx, a)
+	ctx = AsCtx(ctx)
+	local ok, reason = O.Check(ctx, "mail", a)
+	if not ok then return fail(reason) end
+	if GM.Ledger and GM.Ledger.Expect then
+		GM.Ledger.Expect(ctx, { kind = "mailout",
+			qty = a.qty or 1, dir = "out" })
+	end
+	return GM.Banking.Execute({ kind = "mail", itemID = ctx.id,
+		qty = a.qty or 1, to = a.to, cod = a.cod })
+end
+
+-- sell to the open merchant
+function O.Vendor(ctx, a)
+	ctx = AsCtx(ctx)
+	a = a or {}
+	local ok, reason = O.Check(ctx, "vendsell", a)
+	if not ok then return fail(reason) end
+	if GM.Ledger and GM.Ledger.Expect then
+		GM.Ledger.Expect(ctx, { kind = "vendsell",
+			qty = a.qty or 1, dir = "out" })
+	end
+	return GM.Vendoring.Execute({ kind = "vendsell",
+		itemID = ctx.id, qty = a.qty or 1 })
+end
+
+-- buy from the open merchant — MerchantBuy journals via ExpectBuy
+function O.VendorBuy(ctx, a)
+	ctx = AsCtx(ctx)
+	a = a or {}
+	local ok, reason = O.Check(ctx, "vendbuy", a)
+	if not ok then return fail(reason) end
+	GM.MerchantBuy(a.index or a.slot, a.qty or 1)
+	return true
+end

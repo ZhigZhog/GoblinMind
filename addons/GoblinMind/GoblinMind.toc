@@ -58,6 +58,7 @@ MapRevealData.lua
 GatherMap.lua
 GatherMinimap.lua
 Settings.lua
+Ops.lua
 ItemInput.lua
 Tooltip.lua
 Gathering.lua

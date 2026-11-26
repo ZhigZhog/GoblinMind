@@ -512,12 +512,10 @@ local function BindAskRow(row, a, idx)
 		row.act.text:SetText("BUY")
 		row.act:SetScript("OnClick", function()
 			if a.id then
-				GM.AH.Execute({ kind = "buy", itemID = M.itemID,
-					auctionID = a.id, qty = a.qty, unit = a.unit,
-					total = a.total })
+				GM.Ops.Buy(M.ctx or M.itemID, a)
 			else
-				GM.AH.Execute({ kind = "buy", commodity = true,
-					itemID = M.itemID, qty = a.qty, unit = a.unit })
+				GM.Ops.Buy(M.ctx or M.itemID,
+					{ commodity = true, qty = a.qty, unit = a.unit })
 			end
 			MU.Refresh()
 		end)

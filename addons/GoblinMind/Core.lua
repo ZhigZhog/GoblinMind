@@ -1097,6 +1097,7 @@ end
 -- "insecure scripts exceeded execution limit" kills). One 250ms
 -- bucket rebuild serves every itemID lookup.
 local probeAt = 0
+local lastBagMap
 local BagMap = GM.BucketCache(function()
 	local now = GetTime()
 	if now - probeAt > 3 then
@@ -1108,6 +1109,23 @@ local BagMap = GM.BucketCache(function()
 		function(_, _, id, n)
 			m[id] = (m[id] or 0) + n
 		end)
+	-- the movement detector: every bag-map rebuild diffs against the
+	-- last and reports arrivals/departures to the ledger's
+	-- expectation register — one diff point verifies every Ops verb
+	-- (buy lands, post departs, mailout departs, cancel returns)
+	if lastBagMap and GM.Ledger then
+		for id, n in pairs(m) do
+			local d = n - (lastBagMap[id] or 0)
+			if d > 0 and GM.Ledger.Arrived then
+				GM.Ledger.Arrived(id, d) end
+		end
+		for id, n in pairs(lastBagMap) do
+			local d = n - (m[id] or 0)
+			if d > 0 and GM.Ledger.Departed then
+				GM.Ledger.Departed(id, d) end
+		end
+	end
+	lastBagMap = m
 	return m
 end)
 
@@ -1329,6 +1347,37 @@ ctxMT.__index = function(c, k)
 	elseif k == "entry" then
 		local v = GM.ItemEntry(c.id, c.bookKey)
 		c.entry = v return v
+	elseif k == "asks" then
+		local v = GM.AH and GM.AH.BookAsks
+			and GM.AH.BookAsks(c.bookKey)
+		c.asks = v return v
+	elseif k == "bags" then
+		local v = GM.BagCount and GM.BagCount(c.id) or 0
+		c.bags = v return v
+	elseif k == "mine" or k == "bids" then
+		-- our posted lots / open bids whose bookKey matches — the
+		-- same-variant rule: a suffixed ctx only sees its own rows
+		local src = k == "mine" and "MineRows" or "BidRows"
+		local v = {}
+		local rs = GM.Inventory and GM.Inventory[src]
+			and GM.Inventory[src]() or {}
+		local BK = GM.AH and GM.AH.BookKey
+		for _, r in ipairs(rs) do
+			if r.id == c.id
+				and (not BK or BK(r.id, r.key) == c.bookKey) then
+				v[#v + 1] = r
+			end
+		end
+		c[k] = v return v
+	elseif k == "stock" then
+		local v = GM.Ledger and GM.Ledger.db
+			and GM.Ledger.db.itemStats
+			and GM.Ledger.db.itemStats[c.id]
+		c.stock = v return v
+	elseif k == "basis" then
+		local v = GM.Ledger and GM.Ledger.Basis
+			and GM.Ledger.Basis(c.id) or 0
+		c.basis = v return v
 	end
 end
 

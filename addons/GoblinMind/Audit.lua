@@ -175,6 +175,21 @@ check("buy pairing", function()
 		p.outN, p.buys)
 end)
 
+-- Ops verbs register the second half of every transaction as an
+-- expectation — goods arriving (buy), goods leaving (post/mailout/
+-- vend), goods returning (cancel). A stale expectation means the
+-- engine ran but the world didn't follow: the buy's mail never got
+-- collected, the post's stack never left bags.
+check("op verification", function()
+	local e = GM.Ledger.Expectations and GM.Ledger.Expectations()
+	if not e then return "info", "no expectation register" end
+	if e.stale > 0 then
+		return "warn", format(
+			"%d op expectation(s) unmet past their window", e.stale)
+	end
+	return "ok", format("%d open op(s)", e.open)
+end)
+
 -- clamped envelope claims vs the real purse: claims above gold are
 -- allocation overcommit — legal (envelopes are claims, not vaults)
 -- but worth seeing

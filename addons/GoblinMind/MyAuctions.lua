@@ -552,8 +552,8 @@ function MA.RefreshPosted(vm)
 			if st == "outbid" and cur and GM.AH.open then
 				row.act:Show()
 				row.act:SetScript("OnClick", function()
-					GM.AH.Execute({ kind = "bid", itemID = id,
-						auctionID = aid, total = cur + 1 })
+					GM.Ops.Bid(r.ctx or id,
+						{ aid = aid, qty = r.qty, total = cur + 1 })
 					GM.Time.After(0.5, MA.Refresh)
 				end)
 			else

@@ -258,8 +258,8 @@ function AU.BuyN()
 		end
 	end
 	if not cap then return end
-	local r = GM.AH.Execute({ kind = "buy", commodity = true,
-		itemID = ui.sel.id, qty = n, unit = cap })
+	local r = GM.Ops.Buy(ui.sel.ctx or ui.sel.id,
+		{ commodity = true, qty = n, unit = cap })
 	if r == "confirm" then ui.stagedBuy = true end
 	AU.Refresh()
 end
@@ -296,16 +296,9 @@ end
 
 local function BuyAsk(a)
 	if a.own then return end
-	if a.id then
-		-- item auction: PlaceBid with the lot total
-		GM.AH.Execute({ kind = "buy", itemID = ui.sel.id, auctionID = a.id,
-			qty = a.qty, unit = a.unit, total = a.total })
-	else
-		-- commodity aggregate: stage the quote, CONFIRM on the next click
-		local r = GM.AH.Execute({ kind = "buy", commodity = true,
-			itemID = ui.sel.id, qty = a.qty, unit = a.unit })
-		if r == "confirm" then ui.confirmAsk = a end
-	end
+	-- a.id is the lot's auctionID — Ops normalizes commodity vs item
+	local r = GM.Ops.Buy(ui.sel.ctx or ui.sel.id, a)
+	if r == "confirm" and not a.id then ui.confirmAsk = a end
 	AU.Refresh()
 end
 
@@ -1224,8 +1217,8 @@ local function Build()
 			pd.msg:SetText(GM.CC("warn") .. "need a valid price|r")
 			return
 		end
-		GM.AH.Execute({ kind = "post", itemID = id, qty = qty,
-			unit = unit, duration = pd.durIx })
+		GM.Ops.Post(pd.ctx or id, { qty = qty,
+			unit = unit, dur = pd.durIx })
 		GM.Time.After(0.3, function()
 			pd.have:SetText(format("%d in bags", GM.BagCount(id) or 0))
 			if (GM.BagCount(id) or 0) < 1 then pd:Hide() end
@@ -1246,7 +1239,7 @@ function AU.OpenPost(id)
 	local ctx = type(id) == "table" and id.id and id or nil
 	id = ctx and ctx.id or id
 	local pd = ui.postD
-	pd.itemID = id
+	pd.itemID, pd.ctx = id, ctx
 	pd.name:SetText((ctx and ctx.name)
 		or (GM.ItemName and GM.ItemName(id)) or ("item " .. id))
 	pd.name:SetTextColor(GM.NameColor(id))
@@ -1616,7 +1609,8 @@ function AU.Refresh(vm)
 					or "<1m") or "—")
 				local aid = r.aid
 				row.act:SetScript("OnClick", function()
-					GM.AH.Execute({ kind = "cancel", auctionID = aid })
+					GM.Ops.Cancel(r.ctx or r.id,
+						{ aid = aid, qty = r.qty })
 					AU.Refresh()
 				end)
 				row:SetScript("OnClick", function()
@@ -1662,8 +1656,8 @@ function AU.Refresh(vm)
 				if st == "outbid" and cur then
 					row.act:Show()
 					row.act:SetScript("OnClick", function()
-						GM.AH.Execute({ kind = "bid", itemID = id,
-							auctionID = aid, total = cur + 1 })
+						GM.Ops.Bid(r.ctx or id,
+							{ aid = aid, qty = r.qty, total = cur + 1 })
 						GM.Time.After(0.5, AU.Refresh)
 					end)
 				else

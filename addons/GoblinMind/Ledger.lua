@@ -527,6 +527,64 @@ function GM.Ledger.Accounts(charKey)
 	return bal
 end
 
+-- ============ expectation register ============
+-- The item-movement twin of pendingBuy's cash pairing. Every Ops
+-- verb registers the SECOND half of its transaction here before the
+-- engine runs: a buy expects the goods to land in bags (via mail
+-- collect), a post/mailout/vendor sell expects them to leave, a
+-- cancel expects them back. Arrival/departure detectors consume
+-- expectations FIFO; what never arrives is a stale expectation —
+-- an audit finding, not silent drift. Journal legs still belong to
+-- Record/Journal — this register verifies, it doesn't book.
+local expects = {}
+local EXPECT_WINDOW = 900   -- 15m covers buy→mail→collect
+local EXPECT_CAP = 200
+
+function GM.Ledger.Expect(ctx, txn)
+	if not (ctx and ctx.id and txn and txn.dir
+		and txn.qty and txn.qty > 0) then return end
+	if #expects >= EXPECT_CAP then table.remove(expects, 1) end
+	expects[#expects + 1] = {
+		kind = txn.kind, id = ctx.id, qty = txn.qty,
+		got = 0, dir = txn.dir, unit = txn.unit, t = time(),
+	}
+end
+
+-- consume the oldest matching open expectation; returns the matched
+-- row (its kind/qty/unit) or nil. qty is the observed movement.
+local function Fulfill(id, qty, dir)
+	for i, e in ipairs(expects) do
+		if e.id == id and e.dir == dir then
+			e.got = e.got + qty
+			if e.got >= e.qty then
+				table.remove(expects, i)
+				return e
+			end
+			return e
+		end
+	end
+end
+
+function GM.Ledger.Arrived(itemID, qty)
+	return itemID and qty and qty > 0
+		and Fulfill(itemID, qty, "in")
+end
+
+function GM.Ledger.Departed(itemID, qty)
+	return itemID and qty and qty > 0
+		and Fulfill(itemID, qty, "out")
+end
+
+-- audit surface: open + stale expectation counts
+function GM.Ledger.Expectations()
+	local now, open, stale = time(), 0, 0
+	for _, e in ipairs(expects) do
+		if now - e.t <= EXPECT_WINDOW then open = open + 1
+		else stale = stale + 1 end
+	end
+	return { open = open, stale = stale, n = #expects }
+end
+
 -- read-only window into the attribution queues for /goblin audit:
 -- the sums and staleness the cash-drift check needs, without
 -- exposing the queues themselves
@@ -539,8 +597,10 @@ function GM.Ledger.Pending()
 	for _, pb in ipairs(pendingBuy) do
 		if now - pb.t > BUY_WINDOW then staleBuy = staleBuy + 1 end
 	end
+	local exp = GM.Ledger.Expectations()
 	return { out = out, outN = #pendingOut, outStale = staleOut,
-		buys = #pendingBuy, buysStale = staleBuy }
+		buys = #pendingBuy, buysStale = staleBuy,
+		exp = exp.n, expStale = exp.stale }
 end
 
 -- char-switcher surface for the ledger window: sorted char keys and
