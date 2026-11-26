@@ -73,6 +73,60 @@ function W.EditBox(parent, w, hint)
 	return eb
 end
 
+-- inline-editable label: a fontstring that swaps to an edit box on
+-- click — THE reusable "editable text" widget. The field's text
+-- lands pixel-on the label's painted text and the box's right edge
+-- ends where the label's did, so the edit reads as the same text
+-- under focus, not a shifted control.
+-- f.pad reserves leading width the field must not cover (crest
+-- icons) — callers measure it exactly, never guess a constant.
+function W.EditableLabel(parent, w)
+	local f = CreateFrame("Button", nil, parent)
+	f:SetSize(w, 18)
+	f.pad = 0
+	local label = GM.MakeFontString(f, GM.FONT, 10, "text")
+	label:SetPoint("LEFT", 0, 0)
+	label:SetWidth(w)
+	label:SetJustifyH("LEFT")
+	label:SetWordWrap(false)
+	f.label = label
+	-- the box is a sibling of the label button so its left edge can
+	-- overhang by the text inset without clipping
+	local eb = W.EditBox(parent, w)
+	eb:Hide()
+	f.eb = eb
+	-- pad shifts the field's TEXT origin — the box edge sits
+	-- inset-left of it so painted and edited text share one x
+	function f.Layout()
+		eb:ClearAllPoints()
+		eb:SetPoint("LEFT", f, "LEFT", f.pad - 6, 0)
+		eb:SetWidth(w - f.pad + 6)
+	end
+	f.Layout()
+	-- Open(plain, commit): show the field with the unadorned text;
+	-- Enter fires commit(text), Esc cancels — both drop back to the
+	-- label
+	function f.Open(plain, commit)
+		eb:SetText(plain or "")
+		eb:SetTextColor(GM.RGB("text"))
+		eb._commit = commit
+		eb:Show()
+		eb:SetFocus()
+		eb:HighlightText()
+	end
+	eb:SetScript("OnEnterPressed", function(self)
+		local cb = self._commit
+		self:Hide()
+		self:ClearFocus()
+		if cb then cb(self:GetText()) end
+	end)
+	eb:SetScript("OnEscapePressed", function(self)
+		self:Hide()
+		self:ClearFocus()
+	end)
+	return f
+end
+
 -- hover tooltip: linesFn() returns {title, line, line…} or nil.
 -- Renders into an owned frame, NOT GameTooltip — SetText there runs
 -- the shared hook chain of every installed addon, and a foreign
@@ -828,63 +882,34 @@ function W.AcctRow(parent, idx, compact)
 	local nameW = compact and 88 or 104
 	local grpW = compact and 100 or 120
 
-	-- name is clickable: swaps to an inline editbox, Enter commits
-	-- (B.Rename validates empty/dup), Esc cancels
-	local nameBtn = CreateFrame("Button", nil, row)
+	-- name is an editable label: click swaps to an aligned field,
+	-- Enter commits (B.Rename validates empty/dup), Esc cancels
+	local nameBtn = W.EditableLabel(row, nameW)
 	nameBtn:SetPoint("LEFT", 2, 0)
-	nameBtn:SetSize(nameW, 18)
-	row.name = GM.MakeFontString(nameBtn, GM.FONT, 10, "text")
-	row.name:SetPoint("LEFT", 0, 0)
-	row.name:SetWidth(nameW)
-	row.name:SetJustifyH("LEFT")
+	row.name = nameBtn.label
 	row.nameBtn = nameBtn
 	-- fold chevron: overview nests each char's named accounts under
 	-- their pool — the chevron rides the pool row's left gutter and
-	-- only paints when the row carries children
+	-- only paints when the row carries children. Blizzard's own
+	-- plus/minus textures: the ▸/▾ glyphs don't exist in Montserrat
 	local fold = CreateFrame("Button", nil, row)
 	fold:SetSize(14, 18)
 	fold:SetPoint("LEFT", 2, 0)
-	fold.text = GM.MakeFontString(fold, GM.FONT_BOLD, 10, "textDim")
-	fold.text:SetPoint("CENTER")
+	fold.tex = fold:CreateTexture(nil, "ARTWORK")
+	fold.tex:SetSize(14, 14)
+	fold.tex:SetPoint("CENTER")
 	fold:Hide()
 	row.fold = fold
-	local eb = W.EditBox(row, nameW + 6)
-	eb:SetPoint("LEFT", nameBtn, "LEFT", 0, 0)
-	-- paint-time anchor: crested names indent the box so its text
-	-- lands where the name printed, not under the faction icon —
-	-- and shrink it by the pad so the right edge still clears the
-	-- kind button
-	row.nameEditAnchor = function(pad)
-		pad = pad or 0
-		eb:ClearAllPoints()
-		eb:SetPoint("LEFT", nameBtn, "LEFT", pad, 0)
-		eb:SetWidth(nameW + 6 - pad)
-	end
-	row.name:SetWordWrap(false)
-	eb:SetHeight(18)
-	eb:Hide()
-	row.nameEdit = eb
 	nameBtn:SetScript("OnClick", function()
 		local a = GM.Budget.List()[row._idx or idx]
 		if not a then return end
-		eb:SetText(a.name)
-		eb:SetTextColor(GM.RGB("text"))
-		eb:Show()
-		eb:SetFocus()
-		eb:HighlightText()
+		nameBtn.Open(a.name, function(text)
+			GM.Budget.Rename(row._idx or idx, text)
+			AcctRefresh()
+		end)
 	end)
 	W.Tip(nameBtn, function() return {
 		"Rename account", "click to edit the name" } end)
-	eb:SetScript("OnEnterPressed", function(self)
-		GM.Budget.Rename(row._idx or idx, self:GetText())
-		self:Hide()
-		self:ClearFocus()
-		AcctRefresh()
-	end)
-	eb:SetScript("OnEscapePressed", function(self)
-		self:Hide()
-		self:ClearFocus()
-	end)
 
 	local kind = CreateFrame("Button", nil, row)
 	kind:SetSize(50, 20)
@@ -1028,7 +1053,9 @@ function W.PaintAcctRow(row, a, idx, opts)
 		2 + (opts.indent or 0) * 16 + (opts.fold and 14 or 0), 0)
 	if opts.fold then
 		row.fold:Show()
-		row.fold.text:SetText(opts.fold == "closed" and "▸" or "▾")
+		row.fold.tex:SetTexture(opts.fold == "closed"
+			and "Interface\\Buttons\\UI-PlusButton-Up"
+			or "Interface\\Buttons\\UI-MinusButton-Up")
 		row.fold:SetScript("OnClick", opts.onFold)
 	else
 		row.fold:Hide()
@@ -1047,14 +1074,14 @@ function W.PaintAcctRow(row, a, idx, opts)
 		end
 	end
 	row.name:SetText(label)
-	-- crested names pad the rename box so the field's text lands
-	-- where the printed name started, ~crest-width in
-	if row.nameEditAnchor then
-		-- pad ≈ crest (18px icon + space ≈ 20) minus the box's 6px
-		-- text inset, so the field's text lands on the name
-		row.nameEditAnchor(ck and GM.Budget.Crest(ck) ~= ""
-			and 14 or 0)
-	end
+	-- crest pad, exact: measure the crest escape itself — texture
+	-- escapes measure at display width, so this lands the field's
+	-- text on the name no matter what suffix the label carries
+	row._measure = row._measure
+		or GM.MakeFontString(row, GM.FONT, 10, "text")
+	row._measure:SetText(ck and GM.Budget.Crest(ck) or "")
+	row.nameBtn.pad = row._measure:GetStringWidth() or 0
+	row.nameBtn.Layout()
 	row.kind.text:SetText(a.pool and "POOL" or GM.Budget.KINDS[a.kind])
 	-- the pool IS every group — it can't be deleted or rebound, so
 	-- both controls hide on pool rows; a stale binding left by the
