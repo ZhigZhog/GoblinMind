@@ -1313,8 +1313,12 @@ ctxMT.__index = function(c, k)
 		local v = GM.AH and GM.AH.BookKey
 			and GM.AH.BookKey(c.id, c.key) or c.id
 		c.bookKey = v return v
-	elseif k == "color" then
-		return GM.ItemDisplayColor(c.id, c.link)
+	elseif k == "rgb" then
+		-- __index truncates to one value — a field can't hand r,g,b
+		-- to SetTextColor, so the triple rides in a table
+		local r, g, b = GM.ItemDisplayColor(c.id, c.link)
+		local v = { r, g, b }
+		c.rgb = v return v
 	elseif k == "entry" then
 		local v = GM.ItemEntry(c.id, c.bookKey)
 		c.entry = v return v

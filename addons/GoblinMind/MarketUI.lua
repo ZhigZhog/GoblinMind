@@ -448,8 +448,11 @@ local function RefreshHeader(vm)
 	-- repaint reads the same shape, never re-derives
 	mp.name:SetText(id and (M.ctx and M.ctx.name or "item " .. id)
 		or "no item targeted")
-	mp.name.fontString:SetTextColor(
-		M.ctx and M.ctx.color or GM.ItemDisplayColor(id, M.itemLink))
+	if M.ctx and M.ctx.rgb then
+		mp.name.fontString:SetTextColor(unpack(M.ctx.rgb))
+	else
+		mp.name.fontString:SetTextColor(GM.ItemDisplayColor(id, M.itemLink))
+	end
 	local entry = vm.entry
 	local chips = {}
 	if entry then
