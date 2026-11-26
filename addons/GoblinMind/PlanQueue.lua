@@ -808,6 +808,12 @@ function PQ.Solve(asks, workID)
 			- math.max(0, GM.BagCount(workID) - pend.base))
 		pend.qty, pend.base = pending, GM.BagCount(workID)
 	end
+	-- the inbox mirror is ground truth for arrived goods (bought,
+	-- canceled, mailed — pendingBuy only sees buys). max() not sum:
+	-- a delivered buy shows in BOTH until bags absorb it.
+	local inMail = (GM.Inventory and GM.Inventory.Count
+		and GM.Inventory.Count(workID) or {}).mail or 0
+	local transit = math.max(pending, inMail)
 	-- the solver strips own asks from buys itself; hand them back
 	-- separately so the cancel-merge can repost off-target listings
 	local ownAsks
@@ -821,7 +827,7 @@ function PQ.Solve(asks, workID)
 		riskBudget = GM.Model.Pref("riskBudget"),
 		minProfitMargin = (tonumber(sOps.belowPct) or 10) / 100,
 		commodity = isCommodity,
-		owned = GM.BagCount(workID) + pending,
+		owned = GM.BagCount(workID) + transit,
 		normal = ev("normal"),
 		minP = ev("min"),
 		maxP = ev("max"),
@@ -848,17 +854,21 @@ function PQ.Solve(asks, workID)
 		step.item = workLink
 		step.commodity = isCommodity
 	end
-	-- buys arrive by mail — insert a collect step before the post leg
-	-- so the queue models the buy→mailbox→post gap
+	-- goods owed to the bags ride the mailbox — insert a collect step
+	-- before the post leg whenever transit is expected (buys in this
+	-- plan OR the mirror already shows mail for the work item), so a
+	-- post-only plan still routes through the inbox first
 	do
 		local firstPost
 		for i, s in ipairs(plan.steps) do
 			if s.kind == "post" and not firstPost then firstPost = i end
 		end
-		if firstPost and firstPost > 1 then
+		if firstPost and (firstPost > 1 or transit > 0) then
 			tinsert(plan.steps, firstPost,
 				{ kind = "mailcollect", itemID = workID, item = workLink,
-					qty = 1, name = "collect from mail" })
+					qty = transit > 0 and transit or 1,
+					bagBase = GM.BagCount(workID),
+					name = "collect from mail" })
 		end
 	end
 	for _, lot in ipairs(plan.buyLots or {}) do

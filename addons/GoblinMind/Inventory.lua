@@ -1317,7 +1317,7 @@ GM.Inventory.Owned = GM.BucketCache(function()
 	for _, a in pairs(auctionCache) do
 		if a.itemID then set[a.itemID] = true end
 	end
-	if BankFrame and BankFrame:IsShown() then
+	if GM.bankOpen or (BankFrame and BankFrame:IsShown()) then
 		GM.EachBagSlot(BankBags(), function(_, _, id)
 			set[id] = true
 		end)

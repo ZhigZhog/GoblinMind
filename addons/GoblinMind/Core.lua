@@ -1141,10 +1141,12 @@ function GM.BagItems()
 	return set
 end
 
--- Bank contents are only readable while the bank frame is open.
+-- Bank contents are only readable while the bank is open. The
+-- BANKFRAME_* event flag is authoritative on this client — the
+-- native frame isn't what opens (same rule BankUI/Banking use).
 local BankMap = GM.BucketCache(function()
 	local m = {}
-	if BankFrame and BankFrame:IsShown() then
+	if GM.bankOpen or (BankFrame and BankFrame:IsShown()) then
 		GM.EachBagSlot(GM.BankContainerList(),
 			function(_, _, id, n)
 				m[id] = (m[id] or 0) + n
@@ -1354,6 +1356,14 @@ ctxMT.__index = function(c, k)
 	elseif k == "bags" then
 		local v = GM.BagCount and GM.BagCount(c.id) or 0
 		c.bags = v return v
+	elseif k == "mail" then
+		-- inbox contents mirror (Inventory.Count owns the caches) —
+		-- goods bought, canceled, or mailed sit HERE between the
+		-- transaction and the bags; owned-but-not-carried
+		local s = GM.Inventory and GM.Inventory.Count
+			and GM.Inventory.Count(c.id)
+		local v = (s and s.mail) or 0
+		c.mail = v return v
 	elseif k == "mine" or k == "bids" then
 		-- our posted lots / open bids whose bookKey matches — the
 		-- same-variant rule: a suffixed ctx only sees its own rows
