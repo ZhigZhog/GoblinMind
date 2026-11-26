@@ -180,31 +180,16 @@ f:SetScript("OnEvent", function(_, event, ...)
 			-- bargain, not a trap
 			local unit = math.ceil((totalPrice or 0) / math.max(pc.qty or 1, 1))
 			if pc.unit and unit > pc.unit then
-				GM.AH.pendingConfirm = nil
+				-- the quote IS the freshest ask in the game — the
+				-- scan ladder that set pc.unit lags it, so aborting
+				-- and re-solving just re-arms the same dead expected
+				-- price (the drift loop). Keep the stage, update the
+				-- expectation to the quote, and let CONFIRM commit at
+				-- the price the user is looking at right now
+				pc.unit, pc.quote = unit, totalPrice
 				GM.Print(GM.CC("warn") .. format(
-					"quote moved — expected %s ea, quoted %s ea — re-solving at the fresh book|r",
-					GM.Money(pc.unit), GM.Money(unit)))
-				if GM.Shopping and GM.Shopping.QuoteDied then
-					GM.Shopping.QuoteDied(pc.itemID, true)
-				end
-				-- the armed buy step still expects the stale price —
-				-- every click would re-quote the same dead number.
-				-- Rescan re-solves the plan so the next BUY NEXT
-				-- expects the book the client actually has
-				if GM.PlanQueue and GM.PlanQueue.Rescan
-					and GM.PlanQueue.plan and GM.PlanQueue.plan.steps then
-					local st = GM.PlanQueue.plan.steps
-						[GM.PlanQueue.stepIndex]
-					if st and st.kind == "buy"
-						and st.itemID == pc.itemID then
-						GM.PlanQueue.Rescan()
-					end
-				end
-				-- the buy's expectation dies with the quote — the
-				-- rescan re-registers if the plan re-buys
-				if GM.Ledger and GM.Ledger.Unexpect then
-					GM.Ledger.Unexpect(pc.itemID, "buy")
-				end
+					"quote moved — now %s ea — CONFIRM buys at the new price|r",
+					GM.Money(unit)))
 			else
 				pc.quote = totalPrice
 				GM.Print("quote ready — total " .. GM.Money(totalPrice or 0) .. " — click CONFIRM")
