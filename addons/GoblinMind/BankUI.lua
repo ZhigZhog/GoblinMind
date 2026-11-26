@@ -138,7 +138,10 @@ local function Build()
 	-- Contextual takeover (bank session only) — no tab strip.
 	local f = GM.Widgets.Window({
 		name = "GoblinMindBank", title = "BANK",
-		w = 680, h = 430, x = -60, y = -20,
+		-- 460: pads (34+30) + toolbar (22+gap) + pane natural height
+		-- (VISIBLE*ROW_H + 30 = 366) — 430 left the pane ~26px short
+		-- so the last row painted over the frame's bottom edge
+		w = 680, h = 460, x = -60, y = -20,
 		onHide = function()
 			GM.FramePark.Restore(BankFrame)
 			if not ui.wantDefault and CloseBankFrame then
