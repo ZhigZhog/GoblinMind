@@ -104,7 +104,7 @@ function W.MoneyEdit(parent, w, hint, bareUnit)
 	function eb.GetCopper()
 		local t = eb:GetText()
 		if t == "" or (lh and t == lh) then return nil end
-		local bare = tonumber(t:lower():gsub("%s", ""))
+		local bare = tonumber((t:lower():gsub("%s", "")))
 		if bare then return floor(bare * factor) end
 		return GM.Budget.ParseMoney(t)
 	end
@@ -1408,7 +1408,7 @@ function W.AcctAdd(parent)
 	amt:SetPoint("LEFT", kindBtn, "RIGHT", 6, 0)
 	amt._validate = function(t)
 		return addKind ~= "save"
-			or tonumber((t or ""):gsub("%%", "")) ~= nil
+			or tonumber(((t or ""):gsub("%%", ""))) ~= nil
 	end
 
 	local btn = CreateFrame("Button", nil, f)
@@ -1428,7 +1428,7 @@ function W.AcctAdd(parent)
 		local n = name:GetText()
 		if n == LT("name") then n = "" end
 		local alloc = addKind == "save"
-			and tonumber((amt:GetText() or ""):gsub("%%", ""))
+			and tonumber(((amt:GetText() or ""):gsub("%%", "")))
 			or amt.GetCopper()
 		-- alloc may be 0 — an unfunded envelope is a valid account
 		local acct = alloc ~= nil
