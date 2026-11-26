@@ -43,11 +43,28 @@ end
 
 -- snapshot the current char into the registry; runs on every Sample
 -- plus PLAYER_MONEY so the combined-gold strip stays live
+-- class token from whatever the client hands back: stock
+-- UnitClass returns (localized name, file token, id) but this
+-- one can come back name-only — then reverse Blizzard's
+-- localized-name tables ("Hunter" -> "HUNTER")
+local function PlayerClassToken()
+	local cname, cls = UnitClass and UnitClass("player")
+	if cls then return cls end
+	if not cname then return nil end
+	for _, src in ipairs{LOCALIZED_CLASS_NAMES_MALE,
+			LOCALIZED_CLASS_NAMES_FEMALE} do
+		for tag, nm in pairs(src or {}) do
+			if nm == cname then return tag end
+		end
+	end
+	return nil
+end
+
 local function StampChar()
 	if not GM.db then return end
 	local ck = GM.CharKey()
 	local name = UnitName and UnitName("player") or ck
-	local _, cls = UnitClass and UnitClass("player")
+	local cls = PlayerClassToken()
 	local fac = UnitFactionGroup and UnitFactionGroup("player")
 	local ch = Chars()[ck]
 	if not ch then ch = {} Chars()[ck] = ch end
@@ -111,15 +128,27 @@ local function HexRGB(hex)
 		tonumber("0x" .. hex:sub(5, 6)) / 255
 end
 
+-- Blizzard's own class colors, carried for clients without
+-- RAID_CLASS_COLORS in FrameXML
+local CLASS_RGB = {
+	WARRIOR = {0.78, 0.61, 0.43}, PALADIN = {0.96, 0.55, 0.73},
+	HUNTER = {0.67, 0.83, 0.45}, ROGUE = {1.00, 0.96, 0.41},
+	PRIEST = {1.00, 1.00, 1.00}, SHAMAN = {0.00, 0.44, 0.87},
+	MAGE = {0.25, 0.78, 0.92}, WARLOCK = {0.53, 0.53, 0.93},
+	DRUID = {1.00, 0.49, 0.04},
+}
+
 function B.CharRGB(ck)
 	local ch = B.CharInfo(ck)
 	local col = ch and ch.col
 	if type(col) == "string" and col:match("^%x%x%x%x%x%x$") then
 		return HexRGB(col)
 	end
-	local cc = ch and ch.cls and RAID_CLASS_COLORS
-		and RAID_CLASS_COLORS[ch.cls]
-	if cc then return cc.r, cc.g, cc.b end
+	local cc = ch and ch.cls and (RAID_CLASS_COLORS
+		or CLASS_RGB)[ch.cls]
+	if cc then
+		return cc.r or cc[1], cc.g or cc[2], cc.b or cc[3]
+	end
 	local h = 5381
 	for i = 1, #ck do h = (h * 33 + ck:byte(i)) % 16777216 end
 	return HexRGB(CHAR_PALETTE[h % #CHAR_PALETTE + 1])
