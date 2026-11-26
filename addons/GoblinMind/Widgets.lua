@@ -73,6 +73,68 @@ function W.EditBox(parent, w, hint)
 	return eb
 end
 
+-- canonical display for money input: "10g", "5s", "1g 2s 30c"
+local function MoneyText(copper)
+	if not copper or copper <= 0 then return "0c" end
+	local g = floor(copper / 10000)
+	local s = floor((copper % 10000) / 100)
+	local c = copper % 100
+	local out = {}
+	if g > 0 then out[#out + 1] = g .. "g" end
+	if s > 0 then out[#out + 1] = s .. "s" end
+	if c > 0 then out[#out + 1] = c .. "c" end
+	return table.concat(out, " ")
+end
+
+-- money input: W.EditBox that understands "10g50s25c" / "1.5g" /
+-- bare numbers and validates on commit. bareUnit ("g"/"s"/"c",
+-- default "c") decides what a unit-less number means — B.ParseMoney
+-- treats it as copper, but a budget field reads "5" as 5g.
+--   eb.GetCopper()  copper or nil — nil while only the hint shows
+--   eb.SetCopper(n) writes canonical text
+--   eb._validate    optional fn(text) → bool for non-money content
+--                   (save accounts' % input) — keeps a valid non-
+--                   money value from being flagged
+-- Enter/focus-loss rewrites a valid value to canonical text; garbage
+-- turns red, same validate-on-blur semantics as EditableLabel.
+function W.MoneyEdit(parent, w, hint, bareUnit)
+	local eb = W.EditBox(parent, w, hint)
+	local lh = LT(hint)
+	local factor = bareUnit == "g" and 10000 or bareUnit == "s" and 100 or 1
+	function eb.GetCopper()
+		local t = eb:GetText()
+		if t == "" or (lh and t == lh) then return nil end
+		local bare = tonumber(t:lower():gsub("%s", ""))
+		if bare then return floor(bare * factor) end
+		return GM.Budget.ParseMoney(t)
+	end
+	function eb.SetCopper(n)
+		eb:SetText(n ~= nil and MoneyText(n) or "")
+		eb:SetTextColor(GM.RGB("text"))
+	end
+	eb:SetScript("OnEditFocusGained", function()
+		if lh and eb:GetText() == lh then
+			eb:SetText("")
+		end
+		-- refocusing clears the error state so retyping isn't red
+		eb:SetTextColor(GM.RGB("text"))
+		if eb._gmBg then eb._gmBg:SetColorTexture(GM.RGB("contMedium")) end
+	end)
+	eb:SetScript("OnEditFocusLost", function()
+		if eb._gmBg then eb._gmBg:SetColorTexture(GM.RGB("contLowest")) end
+		local t = eb:GetText()
+		if t == "" or (lh and t == lh) then return end
+		local v = eb.GetCopper()
+		if v then
+			eb:SetText(MoneyText(v))
+			eb:SetTextColor(GM.RGB("text"))
+		elseif not (eb._validate and eb._validate(t)) then
+			eb:SetTextColor(GM.RGB("err"))
+		end
+	end)
+	return eb
+end
+
 -- inline-editable label: a fontstring that swaps to an edit box on
 -- click — THE reusable "editable text" widget. The field's text
 -- lands pixel-on the label's painted text and the box's right edge
@@ -909,7 +971,7 @@ function W.XferOpen(row, fromIdx)
 		local title = GM.MakeFontString(pop, GM.FONT_MED, 9, "secondary")
 		title:SetPoint("TOPLEFT", 8, -6)
 		pop.title = title
-		local amt = W.EditBox(pop, 80, "0g")
+		local amt = W.MoneyEdit(pop, 80, "0g")
 		amt:SetPoint("TOPLEFT", 8, -26)
 		pop.amt = amt
 		local toLbl = GM.MakeFontString(pop, GM.FONT, 9, "textDim")
@@ -933,7 +995,7 @@ function W.XferOpen(row, fromIdx)
 		send.text:SetPoint("CENTER")
 		send.text:SetText(LT("SEND"))
 		send:SetScript("OnClick", function()
-			local v = GM.Budget.ParseMoney(pop.amt:GetText())
+			local v = pop.amt.GetCopper()
 			if v and GM.Budget.Transfer(pop._from, pop._dest, v) then
 				pop:Hide() pop.catcher:Hide()
 				AcctRefresh()
@@ -1307,8 +1369,15 @@ function W.AcctAdd(parent)
 	W.Tip(kindBtn, function() return {
 		"New account's function", "click to cycle" } end)
 
-	local amt = W.EditBox(f, 80, "0g")
+	-- bare numbers read as gold here ("5" = 5g, per the hint); the
+	-- same box takes % when the kind flips to SAVE, so a percent is
+	-- valid input even though it isn't money
+	local amt = W.MoneyEdit(f, 80, "0g", "g")
 	amt:SetPoint("LEFT", kindBtn, "RIGHT", 6, 0)
+	amt._validate = function(t)
+		return addKind ~= "save"
+			or tonumber((t or ""):gsub("%%", "")) ~= nil
+	end
 
 	local btn = CreateFrame("Button", nil, f)
 	btn:SetSize(110, 20)
@@ -1326,16 +1395,17 @@ function W.AcctAdd(parent)
 	btn:SetScript("OnClick", function()
 		local n = name:GetText()
 		if n == LT("name") then n = "" end
-		local a = amt:GetText()
 		local alloc = addKind == "save"
-			and tonumber((a or ""):gsub("%%", ""))
-			or (tonumber(a) and floor(tonumber(a) * 10000)
-				or GM.Budget.ParseMoney(a))
-		local acct = alloc and GM.Budget.Add(n, addKind, alloc)
+			and tonumber((amt:GetText() or ""):gsub("%%", ""))
+			or amt.GetCopper()
+		-- alloc may be 0 — an unfunded envelope is a valid account
+		local acct = alloc ~= nil
+			and GM.Budget.Add(n, addKind, alloc) or nil
 		AcctRefresh()
 		if acct then
 			name:SetText("")
 			amt:SetText(addKind == "save" and "30" or "0g")
+			amt:SetTextColor(GM.RGB("textDim"))
 			hint:SetText(LT("craft/ah/vendor: gold · save: %"))
 		else
 			hint:SetText(GM.CC("err")
