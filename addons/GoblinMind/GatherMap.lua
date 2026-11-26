@@ -1001,6 +1001,9 @@ function M.CreatePane(parent, w)
 		-- MapWise's index when the addon is present — same look
 		-- as their map
 		local terrain = TerrainTiles(mapID)
+		-- did MapWise ground actually draw? The WoW art overlay
+		-- below suppresses on this — parchment bases still need it
+		local terrOk = false
 		-- MapWise load pattern: checked SetTexture with
 		-- clamp+filter, plain retry, hide on genuine failure —
 		-- traced per call so mapdebug can see WHERE the chain
@@ -1037,6 +1040,7 @@ function M.CreatePane(parent, w)
 					t:SetPoint("TOPLEFT", inner, "TOPLEFT",
 						l * w, -tp * h)
 					haveArt = true
+					terrOk = true
 				else
 					t:Hide()
 				end
@@ -1080,15 +1084,18 @@ function M.CreatePane(parent, w)
 		end
 		-- explored-art overlay: the client's own reveal tiles via
 		-- the vendored Leatrix dataset (MapRevealData[artID]
-		-- ["w:h:ox:oy"] -> tile fileIDs). Draws over WHICHEVER base
-		-- we laid down — gating it on `not terrain` meant any map
-		-- with MapWise ground tiles lost its revealed detail
-		-- entirely (the "missing revealed tiles" pane bug).
+		-- ["w:h:ox:oy"] -> tile fileIDs) or MapWise's RevealData.
+		-- Draws only over parchment/art-layer bases: when MapWise
+		-- ground tiles drew, this overlay just paints the WoW zone
+		-- art back ON TOP of the terrain — suppressed. (The old
+		-- "missing revealed tiles" bug was the overlay missing on a
+		-- NON-terrain path; under terrain, unexplored regions show
+		-- bright ground — MapWise owns the reveal look there.)
 		-- Gated by GetExploredMapTextures rects when the API
 		-- answers — exact current-state like the default map UI;
 		-- an absent/empty explored list is a custom-zone data gap,
 		-- so the full set draws rather than a bare parchment.
-		do
+		if not terrOk then
 			local artID = C_Map and C_Map.GetMapArtID
 				and C_Map.GetMapArtID(mapID)
 			-- MapWise's own RevealData wins when present: its
@@ -1272,6 +1279,9 @@ function M.CreatePane(parent, w)
 					end
 				end
 			end
+		end
+		if terrOk then
+			note("overlay suppressed — MapWise terrain drew")
 		end
 		note("done: tiles att=%d ok=%d bad=%d haveArt=%s "
 			.. "shown=%s alpha=%s", att, okd, bad,
