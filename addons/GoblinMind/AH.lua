@@ -1057,6 +1057,36 @@ function GM.AH.BookSupply(bookKey)
 	return e and e.sup
 end
 
+-- ladder → obs fields for ONE bookKey — the same derivation
+-- CollectBook/FinishBrowse run incrementally over a whole scan:
+-- mb = lowest ask incl own, mbx/mbx2 = two cheapest non-own units
+-- (a flagged bait lot poisons mbx; mbx2 is the price behind the
+-- drag), sup = summed quantities, n = lots. Page-scoped ask scans
+-- call this so the chips/NUMBERS row stays live between full scans;
+-- the key is the caller's — a variant ladder writes its own bookKey
+-- row and never touches the itemID-wide one.
+function GM.AH.FreshenBook(bookKey, asks)
+	if not (bookKey and asks and asks[1]) then return end
+	GM.AH.book = GM.AH.book or {}
+	local e = { mb = math.huge, mbx = math.huge, mbx2 = math.huge,
+		sup = 0, n = #asks }
+	for _, a in ipairs(asks) do
+		e.sup = e.sup + (a.qty or 1)
+		if a.unit then
+			if a.unit < e.mb then e.mb = a.unit end
+			if not a.own then
+				if a.unit < e.mbx then
+					e.mbx2, e.mbx = e.mbx, a.unit
+				elseif a.unit < e.mbx2 then
+					e.mbx2 = a.unit
+				end
+			end
+		end
+	end
+	GM.AH.book[bookKey] = e
+	return e
+end
+
 local collectGen = 0
 
 -- Diagnostic: dump raw ask/book data so field meanings can be verified

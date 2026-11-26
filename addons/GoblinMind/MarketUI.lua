@@ -157,24 +157,12 @@ local function ScanAsks()
 		-- delivery (suffix-0 scans only — a variant ladder would mint
 		-- item-level marks off a subset). Re-running here would
 		-- double-count suspect scores in the same bucket
-		-- …and freshen the item's book row: mb/sup/n derive from the
-		-- ladder the same way CollectBook derives them, so a page-
-		-- scoped autoscan keeps the chips + NUMBERS live too.
-		-- SUFFIXED scans describe one variant only — writing them into
-		-- the itemID-wide row would shrink a 38-lot market to 1 and
-		-- lie about mb/sup until the per-key book exists (roadmap)
-		local suffixed = M.itemKey and (M.itemKey.itemSuffix or 0) ~= 0
-		if asks[1] and not suffixed then
-			GM.AH.book = GM.AH.book or {}
-			local e = GM.AH.book[id]
-			if not e then e = {} GM.AH.book[id] = e end
-			e.mb, e.sup, e.n = asks[1].unit, 0, #asks
-			e.mbx = math.huge
-			for _, a in ipairs(asks) do
-				e.sup = e.sup + a.qty
-				if not a.own and a.unit < e.mbx then e.mbx = a.unit end
-			end
-		end
+		-- …and freshen the book row: the page-scoped ladder re-derives
+		-- the same obs fields a full scan would (mb/mbx/mbx2/sup/n) so
+		-- the chips + NUMBERS stay live — keyed per variant, so a
+		-- suffixed scan writes its own bookKey row instead of lying
+		-- about the itemID-wide market
+		GM.AH.FreshenBook(GM.AH.BookKey(id, M.itemKey), asks)
 		MU.Refresh()
 	end, M.itemKey)
 end
