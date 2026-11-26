@@ -510,6 +510,22 @@ function GM.Ledger.Accounts(charKey)
 	return bal
 end
 
+-- read-only window into the attribution queues for /goblin audit:
+-- the sums and staleness the cash-drift check needs, without
+-- exposing the queues themselves
+function GM.Ledger.Pending()
+	local now, out, staleBuy, staleOut = time(), 0, 0, 0
+	for _, p in ipairs(pendingOut) do
+		if now - p.t <= OUT_WINDOW then out = out + p.amt
+		else staleOut = staleOut + 1 end
+	end
+	for _, pb in ipairs(pendingBuy) do
+		if now - pb.t > BUY_WINDOW then staleBuy = staleBuy + 1 end
+	end
+	return { out = out, outN = #pendingOut, outStale = staleOut,
+		buys = #pendingBuy, buysStale = staleBuy }
+end
+
 -- char-switcher surface for the ledger window: sorted char keys and
 -- per-char transaction access (byChar is file-local)
 function GM.Ledger.Chars()

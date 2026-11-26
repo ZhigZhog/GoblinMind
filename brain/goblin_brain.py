@@ -2414,6 +2414,9 @@ BOARD_REQ_RE = re.compile(r'"(bo-(\d+)-[^"|]+)\|([0-9a-fA-F]+)"')
 # forces a boards pull + patch emit this pass so the auto-reload
 # the addon just did lands on fresh data
 BOARD_REFRESH_RE = re.compile(r'"(br-[^"|]+)\|([0-9a-fA-F]+)"')
+# /goblin audit stages 'aud-<ts>-<n>|<hex(report)>' — each new rid's
+# decoded lines are written to brain.log once (drift visibility)
+AUDIT_RE = re.compile(r'"(aud-[^"|]+)\|([0-9a-fA-F]+)"')
 
 
 def _ord_route(body):
@@ -2712,6 +2715,42 @@ def process_board_refresh(appdata, root=None):
     return True
 
 
+def process_audit(appdata, root=None):
+    """Consume staged 'aud-' audit reports — /goblin audit's invariant
+    checks ride the SV flush; each new rid's decoded lines land in
+    brain.log once (warn/FAIL at WARNING, the rest at INFO). Dedup
+    watermark lives in api_state.audit_seen, capped like
+    board_refresh."""
+    st = _load_api_state()
+    seen = st.setdefault('audit_seen', {})
+    new = []
+    for sv in sv_paths(appdata, root):
+        try:
+            with open(sv, encoding='utf-8', errors='replace') as fh:
+                text = fh.read()
+        except OSError:
+            continue
+        for rid, hexbody in AUDIT_RE.findall(text):
+            if rid in seen:
+                continue
+            try:
+                payload = bytes.fromhex(hexbody).decode('utf-8')
+            except ValueError:
+                continue
+            new.append((rid, payload))
+    if not new:
+        return
+    for rid, payload in new:
+        seen[rid] = int(time.time())
+        for line in payload.splitlines():
+            (LOG.warning if ('[warn]' in line or '[FAIL]' in line)
+             else LOG.info)('audit %s: %s', rid, line)
+    if len(seen) > 200:
+        for rid in sorted(seen, key=seen.get)[:-100]:
+            del seen[rid]
+    _save_api_state(st)
+
+
 # consumer registries — the poll loop runs these instead of parallel
 # per-consumer if-blocks. OPS_CONSUMERS are the latency-critical path
 # (every iteration; a truthy return accelerates the boards pull+emit);
@@ -2720,7 +2759,7 @@ def process_board_refresh(appdata, root=None):
 # its return value gates the tsm re-emit.
 OPS_CONSUMERS = (process_orders, process_relay, process_board_refresh)
 SV_CONSUMERS = (process_backend_reqs, process_api_reqs,
-                process_board_reqs)
+                process_board_reqs, process_audit)
 
 
 def _order_results_emit():
