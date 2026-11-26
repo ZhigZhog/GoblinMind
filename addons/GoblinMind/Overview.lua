@@ -539,7 +539,13 @@ function OV.RefreshChart()
 		return
 	end
 	ui.chartMsg:SetText("")
-	tMax = math.max(tMax, tMin + 600)
+	-- the X axis follows the SELECTED window, not the samples'
+	-- extent: 20h of buffer in a 7D view draws in the right sliver
+	-- instead of stretching the same samples edge-to-edge in every
+	-- window — what made the zoom look dead. stats above (span,
+	-- slope, cashflow) stay on the sample span
+	local axisMin = (ui.chartWin ~= "ALL") and cutoff or tMin
+	tMax = math.max(tMax, axisMin + 600)
 
 	-- normalize the Y range to the sample band + padding: a
 	-- 0-pinned axis compresses the line into a ceiling sliver once
@@ -585,7 +591,7 @@ function OV.RefreshChart()
 		AxisLabel(GM.Money(lo + vspan * i / 4),
 			gx - 4, y - 4, "BOTTOMRIGHT")
 	end
-	AxisLabel(date("%H:%M", tMin), gx, 4)
+	AxisLabel(date("%H:%M", axisMin), gx, 4)
 	AxisLabel(date("%H:%M", tMax), gx + w, 4, "BOTTOMRIGHT")
 
 	-- pending-AH band + wealth line ride the VIEWED char's ledger
@@ -604,7 +610,7 @@ function OV.RefreshChart()
 	local ar, ag, ab = cr * 0.22, cg * 0.22, cb * 0.22
 	local px, pgy, pwv
 	for _, p in ipairs(hist) do
-		local x = gx + (p.t - tMin) / (tMax - tMin) * w
+		local x = gx + (p.t - axisMin) / (tMax - axisMin) * w
 		local yg = math.max(gy, wy(p.g or 0))
 		local yw = math.min(gy + h, wy((p.g or 0) + (p.a or 0)))
 		if px and pwv > pgy then
@@ -627,10 +633,10 @@ function OV.RefreshChart()
 		-- starts instead of flat-carrying a value it never had
 		local pts, pre = {}, nil
 		for _, p in ipairs(s.a.hist) do
-			if p.t >= tMin then pts[#pts + 1] = p
+			if p.t >= axisMin then pts[#pts + 1] = p
 			else pre = p end
 		end
-		if pre then tinsert(pts, 1, { t = tMin, v = pre.v }) end
+		if pre then tinsert(pts, 1, { t = axisMin, v = pre.v }) end
 		local bal = GM.Budget.Balance(s.a)
 		if #pts == 0 or pts[#pts].v ~= bal then
 			pts[#pts + 1] = { t = tMax, v = bal }
@@ -650,7 +656,7 @@ function OV.RefreshChart()
 		s.cc = { cr * s.shade, cg * s.shade, cb * s.shade }
 		local ax, ayv
 		for _, p in ipairs(pts) do
-			local x = gx + (p.t - tMin) / (tMax - tMin) * w
+			local x = gx + (p.t - axisMin) / (tMax - axisMin) * w
 			local y = ay(p.v)
 			if ax then
 				tinsert(ui.art, Line(chart, ax, ayv, x, ayv, s.cc, 1))
@@ -667,7 +673,7 @@ function OV.RefreshChart()
 	-- jumps, honest to the samples
 	px, pwv = nil, nil
 	for _, p in ipairs(hist) do
-		local x = gx + (p.t - tMin) / (tMax - tMin) * w
+		local x = gx + (p.t - axisMin) / (tMax - axisMin) * w
 		local yw = wy((p.g or 0) + (p.a or 0))
 		if px then
 			tinsert(ui.art, Line(chart, px, pwv, x, pwv, cc))
@@ -684,7 +690,7 @@ function OV.RefreshChart()
 			return math.max(lo,
 				math.min(hi, mv + slope * (t - mt)))
 		end
-		local ya = wy(vy(tMin))
+		local ya = wy(vy(axisMin))
 		local yb = wy(vy(tMax))
 		for i = 0, 12, 2 do -- dashed: every other seventh
 			local xa = gx + w * i / 14
