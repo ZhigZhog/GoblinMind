@@ -83,10 +83,10 @@ check("escrow signs", function()
 	return "ok", "posted/dep/rcbl/wip all non-negative"
 end)
 
--- stock+posted carries the paid basis of what we hold; Σ paidT is
--- the same quantity tracked per item. The gap is attribution slop:
--- looted/mailed/traded units leave stock at average they never
--- paid into (paidQ clamps, the stock leg doesn't)
+-- stock+posted carries everything at running-avg basis; Σ paidT is
+-- the paid-only basis of the same holdings. The gap is a quantity,
+-- not a bug: unpaid inventory (looted/mailed/traded units enter
+-- stock at avg with no paidQ) plus exit-attribution slop
 check("stock basis", function()
 	local bal = GM.Ledger.Accounts()
 	local paid, items = 0, 0
@@ -104,7 +104,7 @@ check("stock basis", function()
 			GM.Money(carry), items)
 	end
 	return "info", format(
-		"carried %s vs paid %s — %s drift (zero-basis lots exit at avg)",
+		"carried %s vs paid %s — %s unpaid inventory at avg",
 		GM.Money(carry), GM.Money(paid), GM.Money(drift))
 end)
 

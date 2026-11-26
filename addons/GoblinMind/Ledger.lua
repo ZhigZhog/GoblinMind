@@ -172,15 +172,19 @@ local function Journal(kind, s, qty, unit, extra, depOut)
 		local from = extra and extra.from or "?"
 		local to = extra and extra.to or "?"
 		return { ["acct:" .. from] = -amt, ["acct:" .. to] = amt }
-	elseif kind == "loot" then
-		-- provenance only: zero cost basis — a later sale reads as
-		-- pure profit, which is what found value IS
-		return {}
+	elseif kind == "loot" or kind == "mail" or kind == "tradein" then
+		-- unpaid inventory enters at the item's running-avg basis
+		-- with the world (ext) supplying it — 0 for a never-bought
+		-- item, so legs no-op exactly where no basis exists. paidQ
+		-- stays untouched (no Gain): stock+posted − ΣpaidT then reads
+		-- as the avg value of unpaid holdings, and exits at avg
+		-- balance the entry instead of over-draining
+		return { stock = cost, ext = -cost }
 	elseif kind == "cancel" or kind == "expire" then
 		return { posted = -cost, stock = cost, dep = -depRel,
 			pnl = depRel }
 	end
-	-- mail items have no known cost — no money movement to balance
+	-- unknown kinds journal no legs — provenance only
 end
 
 -- paid-basis helpers: Consume decrements the on-hand basis at its
