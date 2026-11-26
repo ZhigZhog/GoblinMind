@@ -508,7 +508,7 @@ function MA.RefreshPosted(vm)
 				or "<1m") or "—")
 			row:SetScript("OnClick", function()
 				if not r.id then return end
-				if IsModifiedClick() then GM.ModifiedItemClick(r.id)
+				if IsModifiedClick() then GM.ModifiedItemClick(r.id, r.link)
 				else GM.TargetItem(r.id, r.link, r.key) end
 			end)
 		else
@@ -561,7 +561,7 @@ function MA.RefreshPosted(vm)
 			end
 			row:SetScript("OnClick", function()
 				if not r.id then return end
-				if IsModifiedClick() then GM.ModifiedItemClick(r.id)
+				if IsModifiedClick() then GM.ModifiedItemClick(r.id, r.link)
 				else GM.TargetItem(r.id, r.link, r.key) end
 			end)
 		else
@@ -623,7 +623,7 @@ function MA.RefreshBags(vm)
 			end)
 			row:SetScript("OnClick", function()
 				if not r.id then return end
-				if IsModifiedClick() then GM.ModifiedItemClick(r.id)
+				if IsModifiedClick() then GM.ModifiedItemClick(r.id, r.link)
 				else GM.TargetItem(r.id, r.link, r.key) end
 			end)
 		else

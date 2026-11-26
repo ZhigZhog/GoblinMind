@@ -1381,8 +1381,11 @@ end
 -- chain, not every installed hook — calling the wrapped global
 -- can recurse (C stack overflow on a mat-row click, 2026-11-19).
 local rawHMIC = HandleModifiedItemClick
-function GM.ModifiedItemClick(id)
-	local link = id and GM.ItemLink(id)
+-- callers holding a variant link pass it — rebuilding from the id
+-- loses itemString field 8 (the suffix) and the pasted link reads
+-- as the base item ("Hillborne Axe", never "…of Defense")
+function GM.ModifiedItemClick(id, variantLink)
+	local link = variantLink or (id and GM.ItemLink(id))
 	local h = rawHMIC or HandleModifiedItemClick
 	if link and h and h(link) then
 		return true

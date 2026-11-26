@@ -440,9 +440,20 @@ end
 local function RefreshHeader(vm)
 	local id = M.itemID
 	mp.icon:SetTexture(id and GM.ItemIcon(id) or 134400)
-	mp.name:SetText(id and (GM.ItemName(id) or ("item " .. id))
+	-- the targeted link carries the real display name ("Hillborne
+	-- Axe of Defense", not the base "Hillborne Axe") AND its quality
+	-- hex — ItemName/ItemQuality only know the base item
+	local linkName = M.itemLink and M.itemLink:match("%[(.-)%]")
+	local linkHex = M.itemLink and M.itemLink:match("|cff(%x%x%x%x%x%x)")
+	mp.name:SetText(id and (linkName or GM.ItemName(id) or ("item " .. id))
 		or "no item targeted")
-	mp.name.fontString:SetTextColor(GM.NameColor(id))
+	if linkHex then
+		local r, g, b = tonumber(linkHex:sub(1, 2), 16),
+			tonumber(linkHex:sub(3, 4), 16), tonumber(linkHex:sub(5, 6), 16)
+		mp.name.fontString:SetTextColor(r / 255, g / 255, b / 255)
+	else
+		mp.name.fontString:SetTextColor(GM.NameColor(id))
+	end
 	local entry = vm.entry
 	local chips = {}
 	if entry then
