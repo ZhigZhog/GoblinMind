@@ -382,10 +382,56 @@ function OV.RefreshChart()
 	for _, a in ipairs(ui.art) do a:Hide() end
 	wipe(ui.art)
 	local chart = ui.chart
+	-- window filter hoisted above the plot inset: the account series
+	-- count decides how much right gutter their end labels need
+	local cutoff = WIN_SECS[ui.chartWin or "ALL"]
+	cutoff = cutoff and (time() - cutoff) or -math.huge
+
+	-- per-account signed-balance series in darker shades of the char
+	-- color. Shade index bi runs a bit-reversed (van der Corput)
+	-- fraction — bisecting the shade band each new account keeps any
+	-- count evenly spread: ½, ¼, ¾, ⅛, ⅝, ⅜, ⅞…
+	local accts, bi = {}, 0
+	local vk = ViewChar()
+	for _, a in ipairs(GM.Budget and GM.Budget.List() or {}) do
+		local ok = GM.Budget.OwnerKey and GM.Budget.OwnerKey(a)
+		if a.hist and #a.hist > 0
+			and (ok == vk or (ok or ""):gsub("%-.*$", "")
+				== (vk or ""):gsub("%-.*$", "")) then
+			bi = bi + 1
+			local j, f, p = bi, 0, 0.5
+			while j > 0 do
+				if j % 2 == 1 then f = f + p end
+				p = p / 2
+				j = floor(j / 2)
+			end
+			local pts, pre = {}, nil
+			for _, s in ipairs(a.hist) do
+				if s.t >= cutoff then pts[#pts + 1] = s
+				else pre = s end
+			end
+			-- the last pre-window sample starts the line at its real
+			-- level; the live balance caps the series at the right
+			-- edge since hist samples lag until the next mutation
+			if pre then tinsert(pts, 1, { t = cutoff, v = pre.v }) end
+			local bal = GM.Budget.Balance(a)
+			if #pts == 0 or pts[#pts].v ~= bal then
+				pts[#pts + 1] = { t = math.max(cutoff, time()), v = bal }
+			end
+			if #pts == 1 then
+				pts[2] = { t = time(), v = pts[1].v }
+			end
+			accts[#accts + 1] = { a = a, pts = pts,
+				shade = 0.30 + f * 0.55 }
+		end
+	end
+
 	-- plot inset: left gutter for money labels, top clears the KPI
-	-- strip, bottom holds time labels + the flow footer
+	-- strip, bottom holds time labels + the flow footer, right holds
+	-- the account series' end labels
 	local gx, gy, gt = 56, 20, 56
-	local w = chart:GetWidth() - gx - 14
+	local rg = #accts > 0 and 96 or 14
+	local w = chart:GetWidth() - gx - rg
 	local h = chart:GetHeight() - gt - gy
 
 	-- ---- KPI strip: live numbers, independent of sample history ----
@@ -414,9 +460,7 @@ function OV.RefreshChart()
 	end
 	ui.kpiSplit:SetText(split)
 
-	-- window-filtered samples + stats pass
-	local cutoff = WIN_SECS[ui.chartWin or "ALL"]
-	cutoff = cutoff and (time() - cutoff) or -math.huge
+	-- window-filtered samples + stats pass (cutoff computed above)
 	local hist, tMin, tMax, vMin, vMax =
 		{}, math.huge, 0, math.huge, 0
 	local vals = {}
@@ -611,6 +655,40 @@ function OV.RefreshChart()
 		end
 		px, pgy, pwv = x, yg, yw
 	end
+	-- account series beneath the wealth line: each envelope's signed
+	-- balance normalized to its own window range — magnitudes differ
+	-- too far for the shared axis (a −8s hole next to 52g); the
+	-- right-edge labels key which shade is which account
+	for _, s in ipairs(accts) do
+		local loA, hiA = math.huge, -math.huge
+		for _, p in ipairs(s.pts) do
+			if p.v < loA then loA = p.v end
+			if p.v > hiA then hiA = p.v end
+		end
+		local spanA = hiA - loA
+		local function ay(v)
+			if spanA <= 0 then return gy + h * 0.5 end
+			local cv = math.max(loA, math.min(hiA, v))
+			return gy + h * 0.04 + (cv - loA) / spanA * h * 0.92
+		end
+		s.cc = { cr * s.shade, cg * s.shade, cb * s.shade }
+		local ax, ayv
+		for _, p in ipairs(s.pts) do
+			local x = math.max(gx,
+				math.min(gx + w, gx + (p.t - tMin)
+					/ (tMax - tMin) * w))
+			local y = ay(p.v)
+			if ax then
+				tinsert(ui.art, Line(chart, ax, ayv, x, ayv, s.cc, 1))
+				if y ~= ayv then
+					tinsert(ui.art,
+						Line(chart, x, ayv, x, y, s.cc, 1))
+				end
+			end
+			ax, ayv = x, y
+		end
+		s.endY = ayv
+	end
 	-- the wealth line: step-interpolated W(t) — flat runs + vertical
 	-- jumps, honest to the samples
 	px, pwv = nil, nil
@@ -640,6 +718,27 @@ function OV.RefreshChart()
 			tinsert(ui.art, Line(chart, xa, ya + (yb - ya) * i / 14,
 				xb, ya + (yb - ya) * (i + 1) / 14, "secondary", 1))
 		end
+	end
+	-- right-gutter end labels: a dash in the series shade keys the
+	-- line, the name + live balance carry the identity and the
+	-- magnitude the per-series normalization drops. Sorted by
+	-- endpoint, pushed down to a 9px minimum gap
+	table.sort(accts, function(a, b) return a.endY > b.endY end)
+	local nextTop = math.huge
+	for _, s in ipairs(accts) do
+		local y = math.max(4,
+			math.min((s.endY or gy + h * 0.5) - 4, nextTop - 9))
+		local fs = GM.MakeFontString(chart, GM.FONT, 8, "secondary")
+		fs:SetPoint("BOTTOMLEFT", chart, "BOTTOMLEFT",
+			gx + w + 5, y)
+		fs:SetJustifyH("LEFT")
+		fs:SetWordWrap(false)
+		fs:SetText(format("|cff%02x%02x%02x—|r %s %s",
+			floor(s.cc[1] * 255 + 0.5), floor(s.cc[2] * 255 + 0.5),
+			floor(s.cc[3] * 255 + 0.5), s.a.name or "?",
+			GM.MoneyShort(GM.Budget.Balance(s.a))))
+		tinsert(ui.art, fs)
+		nextTop = y
 	end
 end
 

@@ -617,10 +617,12 @@ function B.Sample()
 		a.hist = a.hist or {}
 		local h = a.hist
 		local n = #h
-		-- collapse same-value adjacent samples so a flat week doesn't
-		-- push real movement out of the window
-		if n == 0 or h[n].v ~= B.Remaining(a) or t - h[n].t > 3600 then
-			h[n + 1] = { t = t, v = B.Remaining(a),
+		-- signed Balance, not clamped Remaining — an overdrawn
+		-- envelope's hole is real history, not a flat zero. Collapse
+		-- same-value adjacent samples so a flat week doesn't push
+		-- real movement out of the window
+		if n == 0 or h[n].v ~= B.Balance(a) or t - h[n].t > 3600 then
+			h[n + 1] = { t = t, v = B.Balance(a),
 				inc = a.income or 0, out = a.spent or 0 }
 			if #h > HIST_CAP then tremove(h, 1) end
 		end
