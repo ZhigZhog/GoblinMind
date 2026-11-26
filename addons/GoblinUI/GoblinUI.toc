@@ -1,5 +1,6 @@
 ## Interface: 16001
 ## Title: GoblinUI
+## IconTexture: Interface\AddOns\GoblinMind\Media\chrome-gear.tga
 ## Notes: Standalone flow-layout and widget toolkit for WoW addons — spacing-enforced panes, semantic text styles, localized strings. Host-agnostic; embeddable via embeds.xml.
 ## Author: ZhigZhog
 ## Version: 1.0.0
