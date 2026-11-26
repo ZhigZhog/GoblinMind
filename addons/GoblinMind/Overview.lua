@@ -393,7 +393,8 @@ function OV.RefreshChart()
 	-- per-account signed-balance series in darker shades of the char
 	-- color. Shade index bi runs a bit-reversed (van der Corput)
 	-- fraction — bisecting the shade band each new account keeps any
-	-- count evenly spread: ½, ¼, ¾, ⅛, ⅝, ⅜, ⅞…
+	-- count evenly spread: ½, ¼, ¾, ⅛, ⅝, ⅜, ⅞… Point lists are
+	-- built at draw time — they need the wealth axis' tMin/tMax
 	local accts, bi = {}, 0
 	local vk = ViewChar()
 	for _, a in ipairs(GM.Budget and GM.Budget.List() or {}) do
@@ -408,24 +409,7 @@ function OV.RefreshChart()
 				p = p / 2
 				j = floor(j / 2)
 			end
-			local pts, pre = {}, nil
-			for _, s in ipairs(a.hist) do
-				if s.t >= cutoff then pts[#pts + 1] = s
-				else pre = s end
-			end
-			-- the last pre-window sample starts the line at its real
-			-- level; the live balance caps the series at the right
-			-- edge since hist samples lag until the next mutation
-			if pre then tinsert(pts, 1, { t = cutoff, v = pre.v }) end
-			local bal = GM.Budget.Balance(a)
-			if #pts == 0 or pts[#pts].v ~= bal then
-				pts[#pts + 1] = { t = math.max(cutoff, time()), v = bal }
-			end
-			if #pts == 1 then
-				pts[2] = { t = time(), v = pts[1].v }
-			end
-			accts[#accts + 1] = { a = a, pts = pts,
-				shade = 0.30 + f * 0.55 }
+			accts[#accts + 1] = { a = a, shade = 0.30 + f * 0.55 }
 		end
 	end
 
@@ -663,8 +647,23 @@ function OV.RefreshChart()
 	-- too far for the shared axis (a −8s hole next to 52g); the
 	-- right-edge labels key which shade is which account
 	for _, s in ipairs(accts) do
+		-- points are clipped to the drawn axis: every sample older
+		-- than tMin collapses into one entry point at the left edge —
+		-- an account born inside the window starts where its data
+		-- starts instead of flat-carrying a value it never had
+		local pts, pre = {}, nil
+		for _, p in ipairs(s.a.hist) do
+			if p.t >= tMin then pts[#pts + 1] = p
+			else pre = p end
+		end
+		if pre then tinsert(pts, 1, { t = tMin, v = pre.v }) end
+		local bal = GM.Budget.Balance(s.a)
+		if #pts == 0 or pts[#pts].v ~= bal then
+			pts[#pts + 1] = { t = tMax, v = bal }
+		end
+		if #pts == 1 then pts[2] = { t = tMax, v = pts[1].v } end
 		local loA, hiA = math.huge, -math.huge
-		for _, p in ipairs(s.pts) do
+		for _, p in ipairs(pts) do
 			if p.v < loA then loA = p.v end
 			if p.v > hiA then hiA = p.v end
 		end
@@ -676,10 +675,8 @@ function OV.RefreshChart()
 		end
 		s.cc = { cr * s.shade, cg * s.shade, cb * s.shade }
 		local ax, ayv
-		for _, p in ipairs(s.pts) do
-			local x = math.max(gx,
-				math.min(gx + w, gx + (p.t - tMin)
-					/ (tMax - tMin) * w))
+		for _, p in ipairs(pts) do
+			local x = gx + (p.t - tMin) / (tMax - tMin) * w
 			local y = ay(p.v)
 			if ax then
 				tinsert(ui.art, Line(chart, ax, ayv, x, ayv, s.cc, 1))
