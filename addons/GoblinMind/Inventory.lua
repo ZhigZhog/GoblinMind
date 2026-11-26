@@ -566,7 +566,42 @@ function GM.Inventory.RefreshOwned()
 	partialSince = nil
 	local now = {}
 	local seenAid = {}
+	-- receivable truth = "sold AND proceeds not yet collected".
+	-- Forever keeps status~=0 rows flagged AFTER the proceeds mail
+	-- is taken — a wholesale snap then resurrects collected
+	-- receivables on every reconcile (the recurring phantom
+	-- incoming). The mailbox is the resolution authority: a flagged
+	-- row whose invoice aid is present still owes; one whose
+	-- journaled sell has no invoice left in a live inbox already
+	-- paid — the journal's own rcbl carries it until Gold(+)
+	-- settles. Rows with no aid join stay status-quo.
 	local pending = 0  -- sold rows awaiting collection = true rcbl
+	local invAidNet, invOrphan = {}, 0
+	if GetInboxInvoiceInfo then
+		for i = 1, GM.MailCount() do
+			local it, _, _, bid, _, dep, con,
+				_, _, _, _, ia = GetInboxInvoiceInfo(i)
+			if it == "seller" or it == "seller_temp_invoice" then
+				local net = (bid or 0) - (con or 0) + (dep or 0)
+				if ia then invAidNet[ia] = net
+				else invOrphan = invOrphan + net end
+			end
+		end
+	end
+	local journaledSell = {}
+	local txns = GM.Ledger and GM.Ledger.TxFor
+		and GM.Ledger.TxFor() or {}
+	for _, tx in ipairs(txns) do
+		if tx.ty == "sell" and tx.x and tx.x.auctionID then
+			journaledSell[tx.x.auctionID] = true
+		end
+	end
+	-- invoice-absence is only evidence once the inbox has actually
+	-- been live this session — before that it's "not fetched", not
+	-- "collected"
+	local inboxLive = (GM.Inventory._inboxScans or 0) > 0
+		or GM.MailCount() > 0
+	local rowAids = {}
 	-- deposit truth for enum rows: a journaled post (or an
 	-- execute-time note) carries the real CalculateItemDeposit the
 	-- estimator can't reproduce for an already-listed item. Without
@@ -593,8 +628,16 @@ function GM.Inventory.RefreshOwned()
 		local dupAid = aid and seenAid[aid]  -- same id twice = ghost row
 		local inactive = info.status ~= nil and info.status ~= 0
 		if inactive then
-			pending = pending + (info.buyoutAmount or info.buyout
-				or info.bidAmount or 0)
+			if aid then rowAids[aid] = true end
+			if aid and invAidNet[aid] then
+				-- sold, invoice still uncollected — its net is the
+				-- exact receivable
+				pending = pending + invAidNet[aid]
+			elseif not (aid and inboxLive and journaledSell[aid]) then
+				pending = pending + (info.buyoutAmount or info.buyout
+					or info.bidAmount or 0)
+			end
+			-- else: journaled + invoice gone + live inbox = collected
 		end
 		if id and not dupAid and not inactive then
 			if aid then seenAid[aid] = true end
@@ -680,6 +723,12 @@ function GM.Inventory.RefreshOwned()
 	-- is the same enum: deposits outstanding = Σ live rows' fees —
 	-- resolutions that released unjournaled deposits (pre-feed posts)
 	-- converge back to the live count
+	-- seller invoices with no flagged row still owe proceeds — the
+	-- row can drop from the enum while its mail lives
+	pending = pending + invOrphan
+	for a, net in pairs(invAidNet) do
+		if not rowAids[a] then pending = pending + net end
+	end
 	if GM.Ledger and GM.Ledger.Adjust then
 		GM.Ledger.Adjust("rcbl", pending, "reconcile")
 		local depLive = 0
