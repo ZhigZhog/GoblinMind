@@ -657,6 +657,38 @@ function GM.Ledger.TxFor(charKey)
 	return c and c.transactions or {}
 end
 
+-- per-item rollup of one char's transaction stream — buyQ/buyT,
+-- sellQ/sellT, cancelQ, expireQ, postQ, mailQ keyed by itemID.
+-- tMin/tMax bound the window (nil = all history); the Overview's
+-- sales/resale/expense/failed lists all aggregate through here.
+function GM.Ledger.Flow(charKey, tMin, tMax)
+	local agg = {}
+	for _, e in ipairs(GM.Ledger.TxFor(charKey)) do
+		if e.i and (not tMin or (e.t or 0) >= tMin)
+			and (not tMax or (e.t or 0) <= tMax) then
+			local a = agg[e.i]
+			if not a then a = {} agg[e.i] = a end
+			local amt = e.q * (e.u or 0)
+			if e.ty == "buy" then
+				a.buyQ = (a.buyQ or 0) + e.q
+				a.buyT = (a.buyT or 0) + amt
+			elseif e.ty == "sell" then
+				a.sellQ = (a.sellQ or 0) + e.q
+				a.sellT = (a.sellT or 0) + amt
+			elseif e.ty == "cancel" then
+				a.cancelQ = (a.cancelQ or 0) + e.q
+			elseif e.ty == "expire" then
+				a.expireQ = (a.expireQ or 0) + e.q
+			elseif e.ty == "post" then
+				a.postQ = (a.postQ or 0) + e.q
+			elseif e.ty == "mail" then
+				a.mailQ = (a.mailQ or 0) + e.q
+			end
+		end
+	end
+	return agg
+end
+
 function GM.Ledger.CharKey()
 	return CharKey()
 end

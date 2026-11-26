@@ -54,32 +54,10 @@ end
 -- ============ data ============
 
 -- per-item aggregation over one char's transaction stream — the char
--- switcher re-aggregates; itemStats (account-global) stays for detail
+-- switcher re-aggregates; itemStats (account-global) stays for detail.
+-- Ledger.Flow owns the rollup — the view just names its window
 local function TxAgg(ck)
-	local agg = {}
-	for _, e in ipairs(GM.Ledger.TxFor(ck)) do
-		if e.i then
-			local a = agg[e.i]
-			if not a then a = {} agg[e.i] = a end
-			local amt = e.q * (e.u or 0)
-			if e.ty == "buy" then
-				a.buyQ = (a.buyQ or 0) + e.q
-				a.buyT = (a.buyT or 0) + amt
-			elseif e.ty == "sell" then
-				a.sellQ = (a.sellQ or 0) + e.q
-				a.sellT = (a.sellT or 0) + amt
-			elseif e.ty == "cancel" then
-				a.cancelQ = (a.cancelQ or 0) + e.q
-			elseif e.ty == "expire" then
-				a.expireQ = (a.expireQ or 0) + e.q
-			elseif e.ty == "post" then
-				a.postQ = (a.postQ or 0) + e.q
-			elseif e.ty == "mail" then
-				a.mailQ = (a.mailQ or 0) + e.q
-			end
-		end
-	end
-	return agg
+	return GM.Ledger.Flow(ck)
 end
 
 local function ViewChar()
