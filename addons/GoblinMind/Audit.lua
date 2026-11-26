@@ -230,7 +230,7 @@ check("spine coverage", function()
 		{ "AH", "PostShopRows" }, { "AH", "BookAsks" },
 		{ "Ledger", "Flow" }, { "Ledger", "Cashflow" },
 		{ "Gather", "ZoneValueNow" }, { "Intel", "Mark" },
-		{ "Intel", "AnalyzeLadder" }, { "Banking", "Execute" },
+		{ "Intel", "AnalyzeItem" }, { "Banking", "Execute" },
 	}
 	local verbs = { "Check", "Can", "Post", "Buy", "Bid",
 		"Cancel", "Mail", "SendMail", "Vendor", "VendorBuy",
