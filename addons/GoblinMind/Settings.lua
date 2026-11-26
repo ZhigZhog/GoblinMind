@@ -1042,7 +1042,7 @@ local function Build()
 		r.chkLab = GM.MakeFontString(cp, GM.FONT, 9, "textDim")
 		r.chkLab:SetPoint("LEFT", r.chk, "RIGHT", 5, 0)
 		r.chkLab:SetJustifyH("LEFT")
-		r.chkLab:SetText(L("class default"))
+		r.chkLab:SetText("class default")
 		r.chk:SetScript("OnClick", function()
 			if GM.Budget.CharColorMode(r.ck) == "custom" then
 				GM.Budget.SetCharColor(r.ck)
