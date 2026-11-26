@@ -1473,6 +1473,14 @@ def _fp_pref(fp):
     return fp.rsplit(':', 1)[0] if fp.count(':') >= 3 else fp
 
 
+def _iid_key(s):
+    """book item key: plain ids normalize to int; 'v<id>:<sfx>:<lvl>'
+    variant keys stay strings. Both survive the JSON emit unchanged
+    (Lua-side RestoreBook does the mirror-image tonumber-or-keep)."""
+    s = str(s)
+    return int(s) if s.isdigit() else s
+
+
 def delta_record(books):
     """books = {scope: book}. Diffs each book's `lots` against the last
     snapshot for that scope and appends sale events to api_state.json.
@@ -1522,7 +1530,7 @@ def delta_record(books):
         gone_by_iid, appt_by_iid, prev_lots_iid = {}, {}, {}
         unit_lots_iid = {}
         for p, on in old_pref.items():
-            iid = p.split(':', 1)[0]
+            iid = p.rsplit(':', 2)[0]
             prev_lots_iid[iid] = prev_lots_iid.get(iid, 0) + on
             try:
                 unit_lots_iid.setdefault(iid, []).append(
@@ -1558,13 +1566,13 @@ def delta_record(books):
             item_events = []
             by_unit, by_qty = {}, {}
             for ap, an in (appt_by_iid.get(iid) or {}).items():
-                _, aq, au = ap.split(':', 2)
+                _, aq, au = ap.rsplit(':', 2)
                 by_unit[au] = by_unit.get(au, 0) + an
                 by_qty[aq] = by_qty.get(aq, 0) + an
             for p, gone in gone_map.items():
                 try:
-                    iid_s, qty_s, unit_s = p.split(':', 2)
-                    iid, qty, unit = int(iid_s), int(qty_s), int(unit_s)
+                    iid_s, qty_s, unit_s = p.rsplit(':', 2)
+                    iid, qty, unit = _iid_key(iid_s), int(qty_s), int(unit_s)
                 except ValueError:
                     continue
                 left = gone
@@ -1661,10 +1669,7 @@ def delta_stats(scope):
         # not the full 7d window — and floored at 1 day so a hot
         # first diff doesn't extrapolate to absurd rates
         span_d = max(now - min(e[0] for e in win), 86400) / 86400
-        try:
-            iid = int(iid_s)
-        except ValueError:
-            continue
+        iid = _iid_key(iid_s)
         out[iid] = {
             'vel': round(units / span_d, 4),
             'veln': len(win),
@@ -1737,7 +1742,7 @@ def cmd_book(sv_arg, out_paths, root=None, feed=None, realm=None):
             continue
         books_by_scope.setdefault(str(s), []).append({
             't': e.get('t') or time.time(),
-            'items': {str(int(iid)): {'mb': e.get('m'),
+            'items': {str(_iid_key(iid)): {'mb': e.get('m'),
                                       'mbx': e.get('m'),
                                       'sup': e.get('sup') or 0, 'n': 1}},
             'remote': True})
@@ -1752,7 +1757,7 @@ def cmd_book(sv_arg, out_paths, root=None, feed=None, realm=None):
             sig = (e.get('t') or 0, e.get('u') or 0,
                    e.get('p') or 0, e.get('l') or 1)
             lst = sales.setdefault(str(s), {}).setdefault(
-                str(int(iid)), [])
+                str(_iid_key(iid)), [])
             if any((x[0], x[1], x[2], x[3]) == sig for x in lst):
                 continue
             lst.append([int(e.get('t') or time.time()),
@@ -1783,13 +1788,13 @@ def cmd_book(sv_arg, out_paths, root=None, feed=None, realm=None):
         for b in books:
             snap_t = int(b.get('t') or now)
             for iid, e in (b.get('items') or {}).items():
-                rec = sh.setdefault(str(int(iid)), [])
+                rec = sh.setdefault(str(_iid_key(iid)), [])
                 # idempotent — a re-run on the same flush must not
                 # double-count the snapshot
                 if not any(r and r[0] == snap_t for r in rec):
                     rec.append([snap_t, e.get('mb'), e.get('sup'),
                                 e.get('n')])
-                sh[str(int(iid))] = [
+                sh[str(_iid_key(iid))] = [
                     r for r in rec
                     if r and r[0] and now - r[0] < HIST_KEEP]
     save_book_hist(hist)
@@ -1860,7 +1865,7 @@ def cmd_book(sv_arg, out_paths, root=None, feed=None, realm=None):
         for b in sorted(books, key=lambda x: x.get('t') or 0):
             latest_t = int(b.get('t') or latest_t)
             for iid, e in (b.get('items') or {}).items():
-                latest[int(iid)] = e
+                latest[_iid_key(iid)] = e
         items = {}
         dstats = delta_stats(scope)
         for iid, e in latest.items():

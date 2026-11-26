@@ -417,6 +417,26 @@ function GM.AH.ItemKeyFromLink(link)
 	end
 end
 
+-- variant book key: a suffixed item gets a composite
+-- "v<id>:<sfx>:<lvl>" string so its market stops conflating into
+-- the base item's mb/mbx/sup/n (another variant's cheap ask
+-- produced false undercuts). Base and commodity items keep the
+-- plain numeric id — string keys never collide with them and the
+-- SV/brain merge passes both through transparently
+function GM.AH.BookKey(itemID, key)
+	if key and (key.itemSuffix or 0) ~= 0 then
+		return "v" .. key.itemID .. ":" .. key.itemSuffix
+			.. ":" .. (key.itemLevel or 0)
+	end
+	return itemID
+end
+
+-- bookKey -> base itemID, for consumers that need item-level data
+-- (names, ilvls, recipes) regardless of which variant priced it
+function GM.AH.BookID(bookKey)
+	return tonumber(tostring(bookKey):match("^v?(%d+)"))
+end
+
 -- Time-left arrives in two shapes on Forever: real seconds on
 -- item-search results (timeLeftSeconds) and a 0–3 bucket enum on
 -- replicate rows (Short/Medium/Long/VeryLong — the same field
@@ -615,14 +635,16 @@ GM.AH.bookLots = nil -- iid:qty:unit lot fingerprints (others' listings)
 -- count: a genuinely cleared market should show empty, not ghosts.
 -- Rows carry no seller/auctionID — fromBook marks them so
 -- consumers can downgrade buy/intel
-function GM.AH.BookAsks(itemID)
-	if not (itemID and GM.AH.bookLots and GM.AH.bookLotsT) then return end
+function GM.AH.BookAsks(bookKey)
+	if not (bookKey and GM.AH.bookLots and GM.AH.bookLotsT) then return end
 	if time() - GM.AH.bookLotsT > 900 then return end
 	local asks = {}
-	local prefix = itemID .. ":"
+	-- variant fps are "v<id>:<sfx>:<lvl>:qty:unit:tlb" — matching by
+	-- prefix and splitting the remainder keeps both key shapes right
+	local prefix = bookKey .. ":"
 	for fp, n in pairs(GM.AH.bookLots) do
 		if fp:sub(1, #prefix) == prefix then
-			local _, qty, unit, tlb = strsplit(":", fp)
+			local qty, unit, tlb = strsplit(":", fp:sub(#prefix + 1))
 			qty, unit = tonumber(qty), tonumber(unit)
 			if qty and unit then
 				for _ = 1, n do
@@ -821,10 +843,15 @@ end
 -- cheapest unit excluding our own listings (decisions use this). A
 -- bait-flagged drag lot isn't the market — when intel marks the
 -- cheapest ask, answer the price behind it instead
-function GM.AH.BookCheapest(itemID)
-	local e = GM.AH.book and GM.AH.book[itemID]
+-- the id-or-bookKey params below take a BOOK KEY: plain itemID for
+-- base items, "v<id>:<sfx>:<lvl>" for variants (GM.AH.BookKey).
+-- intel marks stay item-level — seller behavior doesn't vary by
+-- suffix — so they resolve through BookID
+function GM.AH.BookCheapest(bookKey)
+	local e = GM.AH.book and GM.AH.book[bookKey]
 	if not e or e.mbx == math.huge then return nil end
-	local m = GM.Intel and GM.Intel.marks and GM.Intel.marks[itemID]
+	local m = GM.Intel and GM.Intel.marks
+		and GM.Intel.marks[GM.AH.BookID(bookKey)]
 	if m and m.bait and (e.mbx2 or math.huge) < math.huge then
 		return e.mbx2
 	end
@@ -832,13 +859,13 @@ function GM.AH.BookCheapest(itemID)
 end
 
 -- cheapest unit including ours (display)
-function GM.AH.BookMin(itemID)
-	local e = GM.AH.book and GM.AH.book[itemID]
+function GM.AH.BookMin(bookKey)
+	local e = GM.AH.book and GM.AH.book[bookKey]
 	return e and e.mb
 end
 
-function GM.AH.BookSupply(itemID)
-	local e = GM.AH.book and GM.AH.book[itemID]
+function GM.AH.BookSupply(bookKey)
+	local e = GM.AH.book and GM.AH.book[bookKey]
 	return e and e.sup
 end
 
@@ -998,7 +1025,10 @@ function GM.AH.CollectBook()
 	local ownSet = {}
 	for _, a in pairs(GM.Inventory.auctions or {}) do
 		if a.itemID and a.qty and a.buyout then
-			ownSet[a.itemID .. ":" .. a.qty .. ":" .. a.buyout] = true
+			-- variant-keyed like the book: an own listing only
+			-- excludes from its own variant's mb/mbx
+			ownSet[GM.AH.BookKey(a.itemID, a.itemKey) .. ":"
+				.. a.qty .. ":" .. a.buyout] = true
 		end
 	end
 	local rows, book, lots = {}, {}, {}
@@ -1062,7 +1092,11 @@ function GM.AH.CollectBook()
 			-- replicate follows the same server store — do NOT
 			-- divide by stackSize or multi-stack items underprice
 			local unit = buyout
-			local own = id and ownSet[id .. ":" .. stackSize .. ":" .. buyout] or false
+			-- suffixed links aggregate under their variant key —
+			-- the base item's book row never sees them
+			local bk = id and GM.AH.BookKey(id,
+				GM.AH.ItemKeyFromLink(link)) or id
+			local own = id and ownSet[bk .. ":" .. stackSize .. ":" .. buyout] or false
 			-- seller name for intel marks: scan ONLY the window
 			-- between buyout and itemID — that's bidder/owner
 			-- territory in both known layouts (retail owner =
@@ -1122,14 +1156,14 @@ function GM.AH.CollectBook()
 					est.lastB, est.seen = tlb, gen
 				end
 			end
-			rows[#rows + 1] = { id = id, link = link, qty = stackSize, unit = unit,
+			rows[#rows + 1] = { id = id, bk = bk, link = link, qty = stackSize, unit = unit,
 				buyout = buyout, bid = bid, tl = tl,
 				tlex = est and (est.exp or est.est) or nil,
 				key = key, own = own, seller = seller }
 			if id then
-				local e = book[id]
+				local e = book[bk]
 				if not e then
-					book[id] = { mb = unit, mbx = own and math.huge or unit,
+					book[bk] = { mb = unit, mbx = own and math.huge or unit,
 						mbx2 = math.huge, sup = stackSize, n = 1 }
 				else
 					if unit < e.mb then e.mb = unit end
@@ -1152,7 +1186,7 @@ function GM.AH.CollectBook()
 				-- bucket to classify disappearances — gone with time
 				-- provably left = confident sale; else inconclusive.
 				if not own then
-					local fp = id .. ":" .. stackSize .. ":" .. unit
+					local fp = bk .. ":" .. stackSize .. ":" .. unit
 						.. ":" .. (tlb or "x")
 					lots[fp] = (lots[fp] or 0) + 1
 				end
@@ -1297,9 +1331,10 @@ function GM.AH.OnBrowseResults()
 		local r = results[i]
 		local id = r.itemKey and r.itemKey.itemID
 		if id and r.minPrice and r.minPrice > 0 then
-			local e = b.book[id]
+			local bk = GM.AH.BookKey(id, r.itemKey)
+			local e = b.book[bk]
 			if not e then
-				b.book[id] = { mb = r.minPrice, mbx = r.minPrice,
+				b.book[bk] = { mb = r.minPrice, mbx = r.minPrice,
 					mbx2 = math.huge, sup = r.totalQuantity or 0, n = 1 }
 			else
 				if r.minPrice < e.mb then
@@ -1312,9 +1347,10 @@ function GM.AH.OnBrowseResults()
 			end
 			-- key carries the price so a later min-price drop re-flags
 			-- for the sniper diff
-			b.rows[#b.rows + 1] = { id = id, qty = r.totalQuantity or 1,
+			b.rows[#b.rows + 1] = { id = id, bk = bk,
+				qty = r.totalQuantity or 1,
 				unit = r.minPrice, buyout = r.minPrice,
-				key = "b:" .. id .. ":" .. r.minPrice }
+				key = "b:" .. tostring(bk) .. ":" .. r.minPrice }
 		end
 		b.seen = i
 	end

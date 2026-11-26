@@ -73,14 +73,14 @@ end
 GM.AH.bookSubs[#GM.AH.bookSubs + 1] = function(rows) N.Collect(rows) end
 
 -- price cap for a hit: sniper.belowPrice expr, else belowPct of market
-local function PriceCap(itemID, ops)
+local function PriceCap(itemID, ops, bk)
 	local cap = GM.Groups.EvalOp(ops, "belowPrice", itemID)
 	-- corrupted market data can explode the expression into
 	-- e+45-scale caps — a cap above ~1M gold flags every listing as
 	-- a hit, so treat it as no usable cap
 	if cap and cap > 1e10 then return nil end
 	if cap then return cap end
-	local e = GM.ItemEntry(itemID)
+	local e = GM.ItemEntry(itemID, bk)
 	local m = GM.Price("dbmarket", itemID)
 	local pct = tonumber(ops.belowPct) or 20
 	return m and floor(m * (1 - pct / 100)) or nil
@@ -94,8 +94,8 @@ function N.Collect(rows)
 		now[r.key] = true
 		if r.id and not r.own and (not N.snapshot or not N.snapshot[r.key]) then
 			fresh[#fresh + 1] = {
-				itemID = r.id, qty = r.qty, unit = r.unit, key = r.key,
-				bid = r.bid, tl = r.tl, tlex = r.tlex,
+				itemID = r.id, bk = r.bk, qty = r.qty, unit = r.unit,
+				key = r.key, bid = r.bid, tl = r.tl, tlex = r.tlex,
 				link = r.link, -- carries name+quality when the item
 				-- DB can't resolve the id (Forever customs)
 			}
@@ -116,13 +116,17 @@ function N.Collect(rows)
 	-- unit: the `c.unit <= cap` compare throws). pcall each row
 	-- and count the skips for the completion line
 	local function EvalRow(c)
-		local cap = caps[c.itemID]
+		-- cap cache keys by book key — variants of one item get
+		-- their own cap (a cheap "of the Owl" lot must not undercut-
+		-- flag against the base item's market)
+		local ck = c.bk or c.itemID
+		local cap = caps[ck]
 		if cap == nil then
-			cap = PriceCap(c.itemID, GM.Groups.GetOps(c.itemID, "sniper")) or false
-			caps[c.itemID] = cap
+			cap = PriceCap(c.itemID, GM.Groups.GetOps(c.itemID, "sniper"), c.bk) or false
+			caps[ck] = cap
 		end
 		if cap and c.unit and c.unit <= cap then
-			local e = GM.ItemEntry(c.itemID)
+			local e = GM.ItemEntry(c.itemID, c.bk)
 			local m = GM.Price("dbmarket", c.itemID)
 			c.cap = cap
 			c.pct = m and m > 0 and (c.unit / m * 100) or nil

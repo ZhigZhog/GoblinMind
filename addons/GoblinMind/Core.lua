@@ -901,22 +901,34 @@ end
 -- economics, tooltip sections, queue rows) — the merge is bucket-
 -- memoized like the inventory maps. Book/mesh freshness tolerance
 -- is a quarter second; entries are read-only by contract.
-local itemEntry = GM.BucketMemo(function(itemID)
+local itemEntry = GM.BucketMemo(function(key)
+	-- key = "<itemID>|<bookKey>" — the bookKey is itemID for base
+	-- items, "v<id>:<sfx>:<lvl>" for variants. Model fields come
+	-- from the base item's emitted row (a suffix doesn't change the
+	-- fundamental market) with any emitted variant row on top; the
+	-- observation overlay reads the VARIANT book row so a variant's
+	-- mb/mbx never conflates into the base item's
+	local itemID, bk = strsplit("|", key)
+	itemID = tonumber(itemID)
+	if not itemID then return nil end
+	bk = bk ~= "" and bk or nil
 	local db = GoblinMindDB
 	if not db then return nil end
 	local r = db.realms and db.realms[GM.Scope()]
 	local t = (r and r.items) or db.items
 	local e = t and t[itemID]
-	local book = GM.AH and GM.AH.book and GM.AH.book[itemID]
+	local ev = bk and t and t[bk]
+	local book = GM.AH and GM.AH.book and GM.AH.book[bk or itemID]
 	local bookLive = book and GM.AH.BookLive and GM.AH.BookLive()
 	local beacon = GM.Mesh and GM.Mesh.LatestMB and GM.Mesh.LatestMB(itemID)
-	if not e and not book and not beacon then return nil end
+	if not e and not ev and not book and not beacon then return nil end
 	local out = {}
 	if e then for k, v in pairs(e) do out[k] = v end end
+	if ev then for k, v in pairs(ev) do out[k] = v end end
 	-- book obs overlay: wins when it's the freshest source (BookLive),
 	-- and is still the fallback when the emit has no row for the item
 	-- at all (stale data with a provenance tag beats a blank)
-	if book and (bookLive or not e) then
+	if book and (bookLive or (not e and not ev)) then
 		out.mb, out.mbx, out.sup, out.n =
 			book.mb, book.mbx, book.sup, book.n
 		out._src, out._srcT = "book", GM.AH.bookT
@@ -932,7 +944,15 @@ local itemEntry = GM.BucketMemo(function(itemID)
 	end
 	return out
 end)
-GM.ItemEntry = itemEntry
+-- the public signature gains an optional itemKey — callers holding
+-- a suffixed link/owned row pass its key so variant market data
+-- resolves instead of the base item's
+GM.ItemEntry = function(itemID, keyOrBk)
+	local bk = type(keyOrBk) == "string" and keyOrBk
+		or (GM.AH and GM.AH.BookKey
+			and GM.AH.BookKey(itemID, keyOrBk) or itemID)
+	return itemEntry(tostring(itemID) .. "|" .. tostring(bk))
+end
 
 -- TSM fallback price (copper) — the shim's honest baseline before the model lands.
 function GM.TSMMarket(itemID)
