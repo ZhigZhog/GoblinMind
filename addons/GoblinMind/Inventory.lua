@@ -15,6 +15,7 @@ local guildCache = {}     -- [itemID] = qty, current gbank tab only
 -- post phantoms every refresh. The fingerprint is stable for the
 -- life of a listing; `n` tracks how many identical listings share it.
 local auctionCache = {}   -- [fp] = {fp, aid, idx, itemID, qty, buyout, tLeft, at, n}
+local soldRows = {}       -- status~=0 enum rows — sold, proceeds inbound
 local aidIndex = {}       -- [raw auctionID or enum index] = fp — resolves
                           -- cancel callers' raw ids back to their entry
 local recentCancels = {}  -- [fp or raw id] = time()
@@ -565,6 +566,7 @@ function GM.Inventory.RefreshOwned()
 	end
 	partialSince = nil
 	local now = {}
+	local soldNow = {}
 	local seenAid = {}
 	-- receivable truth = "sold AND proceeds not yet collected".
 	-- Forever keeps status~=0 rows flagged AFTER the proceeds mail
@@ -629,6 +631,23 @@ function GM.Inventory.RefreshOwned()
 		local inactive = info.status ~= nil and info.status ~= 0
 		if inactive then
 			if aid then rowAids[aid] = true end
+			-- carry the sold row for display: the MINE pane shows it
+			-- like Blizzard's Sold: prefix — proceeds amount + the
+			-- timeLeftSeconds countdown until the mail lands
+			if id then
+				soldNow[#soldNow + 1] = {
+					itemID = id, qty = info.quantity or 1,
+					proceeds = info.buyoutAmount or info.buyout
+						or info.bidAmount or 0,
+					aid = aid, idx = i,
+					tLeft = info.timeLeftSeconds, at = time(),
+					name = info.itemLink
+						and info.itemLink:match("%[(.-)%]") or nil,
+					itemKey = info.itemKey or (GM.AH.ItemKeyFromLink
+						and GM.AH.ItemKeyFromLink(info.itemLink)),
+					itemLink = info.itemLink,
+				}
+			end
 			if aid and invAidNet[aid] then
 				-- sold, invoice still uncollected — its net is the
 				-- exact receivable
@@ -842,6 +861,7 @@ function GM.Inventory.RefreshOwned()
 	end
 	auctionCache = now
 	GM.Inventory.auctions = now
+	soldRows = soldNow
 	ownedPrimed = true
 	lastOwnedAt = t
 	SaveOwned()
@@ -1091,6 +1111,24 @@ end
 -- they're the ones to cancel.
 function GM.Inventory.MineRows()
 	local rows = {}
+	-- sold rows first (Blizzard's Sold: block): enum carries them
+	-- while proceeds are inbound — buyoutAmount on a sold row is the
+	-- lot's incoming amount, timeLeftSeconds the mail countdown
+	for _, s in ipairs(soldRows) do
+		local ctx = GM.Ctx(s.itemID, s.itemLink, s.itemKey)
+		rows[#rows + 1] = {
+			aid = s.aid or s.idx, id = s.itemID, key = s.itemKey,
+			link = s.itemLink, ctx = ctx,
+			qty = s.qty or 1,
+			unit = s.proceeds and s.qty
+				and math.floor(s.proceeds / s.qty + 0.5) or nil,
+			proceeds = s.proceeds,
+			tLeft = s.tLeft and s.at
+				and (s.at + s.tLeft - time()) or s.tLeft,
+			sold = true, paidOut = true,
+			name = ctx.name or s.name or ("item " .. s.itemID),
+		}
+	end
 	for fp, a in pairs(auctionCache) do
 		if a.itemID then
 			local mkt = GM.Price("dbmarket", a.itemID)
@@ -1156,6 +1194,7 @@ function GM.Inventory.MineRows()
 		end
 	end
 	table.sort(rows, function(a, b)
+		if (a.paidOut or false) ~= (b.paidOut or false) then return a.paidOut end
 		if a.undercut ~= b.undercut then return a.undercut and true or false end
 		return (a.name or "") < (b.name or "")
 	end)

@@ -1489,8 +1489,10 @@ function AU.Refresh(vm)
 				row.name:SetTextColor(GM.NameColor(r.id))
 				row.qty:SetText("×" .. (r.qty or 1))
 				row.unit:SetText(r.unit and GM.Money(r.unit) .. "/ea" or "—")
-				row.lot:SetText(r.unit and GM.Money(r.unit * (r.qty or 1)) or "—")
-				row.mkt:SetText(r.mkt and (GM.Money(r.mkt) .. "/ea") or "no market")
+				row.lot:SetText(r.proceeds and GM.Money(r.proceeds)
+					or (r.unit and GM.Money(r.unit * (r.qty or 1)) or "—"))
+				row.mkt:SetText(r.proceeds and "incoming"
+					or (r.mkt and (GM.Money(r.mkt) .. "/ea") or "no market"))
 				if r.sold then
 					row.stat:SetText(GM.CC("pos") .. "SOLD|r")
 				elseif r.undercut then
@@ -1506,6 +1508,7 @@ function AU.Refresh(vm)
 					and format("%dh%02dm", floor(tl / 3600), floor(tl % 3600 / 60))
 					or tl >= 60 and format("%dm", floor(tl / 60))
 					or "<1m") or "—")
+				row.act:SetShown(not r.paidOut) -- sold can't be canceled
 				local aid = r.aid
 				row.act:SetScript("OnClick", function()
 					GM.Ops.Cancel(r.ctx or r.id,
