@@ -940,7 +940,12 @@ local function RefreshAccounts()
 		end
 	end
 	-- nudge toward the first real account while this char's seeded
-	-- pool is the whole self-owned list
+	-- pool is the whole self-owned list. Anchor under the LAST
+	-- visible row — the fixed -94 slot assumed a one-row list and
+	-- landed on top of other chars' account rows on an alt
+	ui.acctOnboard:ClearAllPoints()
+	ui.acctOnboard:SetPoint("TOPLEFT", 8,
+		-64 - math.min(#disp, #ui.acctRows) * 26 - 6)
 	local selfAccts = {}
 	for _, a in ipairs(list) do
 		if GM.IsSelfCharKey(GM.Budget.OwnerKey(a)) then
