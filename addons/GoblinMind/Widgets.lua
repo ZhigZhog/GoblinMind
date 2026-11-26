@@ -1326,6 +1326,24 @@ function W.PaintAcctRow(row, a, idx, opts)
 		row.fold:Hide()
 	end
 	local ck = GM.Budget.OwnerKey and GM.Budget.OwnerKey(a)
+	-- an alt's row is read-only on this char: mutating controls
+	-- (rename/rekind/rebind/warn/transfer/reset/delete) go inert or
+	-- hide — the owner manages them on their own char. The fold
+	-- chevron stays live: collapsing a group is view-local, not a
+	-- write. Display controls keep showing state, just unclickable
+	local selfOwned = not ck or GM.IsSelfCharKey(ck)
+	row.nameBtn:EnableMouse(selfOwned)
+	row.kind:EnableMouse(selfOwned)
+	row.grp:EnableMouse(selfOwned)
+	row.warn:SetShown(selfOwned)
+	row.xfr:SetShown(selfOwned)
+	row.rst:SetShown(selfOwned)
+	row.flow:ClearAllPoints()
+	if selfOwned then
+		row.flow:SetPoint("RIGHT", row.warn, "LEFT", -8, 0)
+	else
+		row.flow:SetPoint("RIGHT", row, "RIGHT", -4, 0)
+	end
 	local label = a.name
 	if ck then
 		label = (GM.Budget.Crest(ck) or "")
@@ -1355,7 +1373,7 @@ function W.PaintAcctRow(row, a, idx, opts)
 		a.group = nil
 	end
 	row.grp:SetShown(not a.pool)
-	row.del:SetShown(not a.pool)
+	row.del:SetShown(selfOwned and not a.pool)
 	row.grp.text:SetText(a.group or "—")
 	row.grp.text:SetTextColor(GM.RGB(a.group and "accent" or "textDim"))
 	row.alloc:SetText(GM.Budget.AllocText(a))
