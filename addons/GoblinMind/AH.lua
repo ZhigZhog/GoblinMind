@@ -49,7 +49,6 @@ for _, evt in ipairs({
 	"AUCTION_HOUSE_BROWSE_RESULTS_UPDATED", "AUCTION_HOUSE_BROWSE_RESULTS_ADDED",
 	-- buy-result signals: silent rejections surface here
 	"BIDS_UPDATED", "AUCTION_CANCELED", "UI_ERROR_MESSAGE", "CHAT_MSG_SYSTEM",
-	"CHAT_MSG_MONEY",
 }) do
 	pcall(f.RegisterEvent, f, evt)
 end
@@ -262,16 +261,6 @@ f:SetScript("OnEvent", function(_, event, ...)
 			if GM.AH.open and (msg:find("auction") or msg:find("bid")) then
 				GM.Print(GM.CC("textDim") .. tostring(msg) .. "|r")
 			end
-		end
-	elseif event == "CHAT_MSG_MONEY" then
-		-- loose parse: sum g/s/c quantities anywhere in the message
-		local msg = ...
-		local copper = 0
-		for v, u in tostring(msg or ""):gmatch("(%d+)%s*([gsc])") do
-			copper = copper + v * ({ g = 10000, s = 100, c = 1 })[u]
-		end
-		if copper > 0 then
-			GM.Ledger.Record("gold", { delta = copper, src = "chat" })
 		end
 	elseif event == "AUCTION_HOUSE_POST_ERROR" or event == "AUCTION_MULTISELL_FAILURE" then
 		GM.Print(GM.CC("err") .. "post failed — check the item/stack and try again|r")

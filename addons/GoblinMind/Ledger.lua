@@ -54,6 +54,38 @@ function GM.Ledger.Init()
 		gold = c.gold,
 		mailSeen = c.mailSeen,
 	}
+	-- PLAYER_MONEY is the money feed: delta = GetMoney change. The
+	-- CHAT_MSG_MONEY parser it replaces never matched Blizzard's
+	-- "2 Gold, 95 Silver" phrasing (it wanted 2g95s) so the gold
+	-- stream stayed empty and rcbl never settled. The first event
+	-- only seeds + snaps cash to truth — early reads can be 0.
+	local mf = CreateFrame("Frame")
+	pcall(mf.RegisterEvent, mf, "PLAYER_MONEY")
+	local last, acc, flushing
+	mf:SetScript("OnEvent", function()
+		local now = GetMoney and GetMoney() or 0
+		if last then
+			acc = (acc or 0) + (now - last)
+		else
+			-- snap replayed cash to real gold once: every inflow
+			-- the pre-feed history missed lands on ext
+			GM.Ledger.Adjust("cash", now, "reconcile")
+		end
+		last = now
+		-- deltas flush on a short fuse: a buy's money event can beat
+		-- its purchase-confirm journal, and only the journal knows
+		-- the spend was modeled. Coalescing the window lets
+		-- pendingOut fill first regardless of event order
+		if acc and acc ~= 0 and not flushing then
+			flushing = true
+			GM.Time.After(0.25, function()
+				flushing = nil
+				local d = acc or 0
+				acc = 0
+				if d ~= 0 then GM.Ledger.Gold(d, "money") end
+			end)
+		end
+	end)
 end
 
 -- journal accounts — every transaction writes je = {acct → signed
@@ -149,6 +181,31 @@ local function Gain(s, qty, tot)
 	s.paidT = (s.paidT or 0) + tot
 end
 
+-- spends that journaled a cash leg expect a PLAYER_MONEY delta
+-- within a few seconds; pendingOut pairs them so Gold doesn't
+-- count them again. Session-local: a stale expectation that outlives
+-- its window gets dropped rather than shadowing a real outflow.
+local pendingOut = {}
+local OUT_WINDOW = 30
+
+local function ConsumeOutflow(amt)
+	local i = 1
+	while amt > 0 do
+		local p = pendingOut[i]
+		if not p then break end
+		if time() - p.t > OUT_WINDOW then
+			table.remove(pendingOut, i)
+		elseif p.amt <= amt then
+			amt = amt - p.amt
+			table.remove(pendingOut, i)
+		else
+			p.amt = p.amt - amt
+			amt = 0
+		end
+	end
+	return amt
+end
+
 function GM.Ledger.Add(kind, itemID, qty, unit, extra)
 	local L = GM.Ledger.db
 	if not L then return end
@@ -166,8 +223,15 @@ function GM.Ledger.Add(kind, itemID, qty, unit, extra)
 	-- extra.t backdates: mail-derived records carry the real event
 	-- time (invoice daysLeft), not the detection time
 	local t = extra and extra.t or time()
+	local je = Journal(kind, s or {}, qty, unit, extra)
 	tx[#tx + 1] = { t = t, ty = kind, i = itemID, q = qty, u = unit,
-		x = extra, je = Journal(kind, s or {}, qty, unit, extra) }
+		x = extra, je = je }
+	-- spends register their cash leg as a pending outflow so the
+	-- PLAYER_MONEY delta doesn't journal it a second time — only
+	-- unattributed outflows belong to the gold stream
+	if je and je.cash and je.cash < 0 then
+		pendingOut[#pendingOut + 1] = { t = t, amt = -je.cash }
+	end
 	if #tx > TX_CAP then table.remove(tx, 1) end
 	if kind == "buy" or kind == "bidwon" then
 		-- bidwon counts in buy aggregates too: a won bid IS a purchase
@@ -319,12 +383,20 @@ function GM.Ledger.Gold(delta, source)
 	local L = GM.Ledger.db
 	if not L then return end
 	local g = L.gold
-	local je = { cash = delta, ext = -delta }
-	if delta > 0 then
+	local je
+	if delta < 0 then
+		-- modeled spends (buy/vendorbuy/post-dep/bid) already wrote
+		-- their cash leg — consume the pending outflow; only the
+		-- remainder is an outside-world spend (repair, taxi, trade)
+		local un = ConsumeOutflow(-delta)
+		if un <= 0 then return end  -- fully attributed
+		je = { cash = -un, ext = un }
+	else
+		je = { cash = delta, ext = -delta }
 		-- settle outstanding auction receivables first: positive
 		-- inflow is attributed to uncollected proceeds up to the rcbl
 		-- balance, remainder stays untracked (ext). Aggregate, not
-		-- per-sale — a bare money message can't name its auction.
+		-- per-sale — a bare money delta can't name its auction.
 		local owe = GM.Ledger.Accounts
 			and (GM.Ledger.Accounts().rcbl or 0) or 0
 		local x = math.min(delta, owe)
@@ -333,6 +405,22 @@ function GM.Ledger.Gold(delta, source)
 		end
 	end
 	g[#g + 1] = { t = time(), d = delta, src = source, je = je }
+	if #g > GOLD_CAP then table.remove(g, 1) end
+end
+
+-- snap an account balance to ground truth: writes an adjustment
+-- row with the diff on ext — the unseeable-history account. Repairs
+-- pre-feed drift (cash snap on first money event) and keeps rcbl
+-- honest against what the AH reports collectable.
+function GM.Ledger.Adjust(acct, truth, src)
+	local L = GM.Ledger.db
+	if not L then return end
+	local bal = GM.Ledger.Accounts()[acct] or 0
+	local diff = truth - bal
+	if diff == 0 then return end
+	local g = L.gold
+	g[#g + 1] = { t = time(), d = diff, src = src or "adjust",
+		je = { [acct] = diff, ext = -diff } }
 	if #g > GOLD_CAP then table.remove(g, 1) end
 end
 

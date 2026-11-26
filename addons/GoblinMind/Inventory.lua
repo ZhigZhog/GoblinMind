@@ -554,6 +554,7 @@ function GM.Inventory.RefreshOwned()
 	partialSince = nil
 	local now = {}
 	local seenAid = {}
+	local pending = 0  -- sold rows awaiting collection = true rcbl
 	wipe(aidIndex)
 	for _, r in ipairs(infos) do
 		local i, info = r.i, r.info
@@ -562,6 +563,10 @@ function GM.Inventory.RefreshOwned()
 		if type(aid) ~= "number" and type(aid) ~= "string" then aid = nil end
 		local dupAid = aid and seenAid[aid]  -- same id twice = ghost row
 		local inactive = info.status ~= nil and info.status ~= 0
+		if inactive then
+			pending = pending + (info.buyoutAmount or info.buyout
+				or info.bidAmount or 0)
+		end
 		if id and not dupAid and not inactive then
 			if aid then seenAid[aid] = true end
 			local e = {
@@ -635,6 +640,12 @@ function GM.Inventory.RefreshOwned()
 		end
 	end
 	emptyArmed = nil
+	-- sold rows still listed are proceeds awaiting collection — the
+	-- AH's own receivable truth. Snap rcbl to it: the pre-feed drift
+	-- (sells that journaled but never settled) dies here
+	if GM.Ledger and GM.Ledger.Adjust then
+		GM.Ledger.Adjust("rcbl", pending, "reconcile")
+	end
 	-- sold marks ride the cache: the buyer-found message lands before
 	-- the enum drops the row, so the mark has to survive refreshes —
 	-- and die with the row (or on a stale-mark timeout)
