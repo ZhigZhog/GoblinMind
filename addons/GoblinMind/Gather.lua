@@ -792,6 +792,16 @@ function G.ZoneGPM(zn)
 	return ZoneEV(zn) * ZoneRate(zn)
 end
 
+-- worth farming TODAY: the recorded loot mix repriced at current
+-- values (ItemVal = GM.FarmValue = ctx.value), quoted through the
+-- cautious estimators -- Wilson-bound EV/kill (one-off lottery
+-- drops don't inflate it) x the sustained rate (spawn-capped,
+-- competition-derated). ZoneGPM stays as the optimistic number;
+-- ZoneWall/vTot stay frozen at loot time -- the actualized record.
+function G.ZoneValueNow(zn)
+	return G.ZoneSusEV(zn) * G.ZoneSusRate(zn)
+end
+
 -- wall-clock truth: total looted value over the session gaps.
 -- Gaps past SESSION_GAP are a real break (not respawn/competition
 -- dead time) and don't count toward the session. This is the

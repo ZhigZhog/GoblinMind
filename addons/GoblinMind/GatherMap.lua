@@ -299,11 +299,15 @@ local function ZoneTip(zn, mapID)
 	return function(tip)
 		local G = GM.Gather
 		local zc = G.ZoneCat(zn)
-		local gpm = G.ZoneGPM(zn)
+		local gpm = G.ZoneValueNow(zn)
 		tip:AddLine(GM.MoneyShort(floor(gpm)) .. "/min"
 			.. GM.CC("textDim") .. " · " .. (zn.kills or 0)
 			.. " kills · " .. #(zn.pockets or {})
 			.. " pockets|r")
+		if zn.vTot and zn.vTot > 0 then
+			tip:AddLine(GM.CC("textDim") .. "looted "
+				.. GM.MoneyShort(zn.vTot) .. "|r")
+		end
 		local place = G.ZonePlace and G.ZonePlace(zn)
 		tip:AddLine(G.KindTag(zc)
 			.. (place and (" · " .. place) or ""))
@@ -380,7 +384,7 @@ end
 local function ZoneLabel(zn, mapName)
 	local zc = G.ZoneCat(zn)
 	local stats = KillsK(zn.kills or 0) .. " · "
-		.. GM.MoneyShort(floor(G.ZoneGPM(zn))) .. "/m"
+		.. GM.MoneyShort(floor(G.ZoneValueNow(zn))) .. "/m"
 	local place = G.ZonePlace and G.ZonePlace(zn)
 	if place == mapName then place = nil end
 	local vis = #G.KindLabel(zc) + 3 + #stats
