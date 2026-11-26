@@ -228,8 +228,11 @@ function GM.Ledger.Add(kind, itemID, qty, unit, extra)
 		x = extra, je = je }
 	-- spends register their cash leg as a pending outflow so the
 	-- PLAYER_MONEY delta doesn't journal it a second time — only
-	-- unattributed outflows belong to the gold stream
-	if je and je.cash and je.cash < 0 then
+	-- unattributed outflows belong to the gold stream. extra.noOut
+	-- skips it: paired-cost buys record AFTER their money already
+	-- moved, so there's no delta left to expect
+	if je and je.cash and je.cash < 0
+		and not (extra and extra.noOut) then
 		pendingOut[#pendingOut + 1] = { t = t, amt = -je.cash }
 	end
 	if #tx > TX_CAP then table.remove(tx, 1) end
@@ -379,6 +382,19 @@ function GM.Ledger.Basis(itemID)
 	return s and s.paidQ and s.paidQ > 0 and s.paidT / s.paidQ or 0
 end
 
+-- detected buys with no readable cost (Forever drops the price
+-- field on some merchant/buyback items): the money outflow is the
+-- ground truth, so the next unattributed negative delta within the
+-- window becomes the cost basis. Expiry journals the row anyway —
+-- detected with unknown cost beats invisible.
+local pendingBuy = {}
+local BUY_WINDOW = 15
+
+function GM.Ledger.ExpectBuy(itemID, qty)
+	if not (itemID and qty and qty > 0) then return end
+	pendingBuy[#pendingBuy + 1] = { id = itemID, qty = qty, t = time() }
+end
+
 function GM.Ledger.Gold(delta, source)
 	local L = GM.Ledger.db
 	if not L then return end
@@ -389,6 +405,25 @@ function GM.Ledger.Gold(delta, source)
 		-- their cash leg — consume the pending outflow; only the
 		-- remainder is an outside-world spend (repair, taxi, trade)
 		local un = ConsumeOutflow(-delta)
+		if un > 0 and next(pendingBuy) then
+			-- a detected buy whose cost the client wouldn't tell:
+			-- the outflow IS its basis. FIFO — oldest pending first.
+			local pb = pendingBuy[1]
+			while pb and time() - pb.t > BUY_WINDOW do
+				GM.Ledger.Add("vendorbuy", pb.id, pb.qty,
+					nil, { noOut = true })
+				table.remove(pendingBuy, 1)
+				pb = pendingBuy[1]
+			end
+			if pb then
+				table.remove(pendingBuy, 1)
+				-- fractional unit is fine: qty*unit lands on the
+				-- delta exactly, no rounding drift in cash
+				GM.Ledger.Add("vendorbuy", pb.id, pb.qty,
+					un / pb.qty, { noOut = true })
+				un = 0
+			end
+		end
 		if un <= 0 then return end  -- fully attributed
 		je = { cash = -un, ext = un }
 	else

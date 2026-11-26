@@ -373,14 +373,37 @@ function B.Alloc(a)
 	return a.alloc or 0
 end
 
-function B.Remaining(a)
-	-- pool/save balances are already live — spent/income would
-	-- double-count against a moving alloc (they stay as bookkeeping)
+-- signed balance: an overdrawn account goes negative — the deficit
+-- is real data (spent exceeded alloc+income), not a display clamp.
+function B.Balance(a)
 	if a.pool or a.kind == "save" then
-		return math.max(0, B.Alloc(a) + (a.xfer or 0))
+		return B.Alloc(a) + (a.xfer or 0)
 	end
-	return math.max(0, B.Alloc(a) + (a.income or 0)
-		- (a.spent or 0) + (a.xfer or 0))
+	return B.Alloc(a) + (a.income or 0)
+		- (a.spent or 0) + (a.xfer or 0)
+end
+
+function B.Remaining(a)
+	-- spendable never goes below zero: the pool residual and Free()
+	-- math use the clamp, the row paints the signed Balance — an
+	-- overdrawn account is debt already taken from the purse, not
+	-- negative claim on it
+	return math.max(0, B.Balance(a))
+end
+
+-- overdraw notice: a spend that takes a warn-enabled account below
+-- zero announces each NEW low-water mark — repeat buys while
+-- overdrawn don't spam, only deeper holes do. Session-local mark:
+-- it resets on reload (Balance going back ≥0 clears it too).
+local warnLow = {}
+function B.WarnOverdrawn(a)
+	if a.warn == false then return end
+	local bal = B.Balance(a)
+	if bal >= 0 then warnLow[a] = nil return end
+	if warnLow[a] and bal >= warnLow[a] then return end
+	warnLow[a] = bal
+	GM.Print(GM.CC("warn") .. (a.name or "?") .. " over budget — "
+		.. GM.Money(-bal) .. " over|r")
 end
 
 -- gold with no claim on it: minus save reserves, minus everything
@@ -476,6 +499,7 @@ function B.Record(step, cost)
 			end
 		end
 	end
+	for _, a in ipairs(matching) do B.WarnOverdrawn(a) end
 	B.Sample()
 end
 
@@ -535,6 +559,9 @@ function B.DebitVendor(amount)
 				break
 			end
 		end
+	end
+	for _, a in ipairs(DB()) do
+		if a.kind == "vendor" and IsSelf(a) then B.WarnOverdrawn(a) end
 	end
 	B.Sample()
 end

@@ -209,21 +209,42 @@ local function BuybackDiff()
 	for _, e in pairs(now) do
 		after[e.id] = (after[e.id] or 0) + e.qty
 	end
+	-- buybacks the BuybackItem hook already journaled: the diff must
+	-- not count them again. Entries expire — a failed buyback leaves
+	-- the stamp around ~5s then it's ignored
+	local function Vanished(id, q)
+		local j = V._bbJourn and V._bbJourn[id]
+		if j and time() - j.t > 5 then
+			V._bbJourn[id] = nil j = nil
+		end
+		if j then
+			local c = math.min(j.qty, q)
+			j.qty = j.qty - c
+			if j.qty <= 0 then V._bbJourn[id] = nil end
+			q = q - c
+		end
+		if q <= 0 then return end
+		-- journal the cost we can read, else let the money outflow
+		-- supply the basis (price-less items on Forever)
+		local u = LastUnit(bbSnap, id) or VendorUnit(id)
+		if u then
+			GM.Ledger.Record("vendorbuy", { itemID = id,
+				qty = q, unit = u })
+		else
+			GM.Ledger.ExpectBuy(id, q)
+		end
+	end
 	for id, q in pairs(after) do
 		local d = q - (before[id] or 0)
 		if d > 0 then
 			GM.Ledger.Record("vendor", { itemID = id, qty = d,
 				unit = LastUnit(now, id) or VendorUnit(id) })
 		elseif d < 0 then
-			GM.Ledger.Record("vendorbuy", { itemID = id, qty = -d,
-				unit = LastUnit(bbSnap, id) or VendorUnit(id) })
+			Vanished(id, -d)
 		end
 	end
 	for id, q in pairs(before) do
-		if not after[id] then
-			GM.Ledger.Record("vendorbuy", { itemID = id, qty = q,
-				unit = LastUnit(bbSnap, id) or VendorUnit(id) })
-		end
+		if not after[id] then Vanished(id, q) end
 	end
 	bbSnap = now
 end
@@ -249,14 +270,45 @@ if hooksecurefunc then
 			local link = GetMerchantItemLink
 				and GetMerchantItemLink(idx)
 			local id = link and GM.LinkID(link)
+			if not id then return end
 			local okI, price, stackQty = pcall(function()
 				local _, _, p, q = GetMerchantItemInfo(idx)
 				return p, q end)
-			if id and okI and price and price > 0 then
+			if okI and price and price > 0 then
 				GM.Ledger.Record("vendorbuy", { itemID = id,
 					qty = count or 1,
 					unit = math.floor(price / (stackQty or 1)) })
+			else
+				-- Forever drops the price field on some merchant
+				-- items — the money outflow supplies the basis
+				GM.Ledger.ExpectBuy(id, count or 1)
 			end
 		end)
 	end)
+	-- buyback purchases aren't BuyMerchantItem — BuybackItem is its
+	-- own call. The slot's already cleared post-hook, so read the
+	-- item out of OUR snapshot and stamp the qty journaled — the
+	-- diff subtracts the stamp instead of double-counting, and a
+	-- failed buyback just lets the stamp expire
+	if type(BuybackItem) == "function" then
+		hooksecurefunc("BuybackItem", function(slot)
+			if V._hookSkip then return end
+			local e = bbSnap and bbSnap[slot]
+			if not e then return end
+			pcall(function()
+				V._bbJourn = V._bbJourn or {}
+				local j = V._bbJourn[e.id]
+				if j then j.qty = j.qty + e.qty j.t = time()
+				else V._bbJourn[e.id] = { qty = e.qty, t = time() } end
+				local unit = e.price > 0 and e.price / e.qty
+					or VendorUnit(e.id)
+				if unit then
+					GM.Ledger.Record("vendorbuy", { itemID = e.id,
+						qty = e.qty, unit = unit })
+				else
+					GM.Ledger.ExpectBuy(e.id, e.qty)
+				end
+			end)
+		end)
+	end
 end

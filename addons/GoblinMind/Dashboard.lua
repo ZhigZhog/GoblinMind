@@ -315,6 +315,8 @@ function DB.MountHome(host)
 					row.del:Show()
 					row.kind:Show()
 					row.grp:Show()
+					row.xfr:Show()
+					row.warn:Show()
 					Wd.PaintAcctRow(row, a, idx)
 				else
 					row:Hide()
@@ -322,7 +324,7 @@ function DB.MountHome(host)
 			end
 			if #list == 0 then
 				bRows[1]:Show()
-				for _, k in ipairs({ "rst", "del", "kind", "grp" }) do
+				for _, k in ipairs({ "rst", "del", "kind", "grp", "xfr", "warn" }) do
 					bRows[1][k]:Hide()
 				end
 				bRows[1].name:SetText("no accounts — add below")

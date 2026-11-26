@@ -1246,10 +1246,36 @@ function W.AcctRow(parent, idx, compact)
 		"like a bank transfer" } end)
 	row.xfr = xfr
 
+	-- over-budget warning toggle: ! lit = a spend that overdraws
+	-- this account announces; dim = silent. Per-account, persists.
+	local warn = CreateFrame("Button", nil, row)
+	warn:SetSize(16, 16)
+	warn:SetPoint("RIGHT", xfr, "LEFT", -4, 0)
+	warn.text = GM.MakeFontString(warn, GM.FONT_BOLD, 10, "textDim")
+	warn.text:SetPoint("CENTER")
+	warn:SetScript("OnClick", function()
+		local a = GM.Budget.List()[row._idx or idx]
+		if not a then return end
+		a.warn = (a.warn == false)
+		AcctRefresh()
+	end)
+	W.Tip(warn, function()
+		local a = GM.Budget.List()[row._idx or idx]
+		return a and a.warn == false and {
+			"Over-budget warning: OFF",
+			"spends overdraw silently —",
+			"click to warn again" }
+			or { "Over-budget warning: ON",
+			"a spend that overdraws this",
+			"account prints a warning —",
+			"click to silence" }
+	end)
+	row.warn = warn
+
 	-- 7d income/spend column: fixed-width right-justified block before
 	-- the row buttons; `left` re-anchors to it so nothing overlaps
 	row.flow = GM.MakeFontString(row, GM.FONT, 9, "textDim")
-	row.flow:SetPoint("RIGHT", xfr, "LEFT", -8, 0)
+	row.flow:SetPoint("RIGHT", warn, "LEFT", -8, 0)
 	row.flow:SetWidth(140)
 	row.flow:SetJustifyH("RIGHT")
 	row.flow:SetWordWrap(false)
@@ -1317,10 +1343,16 @@ function W.PaintAcctRow(row, a, idx, opts)
 		row.left:SetText("reserved " .. GM.MoneyShort(rem))
 		row.left:SetTextColor(GM.RGB("accent"))
 	else
-		row.left:SetText("left " .. GM.MoneyShort(rem)
+		-- Balance is signed: an overdrawn envelope reads negative in
+		-- red instead of clamping silently at 0c
+		local bal = GM.Budget.Balance(a)
+		row.left:SetText("left " .. GM.MoneyShort(bal)
 			.. " · spent " .. GM.MoneyShort(a.spent or 0))
-		row.left:SetTextColor(GM.RGB(rem > 0 and "textDim" or "err"))
+		row.left:SetTextColor(GM.RGB(bal > 0 and "textDim" or "err"))
 	end
+	row.warn.text:SetText("!")
+	row.warn.text:SetTextColor(
+		GM.RGB(a.warn == false and "textDim" or "warn"))
 	local fin, fout = GM.Budget.Flow(a)
 	if fin then
 		row.flow:SetText(GM.CC("pos") .. "+" .. GM.MoneyShort(fin) .. "|r"
