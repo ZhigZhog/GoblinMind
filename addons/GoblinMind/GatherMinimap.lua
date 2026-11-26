@@ -422,17 +422,20 @@ local function Update()
 				if fit.poly then
 					-- yard-space verts -> TOPLEFT px through
 					-- the same uv transform every other
-					-- layer takes
+					-- layer takes — but uv's py is CENTER-space
+					-- up-positive while TOPLEFT is down-positive:
+					-- negate it or the blob renders vertically
+					-- mirrored and slides N/S against the terrain
 					local spoly = {}
 					for i, p in ipairs(fit.poly) do
 						local _, _, px, py = uv(znW + p.x,
 							znN + p.y)
 						spoly[i] = { x = hw + px,
-							y = hh + py }
+							y = hh - py }
 					end
 					local _, _, pcx, pcy = uv(znW + fit.cx,
 						znN + fit.cy)
-					local scx, scy = hw + pcx, hh + pcy
+					local scx, scy = hw + pcx, hh - pcy
 					GM.Widgets.PolyFill(host, spoly, 6,
 						col[1], col[2], col[3],
 						SA.zoneRing * oaZ,
