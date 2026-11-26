@@ -282,7 +282,7 @@ local function RowModClick(id, link, key)
 			return
 		end
 	end
-	GM.ModifiedItemClick(id, link)
+	GM.ModifiedItemClick(id, link, key)
 end
 
 -- drill into a result: per-listing asks land in the right pane

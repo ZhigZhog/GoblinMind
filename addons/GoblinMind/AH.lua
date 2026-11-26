@@ -417,6 +417,32 @@ function GM.AH.ItemKeyFromLink(link)
 	end
 end
 
+-- Forever's owned-row links can carry the display name but a bare
+-- itemString — pasting one renders the base item. Splice the
+-- itemKey's suffix into itemString field 7 (after "item"): links
+-- that already carry it pass through unchanged
+function GM.AH.LinkWithKey(link, key, name)
+	if name and link then
+		-- the bracket text is what a paste renders — a caller that
+		-- resolved the variant name elsewhere (owned rows carry it
+		-- outside the link) can correct a base-name bracket
+		link = link:gsub("%[.-%]|h", "[" .. name .. "]|h", 1)
+	end
+	if not (link and key and (key.itemSuffix or 0) ~= 0) then
+		return link
+	end
+	local s = link:match("item:([^|h]+)")
+	if not s then return link end
+	if tonumber(select(7, strsplit(":", s)) or 0) ~= 0 then
+		return link -- already carries a suffix
+	end
+	local f = { strsplit(":", s) }
+	for i = 2, 6 do f[i] = f[i] or "0" end
+	f[7] = key.itemSuffix
+	return link:gsub("item:[^|h]+",
+		"item:" .. table.concat(f, ":"), 1)
+end
+
 -- variant book key: a suffixed item gets a composite
 -- "v<id>:<sfx>:<lvl>" string so its market stops conflating into
 -- the base item's mb/mbx/sup/n (another variant's cheap ask
