@@ -1089,17 +1089,18 @@ function GM.Inventory.MineRows()
 			-- column freezes at whatever the last refresh saw
 			local remain = a.tLeft and a.at
 				and (a.at + a.tLeft - time()) or a.tLeft
+			local ctx = GM.Ctx(a.itemID, a.itemLink, a.itemKey)
 			rows[#rows + 1] = {
 				-- fp-keyed cache: hand cancel the real auctionID when
 				-- the snapshot had one, else the enumeration index
 				aid = a.aid or a.idx or fp,
 				id = a.itemID, key = a.itemKey, link = a.itemLink,
+				ctx = ctx,
 				qty = (a.qty or 1) * (a.n or 1),
 				unit = a.buyout, tLeft = remain,
 				mkt = mkt, cheap = cheap, undercut = undercut,
 				sold = a.sold,
-				name = GM.ItemDisplayName(a.itemID, a.itemLink,
-					a.itemKey) or a.name
+				name = ctx.name or a.name
 					or ("item " .. a.itemID),
 			}
 		end
@@ -1119,14 +1120,14 @@ function GM.Inventory.BidRows()
 		if b.itemID and b.status ~= "gone" then
 			local remain = b.tl and b.at
 				and (b.at + b.tl - time()) or b.tl
+			local ctx = GM.Ctx(b.itemID, b.itemLink, b.itemKey)
 			rows[#rows + 1] = {
 				aid = aid, id = b.itemID, key = b.itemKey,
-				link = b.itemLink, qty = b.qty or 1,
+				link = b.itemLink, qty = b.qty or 1, ctx = ctx,
 				ourBid = b.ourBid, curBid = b.curBid or b.ourBid,
 				buyout = b.buyout, status = b.status or "winning",
 				remain = remain,
-				name = GM.ItemDisplayName(b.itemID, b.itemLink,
-					b.itemKey) or ("item " .. b.itemID),
+				name = ctx.name or ("item " .. b.itemID),
 			}
 		end
 	end

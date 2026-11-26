@@ -104,7 +104,7 @@ local function BuildRow(parent, i)
 	row:SetScript("OnMouseUp", function()
 		local d = row.data
 		if IsModifiedClick() then
-			if d and d.itemID then GM.ModifiedItemClick(d.itemID) end
+			if d and d.itemID then GM.Ops.Click(d.itemID) end
 			return
 		end
 		if d and d.header then

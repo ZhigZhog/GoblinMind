@@ -1295,6 +1295,48 @@ function GM.ItemDisplayColor(id, link)
 	return GM.NameColor(id)
 end
 
+-- ============ identity context — the spine ============
+-- ONE factory normalizes the (id, link, key) triple into a ctx.
+-- Any of the three may be missing; the ctx fills them in. Views
+-- read ctx fields only — never compose/link/key plumbing — so no
+-- surface can produce a bare itemString or a base-name paste.
+-- Lazy fields: a 200-row list pays only for what it paints.
+local ctxMT = {}
+ctxMT.__index = function(c, k)
+	if k == "link" then
+		local v = GM.ItemDisplayLink(c.id, c._link, c.key, c.name)
+		c.link = v return v
+	elseif k == "name" then
+		local v = GM.ItemDisplayName(c.id, c._link, c.key)
+		c.name = v return v
+	elseif k == "bookKey" then
+		local v = GM.AH and GM.AH.BookKey
+			and GM.AH.BookKey(c.id, c.key) or c.id
+		c.bookKey = v return v
+	elseif k == "color" then
+		return GM.ItemDisplayColor(c.id, c.link)
+	elseif k == "entry" then
+		local v = GM.ItemEntry(c.id, c.bookKey)
+		c.entry = v return v
+	end
+end
+
+-- accepts (id, link, key) OR a row table ({id,link,key} or
+-- {itemID,itemLink,itemKey} — both shapes normalize)
+function GM.Ctx(id, link, key)
+	if type(id) == "table" then
+		local r = id
+		id, link, key = r.id or r.itemID,
+			r.link or r.itemLink, r.key or r.itemKey
+	end
+	key = key or (GM.AH and GM.AH.ItemKeyFromLink
+		and GM.AH.ItemKeyFromLink(link)) or nil
+	id = id or (key and key.itemID)
+		or (link and GM.LinkID and GM.LinkID(link)) or nil
+	if not id then return nil end
+	return setmetatable({ id = id, key = key, _link = link }, ctxMT)
+end
+
 function GM.ItemQuality(id)
 	if not id then return end
 	local ok, q = pcall(function()

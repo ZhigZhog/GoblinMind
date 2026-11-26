@@ -179,18 +179,17 @@ local function ScanAsks()
 end
 
 function MU.SetItem(id, link, key)
-	if not id then return end
+	local ctx = GM.Ctx(id, link, key)
+	if not ctx then return end
 	-- same id under a different suffix is a different market — the
 	-- cached ladder belongs to the old variant's key
-	local changed = M.itemID ~= id
+	local changed = M.itemID ~= ctx.id
 		or (M.itemKey and M.itemKey.itemSuffix or 0)
-			~= (key and key.itemSuffix or 0)
-	-- normalize the stored link once: suffix spliced into a bare
-	-- itemString, bracket text corrected to the variant name — every
-	-- downstream read (header, pill, pastes) sees the same shape
-	M.itemID, M.itemKey = id, key
-	M.itemLink = GM.ItemDisplayLink(id, link, key,
-		GM.ItemDisplayName(id, link, key))
+			~= (ctx.key and ctx.key.itemSuffix or 0)
+	-- ctx owns normalization — suffix spliced, bracket corrected;
+	-- stored link/key/name/color all read the same resolved shape
+	M.itemID, M.itemKey, M.ctx = ctx.id, ctx.key, ctx
+	M.itemLink = ctx.link
 	if changed then
 		M.asks, M.askT, M.askTries, M.askWait, M.asksBook =
 			nil, nil, nil, nil, nil
@@ -445,12 +444,12 @@ end
 local function RefreshHeader(vm)
 	local id = M.itemID
 	mp.icon:SetTexture(id and GM.ItemIcon(id) or 134400)
-	-- the shared resolver: the targeted link/key gives "Hillborne
-	-- Axe of Defense" (and its quality hex) where ItemName/
-	-- ItemQuality only know the base item
-	mp.name:SetText(id and (GM.ItemDisplayName(id, M.itemLink, M.itemKey)
-		or ("item " .. id)) or "no item targeted")
-	mp.name.fontString:SetTextColor(GM.ItemDisplayColor(id, M.itemLink))
+	-- the stored ctx resolves name + rarity color once — every
+	-- repaint reads the same shape, never re-derives
+	mp.name:SetText(id and (M.ctx and M.ctx.name or "item " .. id)
+		or "no item targeted")
+	mp.name.fontString:SetTextColor(
+		M.ctx and M.ctx.color or GM.ItemDisplayColor(id, M.itemLink))
 	local entry = vm.entry
 	local chips = {}
 	if entry then
@@ -753,7 +752,8 @@ end
 local function Data()
 	local id = M.itemID
 	return {
-		entry = id and GM.ItemEntry(id),
+		entry = id and (M.ctx and M.ctx.entry
+			or GM.ItemEntry(id)),
 		hist = id and GM.History and GM.History.Points(id, WEEK),
 		marks = id and GM.Intel and GM.Intel.marks[id],
 		bookLive = GM.AH.BookLive and GM.AH.BookLive(),

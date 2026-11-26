@@ -6,16 +6,13 @@ local GetIDByInfo = C_Item and C_Item.GetItemInfoInstant or GetItemInfoInstant
 -- Every input path funnels here: target the item, surface the window,
 -- and read the book when we're already at the AH.
 function GM.TargetItem(itemID, link, key)
-	if not itemID then return end
-	if not link or link:match("^item:") then
-		local _, full = GetInfo and GetInfo(itemID)
-		link = full or link
-	end
-	GM.PlanQueue.SetItem(itemID, link, key)
+	local ctx = GM.Ctx(itemID, link, key)
+	if not ctx then return end
+	GM.PlanQueue.SetItem(ctx)
 	-- AH planning lives in the market terminal while the session
 	-- window is up; the standalone plan window keeps everything else
 	if GM.AH.open and GM.AHUI and GM.AHUI.IsOpen and GM.AHUI.IsOpen() then
-		GM.AHUI.OpenMarket(itemID, link, key)
+		GM.AHUI.OpenMarket(ctx)
 	else
 		GM.PlanQueue.Show()
 	end
@@ -58,6 +55,32 @@ if origHMI then
 		end
 		return origHMI(link)
 	end
+end
+
+-- ============ ops spine ============
+-- THE click dispatcher — one decision tree owns every pointer op,
+-- the way AH.Execute owns AH mutations. Views call Ops.Click(ctx)
+-- and never re-implement the modifier/chat/planner branching or
+-- compose (id, link, key, name) args. Call inside IsModifiedClick()
+-- (or any click handler — a bare click just falls to the context
+-- transfer). ctx may be a GM.Ctx or a plain {id,link,key} row —
+-- Ctx normalizes either.
+GM.Ops = GM.Ops or {}
+function GM.Ops.Click(ctxOrRow)
+	-- a row that carries its own ctx wins; otherwise Ctx normalizes
+	-- whatever raw identity triple (or bare id) arrived
+	local ctx = (type(ctxOrRow) == "table" and ctxOrRow.ctx)
+		or GM.Ctx(ctxOrRow)
+	if not ctx then return end
+	-- one rule everywhere: shift+click targets the planner when a
+	-- planning surface is open; otherwise the native chain runs
+	-- (chat paste, stack split, context transfer)
+	if Capture() then
+		GM.TargetItem(ctx.id, ctx.link, ctx.key)
+		return true
+	end
+	GM.ModifiedItemClick(ctx.id, ctx._link, ctx.key, ctx.name)
+	return true
 end
 
 -- Chat links — SetItemRef may not delegate to the funnel on this

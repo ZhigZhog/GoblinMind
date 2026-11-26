@@ -486,7 +486,7 @@ local function BuildUI()
 	-- Blizzard's modified-click chain via the shared helper
 	ui.detIconBtn:SetScript("OnClick", function(self)
 		if IsModifiedClick() and self.itemID then
-			GM.ModifiedItemClick(self.itemID)
+			GM.Ops.Click(self.itemID)
 		end
 	end)
 	ui.detName = GM.MakeFontString(det, GM.FONT_BOLD, 10, "text")
@@ -524,7 +524,7 @@ local function BuildUI()
 		m.hit:SetHeight(14)
 		m.hit:SetScript("OnClick", function(self)
 			if IsModifiedClick() and self.itemID then
-				GM.ModifiedItemClick(self.itemID)
+				GM.Ops.Click(self.itemID)
 			end
 		end)
 		-- tip bound ONCE — Refresh assigns m._mat per slot; hooking
@@ -1028,7 +1028,7 @@ function CU.Refresh(vm)
 			r:SetScript("OnClick", function(_, btn)
 				-- right-click in a category view pulls the recipe out
 				if IsModifiedClick() and row.itemID then
-					GM.ModifiedItemClick(row.itemID)
+					GM.Ops.Click(row.itemID)
 				elseif btn == "RightButton" and ui.selCat
 					and not row.unlearned then
 					GM.Crafting.CatUnassign(ui.selCat, id)
@@ -1093,7 +1093,7 @@ function CU.Refresh(vm)
 			end)
 			r:SetScript("OnClick", function()
 				if IsModifiedClick() and q.itemID then
-					GM.ModifiedItemClick(q.itemID)
+					GM.Ops.Click(q.itemID)
 				else
 					ui.sel = id
 				end

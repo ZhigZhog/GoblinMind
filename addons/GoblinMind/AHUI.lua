@@ -206,10 +206,10 @@ local function Results()
 			local mkt = GM.Price("dbmarket", id)
 			-- itemKey pins the suffix variant — the shared resolver
 			-- gives "of the Bear" names where the bare id gives base
+			local ctx = GM.Ctx(id, nil, r.itemKey)
 			rows[#rows + 1] = {
-				id = id, key = r.itemKey,
-				name = GM.ItemDisplayName(id, nil, r.itemKey)
-					or ("item " .. id),
+				id = id, key = r.itemKey, ctx = ctx,
+				name = ctx.name or ("item " .. id),
 				qty = r.totalQuantity or 1, unit = r.minPrice,
 				mkt = mkt,
 				low = mkt and r.minPrice and r.minPrice < mkt * 0.9 or nil,
@@ -268,18 +268,6 @@ end
 -- it and rescans while the AH is open). A live chat editbox keeps
 -- the native insert-link priority; other modifiers keep Blizzard's
 -- chain (ctrl=dressup etc.) via ModifiedItemClick.
-local function RowModClick(id, link, key, name)
-	if IsShiftKeyDown() then
-		local chat = ChatEdit_GetActiveWindow
-			and ChatEdit_GetActiveWindow()
-		if not (chat and chat:IsShown()) then
-			GM.TargetItem(id, link, key)
-			return
-		end
-	end
-	GM.ModifiedItemClick(id, link, key, name)
-end
-
 -- drill into a result: per-listing asks land in the right pane
 local function ScanAsks(r)
 	ui.sel = r
@@ -1501,7 +1489,7 @@ function AU.Refresh(vm)
 				local sel = r
 				row:SetScript("OnClick", function()
 					if IsModifiedClick() then
-						if sel.id then RowModClick(sel.id, sel.link, sel.key, sel.name) end
+						if sel.id then GM.Ops.Click(sel) end
 						return
 					end
 					ui.askScroll = 0
@@ -1629,7 +1617,7 @@ function AU.Refresh(vm)
 				end)
 				row:SetScript("OnClick", function()
 					if not r.id then return end
-					if IsModifiedClick() then RowModClick(r.id, r.link, r.key, r.name)
+					if IsModifiedClick() then GM.Ops.Click(r)
 					else GM.TargetItem(r.id, r.link, r.key) end
 				end)
 			else
@@ -1679,7 +1667,7 @@ function AU.Refresh(vm)
 				end
 				row:SetScript("OnClick", function()
 					if not r.id then return end
-					if IsModifiedClick() then RowModClick(r.id, r.link, r.key, r.name)
+					if IsModifiedClick() then GM.Ops.Click(r)
 					else GM.TargetItem(r.id, r.link, r.key) end
 				end)
 			else

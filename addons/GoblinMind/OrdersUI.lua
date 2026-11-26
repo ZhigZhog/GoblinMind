@@ -253,7 +253,7 @@ local function Build()
 		r:SetScript("OnClick", function(s)
 			if not s.itemID then return end
 			if IsModifiedClick() then
-				GM.ModifiedItemClick(s.itemID)
+				GM.Ops.Click(s.itemID)
 				return
 			end
 			if ui.view == "search" then

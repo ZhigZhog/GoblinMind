@@ -688,17 +688,16 @@ end
 
 function PQ.SetItem(itemID, itemLink, key)
 	Build()
+	local ctx = GM.Ctx(itemID, itemLink, key)
+	if not ctx then return end
 	PQ.homeMode = false
-	PQ.itemID = itemID
-	-- suffixed variants ("of the Bear") need their exact ItemKey —
-	-- suffix-0 scans return zero listings. Callers hand the key from
-	-- browse/owned rows; links carry it in itemString field 8.
-	PQ.itemKey = key or (GM.AH.ItemKeyFromLink
-		and GM.AH.ItemKeyFromLink(itemLink)) or nil
-	-- normalize once: suffix spliced into a bare itemString, bracket
-	-- corrected — pill/header/pastes all read the same shape
-	PQ.item = GM.ItemDisplayLink(itemID, itemLink, PQ.itemKey,
-		GM.ItemDisplayName(itemID, itemLink, PQ.itemKey))
+	PQ.itemID = ctx.id
+	PQ.ctx = ctx
+	-- ctx owns normalization: the key resolves (suffix-0 scans
+	-- return zero listings), PQ.item is the corrected link — pill,
+	-- header and pastes all read the same shape
+	PQ.itemKey = ctx.key
+	PQ.item = ctx.link
 	PQ.scan = nil
 	PQ.scanMode = nil -- retargeting supersedes "rerun last scan"
 	PQ.itemFresh = true -- and outranks the armed plan's mode on rescan
@@ -1411,8 +1410,10 @@ local function Data()
 	local dispLink = scanMode and (curStep.item or curStep.name) or PQ.item
 	vm.stepN, vm.curStep, vm.scanMode = stepN, curStep, scanMode
 	vm.dispID, vm.dispLink = dispID, dispLink
-	vm.entry = dispID and GM.ItemEntry(dispID,
-		(dispID == PQ.itemID and PQ.itemKey) or nil)
+	vm.entry = dispID and (dispID == PQ.itemID and PQ.ctx
+		and PQ.ctx.entry
+		or GM.ItemEntry(dispID,
+			(dispID == PQ.itemID and PQ.itemKey) or nil))
 	vm.market = dispID and GM.TSMMarket(dispID)
 	vm.bookTxt = scanMode
 		and format(" · step %d/%d", stepN, #PQ.plan.steps)
@@ -1426,6 +1427,7 @@ local function Data()
 	-- a proper link renders its own name — bare "4238" targets fall
 	-- back to the resolved item name
 	vm.nameTxt = (dispLink and dispLink:find("%[") and dispLink)
+		or (dispID == PQ.itemID and PQ.ctx and PQ.ctx.name)
 		or (dispID and GM.ItemDisplayName(dispID, nil,
 			(dispID == PQ.itemID and PQ.itemKey) or nil))
 		or dispLink

@@ -603,7 +603,7 @@ function VU.Refresh(vm)
 						return
 					end
 					if IsModifiedClick() and r.id then
-						GM.ModifiedItemClick(r.id)
+						GM.Ops.Click(r.id)
 						return
 					end
 					GM.MerchantBuy(idx, r.qty or 1)
@@ -611,7 +611,7 @@ function VU.Refresh(vm)
 				end)
 				row:SetScript("OnClick", function()
 					if IsModifiedClick() and r.id then
-						GM.ModifiedItemClick(r.id)
+						GM.Ops.Click(r.id)
 					end
 				end)
 			elseif ui.page == "sell" then
@@ -624,7 +624,7 @@ function VU.Refresh(vm)
 				local bag, slot = r.bag, r.slot
 				row.act:SetScript("OnClick", function()
 					if IsModifiedClick() and r.id then
-						GM.ModifiedItemClick(r.id)
+						GM.Ops.Click(r.id)
 						return
 					end
 					if MerchantOpen() and UseItem then
@@ -642,7 +642,7 @@ function VU.Refresh(vm)
 						GM.Vendoring.BlacklistToggle(r.id)
 						VU.Refresh()
 					elseif IsModifiedClick() and r.id then
-						GM.ModifiedItemClick(r.id)
+						GM.Ops.Click(r.id)
 					end
 				end)
 			else
@@ -655,7 +655,7 @@ function VU.Refresh(vm)
 				local idx = r.index
 				row.act:SetScript("OnClick", function()
 					if IsModifiedClick() and r.id then
-						GM.ModifiedItemClick(r.id)
+						GM.Ops.Click(r.id)
 						return
 					end
 					pcall(BuybackItem, idx)
@@ -663,7 +663,7 @@ function VU.Refresh(vm)
 				end)
 				row:SetScript("OnClick", function()
 					if IsModifiedClick() and r.id then
-						GM.ModifiedItemClick(r.id)
+						GM.Ops.Click(r.id)
 					end
 				end)
 			end

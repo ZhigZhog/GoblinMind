@@ -322,7 +322,7 @@ function W.ModifiedClick(f, idFn)
 		if btn ~= "LeftButton" or not IsModifiedClick() then return end
 		local fn = f._gmClickFn
 		local id = type(fn) == "function" and fn() or fn
-		if id then GM.ModifiedItemClick(id) end
+		if id then GM.Ops.Click(id) end
 	end)
 end
 
@@ -1672,7 +1672,7 @@ function W.ItemSlot(parent, opts)
 	end
 	local function Click()
 		if IsModifiedClick() then
-			GM.ModifiedItemClick(f.iconBtn.itemID)
+			GM.Ops.Click(f.iconBtn.itemID)
 		elseif CursorHasItem() then
 			Drop()
 		end

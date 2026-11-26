@@ -159,7 +159,7 @@ local function MakeTable(parent, cols, onClick)
 		end)
 		row:SetScript("OnClick", function()
 			if IsModifiedClick() then
-				if row.id then GM.ModifiedItemClick(row.id) end
+				if row.id then GM.Ops.Click(row.id) end
 			elseif row.id and onClick then
 				onClick(row.id)
 			end
@@ -1247,7 +1247,7 @@ local function Build()
 	itP.iconBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
 	itP.iconBtn:SetScript("OnClick", function()
 		if IsModifiedClick() and ui.itemID then
-			GM.ModifiedItemClick(ui.itemID)
+			GM.Ops.Click(ui.itemID)
 		end
 	end)
 	itP.name = GM.MakeFontString(itP, GM.FONT_BOLD, 13, "text")
