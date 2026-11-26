@@ -145,6 +145,16 @@ G.RegisterKind{ id = "cloth", label = "CLOTH",
 G.RegisterKind{ id = "cook", label = "COOK",
 	color = { 0.95, 0.55, 0.55 },
 	cats = { "flesh" }, corpse = true }
+G.RegisterKind{ id = "chest", label = "CHEST",
+	color = { 0.85, 0.75, 0.45 }, node = true,
+	-- object taps: Forever loots most chests instantly with no
+	-- SUCCEEDED, so recording rides the no-corpse catch-all below;
+	-- the cast IDs arm it when the client reports one. keepArm
+	-- because the cast IS the evidence — a dead target standing
+	-- beside the chest must not drop it to a hunt kill
+	keepArm = true,
+	castIds = { 3365, 5108, 22810, 22811 },
+	castNames = { "opening" } }
 
 
 -- hunt = the mob-farm kind — no cast; every non-gather loot window
@@ -2588,6 +2598,7 @@ local function OnLoot()
 			-- cast armed this loot or no corpse could be
 			-- impersonating the node
 			local nm = NodeNameFor(items)
+				or (gKind == "chest" and "Chest")
 				or ((armValid or not srcDead) and winName)
 			local nd
 			if gKind == "fish" then
@@ -2676,8 +2687,34 @@ local function OnLoot()
 		end
 		if GM.GatherMap then GM.GatherMap.Refresh() end
 	else
-		Journal("skip", { mob = srcName,
-			items = ItemStr(items), why = "no-corpse" })
+		-- no gather verdict, no corpse: what's left is object loot —
+		-- chests, barrels, crates (quest items are filtered
+		-- upstream by LootItems). A fish-bearing window is never a
+		-- chest: catches whose arm didn't survive stay unclaimed
+		-- rather than planting treasure where you stood fishing
+		local fishy
+		local IC = GM.Gathering and GM.Gathering.ItemCat
+		if IC then
+			for id in pairs(items) do
+				if IC(id) == "fish" then fishy = true break end
+			end
+		end
+		if next(items) and not fishy then
+			local pos = PosNow()
+			if pos then
+				MergeNode(pos, "chest", "Chest")
+				UpdateYield(YieldRec("chest"), items)
+				Journal("chest", { mob = winName,
+					items = ItemStr(items) })
+				if GM.GatherMap then GM.GatherMap.Refresh() end
+			else
+				Journal("skip", { mob = winName,
+					items = ItemStr(items), why = "no-pos" })
+			end
+		else
+			Journal("skip", { mob = srcName,
+				items = ItemStr(items), why = "no-corpse" })
+		end
 	end
 	return
 end
