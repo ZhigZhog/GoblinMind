@@ -36,6 +36,7 @@ Orders.lua
 Shopping.lua
 Chrome.lua
 Widgets.lua
+MapManager.lua
 PlanQueue.lua
 GroupsUI.lua
 OpsUI.lua

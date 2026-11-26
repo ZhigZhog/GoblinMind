@@ -174,37 +174,6 @@ local function ZonePoly(pts, pad, minR, maxR)
 	return poly, cx, cy
 end
 
--- pocket px points for the fit; records that predate pockets
--- fabricate a span-proportioned scatter (kill-skewed hexagon) so
--- they draw as blobs too instead of falling back to a circle
-local function ZonePts(zn, recXY, w, h, rPx)
-	local pts = {}
-	for _, pk in ipairs(zn.pockets or {}) do
-		local px, py = recXY(pk)
-		if M.OnFrame(px, py, 0.05) then
-			pts[#pts + 1] = { x = px * w, y = py * h }
-		end
-	end
-	if #pts < 3 then
-		local zx, zy = recXY(zn)
-		if not zx then return pts end
-		local cx0, cy0 = zx * w, zy * h
-		-- scatter at recorded-span minus the fit's pad so the
-		-- resulting blob lands at roughly DispR's footprint
-		local r0 = max(20, rPx(DispR(zn) - POCKET_PAD_YD))
-		local skew = (zn.kills or 1) * 0.7
-		pts = {}
-		for i = 0, 5 do
-			local a = skew + i / 6 * 6.2831853
-			pts[#pts + 1] = { x = cx0 + cos(a) * r0,
-				y = cy0 + sin(a) * r0 }
-		end
-	end
-	return pts
-end
-
-
-
 -- map-units per yard near (n,w): project two points a known world
 -- distance apart and measure. Fallback matches the world map's
 -- 1500yd-per-map-width assumption
@@ -317,6 +286,7 @@ M.ZonePoly, M.DispR = ZonePoly, DispR
 M.POCKET_PAD_YD, M.ZONE_MIN_YD = POCKET_PAD_YD, ZONE_MIN_YD
 M.ZONE_DRAW_MAX_YD = ZONE_DRAW_MAX_YD
 
+
 -- ======================== shared scenes ========================
 -- every map object renders through these — world-map overlay and
 -- window pane both call them with per-surface style, so a camp,
@@ -421,86 +391,6 @@ local function ZoneLabel(zn, mapName)
 	return G.KindTag(zc) .. " · " .. stats
 end
 
--- zone object: fitted blob (solid border band + translucent
--- interior) or disc fallback, farm icon at the centroid,
--- optional stats tag beneath. st = {
---   col = {r,g,b}, fillA, ringA, ringPx, sel,
---   iconID (item), iconA, iconSz, tag, tagDY,
---   rPx = fn(yd) -> px }
-local function ZoneScene(L, zn, prj, w, h, st)
-	local zx, zy = prj(zn)
-	if not zx then return end
-	G = G or GM.Gather
-	local col = st.col
-	local pts = ZonePts(zn, prj, w, h, st.rPx)
-	local poly, cx, cy = ZonePoly(pts,
-		st.rPx(POCKET_PAD_YD), st.rPx(ZONE_MIN_YD),
-		st.rPx(ZONE_DRAW_MAX_YD))
-	if poly then
-		L:blob(poly, cx, cy, col[1], col[2], col[3],
-			st.fillA, st.ringA, st.ringPx, st.sel)
-	else
-		cx, cy = zx * w, zy * h
-		local rPx = max(10, st.rPx(DispR(zn)))
-		-- disc pair: rim + interior — the same border-band
-		-- trick the blob uses, so the fallback reads the same
-		L:disc(cx, cy, rPx, col[1], col[2], col[3], st.ringA)
-		L:disc(cx, cy, max(4, rPx - (st.ringPx or 3)),
-			col[1], col[2], col[3], st.fillA)
-	end
-	if st.iconID then
-		local sz = st.iconSz or GM.Widgets.MapStyle.ZONE_ICON
-		L:icon(cx, cy, sz, GM.ItemIcon(st.iconID),
-			col[1], col[2], col[3], st.iconA or 1)
-		if st.tip ~= false then
-			L:hot(cx, cy, sz + 6, sz + 6,
-				ZoneTip(zn, st.mapID))
-		end
-		if st.tag then
-			-- icon-relative offset (S2): the tag sits under the
-			-- art, not at a fixed dip that drifts with iconSz
-			L:tag(cx, cy + (st.tagDY or sz / 2 + 8), st.tag,
-				st.iconA)
-		end
-	elseif st.tag then
-		L:tag(cx, cy + (st.tagDY or 14), st.tag, st.iconA)
-	end
-	return cx, cy
-end
-
--- Gatherer-style cluster: best-drop item art sized by group with
--- a count badge beneath. st = { a, shrink, tid } — tid swaps the
--- icon to the target's own and marks the cluster a producer
-local function ClusterScene(L, c, w, h, st)
-	G = G or GM.Gather
-	local rep = c.nodes[1]
-	local col = G.KindCol(rep.kind)
-	local best
-	for _, nd in ipairs(c.nodes) do
-		best = best or (G.NodeIconID and G.NodeIconID(nd))
-		if st.tid and G.NodeTargets
-			and G.NodeTargets(nd, st.tid) then
-			best = st.tid
-		end
-	end
-	local a = st.a or 1
-	local S = GM.Widgets.MapStyle
-	local sz = S.ClusterSize(c.n)
-	if st.shrink then sz = min(sz, S.SHRINK_CAP) end
-	local x, y = c.x * w, c.y * h
-	L:icon(x, y, sz, GM.ItemIcon(best), col[1], col[2], col[3], a)
-	if c.n > 1 then
-		L:badge(x, y + sz / 2 + 6, tostring(c.n),
-			col[1], col[2], col[3], a)
-	end
-	if st.tip ~= false then
-		L:hot(x, y, sz + 6, sz + 6, ClusterTip(c, st.mapID))
-	end
-end
-
--- solved-loop tooltip: money first — steady-state GPM the
--- saturation model expects — then lap economics and the
--- respawn-uptime derate behind the headline number
 local function RouteTip(r)
 	return function(tip)
 		local G = GM.Gather
@@ -532,34 +422,13 @@ local function RouteTip(r)
 	end
 end
 
--- route loop: dashed polyline (rotation-free — the world-map
--- canvas drops rotated textures on this client). tipFn adds
--- invisible hover pads along each leg so the whole loop shows
--- the route-value tooltip without blocking map drags elsewhere
-local function RouteScene(L, stops, prj, w, h, a, tipFn)
-	for i = 1, #stops do
-		local p, q = stops[i], stops[i % #stops + 1]
-		local ax, ay = prj(p)
-		local bx, by = prj(q)
-		if ax and bx then
-			local x1, y1 = ax * w, ay * h
-			local x2, y2 = bx * w, by * h
-			L:dots(x1, y1, x2, y2, 0.4, 0.85, 1.0, a or 0.85)
-			if tipFn then
-				local len = sqrt((x2 - x1) ^ 2 + (y2 - y1) ^ 2)
-				local n = max(1, floor(
-					len / GM.Widgets.MapStyle.ROUTE_HOT_SPACING))
-				for j = 0, n - 1 do
-					L:hot(x1 + (x2 - x1) * (j + 0.5) / n,
-						y1 + (y2 - y1) * (j + 0.5) / n,
-						20, 20, tipFn)
-				end
-			end
-		end
-	end
-end
 
--- ======================== refresh ========================
+-- the manager consumes the shared scene vocabulary — the draw
+-- logic lives in MapManager; these are the tooltip/label/projection
+-- helpers its object draws reach back for
+M.MapXY, M.UnitsPerYard, M.YdToPx = MapXY, UnitsPerYard, YdToPx
+M.ZoneTip, M.ClusterTip, M.RouteTip = ZoneTip, ClusterTip, RouteTip
+M.ZoneLabel = ZoneLabel
 
 -- remember the freshest solved route per map so the overlay draws
 -- without re-running the solver every frame
@@ -574,6 +443,62 @@ function M.ClearRoute(map)
 	lastRoutes[map] = nil
 end
 
+
+-- ====================== view: world map ======================
+-- the manager's adapter for the WorldMapFrame overlay: fractions
+-- -> canvas px, pools through worldML, tags + hover enabled
+local worldView = {
+	id = "world",
+	feats = { tag = true, hot = true },
+	fit = setmetatable({}, { __mode = "k" }),
+}
+function worldView:proj(rec)
+	local x, y = MapXY(rec, self.mapID)
+	if not x then return end
+	return x * self.w, y * self.h
+end
+function worldView:ptsRel(zn)
+	local pts = {}
+	local zx, zy = MapXY(zn, self.mapID)
+	if not zx then return pts end
+	for _, pk in ipairs(zn.pockets or {}) do
+		local px, py = MapXY(pk, self.mapID)
+		if px and M.OnFrame(px, py, 0.05) then
+			pts[#pts + 1] = { x = (px - zx) * self.w,
+				y = (py - zy) * self.h }
+		end
+	end
+	return pts
+end
+function worldView:rPx(yd) return YdToPx(self.canvas, yd) end
+function worldView:cull(x, y, slack)
+	slack = slack or 0
+	return x < -slack or x > self.w + slack
+		or y < -slack or y > self.h + slack
+end
+function worldView:rim(x, y) return x, y end
+function worldView:fade() return 1 end
+function worldView:iconSz(n)
+	return GM.Widgets.MapStyle.ClusterSize(n)
+end
+function worldView:routeSeg(x1, y1, x2, y2, a)
+	self.L:dots(x1, y1, x2, y2, 0.4, 0.85, 1.0, a)
+end
+function worldView:routeStop() end -- flat views draw the loop only
+function worldView:clusters(nodes)
+	local ref = nodes[1]
+	local upy = UnitsPerYard(self.mapID, ref)
+	local function frac(nd)
+		local x, y = MapXY(nd, self.mapID)
+		if M.OnFrame(x, y) then return x, y end
+	end
+	local out = {}
+	for _, c in ipairs(Cluster(nodes, frac, 70 * upy)) do
+		out[#out + 1] = { nodes = c.nodes, n = c.n,
+			x = c.x * self.w, y = c.y * self.h }
+	end
+	return out
+end
 
 function M.Refresh()
 	G = G or GM.Gather
@@ -595,106 +520,41 @@ function M.Refresh()
 	local oaZ = GM.GatherMinimap and GM.GatherMinimap.AlphaZone() or 1
 	local oaN = GM.GatherMinimap and GM.GatherMinimap.AlphaNode() or 1
 	local oaI = GM.GatherMinimap and GM.GatherMinimap.AlphaIcon() or 1
-	-- record -> normalized map coords on the displayed frame;
-	-- cross-mapID records reproject via the shared MapXY
-	local function RecXY(p)
-		local x, y = MapXY(p, map)
-		if M.OnFrame(x, y) then return x, y end
-	end
-
-	-- continent/world view: one mark per zone SLOT (record mapIDs
-	-- roll up under their display ancestor — Forever stores one
-	-- place under several IDs), medal-ringed by best gpm — the
-	-- same ZoneMarks the window pane draws
-	if M.IsWorldy(map) then
-		local S = GM.Widgets.MapStyle
-		for _, m in ipairs(M.ZoneMarks(map,
-			G.Leaderboard and G.Leaderboard() or {})) do
-			local mc = m.medal and S.MEDAL[m.medal]
-				or S.MEDAL_OFF
-			L:mark(m.x * w, m.y * h, m.count,
-				mc[1], mc[2], mc[3], m.medal)
-		end
-		return
-	end
-
-	-- hunt zones first (under the pins): fitted blob + farm icon
-	-- + stats tag. Label = dominant landmark (ZonePlace) +
-	-- display category — the raw record kind is always
-	-- "hunt"/"skin", never the cloth/meat/mine family the camp
-	-- actually farms. A landmark equal to the map's own name adds
-	-- nothing — drop it
 	local S = GM.Widgets.MapStyle
-	local mapName = G.ZoneName and G.ZoneName(map)
+
+	worldView.canvas, worldView.mapID = canvas, map
+	worldView.w, worldView.h = w, h
+	worldView.L = L
+	worldView.fitScale = w * 4096 + h
+
+	-- continent/world view: one mark per zone SLOT replaces the
+	-- camps entirely (record mapIDs roll up under their display
+	-- ancestor — Forever stores one place under several IDs)
+	local marks
+	if M.IsWorldy(map) then
+		marks = M.ZoneMarks(map,
+			G.Leaderboard and G.Leaderboard() or {})
+	end
+
 	-- every record landing on the displayed map, whatever mapID
 	-- the client stored it under (custom zones, Riverglades, ...)
-	for _, zl in pairs(GoblinMindGather.zones or {}) do
-	for _, zn in ipairs(zl) do
-		if RecXY(zn) then
-		-- a bad record can't kill the overlay pass — one zone's
-		-- draw failing must not take every later zone/pin with it
-		pcall(function()
-			local zc = G.ZoneCat(zn)
-			local col = G.KindCol(zc)
-			ZoneScene(L, zn, RecXY, w, h, {
-				col = col,
-				fillA = S.A.zoneFill * oaZ,
-				ringA = S.A.zoneRing * oaZ,
-				ringPx = 3,
-				iconID = G.ZoneIconID and G.ZoneIconID(zn),
-				iconA = S.A.full * oaI,
-				tag = ZoneLabel(zn, mapName),
-				mapID = map,
-				rPx = function(yd)
-					return YdToPx(draw, yd)
-				end,
-			})
-		end)
-		end
-	end
-	end
-
-	-- node pins: Gatherer-style stacking — records within ~70yd
-	-- merge into one spawn icon (best drop's item art) sized and
-	-- badged by group; plain colored pin when the client can't
-	-- resolve an icon. Dim when every member is inside the
-	-- learned respawn window; a set target dims non-producers
-	local tid = G.TargetID and G.TargetID()
-	local nodes = {}
-	for _, list in pairs(GoblinMindGather.nodes or {}) do
-		for _, nd in ipairs(list) do
-			if RecXY(nd) then nodes[#nodes + 1] = nd end
-		end
-	end
-	local upy = nodes[1] and UnitsPerYard(map, nodes[1])
-		or (1 / 1500)
-	for _, c in ipairs(Cluster(nodes, RecXY, 70 * upy)) do
-		-- one bad record used to kill every later cluster — a
-		-- respawn-less map's depleted record arithmetic-errored and
-		-- the whole draw died mid-pass ("icons fading"): pairs()
-		-- order meant a different crash point every tick
-		pcall(function()
-		local dimAll, tHit = true, nil
-		for _, nd in ipairs(c.nodes) do
-			if not G.NodeDepleted(nd, map) then
-				dimAll = false
-			end
-			if tid and G.NodeTargets
-				and G.NodeTargets(nd, tid) then
-				tHit = true
+	local zones, nodes
+	if not marks then
+		zones, nodes = {}, {}
+		for _, zl in pairs(GoblinMindGather.zones or {}) do
+			for _, zn in ipairs(zl) do
+				if worldView:proj(zn) then
+					zones[#zones + 1] = zn
+				end
 			end
 		end
-		local match = not tid or tHit
-		ClusterScene(L, c, w, h, {
-			-- states only lower alpha — min() stacking, not
-			-- ad-hoc products (S3)
-			a = min(dimAll and S.A.depleted or S.A.full,
-				match and S.A.full or S.A.nonMatch) * oaN,
-			shrink = not match,
-			tid = tid,
-			mapID = map,
-		})
-		end)
+		for _, list in pairs(GoblinMindGather.nodes or {}) do
+			for _, nd in ipairs(list) do
+				if worldView:proj(nd) then
+					nodes[#nodes + 1] = nd
+				end
+			end
+		end
 	end
 
 	-- route polyline: the active run if one's going, else the last
@@ -702,16 +562,39 @@ function M.Refresh()
 	local run = G.Route and G.Route()
 	local r = run and run.route or M.RouteFor(map)
 	local stops = run and run.stops or (r and r.stops)
-	if stops and #stops > 1 then
-		RouteScene(L, stops, RecXY, w, h, S.A.route * oaN,
-			r and RouteTip(r))
-		local s = run and run.stops[run.idx]
-		local sx, sy = s and RecXY(s)
-		if sx then
-			L:pin(sx * w, sy * h, 8,
-				0.4, 0.85, 1.0, S.A.full * oaN)
-		end
-	end
+	local route = stops and #stops > 1 and {
+		stops = stops,
+		active = run and run.stops[run.idx],
+		tipFn = r and RouteTip(r),
+		a = S.A.route * oaN,
+	}
+
+	local mapName = G.ZoneName and G.ZoneName(map)
+	local tid = G.TargetID and G.TargetID()
+	GM.MapMgr.Paint(worldView, {
+		mapID = map,
+		zones = zones,
+		nodes = nodes,
+		route = route,
+		marks = marks,
+		tid = tid,
+		oa = { n = oaN },
+		zoneSt = function(zn)
+			local zc = G.ZoneCat(zn)
+			return {
+				col = G.KindCol(zc),
+				fillA = S.A.zoneFill * oaZ,
+				ringA = S.A.zoneRing * oaZ,
+				ringPx = 3,
+				iconID = G.ZoneIconID and G.ZoneIconID(zn),
+				iconA = S.A.full * oaI,
+				-- kind tag + landmark + kills/gpm line — the
+				-- glance label S2 specifies, world-map only
+				tag = ZoneLabel(zn, mapName),
+				mapID = map,
+			}
+		end,
+	})
 end
 
 -- ======================== window pane ========================
@@ -868,6 +751,59 @@ end
 -- world corners the same way their Geometry does so map-coord
 -- overlays stay aligned. Nil when MapWise isn't installed or has
 -- no index for this map.
+-- ====================== view: gather pane ======================
+-- same adapter contract as the world map — fraction space, its
+-- own MapLayer pool inside the scroll child, hot regions but no
+-- zone tags (the pane lists that data beside the map)
+local paneView = {
+	id = "pane",
+	feats = { hot = true },
+	fit = setmetatable({}, { __mode = "k" }),
+}
+function paneView:proj(rec)
+	local x, y = MapXY(rec, self.mapID)
+	if not x then return end
+	return x * self.w, y * self.h
+end
+function paneView:ptsRel(zn)
+	local pts = {}
+	local zx, zy = MapXY(zn, self.mapID)
+	if not zx then return pts end
+	for _, pk in ipairs(zn.pockets or {}) do
+		local px, py = MapXY(pk, self.mapID)
+		if px and M.OnFrame(px, py, 0.05) then
+			pts[#pts + 1] = { x = (px - zx) * self.w,
+				y = (py - zy) * self.h }
+		end
+	end
+	return pts
+end
+function paneView:rPx(yd) return yd * self.upy * self.w end
+function paneView:cull(x, y, slack)
+	slack = slack or 0
+	return x < -slack or x > self.w + slack
+		or y < -slack or y > self.h + slack
+end
+function paneView:rim(x, y) return x, y end
+function paneView:fade() return 1 end
+function paneView:iconSz(n)
+	return GM.Widgets.MapStyle.ClusterSize(n)
+end
+function paneView:routeSeg(x1, y1, x2, y2, a)
+	self.L:dots(x1, y1, x2, y2, 0.4, 0.85, 1.0, a)
+end
+function paneView:routeStop() end
+function paneView:clusters(nodes)
+	local out = {}
+	for _, c in ipairs(Cluster(nodes,
+			function(nd) return MapXY(nd, self.mapID) end,
+			70 * self.upy)) do
+		out[#out + 1] = { nodes = c.nodes, n = c.n,
+			x = c.x * self.w, y = c.y * self.h }
+	end
+	return out
+end
+
 local function TerrainTiles(mapID)
 	local A = MapWiseAPI
 	local TI = A and A.TerrainIndex
@@ -1327,7 +1263,11 @@ function M.CreatePane(parent, w)
 		end
 		for _, list in pairs(GoblinMindGather.nodes or {}) do
 			for _, nd in ipairs(list) do
-				if MapXY(nd, mapID) then
+				local x, y = MapXY(nd, mapID)
+				-- the category filter isolates the overlay —
+				-- non-matching camps drop off the map entirely
+				if M.OnFrame(x, y)
+					and (not filter or nd.kind == filter) then
 					nodes[#nodes + 1] = nd
 				end
 			end
@@ -1337,91 +1277,16 @@ function M.CreatePane(parent, w)
 		local tid = G.TargetID and G.TargetID()
 		local oaI = GM.GatherMinimap
 			and GM.GatherMinimap.AlphaIcon() or 1
+		local S = GM.Widgets.MapStyle
 		-- continent/world view: child-zone geometry projects into
 		-- the parent's frame at the wrong scale — no camps, pins,
 		-- or loops here; the per-zone summary marks replace them
 		local worldy = M.IsWorldy(mapID)
 
-		-- hunt zones under everything: disc + drop icon at center.
-		-- With a target set, non-producers recede to a faint trace.
-		-- Out-of-bounds projections (bad world->map for records with
-		-- no stored x,y) get skipped — a px<0 disc bleeds outside the
-		-- pane into the list column
-		if not worldy then
-		for _, zn in ipairs(zones) do
-			local zc = G.ZoneCat(zn)
-			local x, y = MapXY(zn, mapID)
-			if M.OnFrame(x, y)
-				-- the category filter isolates the overlay —
-				-- non-matching camps drop off the map entirely
-				and (not filter or zc == filter) then
-				local match = not tid or G.ZoneTargets(zn, tid)
-				-- the selected row's camp pops: brighter fill/ring
-				-- plus an outer accent band
-				local isSel = sel and sel.zone == zn
-				local col = G.KindCol(zc)
-				local S = GM.Widgets.MapStyle
-				ZoneScene(L, zn,
-					function(p) return MapXY(p, mapID) end,
-					w, h, {
-						col = col,
-						fillA = isSel and S.A.zoneFillSel
-							or (match and S.A.zoneFill
-								or S.A.zoneFillMute),
-						ringA = isSel and S.A.zoneRingSel
-							or (match and S.A.zoneRing
-								or S.A.zoneRingMute),
-						ringPx = 2.5,
-						sel = isSel,
-						iconID = G.ZoneIconID
-							and G.ZoneIconID(zn),
-						iconA = ((match or isSel) and S.A.full
-							or S.A.nonMatch) * oaI,
-						iconSz = isSel and S.ZONE_ICON_SEL
-							or S.ZONE_ICON,
-						mapID = mapID,
-						rPx = function(yd)
-							return yd * upy * w
-						end,
-					})
-			end
-		end
-
-		-- node clusters; icon = best drop (target's own icon when
-		-- it's among them), size ∝ group size, non-producers dim
-		local drawable = {}
-		for _, nd in ipairs(nodes) do
-			local x, y = MapXY(nd, mapID)
-			if M.OnFrame(x, y)
-				and (not filter or nd.kind == filter) then
-				drawable[#drawable + 1] = nd
-			end
-		end
-		local clusters = Cluster(drawable,
-			function(nd) return MapXY(nd, mapID) end, 70 * upy)
-		for _, c in ipairs(clusters) do
-			local tHit, dimAll = nil, true
-			for _, nd in ipairs(c.nodes) do
-				if tid and G.NodeTargets(nd, tid) then tHit = true end
-				if not G.NodeDepleted(nd, mapID) then
-					dimAll = false
-				end
-			end
-			local match = not tid or tHit
-			ClusterScene(L, c, w, h, {
-				-- same alpha contract as the world map (S3)
-				a = min(dimAll
-						and GM.Widgets.MapStyle.A.depleted
-						or GM.Widgets.MapStyle.A.full,
-					match and GM.Widgets.MapStyle.A.full
-						or GM.Widgets.MapStyle.A.nonMatch),
-				shrink = not match,
-				tid = tid,
-				mapID = mapID,
-			})
-		end
-
-		-- route polyline through its stops
+		-- route polyline through its stops: a selected route row
+		-- draws its loop brighter — only when the drawn stops are
+		-- that row's own (a running route on the same map keeps
+		-- the normal look); a mismatched category filter drops it
 		local run = G.Route and G.Route()
 		local r = route
 			or (run and run.route and run.route.map == mapID
@@ -1430,39 +1295,55 @@ function M.CreatePane(parent, w)
 		local stops = (run and run.route and run.route.map == mapID
 				and run.stops)
 			or (r and r.stops)
-		-- the kind the drawn loop belongs to — a mismatched
-		-- category filter drops it off the overlay too
 		local loopKind = (run and run.route
 				and run.route.map == mapID and run.route.kind)
 			or (r and r.kind)
-		-- a selected route row draws its loop wider and brighter —
-		-- only when the drawn stops are that row's own (a running
-		-- route on the same map keeps the normal look)
 		local selLoop = sel and sel.stops and stops == sel.stops
+		local rt
 		if stops and #stops > 1
 			and (not filter or loopKind == filter) then
-			RouteScene(L, stops, function(p)
-				local px, py = MapXY(p, mapID)
-				if M.OnFrame(px, py) then return px, py end
-			end, w, h, selLoop and GM.Widgets.MapStyle.A.routeSel
-				or GM.Widgets.MapStyle.A.route,
-				r and RouteTip(r))
+			rt = {
+				stops = stops,
+				tipFn = r and RouteTip(r),
+				a = selLoop and S.A.routeSel or S.A.route,
+			}
 		end
-		end -- not worldy
 
-		-- per-zone summary marks on continent/world maps: count
-		-- of camps+routes, medal ring for the top-3 GPM zones
-		if worldy and marks then
-			local S = GM.Widgets.MapStyle
-			for _, m in ipairs(marks) do
-				if M.OnFrame(m.x, m.y) then
-					local mc = m.medal and S.MEDAL[m.medal]
-						or S.MEDAL_OFF
-					L:mark(m.x * w, m.y * h, m.count,
-						mc[1], mc[2], mc[3], m.medal)
-				end
-			end
-		end
+		paneView.mapID, paneView.w, paneView.h = mapID, w, h
+		paneView.L, paneView.upy = L, upy
+		paneView.fitScale = w * 4096 + h
+		GM.MapMgr.Paint(paneView, {
+			mapID = mapID,
+			zones = worldy and nil or zones,
+			nodes = worldy and nil or nodes,
+			route = worldy and nil or rt,
+			marks = worldy and marks or nil,
+			tid = tid,
+			zoneSt = function(zn)
+				local zc = G.ZoneCat(zn)
+				if filter and zc ~= filter then return nil end
+				local match = not tid or G.ZoneTargets(zn, tid)
+				local isSel = sel and sel.zone == zn
+				return {
+					col = G.KindCol(zc),
+					fillA = isSel and S.A.zoneFillSel
+						or (match and S.A.zoneFill
+							or S.A.zoneFillMute),
+					ringA = isSel and S.A.zoneRingSel
+						or (match and S.A.zoneRing
+							or S.A.zoneRingMute),
+					ringPx = 2.5,
+					sel = isSel,
+					iconID = G.ZoneIconID
+						and G.ZoneIconID(zn),
+					iconA = ((match or isSel) and S.A.full
+						or S.A.nonMatch) * oaI,
+					iconSz = isSel and S.ZONE_ICON_SEL
+						or S.ZONE_ICON,
+					mapID = mapID,
+				}
+			end,
+		})
 	end
 
 	-- the draw is wrapped: a mid-draw error used to leave
