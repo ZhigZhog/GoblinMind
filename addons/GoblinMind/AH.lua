@@ -182,10 +182,28 @@ f:SetScript("OnEvent", function(_, event, ...)
 			if pc.unit and unit > pc.unit then
 				GM.AH.pendingConfirm = nil
 				GM.Print(GM.CC("warn") .. format(
-					"quote moved — expected %s ea, quoted %s ea — rescan before buying|r",
+					"quote moved — expected %s ea, quoted %s ea — re-solving at the fresh book|r",
 					GM.Money(pc.unit), GM.Money(unit)))
 				if GM.Shopping and GM.Shopping.QuoteDied then
 					GM.Shopping.QuoteDied(pc.itemID, true)
+				end
+				-- the armed buy step still expects the stale price —
+				-- every click would re-quote the same dead number.
+				-- Rescan re-solves the plan so the next BUY NEXT
+				-- expects the book the client actually has
+				if GM.PlanQueue and GM.PlanQueue.Rescan
+					and GM.PlanQueue.plan and GM.PlanQueue.plan.steps then
+					local st = GM.PlanQueue.plan.steps
+						[GM.PlanQueue.stepIndex]
+					if st and st.kind == "buy"
+						and st.itemID == pc.itemID then
+						GM.PlanQueue.Rescan()
+					end
+				end
+				-- the buy's expectation dies with the quote — the
+				-- rescan re-registers if the plan re-buys
+				if GM.Ledger and GM.Ledger.Unexpect then
+					GM.Ledger.Unexpect(pc.itemID, "buy")
 				end
 			else
 				pc.quote = totalPrice
@@ -196,6 +214,8 @@ f:SetScript("OnEvent", function(_, event, ...)
 	elseif event == "COMMODITY_PRICE_UNAVAILABLE" then
 		local pc = GM.AH.pendingConfirm
 		GM.AH.pendingConfirm = nil
+		if pc and GM.Ledger and GM.Ledger.Unexpect then
+			GM.Ledger.Unexpect(pc.itemID, "buy") end
 		GM.Print(GM.CC("warn") .. "no commodity quote — falling back to per-lot buyouts|r")
 		if GM.PlanQueue.CommodityFallback then GM.PlanQueue.CommodityFallback() end
 		if GM.Shopping and GM.Shopping.QuoteDied then
@@ -205,6 +225,8 @@ f:SetScript("OnEvent", function(_, event, ...)
 	elseif event == "COMMODITY_PURCHASE_FAILED" then
 		local pc = GM.AH.pendingConfirm
 		GM.AH.pendingConfirm = nil
+		if pc and GM.Ledger and GM.Ledger.Unexpect then
+			GM.Ledger.Unexpect(pc.itemID, "buy") end
 		GM.Print(GM.CC("err") .. "commodity purchase failed|r")
 		if GM.Shopping and GM.Shopping.QuoteDied then
 			GM.Shopping.QuoteDied(pc and pc.itemID)
@@ -1464,6 +1486,8 @@ function GM.AH.Execute(step)
 		GM.Time.After(4, function()
 			if GM.AH.pendingConfirm == pc and not pc.quote then
 				GM.AH.pendingConfirm = nil
+				if GM.Ledger and GM.Ledger.Unexpect then
+					GM.Ledger.Unexpect(pc.itemID, "buy") end
 				GM.Print(GM.CC("warn") .. "no commodity quote — falling back to per-lot buyouts|r")
 				if GM.PlanQueue.CommodityFallback then GM.PlanQueue.CommodityFallback() end
 				if GM.Shopping and GM.Shopping.QuoteDied then

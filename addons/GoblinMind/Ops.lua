@@ -112,10 +112,14 @@ function O.Post(ctx, a)
 		GM.Ledger.Expect(ctx, { kind = "post", qty = qty,
 			dir = "out", unit = a.unit })
 	end
-	return GM.AH.Execute({ kind = "post", itemID = ctx.id,
+	local r = GM.AH.Execute({ kind = "post", itemID = ctx.id,
 		item = ctx.link, name = ctx.name,
 		qty = qty, unit = a.unit, bid = a.bid,
 		duration = a.dur or a.duration })
+	-- refused outright → no transaction, no expectation
+	if r == false and GM.Ledger and GM.Ledger.Unexpect then
+		GM.Ledger.Unexpect(ctx.id, "post") end
+	return r
 end
 
 -- buyout a lot (non-commodity: lot.auctionID; commodity:
@@ -131,14 +135,16 @@ function O.Buy(ctx, lot)
 		GM.Ledger.Expect(ctx, { kind = "buy", qty = qty,
 			dir = "in", unit = lot.unit or lot.price })
 	end
-	if lot.commodity then
-		return GM.AH.Execute({ kind = "buy", commodity = true,
-			itemID = ctx.id, qty = qty, unit = lot.unit })
-	end
-	return GM.AH.Execute({ kind = "buy", itemID = ctx.id,
-		qty = qty, unit = lot.unit or lot.price,
-		total = lot.total,
-		auctionID = lot.auctionID or lot.aid or lot.id })
+	local r = GM.AH.Execute(lot.commodity
+		and { kind = "buy", commodity = true,
+			itemID = ctx.id, qty = qty, unit = lot.unit }
+		or { kind = "buy", itemID = ctx.id,
+			qty = qty, unit = lot.unit or lot.price,
+			total = lot.total,
+			auctionID = lot.auctionID or lot.aid or lot.id })
+	if r == false and GM.Ledger and GM.Ledger.Unexpect then
+		GM.Ledger.Unexpect(ctx.id, "buy") end
+	return r
 end
 
 -- real bid (escrow, not buyout) — lot.total is the bid amount
@@ -161,8 +167,11 @@ function O.Cancel(ctx, lot)
 		GM.Ledger.Expect(ctx, { kind = "cancel", qty = lot.qty,
 			dir = "in" })
 	end
-	return GM.AH.Execute({ kind = "cancel",
+	local r = GM.AH.Execute({ kind = "cancel",
 		auctionID = lot.auctionID or lot.aid })
+	if r == false and GM.Ledger and GM.Ledger.Unexpect then
+		GM.Ledger.Unexpect(ctx.id, "cancel") end
+	return r
 end
 
 -- mail items — one Execute tick attaches + sends; multi-stack sends
@@ -175,8 +184,11 @@ function O.Mail(ctx, a)
 		GM.Ledger.Expect(ctx, { kind = "mailout",
 			qty = a.qty or 1, dir = "out" })
 	end
-	return GM.Banking.Execute({ kind = "mail", itemID = ctx.id,
+	local r = GM.Banking.Execute({ kind = "mail", itemID = ctx.id,
 		qty = a.qty or 1, to = a.to, cod = a.cod })
+	if r == nil and GM.Ledger and GM.Ledger.Unexpect then
+		GM.Ledger.Unexpect(ctx.id, "mailout") end
+	return r
 end
 
 -- sell to the open merchant
@@ -189,8 +201,12 @@ function O.Vendor(ctx, a)
 		GM.Ledger.Expect(ctx, { kind = "vendsell",
 			qty = a.qty or 1, dir = "out" })
 	end
-	return GM.Vendoring.Execute({ kind = "vendsell",
+	local r = GM.Vendoring.Execute({ kind = "vendsell",
 		itemID = ctx.id, qty = a.qty or 1 })
+	if (r == false or r == nil)
+			and GM.Ledger and GM.Ledger.Unexpect then
+		GM.Ledger.Unexpect(ctx.id, "vendsell") end
+	return r
 end
 
 -- buy from the open merchant — MerchantBuy journals via ExpectBuy

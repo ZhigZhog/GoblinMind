@@ -575,6 +575,19 @@ function GM.Ledger.Departed(itemID, qty)
 		and Fulfill(itemID, qty, "out")
 end
 
+-- the engine refused or the staged flow died (drifted quote, no
+-- quote at all): an expectation for a transaction that never ran
+-- would sit open to stale — drop it explicitly
+function GM.Ledger.Unexpect(itemID, kind)
+	for i = #expects, 1, -1 do
+		local e = expects[i]
+		if e.id == itemID and (not kind or e.kind == kind) then
+			table.remove(expects, i)
+			return e
+		end
+	end
+end
+
 -- audit surface: open + stale expectation counts
 function GM.Ledger.Expectations()
 	local now, open, stale = time(), 0, 0
