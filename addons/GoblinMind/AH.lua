@@ -1463,15 +1463,26 @@ function GM.AH.Execute(step)
 			or (not ok and GM.AH.IsCommodity(step.itemID))
 		-- bid below buyout only — a bid equal to buyout is rejected
 		local bid = step.bid and step.bid < step.unit and step.bid or nil
+		-- PostItem's qty is this auction's stack size — can't exceed
+		-- the stack (commodities post the whole qty)
+		local postQty = isComm and qty or math.min(qty, stackCount or qty)
+		-- the client's real listing fee while the stack is still in
+		-- bags: once listed, CalculateItemDeposit can't run and the
+		-- enum would journal an estimate — hand the true number
+		-- forward by fingerprint so post/sell/cancel legs close
+		local dep = GM.AH.DepositCost
+			and GM.AH.DepositCost(step.itemID, postQty) or 0
+		if dep > 0 and GM.Inventory.NotePostedDep then
+			GM.Inventory.NotePostedDep(step.itemID .. ":" .. postQty
+				.. ":" .. (step.unit or 0), dep)
+		end
 		if GM.Inventory.ArmPost then GM.Inventory.ArmPost(15) end
 		if isComm then
 			C_AuctionHouse.PostCommodity(loc, step.duration or 2, qty, step.unit)
 		else
-			-- PostItem's qty is this auction's stack size — can't exceed the stack.
 			-- bid/buyout are LOT prices (TSM: itemBid*stackSize — verified in
 			-- LibTSMWoW AuctionHouseWrapper) — step.unit/bid are per-item, so
 			-- scale by the posted stack or a multi-stack lists at 1 item's price
-			local postQty = math.min(qty, stackCount or qty)
 			C_AuctionHouse.PostItem(loc, step.duration or 2, postQty,
 				bid and bid * postQty or nil, step.unit * postQty)
 		end

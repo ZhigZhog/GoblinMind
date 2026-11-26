@@ -30,6 +30,7 @@ local emptyArmed = nil  -- timestamp of the first zero report; an
 local partialSince = nil -- first incomplete-read timestamp — the same
                          -- sustained-state gate shape as emptyArmed
 local rearmQueued = false -- dedupe the incomplete-read retry arm
+local postedDep = {}      -- fp -> {dep, t}: execute-time deposit truth
 local postUntil = 0       -- posts are only ledgered inside this window —
                           -- enumeration ghost rows (sold/history rows the
                           -- status filter can't catch) otherwise ratchet
@@ -43,6 +44,15 @@ GM.Inventory.recentCancels = recentCancels
 
 function GM.Inventory.ArmPost(sec)
 	postUntil = math.max(postUntil, time() + (sec or 15))
+end
+
+-- an execute-time post hands its real deposit forward: the enum
+-- can't recompute CalculateItemDeposit for an item already listed
+-- (it's out of bags), so the number rides here keyed by fingerprint
+function GM.Inventory.NotePostedDep(fp, dep)
+	if fp and dep and dep > 0 then
+		postedDep[fp] = { dep = dep, t = time() }
+	end
 end
 
 -- ============ mailbox ============
@@ -557,6 +567,23 @@ function GM.Inventory.RefreshOwned()
 	local now = {}
 	local seenAid = {}
 	local pending = 0  -- sold rows awaiting collection = true rcbl
+	-- deposit truth for enum rows: a journaled post (or an
+	-- execute-time note) carries the real CalculateItemDeposit the
+	-- estimator can't reproduce for an already-listed item. Without
+	-- this every tracked resolution releases an estimate against a
+	-- real deposit and the dep account drifts negative
+	local postDep = {}
+	for _, tx in ipairs(GM.Ledger and GM.Ledger.TxFor
+		and GM.Ledger.TxFor() or {}) do
+		if tx.ty == "post" and tx.x and tx.x.dep then
+			postDep[tx.i .. ":" .. (tx.q or 1) .. ":"
+				.. (tx.u or 0)] = tx.x.dep
+		end
+	end
+	for fp, d in pairs(postedDep) do
+		if time() - d.t > 600 then postedDep[fp] = nil
+		else postDep[fp] = d.dep end
+	end
 	wipe(aidIndex)
 	for _, r in ipairs(infos) do
 		local i, info = r.i, r.info
@@ -590,11 +617,16 @@ function GM.Inventory.RefreshOwned()
 					or info.bidAmount,
 				tLeft = info.timeLeftSeconds,
 				at = time(),
-				-- listing deposit estimate, captured once: the post,
-				-- sale, and cancel legs must move the SAME number or
-				-- the ledger's dep account never closes
-				dep = GM.AH and GM.AH.DepositCost
-					and GM.AH.DepositCost(id, info.quantity or 1) or 0,
+				-- listing deposit, captured once: the post, sale, and
+				-- cancel legs must move the SAME number or the ledger's
+				-- dep account never closes. Prefer the journaled post's
+				-- real fee (or the execute-time note) — the estimate
+				-- only fills in when neither saw this lot
+				dep = postDep[id .. ":" .. (info.quantity or 1) .. ":"
+					.. (info.buyoutAmount or info.buyout
+						or info.bidAmount or 0)]
+					or (GM.AH and GM.AH.DepositCost
+						and GM.AH.DepositCost(id, info.quantity or 1)) or 0,
 				aid = aid, idx = i, n = 1,
 			}
 			e.fp = EntryFp(e)
@@ -644,9 +676,17 @@ function GM.Inventory.RefreshOwned()
 	emptyArmed = nil
 	-- sold rows still listed are proceeds awaiting collection — the
 	-- AH's own receivable truth. Snap rcbl to it: the pre-feed drift
-	-- (sells that journaled but never settled) dies here
+	-- (sells that journaled but never settled) dies here. dep's truth
+	-- is the same enum: deposits outstanding = Σ live rows' fees —
+	-- resolutions that released unjournaled deposits (pre-feed posts)
+	-- converge back to the live count
 	if GM.Ledger and GM.Ledger.Adjust then
 		GM.Ledger.Adjust("rcbl", pending, "reconcile")
+		local depLive = 0
+		for _, e in pairs(now) do
+			depLive = depLive + (e.dep or 0) * (e.n or 1)
+		end
+		GM.Ledger.Adjust("dep", depLive, "reconcile")
 	end
 	-- sold marks ride the cache: the buyer-found message lands before
 	-- the enum drops the row, so the mark has to survive refreshes —

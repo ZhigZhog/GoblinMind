@@ -96,7 +96,7 @@ end
 --   pnl    realized trading P&L — CREDIT balance: negative = profit
 --   ext    outside world (loot, vendors, mail, unseen gold flows)
 --   wip    work in progress — mat cost held between craftout/craftin
-local function Journal(kind, s, qty, unit, extra)
+local function Journal(kind, s, qty, unit, extra, depOut)
 	-- extra.cost overrides the paidQ-average basis — callers that know
 	-- the real basis (craftin = consumed-mat total, bidwon = the bid)
 	-- pass it so the account legs carry the right copper
@@ -104,6 +104,11 @@ local function Journal(kind, s, qty, unit, extra)
 		or (s.paidQ and s.paidQ > 0
 			and s.paidT / s.paidQ * qty or 0)
 	local dep = extra and extra.dep or 0
+	-- a release can't exceed the recorded escrow: a resolution whose
+	-- post predates tracking returns a deposit the books never held.
+	-- depRel is the on-books portion — the remainder rides pnl (an
+	-- unbooked return is windfall, an unbooked loss can't be lost)
+	local depRel = math.min(dep, depOut or dep)
 	if kind == "buy" or kind == "vendorbuy" then
 		local tot = qty * (unit or 0)
 		return { cash = -tot, stock = tot }
@@ -119,8 +124,8 @@ local function Journal(kind, s, qty, unit, extra)
 		-- the mail until collected, so the debit lands on rcbl and
 		-- settles to cash when gold actually arrives (Ledger.Gold)
 		local net = qty * (unit or 0)
-		return { rcbl = net + dep, posted = -cost, dep = -dep,
-			pnl = cost - net }
+		return { rcbl = net + dep, posted = -cost, dep = -depRel,
+			pnl = cost - net - dep + depRel }
 	elseif kind == "vendor" then
 		-- vendor proceeds arrive as an unattributed money message —
 		-- NO cash leg here: CHAT_MSG_MONEY's Gold(+net) credits cash
@@ -172,7 +177,8 @@ local function Journal(kind, s, qty, unit, extra)
 		-- pure profit, which is what found value IS
 		return {}
 	elseif kind == "cancel" or kind == "expire" then
-		return { posted = -cost, stock = cost, dep = -dep, pnl = dep }
+		return { posted = -cost, stock = cost, dep = -depRel,
+			pnl = depRel }
 	end
 	-- mail items have no known cost — no money movement to balance
 end
@@ -233,7 +239,14 @@ function GM.Ledger.Add(kind, itemID, qty, unit, extra)
 	-- extra.t backdates: mail-derived records carry the real event
 	-- time (invoice daysLeft), not the detection time
 	local t = extra and extra.t or time()
-	local je = Journal(kind, s or {}, qty, unit, extra)
+	-- dep-releasing kinds clamp against the recorded escrow — one
+	-- replay per resolution, same order Gold() already spends per
+	-- positive delta
+	local depOut
+	if kind == "sell" or kind == "cancel" or kind == "expire" then
+		depOut = GM.Ledger.Accounts().dep or 0
+	end
+	local je = Journal(kind, s or {}, qty, unit, extra, depOut)
 	tx[#tx + 1] = { t = t, ty = kind, i = itemID, q = qty, u = unit,
 		x = extra, je = je }
 	-- spends register their cash leg as a pending outflow so the
