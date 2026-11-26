@@ -123,9 +123,8 @@ local function ScanAsks()
 		-- empty callback while the book insists lots exist is a lost
 		-- race — both deserve the retry, a truly unlisted item doesn't
 		if M.itemID ~= id or (M.askTries or 0) >= 3 then return end
-		local e = GM.AH.book and GM.AH.book[
-			GM.AH.BookKey(id, M.itemKey)]
-		if not M.asks or (#M.asks == 0 and e and (e.n or 0) > 0) then
+		local n = (M.ctx and M.ctx.entry and M.ctx.entry.n) or 0
+		if not M.asks or (#M.asks == 0 and n > 0) then
 			ScanAsks()
 		end
 	end)
@@ -138,8 +137,7 @@ local function ScanAsks()
 		-- book cleared in seconds. Rebuild the ladder from the book's
 		-- own lot fingerprints (tagged · book) until the next scan
 		if #M.asks == 0 then
-			local fb = GM.AH.BookAsks
-				and GM.AH.BookAsks(GM.AH.BookKey(id, M.itemKey))
+			local fb = M.ctx and M.ctx.asks
 			if fb then
 				M.asks, M.asksBook = fb, true
 				M.askTries = 0 -- the book row already answered —

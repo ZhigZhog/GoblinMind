@@ -194,8 +194,9 @@ end
 local function BuildInventory()
 	local out, total = {}, 0
 	for id in pairs(GM.Inventory.Owned()) do
-		local c = GM.Inventory.Count(id)
-		local e = GM.ItemEntry(id)
+		local ctx = GM.Ctx and GM.Ctx(id)
+		local c = ctx and ctx.stock or GM.Inventory.Count(id)
+		local e = ctx and ctx.entry or GM.ItemEntry(id)
 		local p = GM.Price("dbmarket", id)
 		local v = p and p * c.total or 0
 		total = total + v
@@ -496,13 +497,8 @@ function OV.RefreshChart()
 	ui.kpiFlow:SetText("")
 	if slopeOK and span >= 43200 then
 		local sell, buy = 0, 0
-		for _, e in ipairs(GM.Ledger.db and GM.Ledger.db.transactions
-			or {}) do
-			if e.t >= tMin and e.t <= tMax then
-				local tot = (e.u or 0) * (e.q or 0)
-				if e.ty == "sell" then sell = sell + tot
-				elseif e.ty == "buy" then buy = buy + tot end
-			end
+		if GM.Ledger.Cashflow then
+			sell, buy = GM.Ledger.Cashflow(tMin, tMax)
 		end
 		if sell > 0 or buy > 0 then
 			local realized = (sell - buy) * 86400 / span

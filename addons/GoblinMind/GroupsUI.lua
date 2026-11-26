@@ -790,8 +790,11 @@ function GU.RefreshMembers(vm)
 		local id = ids[i + ui.memOff]
 		if id then
 			row:Show()
-			local e = GM.ItemEntry(id)
-			local own = GM.Inventory.Count and GM.Inventory.Count(id).total or 0
+			local ctx = GM.Ctx and GM.Ctx(id)
+			local e = ctx and ctx.entry or GM.ItemEntry(id)
+			local own = ctx and ctx.stock.total
+				or GM.Inventory.Count and GM.Inventory.Count(id).total
+				or 0
 			FillItemRow(row, id,
 				(e and e.p) and GM.Money(e.p) or "",
 				own > 0 and ("own " .. own) or "")

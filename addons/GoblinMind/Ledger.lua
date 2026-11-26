@@ -689,6 +689,22 @@ function GM.Ledger.Flow(charKey, tMin, tMax)
 	return agg
 end
 
+-- windowed sell/buy cash totals across the shared facade stream —
+-- the realized-rate half of the wealth chart's trading/revaluation
+-- split. Per-item version of the same windowed scan is Flow().
+function GM.Ledger.Cashflow(tMin, tMax)
+	local sell, buy = 0, 0
+	for _, e in ipairs(GM.Ledger.db and GM.Ledger.db.transactions
+		or {}) do
+		if e.t >= (tMin or 0) and e.t <= (tMax or math.huge) then
+			local tot = (e.u or 0) * (e.q or 0)
+			if e.ty == "sell" then sell = sell + tot
+			elseif e.ty == "buy" then buy = buy + tot end
+		end
+	end
+	return sell, buy
+end
+
 function GM.Ledger.CharKey()
 	return CharKey()
 end

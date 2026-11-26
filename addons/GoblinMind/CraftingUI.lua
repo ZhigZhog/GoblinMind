@@ -534,7 +534,7 @@ local function BuildUI()
 		Tip(m.hit, function()
 			local mat = m._mat
 			if not mat then return nil end
-			local have = GM.BagCount(mat.id) or 0
+			local have = (mat.ctx or GM.Ctx(mat.id)).bags
 			local all = GM.Crafting.Available
 				and GM.Crafting.Available(mat.id) or have
 			return { GM.ItemName(mat.id) or ("item " .. mat.id),
@@ -1258,7 +1258,7 @@ function CU.Refresh(vm)
 				m.name:SetText(GM.ItemName(mat.id) or ("item " .. mat.id))
 				-- bags-only, matching the row's "bags N" — a banked mat
 				-- still shows via the +N suffix from Available
-				local have = GM.BagCount(mat.id) or 0
+				local have = (mat.ctx or GM.Ctx(mat.id)).bags
 				local all = GM.Crafting.Available
 					and GM.Crafting.Available(mat.id) or have
 				m.have:Show()

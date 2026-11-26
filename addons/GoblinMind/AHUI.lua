@@ -1128,8 +1128,11 @@ end
 -- suggested unit; qty defaults to the first stack in bags
 function AU.OpenPost(id)
 	Build()
-	-- accepts a bare id or a ctx — variant rows post their variant
-	local ctx = type(id) == "table" and id.id and id or nil
+	-- accepts a bare id or a ctx — variant rows post their variant.
+	-- bare ids get one built: the dialog answers every count through
+	-- the same spine the row that opened it used
+	local ctx = type(id) == "table" and id.id and id
+		or GM.Ctx and GM.Ctx(id) or nil
 	id = ctx and ctx.id or id
 	local pd = ui.postD
 	pd.itemID, pd.ctx = id, ctx
@@ -1366,8 +1369,7 @@ function AU.Refresh(vm)
 					.. (r.mkt and " · mkt " .. GM.Money(r.mkt) or ""))
 				-- POST appears when bags hold the item — opens the
 				-- post dialog (qty/price/duration, one call per click)
-				if r.id and ((r.ctx and r.ctx.bags)
-						or GM.BagCount(r.id) or 0) > 0 then
+				if r.id and (r.ctx or GM.Ctx(r.id)).bags > 0 then
 					row.act:Show()
 					row.act.text:SetText("POST")
 					row.act.text:SetTextColor(GM.RGB("accent"))
