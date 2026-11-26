@@ -197,7 +197,7 @@ local function TaskLines()
 			raw > hits and GM.CC("textDim") ..
 				format(" (%d filtered)", raw - hits) or "")
 	end
-	local mail = GetInboxNumItems and GetInboxNumItems() or 0
+	local mail = GM.MailCount and GM.MailCount() or 0
 	if mail > 0 then
 		out[#out + 1] = format("%d mail message%s waiting", mail,
 			mail == 1 and "" or "s")

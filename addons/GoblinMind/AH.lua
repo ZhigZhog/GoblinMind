@@ -412,7 +412,7 @@ function GM.AH.ItemKeyFromLink(link)
 		-- the itemString carries no itemLevel, but Forever keys do
 		-- (owndump: Banded Girdle of Spirit = lvl 31) — a level-0 key
 		-- can miss a strict server-side match where the real key hits
-		local ilvl = GetInfo and (select(4, GetInfo(id))) or 0
+		local ilvl = GM.ItemILevel and GM.ItemILevel(id) or 0
 		return C_AuctionHouse.MakeItemKey(id, ilvl or 0, suffix, nil)
 	end
 end

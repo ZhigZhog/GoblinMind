@@ -88,7 +88,7 @@ local function Tasks()
 		}
 	end
 	-- mail waiting
-	local mail = GetInboxNumItems and GetInboxNumItems() or 0
+	local mail = GM.MailCount()
 	if mail > 0 then
 		t[#t + 1] = {
 			text = format("%d mail message%s waiting", mail,

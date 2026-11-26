@@ -840,7 +840,7 @@ function PQ.Solve(asks, workID)
 	end
 	-- the work item's own link — PQ.item is the *inspected* link and
 	-- can belong to a different item when a plan outlives inspection
-	local workLink = select(2, GetInfo and GetInfo(workID)) or PQ.item
+	local workLink = (GM.ItemLink and GM.ItemLink(workID)) or PQ.item
 	for _, step in ipairs(plan.steps) do
 		step.itemID = workID
 		step.item = workLink
@@ -1425,11 +1425,7 @@ local function Data()
 		or (dispID and GM.ItemName(dispID))
 		or dispLink
 		or (dispID and ("item " .. dispID))
-	vm.icon = dispID and C_Item and C_Item.GetItemIconByID
-		and C_Item.GetItemIconByID(dispID)
-	if not vm.icon and dispID and GetInfo then
-		vm.icon = select(10, GetInfo(dispID))
-	end
+	vm.icon = dispID and GM.ItemIcon and GM.ItemIcon(dispID)
 	local sub = {}
 	if dispID and GetInfo then
 		local _, _, _, _, _, itemType = GetInfo(dispID)
@@ -1440,7 +1436,7 @@ local function Data()
 	-- stack fails the client's own sell check
 	if dispID then
 		local flag
-		local bind = GetInfo and select(14, GetInfo(dispID))
+		local bind = GM.ItemBind and GM.ItemBind(dispID)
 		if bind == 1 or bind == 4 then flag = "soulbound" end
 		local loc = not flag and GM.AH.FindInBags
 			and GM.AH.FindInBags(dispID)

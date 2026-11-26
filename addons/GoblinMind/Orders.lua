@@ -1936,7 +1936,7 @@ end
 
 function OR.InboxCODs()
 	local out = {}
-	local n = GetInboxNumItems and GetInboxNumItems() or 0
+	local n = GM.MailCount()
 	local me = OR.MyUUID()
 	local want = {}  -- sender charname -> {order, commit}
 	for _, name in ipairs(OR.Boards()) do

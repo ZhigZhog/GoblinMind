@@ -118,7 +118,7 @@ end
 -- Inbox.GetHeaderInfo (sender/subject/money/cod/daysLeft/numItems)
 local function InboxRows()
 	local rows = {}
-	local n = GetInboxNumItems and GetInboxNumItems() or 0
+	local n = GM.MailCount()
 	for i = 1, n do
 		local _, tex, sender, subject, money, cod, daysLeft, numItems =
 			GetInboxHeaderInfo(i)
@@ -967,7 +967,7 @@ function MU.CodProbe()
 			if ClearSendMail then pcall(ClearSendMail) end
 		end
 		if GetInboxNumItems and GetInboxHeaderInfo then
-			local n = tonumber((GetInboxNumItems())) or 0
+			local n = GM.MailCount()
 			GM.Print("inbox items: " .. n)
 			if n > 0 then
 				local ok3, t = pcall(function()

@@ -425,7 +425,7 @@ local function DoMailCollect(step)
 	if not (MailFrame and MailFrame:IsShown()) then
 		return "bounce", "mailbox is closed"
 	end
-	local n = GetInboxNumItems and GetInboxNumItems() or 0
+	local n = GM.MailCount()
 	for i = 1, n do
 		for a = 1, 16 do
 			-- returns (name, itemID, texture, count, ...); nil name = end

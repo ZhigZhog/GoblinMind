@@ -686,12 +686,7 @@ end
 -- floored at vendor sell — a fantasy listing can never beat the
 -- guaranteed price a vendor always pays.
 ItemVal = function(id)
-	local quality, sell
-	if GetInfo then
-		local ok, q = pcall(function() return select(3, GetInfo(id)) end)
-		if ok then quality = q end
-		sell = GM.VendorSellPrice(id)
-	end
+	local quality, sell = GM.ItemQuality(id), GM.VendorSellPrice(id)
 	-- index 11 is sellPrice on standard clients — on Forever it
 	-- sometimes returns an unrelated field (appearance/spell ids
 	-- land in the millions). Nothing a farm mob drops legitimately

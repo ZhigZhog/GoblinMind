@@ -53,7 +53,7 @@ local function scanInbox()
 	-- mid-load event keeps the last good cache instead of zeroing it
 	if not (GetInboxNumItems and GetInboxItem) then return end
 	local t = {}
-	local n = GetInboxNumItems() or 0
+	local n = GM.MailCount()
 	for i = 1, n do
 		for slot = 1, 20 do
 			local ok, a, b, _, d = pcall(GetInboxItem, i, slot)
@@ -160,7 +160,7 @@ local function scanAuctionMail()
 	mailScanAt = now
 	local L = GM.Ledger.db
 	if not (L and GM.Ledger.Record) then return end
-	for i = 1, (GetInboxNumItems() or 0) do
+	for i = 1, GM.MailCount() do
 		local invoiceType, itemName, playerName, bid, buyout,
 			deposit, consignment, _, _, _, count, invAid
 		if GetInboxInvoiceInfo then
@@ -398,7 +398,9 @@ end
 -- already values those at buyout in `a`, so the posted share comes
 -- back out. Without this term a buy reads as a wealth collapse
 -- until the item sells — the giant Xs on the wealth chart.
--- (Vendored/destroyed stock never leaves paidQ; BagCount bounds it.
+-- (Outflow legs drain paidQ at the running average — Consume runs on
+-- sell/vendor/mailout/destroy/craftout — so only unjournaled stock
+-- moves (loots, trades) leave residue; BagCount bounds it.
 -- Bank-only stock isn't reachable — bags are the trading boundary.)
 function GM.Inventory.HeldValue()
 	local st = GM.Ledger and GM.Ledger.db and GM.Ledger.db.itemStats

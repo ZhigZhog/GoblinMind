@@ -717,8 +717,7 @@ function GM.PullInbox()
 			-- MinimapCluster layout).
 			local unread = HasNewMail and HasNewMail()
 			if unread == nil then
-				local n = GetInboxNumItems and GetInboxNumItems() or 0
-				for i = 1, n do
+				for i = 1, GM.MailCount() do
 					local wasRead = select(9, GetInboxHeaderInfo(i))
 					if wasRead == false then unread = true break end
 				end
@@ -731,6 +730,12 @@ function GM.PullInbox()
 			end
 		end)
 	end)
+end
+
+-- THE inbox-count read — live API state (the contents mirror is
+-- Inventory's mailCache; the count itself is cheap truth)
+function GM.MailCount()
+	return GetInboxNumItems and GetInboxNumItems() or 0
 end
 
 -- Character key "Name-Realm" — the SV per-char bucket key. Shared by
@@ -1225,6 +1230,34 @@ function GM.ItemQuality(id)
 	return q
 end
 
+-- field-4 itemLevel — Forever itemStrings can lack it, nil is real
+function GM.ItemILevel(id)
+	if not id then return end
+	local ok, l = pcall(function()
+		return GetInfo and select(4, GetInfo(id)) end)
+	l = ok and l or nil
+	return type(l) == "number" and l or nil
+end
+
+-- field-8 max stack — 0/unsellable stack means nil
+function GM.ItemMaxStack(id)
+	if not id then return end
+	local ok, ms = pcall(function()
+		return GetInfo and select(8, GetInfo(id)) end)
+	ms = ok and ms or nil
+	return (type(ms) == "number" and ms > 0) and ms or nil
+end
+
+-- field-14 bindType: 0 none · 1 BoP · 2 BoE · 3 BoU · 4 quest —
+-- callers name their own meaning (soulbound = 1 or 4)
+function GM.ItemBind(id)
+	if not id then return end
+	local ok, b = pcall(function()
+		return GetInfo and select(14, GetInfo(id)) end)
+	b = ok and b or nil
+	return type(b) == "number" and b or nil
+end
+
 -- BuyMerchantItem fails the whole call when the count crosses the
 -- item's stack cap ("Internal Bag Error" — issue #21). Chunk the
 -- purchase into stack-sized calls; the cap comes from the merchant's
@@ -1241,11 +1274,7 @@ function GM.MerchantBuy(idx, n)
 	if not max then
 		local link = GetMerchantItemLink and GetMerchantItemLink(idx)
 		local id = link and GM.LinkID(link)
-		if id and GetInfo then
-			local ok, ms = pcall(function()
-				return select(8, GetInfo(id)) end)
-			if ok and type(ms) == "number" and ms > 0 then max = ms end
-		end
+		max = id and GM.ItemMaxStack(id) or nil
 	end
 	if not max then
 		local info = C_MerchantFrame and C_MerchantFrame.GetItemInfo

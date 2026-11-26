@@ -1673,10 +1673,7 @@ function W.ItemSlot(parent, opts)
 		if id and GM.NameColor then
 			f.name:SetTextColor(GM.NameColor(id))
 		end
-		local icon = id and ((C_Item and C_Item.GetItemIconByID
-			and C_Item.GetItemIconByID(id))
-			or (C_Item and C_Item.GetItemInfo
-				and select(10, C_Item.GetItemInfo(id))))
+		local icon = id and GM.ItemIcon and GM.ItemIcon(id)
 		if icon then f.icon:SetTexture(icon) f.icon:Show()
 		else f.icon:Hide() end
 		f.sub:SetText(id and ("id " .. id) or "")
