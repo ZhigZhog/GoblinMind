@@ -916,13 +916,12 @@ end
 -- per-unit mat price: market first, vendor-sell as the floor (matches
 -- TSM's default matPrice fallback chain minus sources we lack)
 function C.MatPrice(itemID)
-	local GetInfo = C_Item and C_Item.GetItemInfo or GetItemInfo
 	local ah = GM.Price("dbmarket", itemID)
 	local vb = GM.Price("vendorbuy", itemID)
 	-- vendor mats (flux, stock, thread) price at the vendor when it's
 	-- the cheaper source — crafting math stays honest either way
 	if vb and vb > 0 and (not ah or vb < ah) then return vb end
-	return ah or (GetInfo and select(11, GetInfo(itemID)))
+	return ah or GM.VendorSellPrice(itemID)
 end
 
 -- SINGLE execution path for craft economics — every surface that

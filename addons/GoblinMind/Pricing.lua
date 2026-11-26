@@ -43,6 +43,15 @@ function GM.Price(key, itemID)
 	return v
 end
 
+-- THE one vendor-sell-price read — GetItemInfo field 11, copper or
+-- nil when unreadable/unsellable. Every "what a merchant pays for
+-- this item" lookup routes here (tooltip lines, vendor floors,
+-- ledger sell provisionals); never open-code select(11, GetInfo).
+function GM.VendorSellPrice(id)
+	local v = GetInfo and select(11, GetInfo(id))
+	return v and v > 0 and v or nil
+end
+
 -- ============ sources: name -> fn(itemID) -> copper|nil ============
 
 local function ef(itemID, k)
@@ -65,7 +74,7 @@ local SRC = {
 	dbregionsalerate    = function(id) return ef(id, "vel") end,
 	dbregionsalepercent = function(id) return GM.Price("dbregionsalepercent", id) end,
 	numauctions         = function(id) return ef(id, "sup") end,
-	vendorsell          = function(id) return GetInfo and select(11, GetInfo(id)) or nil end,
+	vendorsell          = function(id) return GM.VendorSellPrice(id) end,
 	vendorbuy           = function(id)
 		-- emitted by the brain from TSM's VendorSell.Retail table —
 		-- the TSM4 custom-price API doesn't register 'vendorbuy'
@@ -97,7 +106,7 @@ local SRC = {
 			and GM.Destroying.DisenchantEV(id) or nil
 	end,
 	destroy             = function(id)
-		local best = GetInfo and select(11, GetInfo(id)) or nil
+		local best = GM.VendorSellPrice(id)
 		local de = GM.Destroying and GM.Destroying.DisenchantEV
 			and GM.Destroying.DisenchantEV(id)
 		if de and (not best or de > best) then best = de end

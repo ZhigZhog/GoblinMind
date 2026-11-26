@@ -1263,18 +1263,17 @@ function GM.MerchantBuy(idx, n)
 		n = n - c
 	end
 	if GM.Vendoring then GM.Vendoring._hookSkip = nil end
-	-- journal what actually bought — merchant price is per stack,
-	-- divided by the stack qty; alt-currency goods skip the ledger
+	-- journal what actually bought — the money outflow is the real
+	-- cost basis via ExpectBuy; the merchant slot price is only the
+	-- fallback when no delta ever reads
 	local bought = want - n
-	if bought > 0 and GM.Ledger and GM.Ledger.Record then
+	if bought > 0 and GM.Ledger and GM.Ledger.ExpectBuy then
 		local link = GetMerchantItemLink and GetMerchantItemLink(idx)
 		local id = link and GM.LinkID(link)
-		local okI, price, stackQty = pcall(function()
-			local _, _, p, q = GetMerchantItemInfo(idx)
-			return p, q end)
-		if id and okI and price and price > 0 then
-			GM.Ledger.Record("vendorbuy", { itemID = id, qty = bought,
-				unit = math.floor(price / (stackQty or 1)) })
+		if id then
+			GM.Ledger.ExpectBuy(id, bought,
+				GM.Vendoring and GM.Vendoring.Price
+				and GM.Vendoring.Price.buy(idx))
 		end
 	end
 end

@@ -382,17 +382,20 @@ function GM.Ledger.Basis(itemID)
 	return s and s.paidQ and s.paidQ > 0 and s.paidT / s.paidQ or 0
 end
 
--- detected buys with no readable cost (Forever drops the price
--- field on some merchant/buyback items): the money outflow is the
--- ground truth, so the next unattributed negative delta within the
--- window becomes the cost basis. Expiry journals the row anyway —
--- detected with unknown cost beats invisible.
+-- every buy detection routes here: the money outflow is the ONLY
+-- cost field that's always right (Forever drops merchant/buyback
+-- prices on some items), so the next unattributed negative delta
+-- within the window becomes the basis. unit is a provisional
+-- fallback for buys whose delta never arrives (extended-cost
+-- items, missed events). Expiry journals the row anyway —
+-- detected with provisional cost beats invisible.
 local pendingBuy = {}
 local BUY_WINDOW = 15
 
-function GM.Ledger.ExpectBuy(itemID, qty)
+function GM.Ledger.ExpectBuy(itemID, qty, unit)
 	if not (itemID and qty and qty > 0) then return end
-	pendingBuy[#pendingBuy + 1] = { id = itemID, qty = qty, t = time() }
+	pendingBuy[#pendingBuy + 1] = { id = itemID, qty = qty,
+		unit = unit, t = time() }
 end
 
 function GM.Ledger.Gold(delta, source)
@@ -411,7 +414,7 @@ function GM.Ledger.Gold(delta, source)
 			local pb = pendingBuy[1]
 			while pb and time() - pb.t > BUY_WINDOW do
 				GM.Ledger.Add("vendorbuy", pb.id, pb.qty,
-					nil, { noOut = true })
+					pb.unit, { noOut = true })
 				table.remove(pendingBuy, 1)
 				pb = pendingBuy[1]
 			end

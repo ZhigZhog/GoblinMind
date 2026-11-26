@@ -1373,8 +1373,8 @@ function GM.AH.DepositCost(itemID, qty)
 		local ok, cost = pcall(C_AuctionHouse.CalculateItemDeposit, loc, 2, qty)
 		if ok and cost then return cost end
 	end
-	local vendor = GetInfo and select(11, GetInfo(itemID))
-	if vendor and vendor > 0 then
+	local vendor = GM.VendorSellPrice(itemID)
+	if vendor then
 		return floor(vendor * qty * 0.30) -- ~15% MSV per 12h; verify against client
 	end
 	return 0

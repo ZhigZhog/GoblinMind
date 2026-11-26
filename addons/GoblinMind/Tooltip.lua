@@ -15,8 +15,6 @@ local _, GM = ...
 GM.Tooltip = {}
 local TT = GM.Tooltip
 
-local GetInfo = C_Item and C_Item.GetItemInfo or GetItemInfo
-
 -- ============ settings (TSM tooltipOptions schema) ============
 
 local OPT_DEFAULTS = {
@@ -247,8 +245,8 @@ local function P_VendorBuy(t, id)
 end
 
 local function P_VendorSell(t, id)
-	local v = GetInfo and select(11, GetInfo(id))
-	if v and v > 0 then t:AddItemValueLine("Sell to vendor", v) end
+	local v = GM.VendorSellPrice(id)
+	if v then t:AddItemValueLine("Sell to vendor", v) end
 end
 
 local function P_Destroy(t, id)
@@ -267,7 +265,7 @@ local function P_Destroy(t, id)
 	-- suppress when destroying earns nothing over vendoring — herbs,
 	-- ores, and mats only ever show vendor price (mill/prospect don't
 	-- exist on Forever) and the sell line already carries it
-	local vendor = GetInfo and select(11, GetInfo(id)) or 0
+	local vendor = GM.VendorSellPrice(id) or 0
 	if v and v > vendor then t:AddItemValueLine("Disenchant value", v) end
 	if not drops then return end
 	for _, d in ipairs(drops) do

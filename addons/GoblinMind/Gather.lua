@@ -688,10 +688,9 @@ end
 ItemVal = function(id)
 	local quality, sell
 	if GetInfo then
-		local ok, q, sp = pcall(function()
-			return select(3, GetInfo(id)), select(11, GetInfo(id))
-		end)
-		if ok then quality, sell = q, sp end
+		local ok, q = pcall(function() return select(3, GetInfo(id)) end)
+		if ok then quality = q end
+		sell = GM.VendorSellPrice(id)
 	end
 	-- index 11 is sellPrice on standard clients — on Forever it
 	-- sometimes returns an unrelated field (appearance/spell ids

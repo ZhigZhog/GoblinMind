@@ -191,14 +191,27 @@ local function LastUnit(snap, id)
 	end
 end
 
--- buyback rows on Forever can carry no price — the item's own
--- vendor-sell field (GetItemInfo #11) is the authoritative unit:
--- a merchant pays exactly that per piece
-local function VendorUnit(id)
-	local info = C_Item and C_Item.GetItemInfo or GetItemInfo
-	local sell = info and select(11, info(id))
-	return sell and sell > 0 and sell or nil
-end
+-- the price authority — ONE place that knows which field answers
+-- "what did this cost" per vendor movement. Forever drops merchant
+-- and buyback price fields on some items, so every buy-side value
+-- is provisional: the real basis is the money outflow ExpectBuy
+-- pairs. Sells have no outflow — the sellPrice IS the truth.
+V.Price = {
+	-- sell: the item's own sellPrice — a merchant pays exactly that
+	sell = function(id) return GM.VendorSellPrice(id) end,
+	-- buy: the merchant slot's price per purchase unit
+	buy = function(idx)
+		local ok, price, q = pcall(function()
+			local _, _, p, qq = GetMerchantItemInfo(idx)
+			return p, qq end)
+		if ok and price and price > 0 then return price / (q or 1) end
+	end,
+	-- buyback: the row's own price, else the sellPrice it paid
+	buyback = function(e)
+		if e.price and e.price > 0 then return e.price / e.qty end
+		return V.Price.sell(e.id)
+	end,
+}
 
 local function BuybackDiff()
 	local now = ReadBuyback()
@@ -224,21 +237,16 @@ local function BuybackDiff()
 			q = q - c
 		end
 		if q <= 0 then return end
-		-- journal the cost we can read, else let the money outflow
-		-- supply the basis (price-less items on Forever)
-		local u = LastUnit(bbSnap, id) or VendorUnit(id)
-		if u then
-			GM.Ledger.Record("vendorbuy", { itemID = id,
-				qty = q, unit = u })
-		else
-			GM.Ledger.ExpectBuy(id, q)
-		end
+		-- the money outflow is the real basis; the row/sell price
+		-- is only the fallback when no delta ever arrives
+		GM.Ledger.ExpectBuy(id, q,
+			LastUnit(bbSnap, id) or V.Price.sell(id))
 	end
 	for id, q in pairs(after) do
 		local d = q - (before[id] or 0)
 		if d > 0 then
 			GM.Ledger.Record("vendor", { itemID = id, qty = d,
-				unit = LastUnit(now, id) or VendorUnit(id) })
+				unit = LastUnit(now, id) or V.Price.sell(id) })
 		elseif d < 0 then
 			Vanished(id, -d)
 		end
@@ -271,18 +279,9 @@ if hooksecurefunc then
 				and GetMerchantItemLink(idx)
 			local id = link and GM.LinkID(link)
 			if not id then return end
-			local okI, price, stackQty = pcall(function()
-				local _, _, p, q = GetMerchantItemInfo(idx)
-				return p, q end)
-			if okI and price and price > 0 then
-				GM.Ledger.Record("vendorbuy", { itemID = id,
-					qty = count or 1,
-					unit = math.floor(price / (stackQty or 1)) })
-			else
-				-- Forever drops the price field on some merchant
-				-- items — the money outflow supplies the basis
-				GM.Ledger.ExpectBuy(id, count or 1)
-			end
+			-- always defer to the money outflow for the real cost;
+			-- the merchant price is only the no-delta fallback
+			GM.Ledger.ExpectBuy(id, count or 1, V.Price.buy(idx))
 		end)
 	end)
 	-- buyback purchases aren't BuyMerchantItem — BuybackItem is its
@@ -300,14 +299,7 @@ if hooksecurefunc then
 				local j = V._bbJourn[e.id]
 				if j then j.qty = j.qty + e.qty j.t = time()
 				else V._bbJourn[e.id] = { qty = e.qty, t = time() } end
-				local unit = e.price > 0 and e.price / e.qty
-					or VendorUnit(e.id)
-				if unit then
-					GM.Ledger.Record("vendorbuy", { itemID = e.id,
-						qty = e.qty, unit = unit })
-				else
-					GM.Ledger.ExpectBuy(e.id, e.qty)
-				end
+				GM.Ledger.ExpectBuy(e.id, e.qty, V.Price.buyback(e))
 			end)
 		end)
 	end
