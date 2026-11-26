@@ -743,7 +743,8 @@ local function Data()
 		entry = id and (M.ctx and M.ctx.entry
 			or GM.ItemEntry(id)),
 		hist = id and GM.History and GM.History.Points(id, WEEK),
-		marks = id and GM.Intel and GM.Intel.marks[id],
+		marks = id and GM.Intel and GM.Intel.Mark
+			and GM.Intel.Mark(M.ctx and M.ctx.bookKey or id),
 		bookLive = GM.AH.BookLive and GM.AH.BookLive(),
 		bookAge = GM.AH.BookAge and GM.AH.BookAge(),
 		bookLotsT = GM.AH.bookLotsT,

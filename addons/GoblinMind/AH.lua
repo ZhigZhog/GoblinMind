@@ -528,12 +528,11 @@ function GM.AH.CollectCommodityAsks(itemID)
 		GM.AH.MergeOwnAsks(asks, GM.AH.scanItemKey)
 	table.sort(asks, function(a, b) return a.unit < b.unit end)
 	-- flag rows before delivery — solver/sniper consumers price off
-	-- bait/step marks; unflagged rows feed the drag. Suffixed scans
-	-- describe one variant's market — flagging them would mint
-	-- item-level marks off a subset (same rule MarketUI applies)
-	local sfx = GM.AH.scanItemKey and (GM.AH.scanItemKey.itemSuffix or 0) or 0
-	if sfx == 0 and GM.Intel and GM.Intel.AnalyzeItem then
-		GM.Intel.AnalyzeItem(itemID, asks, time())
+	-- bait/step marks; unflagged rows feed the drag. Variant scans
+	-- mint marks under their own bookKey — the suffix-0 gate died
+	-- with per-variant marks (the itemID-wide mark stays intact)
+	if GM.Intel and GM.Intel.AnalyzeItem then
+		GM.Intel.AnalyzeItem(itemID, asks, time(), GM.AH.scanItemKey)
 	end
 	GM.AH.asks = asks
 	GM.AH.scanConsumed = true
@@ -594,9 +593,9 @@ function GM.AH.CollectItemAsks()
 	end
 	local apiOwn, cand, merged = GM.AH.MergeOwnAsks(asks, key)
 	table.sort(asks, function(a, b) return a.unit < b.unit end)
-	local sfx = GM.AH.scanItemKey and (GM.AH.scanItemKey.itemSuffix or 0) or 0
-	if sfx == 0 and GM.Intel and GM.Intel.AnalyzeItem then
-		GM.Intel.AnalyzeItem(GM.AH.scanItemID, asks, time())
+	if GM.Intel and GM.Intel.AnalyzeItem then
+		GM.Intel.AnalyzeItem(GM.AH.scanItemID, asks, time(),
+			GM.AH.scanItemKey)
 	end
 	GM.AH.asks = asks
 	GM.AH.scanConsumed = true
@@ -1033,13 +1032,13 @@ end
 -- cheapest ask, answer the price behind it instead
 -- the id-or-bookKey params below take a BOOK KEY: plain itemID for
 -- base items, "v<id>:<sfx>:<lvl>" for variants (GM.AH.BookKey).
--- intel marks stay item-level — seller behavior doesn't vary by
--- suffix — so they resolve through BookID
+-- intel marks key per variant too — I.Mark falls back to the
+-- itemID-wide row for ladders that never minted their own
 function GM.AH.BookCheapest(bookKey)
 	local e = GM.AH.book and GM.AH.book[bookKey]
 	if not e or e.mbx == math.huge then return nil end
-	local m = GM.Intel and GM.Intel.marks
-		and GM.Intel.marks[GM.AH.BookID(bookKey)]
+	local m = GM.Intel and GM.Intel.Mark
+		and GM.Intel.Mark(bookKey)
 	if m and m.bait and (e.mbx2 or math.huge) < math.huge then
 		return e.mbx2
 	end

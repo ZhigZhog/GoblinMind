@@ -12,7 +12,7 @@ GM.Intel = I
 
 local floor = math.floor
 
-I.marks = {}    -- itemID -> { bait=?, steps=?, walls={seller=n}, wallHist={seller={...}} }
+I.marks = {}    -- bookKey -> { bait=?, steps=?, walls={seller=n}, wallHist={seller={...}} }
 I.suspects = nil -- seller -> { score, last, obs, scanB } (persisted in SV)
 
 local STEP_GAP = 1         -- exact-1c chains are the literal bot tell
@@ -121,10 +121,15 @@ local function RecordWall(id, seller, l, n, scanT, scanB)
 	return e
 end
 
--- one item's sorted ask ladder: bait / step-chains / walls / solver
--- marks — shared by the book pass and per-item targeted scans
-local function AnalyzeLadder(id, l, scanT)
+-- one bookKey's sorted ask ladder: bait / step-chains / walls /
+-- solver marks — shared by the book pass and per-item targeted
+-- scans. marks key PER VARIANT (a suffixed ladder describes that
+-- variant's market, not the itemID-wide one); wallHist keeps
+-- itemID granularity — the relist pattern is a seller's record
+-- across the whole item, not per suffix
+local function AnalyzeLadder(bk, l, scanT)
 	local scanB = floor(scanT / OBS_BUCKET)
+	local id = GM.AH and GM.AH.BookID and GM.AH.BookID(bk) or bk
 	local m = {}
 	-- bait: a lone cheap lot far under the next ask OR the book's own
 	-- median — posted to drag snipers/solvers to a low reference
@@ -218,7 +223,7 @@ local function AnalyzeLadder(id, l, scanT)
 	for _, r in ipairs(l) do
 		if r.seller and I.IsSuspect(r.seller) then r.solver = true end
 	end
-	I.marks[id] = m
+	I.marks[bk] = m
 end
 
 -- mark row objects in place; the book pass hands the same tables to
@@ -229,15 +234,16 @@ local function Analyze(rows)
 	local scanT = GM.AH.bookT or time()
 	local byItem = {}
 	for _, r in ipairs(rows) do
-		if r.id then
-			local l = byItem[r.id]
-			if not l then l = {} byItem[r.id] = l end
+		local k = r.bk or r.id
+		if k then
+			local l = byItem[k]
+			if not l then l = {} byItem[k] = l end
 			l[#l + 1] = r
 		end
 	end
-	for id, l in pairs(byItem) do
+	for k, l in pairs(byItem) do
 		table.sort(l, function(a, b) return a.unit < b.unit end)
-		AnalyzeLadder(id, l, scanT)
+		AnalyzeLadder(k, l, scanT)
 	end
 	-- prune wall history not confirmed by this snapshot for a week —
 	-- per-item scans aren't allowed to prune the book-wide history
@@ -255,12 +261,26 @@ local function Analyze(rows)
 end
 
 -- targeted per-item scans (the market page's ask ladder) feed the
--- same marks + suspect table — intel no longer waits on full books
-function I.AnalyzeItem(id, asks, scanT)
+-- same marks + suspect table — intel no longer waits on full books.
+-- `key` carries the itemKey a variant scan ran on so its marks land
+-- under that variant's bookKey, not the itemID-wide mark
+function I.AnalyzeItem(id, asks, scanT, key)
 	if not (id and asks and asks[1]) then return end
 	Suspects()
 	table.sort(asks, function(a, b) return a.unit < b.unit end)
-	AnalyzeLadder(id, asks, scanT or time())
+	local bk = GM.AH and GM.AH.BookKey and GM.AH.BookKey(id, key) or id
+	AnalyzeLadder(bk, asks, scanT or time())
+end
+
+-- marks read: the variant's own mark first, itemID fallback so a
+-- ladder that only ever minted the item-wide row still answers.
+-- The old suffix-0 caveat is gone — variants mint their own marks.
+function I.Mark(bookKey)
+	local m = I.marks[bookKey]
+	if m then return m end
+	local id = GM.AH and GM.AH.BookID and GM.AH.BookID(bookKey)
+		or bookKey
+	return id ~= bookKey and I.marks[id] or nil
 end
 
 -- first subscriber: flags exist before sniper/shopping consume rows
