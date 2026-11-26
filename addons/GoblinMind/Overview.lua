@@ -1468,4 +1468,10 @@ GM.View.Register("overview", {
 	Show = OV.Show, Hide = OV.Hide, Toggle = OV.Toggle,
 	Data = Data,
 	Refresh = OV.Refresh,
+	-- the wealth header is ledger-backed: money/chat deltas settle
+	-- rcbl, bag/inbox/owned changes move stock+posted — repaint on
+	-- all of them so "incoming" drops the moment proceeds collect
+	events = { "CHAT_MSG_MONEY", "PLAYER_MONEY", "BAG_UPDATE",
+		"MAIL_INBOX_UPDATE", "OWNED_AUCTIONS_UPDATED" },
+	evDelay = 0.3,
 	IsShown = function() return ui and ui.frame and ui.frame:IsShown() end })
