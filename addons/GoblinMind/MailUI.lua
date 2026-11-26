@@ -279,7 +279,10 @@ local function Build()
 	end)
 	ui.money = W.GoldEdit(ui.sendBar, 108)
 	ui.money:SetPoint("LEFT", ui.to, "RIGHT", 6, 0)
-	ui.money:HookScript("OnTextChanged", GateSend)
+	-- GoldEdit is a wrapper frame — the coin EditBoxes live on it
+	for _, e in ipairs({ ui.money.g, ui.money.s, ui.money.c }) do
+		e:HookScript("OnTextChanged", GateSend)
+	end
 	-- COD toggle: when set the copper box feeds SetSendMailCOD
 	-- (payment on delivery) instead of SetSendMailMoney — the writ
 	-- board's escrow mechanism
