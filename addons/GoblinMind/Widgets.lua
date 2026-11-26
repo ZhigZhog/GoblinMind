@@ -1639,7 +1639,12 @@ function W.ItemSlot(parent, opts)
 	f.iconBtn:SetScript("OnEnter", function(s)
 		if not s.itemID then return end
 		GameTooltip:SetOwner(s, "ANCHOR_RIGHT")
-		if GameTooltip.SetItemByID then
+		-- the stored ctx.link carries the suffix — SetItemByID
+		-- would tip the base item
+		local link = f.ctx and f.ctx.link
+		if link then
+			GameTooltip:SetHyperlink(link)
+		elseif GameTooltip.SetItemByID then
 			GameTooltip:SetItemByID(s.itemID)
 		else
 			GameTooltip:SetHyperlink("item:" .. s.itemID)
@@ -1672,7 +1677,7 @@ function W.ItemSlot(parent, opts)
 	end
 	local function Click()
 		if IsModifiedClick() then
-			GM.Ops.Click(f.iconBtn.itemID)
+			GM.Ops.Click(f.ctx or { id = f.itemID, link = f.itemLink })
 		elseif CursorHasItem() then
 			Drop()
 		end
@@ -1686,6 +1691,7 @@ function W.ItemSlot(parent, opts)
 
 	function f:SetItem(id, link)
 		f.itemID, f.itemLink = id, link
+		f.ctx = id and GM.Ctx(id, link) or nil
 		f.iconBtn.itemID = id
 		local name = (link and link:find("%[") and link)
 			or (id and GM.ItemName and GM.ItemName(id))
@@ -1700,7 +1706,7 @@ function W.ItemSlot(parent, opts)
 		f.sub:SetText(id and ("id " .. id) or "")
 	end
 	function f:Clear()
-		f.itemID, f.itemLink = nil, nil
+		f.itemID, f.itemLink, f.ctx = nil, nil, nil
 		f.iconBtn.itemID = nil
 		f.icon:Hide()
 		f.name:SetText(GM.CC("textDim")
@@ -1761,7 +1767,12 @@ function W.ItemRow(parent, opts)
 	row:SetScript("OnEnter", function(self)
 		if not self.id then return end
 		GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-		if GameTooltip.SetItemByID then
+		-- ctx.link carries the variant suffix — SetItemByID
+		-- would tip the base item
+		local link = self.ctx and self.ctx.link
+		if link then
+			GameTooltip:SetHyperlink(link)
+		elseif GameTooltip.SetItemByID then
 			GameTooltip:SetItemByID(self.id)
 		else
 			GameTooltip:SetHyperlink("item:" .. self.id)
@@ -1775,18 +1786,20 @@ function W.ItemRow(parent, opts)
 			opts.onClick(self, self.id)
 		end)
 	end
-	W.ModifiedClick(row, function() return row.id end)
+	W.ModifiedClick(row, function() return row.ctx or row.id end)
 
 	function row:SetItem(d)
 		local id = type(d) == "table" and (d.id or d.itemID) or d
 		row.id = id
+		row.ctx = type(d) == "table" and (d.ctx or GM.Ctx(d))
+			or id and GM.Ctx(id)
 		if not id then row:Clear() return end
 		row:SetAlpha(1)
 		row.icon:SetTexture(GM.ItemIcon and GM.ItemIcon(id)
 			or "Interface\\Icons\\INV_Misc_QuestionMark")
 		local nm = type(d) == "table" and d.name or nil
 		row.name:SetText((nm and nm ~= "" and nm)
-			or GM.ItemNameOr(id))
+			or (row.ctx and row.ctx.name) or GM.ItemNameOr(id))
 		row.name:SetTextColor(GM.NameColor(id))
 		local price = type(d) == "table" and d.price or nil
 		local vel = type(d) == "table" and d.vel or nil
@@ -1810,7 +1823,7 @@ function W.ItemRow(parent, opts)
 		row.rate:SetText(rate and format("%.2g/k", rate) or "")
 	end
 	function row:Clear()
-		row.id = nil
+		row.id, row.ctx = nil, nil
 		row.icon:SetTexture(
 			"Interface\\Icons\\INV_Misc_QuestionMark")
 		row.name:SetText("")
@@ -1867,7 +1880,12 @@ function W.ColumnRow(parent, opts)
 	row:SetScript("OnEnter", function(self)
 		if not self.id then return end
 		GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-		if GameTooltip.SetItemByID then
+		-- ctx.link carries the variant suffix — SetItemByID
+		-- would tip the base item
+		local link = self.ctx and self.ctx.link
+		if link then
+			GameTooltip:SetHyperlink(link)
+		elseif GameTooltip.SetItemByID then
 			GameTooltip:SetItemByID(self.id)
 		else
 			GameTooltip:SetHyperlink("item:" .. self.id)
@@ -1881,16 +1899,19 @@ function W.ColumnRow(parent, opts)
 			opts.onClick(self, self.id)
 		end)
 	end
-	W.ModifiedClick(row, function() return row.id end)
+	W.ModifiedClick(row, function() return row.ctx or row.id end)
 
 	function row:SetItem(d)
 		local id = type(d) == "table" and (d.id or d.itemID) or d
 		row.id = id
+		row.ctx = type(d) == "table" and (d.ctx or GM.Ctx(d))
+			or id and GM.Ctx(id)
 		row.icon:SetTexture(
 			id and GM.ItemIcon and GM.ItemIcon(id)
 			or "Interface\\Icons\\INV_Misc_QuestionMark")
 		local nm = type(d) == "table" and d.name or nil
 		row.name:SetText((type(nm) == "string" and nm ~= "" and nm)
+			or (row.ctx and row.ctx.name)
 			or (id and GM.ItemNameOr(id)) or "")
 		-- `a and X or Y` truncates to one arg — SetTextColor needs
 		-- the full triple so pick the source, not the expression

@@ -89,6 +89,9 @@ if SetItemRef then
 	hooksecurefunc("SetItemRef", function(link)
 		if not Capture() then return end
 		local id = GM.LinkID(link)
-		if id then GM.TargetItem(id) end
+		-- pass the link through — Ctx extracts the itemKey from
+		-- its itemString suffix field, so variant chat links
+		-- target the variant, not the base
+		if id then GM.TargetItem(id, link) end
 	end)
 end
