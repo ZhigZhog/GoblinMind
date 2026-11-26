@@ -1283,6 +1283,7 @@ for _, evt in ipairs({
 	"BIDS_UPDATED", "AUCTION_HOUSE_SHOW_FORMATTED_NOTIFICATION",
 	"GUILDBANKBAGSLOTS_CHANGED", "BANKFRAME_OPENED",
 	"BAG_UPDATE", "PLAYER_LOGOUT", "PLAYER_LOGIN",
+	"TRADE_SHOW", "TRADE_CLOSED",
 }) do
 	pcall(f.RegisterEvent, f, evt)
 end
@@ -1312,6 +1313,35 @@ f:SetScript("OnEvent", function(_, event, ...)
 		GM.Time.After(0.5, function()
 			if BankFrame and BankFrame:IsShown() then
 				Snapshot("bank")
+			end
+		end)
+	elseif event == "TRADE_SHOW" then
+		-- the trade mirror: bag state before the window — slot reads
+		-- inside the trade UI lie about provenance and empty on
+		-- close, so the honest detector is the bag diff itself
+		f._tradeBags = ScanContainers(CarriedBags())
+	elseif event == "TRADE_CLOSED" then
+		local before = f._tradeBags
+		f._tradeBags = nil
+		if not before then return end
+		-- bag events settle a beat after the window drops; a
+		-- cancelled trade diffs to zero and journals nothing
+		GM.Time.After(0.4, function()
+			if not (GM.Ledger and GM.Ledger.Record) then return end
+			local now = ScanContainers(CarriedBags())
+			for id in pairs(before) do
+				local d = (now[id] or 0) - before[id]
+				if d < 0 then
+					GM.Ledger.Record("tradeout",
+						{ itemID = id, qty = -d })
+				elseif d > 0 then
+					GM.Ledger.Record("tradein",
+						{ itemID = id, qty = d })
+				end
+				now[id] = nil
+			end
+			for id, n in pairs(now) do
+				GM.Ledger.Record("tradein", { itemID = id, qty = n })
 			end
 		end)
 	elseif event == "BAG_UPDATE" or event == "PLAYER_LOGOUT" then

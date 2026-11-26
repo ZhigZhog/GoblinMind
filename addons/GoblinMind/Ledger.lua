@@ -131,6 +131,11 @@ local function Journal(kind, s, qty, unit, extra)
 		-- items leave our accounts; the basis rides ext (the world
 		-- now holds it) — matching mail-in on an alt can't correlate
 		return { stock = -cost, ext = cost }
+	elseif kind == "tradeout" then
+		-- items left via trade — same shape as mailout: the world
+		-- holds the basis; whatever came back journals its own legs
+		-- (items at zero basis, gold via the PLAYER_MONEY delta)
+		return { stock = -cost, ext = cost }
 	elseif kind == "craftout" then
 		-- mats consumed into the craft — basis parks in wip until
 		-- the product lands (craftin pairs it the same tick)
@@ -281,6 +286,13 @@ function GM.Ledger.Add(kind, itemID, qty, unit, extra)
 		s.mailInQ = (s.mailInQ or 0) + qty
 	elseif kind == "mailout" then
 		s.mailOutQ = (s.mailOutQ or 0) + qty
+		Consume(s, qty)
+	elseif kind == "tradein" then
+		-- like mail-in: no cash basis — Consume on a later sell
+		-- clamps against bought-basis only
+		s.tradeInQ = (s.tradeInQ or 0) + qty
+	elseif kind == "tradeout" then
+		s.tradeOutQ = (s.tradeOutQ or 0) + qty
 		Consume(s, qty)
 	elseif kind == "destroy" then
 		s.destroyQ = (s.destroyQ or 0) + qty
