@@ -421,6 +421,34 @@ local function BuildUI()
 		r.plus = StepBtn(-20, "+")
 		r.minus = StepBtn(-38, "-")
 		r.craft = StepBtn(-56, "»")
+		-- tip bound ONCE — Refresh assigns r._q per row; hooking in
+		-- the render loop stacked OnEnter hooks per refresh (Tip uses
+		-- HookScript) — the pile-up blew the C stack mid-craft-run
+		Tip(r, function()
+			local q = r._q
+			if not q then return nil end
+			local extra = (q.craftableAll or 0) - (q.craftable or 0)
+			local short = q.qty - (q.craftable or 0)
+			local lines = { q.name or "recipe",
+				format("queue ×%d · can craft %d on hand%s%s", q.qty,
+					q.craftable or 0,
+					extra > 0 and format(" · +%d with bank/alts", extra) or "",
+					short > 0 and format(" (%d short)", short) or "") }
+			for _, m in ipairs(GM.Crafting.MatSources(r._id, q.qty)) do
+				local nm = GM.ItemName(m.id) or ("item " .. m.id)
+				if m.fetch > 0 then
+					tinsert(lines, format("  fetch %s ×%d (bank/mail/gbank)", nm, m.fetch))
+				end
+				if m.alt > 0 then
+					tinsert(lines, format("  alt has %s ×%d", nm, m.alt))
+				end
+				if m.buy > 0 then
+					tinsert(lines, format("  buy %s ×%d", nm, m.buy))
+				end
+			end
+			if #lines == 2 then tinsert(lines, "all mats on hand") end
+			return lines
+		end)
 		r:Hide()
 		ui.qRows[i] = r
 	end
@@ -498,6 +526,20 @@ local function BuildUI()
 			if IsModifiedClick() and self.itemID then
 				GM.ModifiedItemClick(self.itemID)
 			end
+		end)
+		-- tip bound ONCE — Refresh assigns m._mat per slot; hooking
+		-- inside the render loop stacked OnEnter hooks (Tip uses
+		-- HookScript), and a craft-run refresh per cast piled ~65
+		-- hooks on this row — the hover chain blew the C stack
+		Tip(m.hit, function()
+			local mat = m._mat
+			if not mat then return nil end
+			local have = GM.BagCount(mat.id) or 0
+			local all = GM.Crafting.Available
+				and GM.Crafting.Available(mat.id) or have
+			return { GM.ItemName(mat.id) or ("item " .. mat.id),
+				format("bags+bank %d · mail/gbank/ah/alts %d · total %d",
+					have, all - have, all) }
 		end)
 		ui.detMats[i] = m
 	end
@@ -1012,6 +1054,7 @@ function CU.Refresh(vm)
 		local q = qs[(ui.qOff or 0) + i]
 		if q then
 			r:Show()
+			r._q, r._id = q, q.recipeID -- the creation-time tip reads these
 			r.name:SetText((q.name or "?") )
 			r.name:SetTextColor(GM.NameColor(q.itemID))
 			r.qty._id, r.qty._q = q.recipeID, q.qty
@@ -1056,30 +1099,8 @@ function CU.Refresh(vm)
 				end
 				CU.Refresh()
 			end)
-			local short = q.qty - (q.craftable or 0)
-			Tip(r, function()
-				local extra = (q.craftableAll or 0) - (q.craftable or 0)
-				local lines = { q.name or "recipe",
-					format("queue ×%d · can craft %d on hand%s%s", q.qty,
-						q.craftable or 0,
-						extra > 0 and format(" · +%d with bank/alts", extra) or "",
-						short > 0 and format(" (%d short)", short) or "") }
-				for _, m in ipairs(GM.Crafting.MatSources(id, q.qty)) do
-					local nm = GM.ItemName(m.id) or ("item " .. m.id)
-					if m.fetch > 0 then
-						tinsert(lines, format("  fetch %s ×%d (bank/mail/gbank)", nm, m.fetch))
-					end
-					if m.alt > 0 then
-						tinsert(lines, format("  alt has %s ×%d", nm, m.alt))
-					end
-					if m.buy > 0 then
-						tinsert(lines, format("  buy %s ×%d", nm, m.buy))
-					end
-				end
-				if #lines == 2 then tinsert(lines, "all mats on hand") end
-				return lines
-			end)
 		else
+			r._q, r._id = nil, nil
 			r:Hide()
 		end
 	end
@@ -1231,6 +1252,8 @@ function CU.Refresh(vm)
 				m.icon:Show()
 				m.icon:SetTexture(GM.ItemIcon(mat.id) or 134400)
 				m.hit.itemID = mat.id
+				m.hit:Show()
+				m._mat = mat -- the creation-time tip hook reads this
 				m.name:Show()
 				m.name:SetText(GM.ItemName(mat.id) or ("item " .. mat.id))
 				-- bags-only, matching the row's "bags N" — a banked mat
@@ -1245,12 +1268,9 @@ function CU.Refresh(vm)
 				m.name:SetTextColor(GM.NameColor(
 					have >= mat.qty and mat.id,
 					have >= mat.qty and "text" or "warn"))
-				Tip(m.hit, function()
-					return { GM.ItemName(mat.id) or ("item " .. mat.id),
-						format("bags+bank %d · mail/gbank/ah/alts %d · total %d",
-							have, all - have, all) }
-				end)
 			else
+				m._mat = nil
+				m.hit:Hide() -- invisible row must not catch stale clicks
 				m.icon:Hide()
 				m.name:Hide()
 				m.have:Hide()
