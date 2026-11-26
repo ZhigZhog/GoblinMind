@@ -141,6 +141,18 @@ local function Journal(kind, s, qty, unit, extra, depOut)
 		-- items leave our accounts; the basis rides ext (the world
 		-- now holds it) — matching mail-in on an alt can't correlate
 		return { stock = -cost, ext = cost }
+	elseif kind == "codout" then
+		-- COD send = sale at the agreed price, proceeds pending mail —
+		-- the receivable rides rcbl exactly like an AH sell and
+		-- settles via Gold(+) when payment lands. extra.cod is this
+		-- item's share of the mail's COD total
+		local rcv = (extra and extra.cod) or 0
+		return { stock = -cost, rcbl = rcv, pnl = cost - rcv }
+	elseif kind == "mailgold" then
+		-- bare copper send — cash to the world; the pendingOut leg
+		-- pairs the PLAYER_MONEY delta so it isn't untracked spend
+		local amt = qty or 0
+		return { cash = -amt, ext = amt }
 	elseif kind == "tradeout" then
 		-- items left via trade — same shape as mailout: the world
 		-- holds the basis; whatever came back journals its own legs
@@ -230,9 +242,11 @@ function GM.Ledger.Add(kind, itemID, qty, unit, extra)
 	local L = GM.Ledger.db
 	if not L then return end
 	-- item-less kinds carry identity in extra: transfer is a
-	-- copper-only line (from/to), trainer buys a service (nm).
-	-- Everything else needs an item and a positive qty.
-	if kind ~= "transfer" and not (extra and extra.nm)
+	-- copper-only line (from/to), mailgold is copper-to-the-world,
+	-- trainer buys a service (nm). Everything else needs an item
+	-- and a positive qty.
+	if kind ~= "transfer" and kind ~= "mailgold"
+		and not (extra and extra.nm)
 		and (not itemID or not qty or qty <= 0) then return end
 	local tx = L.transactions
 	local s
@@ -309,6 +323,11 @@ function GM.Ledger.Add(kind, itemID, qty, unit, extra)
 	elseif kind == "mailout" then
 		s.mailOutQ = (s.mailOutQ or 0) + qty
 		Consume(s, qty)
+	elseif kind == "codout" then
+		-- same stock-out as mailout — the receivable lives in the
+		-- journal legs (rcbl), the unit count just tracks volume
+		s.mailOutQ = (s.mailOutQ or 0) + qty
+		Consume(s, qty)
 	elseif kind == "tradein" then
 		-- like mail-in: no cash basis — Consume on a later sell
 		-- clamps against bought-basis only
@@ -338,6 +357,11 @@ function GM.Ledger.Add(kind, itemID, qty, unit, extra)
 		local flowTot = (extra and extra.cost) or qty * (unit or 0)
 		if kind == "sell" then
 			GM.Budget.CreditTo(itemID, flowTot, "ah")
+		elseif kind == "codout" then
+			-- income booked at sale, like sell — extra.cod is this
+			-- item's share of the COD total
+			GM.Budget.CreditTo(itemID,
+				(extra and extra.cod) or 0, "ah")
 		elseif kind == "vendor" then
 			GM.Budget.CreditTo(itemID, flowTot, "vendor")
 		elseif kind == "vendorbuy" or kind == "trainer" then

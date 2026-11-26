@@ -375,6 +375,65 @@ local function DoMove(step)
 	return (step.moved or 0) >= step.qty
 end
 
+-- send phase, shared by targeted mail steps and the compose form's
+-- already-attached send. COD/money hooks set BEFORE the SendMail
+-- click; every attached item journals stock-out — codout splits the
+-- mail's COD total pro-rata across carried basis so each item's
+-- receivable share matches what it cost (last item takes rounding)
+local function DoMailSend(step)
+	if not (MailFrame and MailFrame:IsShown()) then
+		return "bounce", "mailbox is closed"
+	end
+	local items, totBasis, attached = {}, 0, 0
+	for i = 1, 12 do
+		local ret = { GetSendMailItem(i) }
+		local id = tonumber(ret[2])
+		if ret[1] or id then
+			local q = tonumber(ret[#ret]) or 1
+			items[#items + 1] = { id = id, qty = q, name = ret[1] }
+			attached = attached + q
+			totBasis = totBasis
+				+ (id and GM.Ledger.Basis(id) or 0) * q
+		end
+	end
+	if step.cod and step.cod > 0 then
+		pcall(SetSendMailCOD, step.cod)
+	elseif step.money and step.money > 0 then
+		pcall(SetSendMailMoney, step.money)
+	end
+	SendMail(step.to, step.subject
+		or ((items[1] and (GM.ItemName(items[1].id) or items[1].name))
+			or "items") .. " ×" .. attached,
+		step.body)
+	local left = step.cod or 0
+	for j, it in ipairs(items) do
+		if step.cod and step.cod > 0 then
+			local share
+			if j == #items then
+				share = left
+			elseif totBasis > 0 then
+				share = math.floor(step.cod
+					* ((GM.Ledger.Basis(it.id) or 0) * it.qty)
+					/ totBasis + 0.5)
+				left = left - share
+			else
+				share = j == 1 and step.cod or 0
+				left = left - share
+			end
+			GM.Ledger.Record("codout", { itemID = it.id,
+				qty = it.qty, cod = share, to = step.to })
+		else
+			GM.Ledger.Record("mailout", { itemID = it.id,
+				qty = it.qty, to = step.to })
+		end
+	end
+	if step.money and step.money > 0 then
+		GM.Ledger.Record("mailgold",
+			{ qty = step.money, to = step.to })
+	end
+	return true
+end
+
 -- mail: attach one stack per click; when qty worth of attachments is
 -- in, the click sends. getSendMailItem counts what's attached.
 local function DoMail(step)
@@ -387,12 +446,7 @@ local function DoMail(step)
 		attached = attached + (q or 0)
 	end
 	if attached >= step.qty then
-		SendMail(step.to, (GM.ItemName(step.itemID) or "items")
-			.. " ×" .. attached)
-		-- items left our hands — basis rides ext (Ledger mailout)
-		GM.Ledger.Record("mailout", { itemID = step.itemID,
-			qty = attached, to = step.to })
-		return true
+		return DoMailSend(step)
 	end
 	local slot
 	for _, s in ipairs(Slots("bags")) do
@@ -453,6 +507,7 @@ end
 function B.Execute(step)
 	local fn = step.kind == "move" and DoMove
 		or step.kind == "mail" and DoMail
+		or step.kind == "mailsend" and DoMailSend
 		or step.kind == "mailcollect" and DoMailCollect
 	if not fn then return end
 	local ok, reason = fn(step)

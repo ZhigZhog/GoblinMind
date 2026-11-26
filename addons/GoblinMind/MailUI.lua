@@ -553,16 +553,8 @@ function MU.Send()
 	end
 	local copper = ui.money:GetCopper() or 0
 	if copper < 0 then copper = 0 end
+	local isCod = ui.cod and ui.cod:GetChecked()
 	local name = GetSendMailItem and GetSendMailItem(1)
-	if copper > 0 then
-		-- COD checked -> payment-on-delivery; unchecked -> money send.
-		-- SetSendMailCOD is live-verified on Forever (codprobe)
-		if ui.cod and ui.cod:GetChecked() then
-			pcall(SetSendMailCOD, copper)
-		else
-			pcall(SetSendMailMoney, copper)
-		end
-	end
 	-- hint strings survive unfocused boxes — treat them as empty
 	local subj = strtrim(ui.subject and ui.subject:GetText() or "")
 	if subj == "" or subj == SUBJ_HINT then
@@ -570,12 +562,12 @@ function MU.Send()
 	end
 	local body = strtrim(ui.body and ui.body:GetText() or "")
 	if body == BODY_HINT then body = "" end
-	local ok, err = pcall(SendMail, to, subj, body)
-	if ok then
-		PushRecent(to)
-	else
-		GM.Print(GM.CC("err") .. "SendMail: " .. tostring(err) .. "|r")
-	end
+	-- the spine owns the send: COD/money hooks, per-item mailout /
+	-- codout journal legs, bag-diff verification
+	local ok = GM.Ops.SendMail({ to = to, subject = subj, body = body,
+		cod = isCod and copper > 0 and copper or nil,
+		money = not isCod and copper > 0 and copper or nil })
+	if ok then PushRecent(to) end
 	MU.Refresh()
 end
 

@@ -180,15 +180,68 @@ function O.Mail(ctx, a)
 	ctx = AsCtx(ctx)
 	local ok, reason = O.Check(ctx, "mail", a)
 	if not ok then return fail(reason) end
+	local ekind = (a.cod and a.cod > 0) and "codout" or "mailout"
 	if GM.Ledger and GM.Ledger.Expect then
-		GM.Ledger.Expect(ctx, { kind = "mailout",
+		GM.Ledger.Expect(ctx, { kind = ekind,
 			qty = a.qty or 1, dir = "out" })
 	end
 	local r = GM.Banking.Execute({ kind = "mail", itemID = ctx.id,
 		qty = a.qty or 1, to = a.to, cod = a.cod })
 	if r == nil and GM.Ledger and GM.Ledger.Unexpect then
-		GM.Ledger.Unexpect(ctx.id, "mailout") end
+		GM.Ledger.Unexpect(ctx.id, ekind) end
 	return r
+end
+
+-- compose-send — the mail window's SEND button: attachments already
+-- sit in send slots (possibly several item types), letter fields and
+-- a COD/gold amount ride the one request. Expectations register per
+-- attached item so the bag diff verifies the send exactly like a
+-- planner mail; a send that never happens unexpects them all.
+function O.SendMail(a)
+	a = a or {}
+	if not (MailFrame and MailFrame:IsShown()) then
+		return fail("mailbox is closed")
+	end
+	if not (a.to and a.to ~= "") then
+		return fail("mail needs a recipient")
+	end
+	local items = {}
+	if GetSendMailItem then
+		for i = 1, 12 do
+			local ret = { GetSendMailItem(i) }
+			local id = tonumber(ret[2])
+			if ret[1] or id then
+				items[#items + 1] = { id = id,
+					qty = tonumber(ret[#ret]) or 1 }
+			end
+		end
+	end
+	if #items == 0 then
+		if (a.cod or 0) > 0 then
+			return fail("COD needs an item attached")
+		end
+		if not (a.money and a.money > 0) then
+			return fail("nothing to send")
+		end
+	end
+	local ekind = (a.cod and a.cod > 0) and "codout" or "mailout"
+	if GM.Ledger and GM.Ledger.Expect then
+		for _, it in ipairs(items) do
+			if it.id then
+				GM.Ledger.Expect({ id = it.id }, { kind = ekind,
+					qty = it.qty, dir = "out" })
+			end
+		end
+	end
+	local r = GM.Banking.Execute({ kind = "mailsend", to = a.to,
+		subject = a.subject, body = a.body,
+		cod = a.cod, money = a.money })
+	if r == nil and GM.Ledger and GM.Ledger.Unexpect then
+		for _, it in ipairs(items) do
+			if it.id then GM.Ledger.Unexpect(it.id, ekind) end
+		end
+	end
+	return r ~= nil and r ~= false
 end
 
 -- sell to the open merchant
