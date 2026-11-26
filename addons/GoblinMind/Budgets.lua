@@ -277,7 +277,48 @@ function B.Rename(i, name)
 end
 function B.ResetSpent(i)
 	local a = DB()[i]
-	if a then a.spent, a.income, a.xfer = 0, 0, 0 B.Sample() end
+	if not a then return end
+	-- zeroing xfer without a journal leg orphans the acct:<name>
+	-- memo — the audit's xfer/journal check fails forever after.
+	-- Journal the balancing transfer against the "reset" account
+	-- so the envelope counter and the bank statement move together
+	local x = floor(a.xfer or 0)
+	if x ~= 0 and GM.Ledger and GM.Ledger.Record then
+		if x > 0 then
+			GM.Ledger.Record("transfer",
+				{ from = a.name, to = "reset", amt = x })
+		else
+			GM.Ledger.Record("transfer",
+				{ from = "reset", to = a.name, amt = -x })
+		end
+	end
+	a.spent, a.income, a.xfer = 0, 0, 0
+	B.Sample()
+end
+
+-- one-shot self-heal at init: envelopes whose xfer counter drifted
+-- from the journal's acct:<name> replay (a reset that predates the
+-- balancing leg above, a renamed envelope) get an opening-equity
+-- transfer — from/to "reconcile" — so the two agree again
+function B.ReconcileXfer()
+	if not (GM.Ledger and GM.Ledger.Record
+		and GM.Ledger.Accounts) then return end
+	local replay = GM.Ledger.Accounts()
+	for _, a in ipairs(DB()) do
+		if not a.pool and IsSelf(a) then
+			local rep = replay["acct:" .. (a.name or "?")] or 0
+			local delta = floor((a.xfer or 0) - rep)
+			if math.abs(delta) > 0 then
+				if delta > 0 then
+					GM.Ledger.Record("transfer", {
+						from = "reconcile", to = a.name, amt = delta })
+				else
+					GM.Ledger.Record("transfer", {
+						from = a.name, to = "reconcile", amt = -delta })
+				end
+			end
+		end
+	end
 end
 
 function B.SetKind(i, kind)
@@ -740,6 +781,7 @@ function B.Init()
 		tinsert(DB(), { name = myName, kind = "ah", pool = true,
 			spent = 0, income = 0, c = me })
 	end
+	B.ReconcileXfer()
 	B.Sample()
 	-- PLAYER_MONEY keeps the registry's gold cell live between
 	-- samples — the combined strip reads it every repaint

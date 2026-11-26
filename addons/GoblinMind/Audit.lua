@@ -127,7 +127,10 @@ check("envelope transfers", function()
 			n = n + 1
 			local rep = replay["acct:" .. (a.name or "?")] or 0
 			if math.abs((a.xfer or 0) - rep) > 0.5 then
-				mismatched[#mismatched + 1] = a.name or "?"
+				mismatched[#mismatched + 1] = format(
+					"%s(env %s·journal %s)", a.name or "?",
+					GM.MoneyShort(a.xfer or 0),
+					GM.MoneyShort(rep))
 			end
 		end
 	end
