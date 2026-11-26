@@ -879,7 +879,24 @@ function W.PopupMenu(btn, entries, opts)
 		host._gmMenu = m
 	end
 	if not (entries and #entries > 0) then return end
-	local w = opts.w or 220
+	-- auto-size to the widest entry when no explicit width is given —
+	-- dynamic content (group paths) runs long; the cap stops a
+	-- monster entry from eating the screen
+	local w = opts.w
+	if not w then
+		local probe = m._probe
+		if not probe then
+			probe = GM.MakeFontString(m, GM.FONT, 10, "text")
+			m._probe = probe
+		end
+		w = 160
+		for _, e in ipairs(entries) do
+			probe:SetText((opts.raw or e.raw) and e.label
+				or LT(e.label))
+			w = math.max(w, math.ceil(probe:GetStringWidth()) + 24)
+		end
+		w = math.min(w, opts.maxW or 420)
+	end
 	local MAX = opts.maxRows or 14
 	local vis = math.min(#entries, MAX)
 	m.btns = m.btns or {}
@@ -1181,7 +1198,7 @@ function W.AcctRow(parent, idx, compact)
 			}
 		end
 		W.PopupMenu(grp, entries,
-			{ w = math.max(160, grpW + 40), raw = true })
+			{ raw = true, maxW = 560 })
 	end)
 	W.Tip(grp, function() return {
 		"Group binding",
