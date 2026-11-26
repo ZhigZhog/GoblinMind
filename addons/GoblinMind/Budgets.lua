@@ -544,6 +544,17 @@ end
 local HIST_CAP = 200
 function B.Sample()
 	StampChar()
+	-- every budget mutation funnels here — coalesce a repaint of the
+	-- account surfaces so rows can't read stale between events (a
+	-- buy's debit once painted "spent 0c" for a full minute because
+	-- nothing re-ran the paint). Early returns below only gate the
+	-- wealth-series append; the mutation already happened.
+	if GM.View and GM.View.Coalesced then
+		GM.View.Coalesced("accts", function()
+			GM.View.Refresh("planner")
+			GM.View.Refresh("overview")
+		end)
+	end
 	local t = time()
 	for _, a in ipairs(DB()) do
 		a.hist = a.hist or {}
