@@ -1019,7 +1019,10 @@ local function Toggle()
 			if ns ~= (ui.scroll or 0) then
 				ui.scroll = ns
 				ui.clip:SetVerticalScroll(ns)
-				Refresh()
+				-- lite: the map pane doesn't move on scroll —
+				-- a full Refresh repaints every cluster icon
+				-- per wheel step
+				Refresh(true)
 			end
 		end
 		ui:EnableMouseWheel(true)
@@ -1266,6 +1269,12 @@ end
 
 function UI.Hide()
 	if ui then ui:Hide() end
+	-- solves are cache-only — dropping the queue just re-enqueues
+	-- on next open; draining it with nobody watching was the
+	-- "keeps lagging after close" half of the load complaint
+	if GM.Gather and GM.Gather.CancelSolves then
+		GM.Gather.CancelSolves()
+	end
 end
 
 function UI.IsShown()

@@ -200,6 +200,12 @@ local NODE_MERGE_YD = 14    -- one record ≈ one spawn point: routes
 local ZONE_MERGE_YD = 150   -- kills this close join one farm zone
 local LINK_YD = 250         -- route-solver component link distance
 local DEFAULT_YPU = 1500    -- yards per normalized map unit (fallback)
+local SOLVE_PTS_MAX = 350   -- past this the O(n^2) solver passes
+                            -- chunk frames; collapse to POIs first
+local POI_YD = 45           -- sparsify cell: spawns this close act
+                            -- as one route stop anyway
+local PUMP_MS = 60          -- background solve budget/tick (BUILD
+                            -- gets the full 200ms)
 local GATHER_SEC = 2.5      -- gather cast + loot time per stop
 local RESPAWN_PRIOR = 900   -- node respawn prior (learned bound wins)
 local ARRIVE_YD = 20        -- waypoint advance radius
@@ -1279,6 +1285,12 @@ local function BuildLoop(set, pts, evs, ctx)
 	local used = { [set[1]] = true }
 	local cur = set[1]
 	for _ = 2, #set do
+		-- the O(k^2) scan has no other bound — a sparsified field
+		-- still costs tens of ms; past the deadline this candidate
+		-- just doesn't score
+		if ctx.deadline and PerfNow() > ctx.deadline then
+			return nil
+		end
 		local best, bd
 		for _, i in ipairs(set) do
 			if not used[i] then
@@ -1296,6 +1308,36 @@ local function BuildLoop(set, pts, evs, ctx)
 		order = order, gpm = gpm, lapSec = lapSec,
 		yards = yards, evLoop = evEff,
 	}
+end
+
+-- collapse huge imported fields into points-of-interest: the
+-- component/NN passes below are O(n^2) and GatherLite imports run
+-- to thousands of records (6k spawns = 40M pair loops — seconds
+-- in one frame). A route only needs WHERE to go: cells sum their
+-- EV and keep the first record as rep so solved stops stay real
+-- node refs
+local function Sparsify(pts, evs, yd)
+	local cell = {}
+	local spts, sevs = {}, {}
+	for i, nd in ipairs(pts) do
+		local gx, gy, tag
+		if nd.n then
+			gx, gy, tag = nd.n, nd.w, "w" .. (nd.c or 0)
+		else
+			gx, gy, tag = (nd.x or 0) * DEFAULT_YPU,
+				(nd.y or 0) * DEFAULT_YPU, "m" .. (nd.map or 0)
+		end
+		local k = tag .. ":" .. floor(gx / yd) .. ":" .. floor(gy / yd)
+		local rep = cell[k]
+		if rep then
+			sevs[rep] = sevs[rep] + evs[i]
+		else
+			tinsert(spts, nd)
+			tinsert(sevs, evs[i])
+			cell[k] = #spts
+		end
+	end
+	return spts, sevs
 end
 
 -- union-find components under LINK_YD so detached spawn pockets
@@ -1368,7 +1410,7 @@ solvePump:SetScript("OnUpdate", function()
 	local job = tremove(solveQ)
 	if not job then solvePump:Hide() return end
 	solveSeen[job.key] = nil
-	G.SolveRoute(job.map, job.kind) -- writes through the cache
+	G.SolveRoute(job.map, job.kind, PUMP_MS) -- writes through the cache
 	local now = GetTime()
 	-- stream the repaint: at most 4/s while draining, always on
 	-- the last job so the final set lands promptly
@@ -1390,15 +1432,26 @@ local function SolveCached(map, kind)
 	return e and e.r
 end
 
+-- drop pending work when the last consumer goes away (gather
+-- window closed) — results are cache-only, a miss just re-enqueues
+-- on the next Leaderboard
+function G.CancelSolves()
+	for i = #solveQ, 1, -1 do solveQ[i] = nil end
+	for k in pairs(solveSeen) do solveSeen[k] = nil end
+	solvePump:Hide()
+end
+
 -- the synchronous entry point (BUILD button, pump, tests): serve
--- a fresh cache hit, else solve now and write through
-function G.SolveRoute(map, kind)
+-- a fresh cache hit, else solve now and write through. ms bounds
+-- the solve's internal passes — pump jobs run tighter than a
+-- button press so the background drain can't hitch frames
+function G.SolveRoute(map, kind, ms)
 	local key = SolveKey(map, kind)
 	local e = solveCache[key]
 	if e and GetTime() - e.t < SOLVE_TTL then
 		return e.r
 	end
-	local r = SolveNow(map, kind)
+	local r = SolveNow(map, kind, ms)
 	solveCache[key] = { t = GetTime(), r = r }
 	return r
 end
@@ -1407,7 +1460,7 @@ end
 -- steady-state GPM under the given transport speed + learned
 -- respawn. Stops in the result are node record refs — they survive
 -- a later Solve without index remapping.
-function SolveNow(map, kind)
+function SolveNow(map, kind, ms)
 	local list = NodeList(map)
 	if not list then return nil end
 	local pts, evs = {}, {}
@@ -1451,12 +1504,22 @@ function SolveNow(map, kind)
 		}
 	end
 
+	-- thousands of imported spawns make every O(n^2) pass below
+	-- frame-killing — collapse to POIs first (EVs sum, stops stay
+	-- real node refs)
+	local py = POI_YD
+	for _ = 1, 6 do
+		if #pts <= SOLVE_PTS_MAX then break end
+		pts, evs = Sparsify(pts, evs, py)
+		py = py * 2
+	end
+
 	local ctx = {
 		speed = G.SPEEDS[db.speedIx or 2].yps,
 		respawn = G.RespawnSec(map, kind),
-		-- 200ms cap per solve: candidate loops share the budget, so
+		-- ms cap per solve: candidate loops share the budget, so
 		-- 30 scattered pockets can't each burn their own
-		deadline = PerfNow() + 200,
+		deadline = PerfNow() + (ms or 200),
 	}
 
 	-- candidate sets: every component alone, greedy merges while
@@ -1466,6 +1529,7 @@ function SolveNow(map, kind)
 	table.sort(comps, function(a, b) return #a > #b end)
 	local best, merged
 	for _, c in ipairs(comps) do
+		if PerfNow() > ctx.deadline then break end
 		local r = BuildLoop(c, pts, evs, ctx)
 		if r and (not best or r.gpm > best.gpm) then
 			best, merged = r, c
@@ -1487,10 +1551,12 @@ function SolveNow(map, kind)
 			end
 		end
 	end
-	local all = {}
-	for i = 1, #pts do tinsert(all, i) end
-	local r = BuildLoop(all, pts, evs, ctx)
-	if r and (not best or r.gpm > best.gpm) then best = r end
+	if PerfNow() <= ctx.deadline then
+		local all = {}
+		for i = 1, #pts do tinsert(all, i) end
+		local r = BuildLoop(all, pts, evs, ctx)
+		if r and (not best or r.gpm > best.gpm) then best = r end
+	end
 	if not best then return nil end
 
 	-- translate order indices into node refs — the route keeps

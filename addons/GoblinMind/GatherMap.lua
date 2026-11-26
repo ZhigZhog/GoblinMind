@@ -193,15 +193,30 @@ end
 -- layer's tighter merge already ran, this just thins pin spam
 local function Cluster(nodes, xy, thresh)
 	local out = {}
+	-- spatial hash, cell = thresh: a centroid within thresh can
+	-- only live in the 9 neighboring cells, so each record scans a
+	-- handful of clusters instead of all of them. The O(n^2) scan
+	-- chunked for seconds on imported fields of several thousand
+	-- spawn records — one cell per record would be ~40M compares
+	local grid = {}
+	local t2 = thresh * thresh
 	for _, nd in ipairs(nodes) do
 		local x, y = xy(nd)
 		if x then
+			local cx, cy = floor(x / thresh), floor(y / thresh)
 			local hit
-			for _, c in ipairs(out) do
-				local dx, dy = x - c.x, y - c.y
-				if dx * dx + dy * dy < thresh * thresh then
-					hit = c break
+			for dx = -1, 1 do
+				for dy = -1, 1 do
+					local l = grid[(cx + dx) .. ":" .. (cy + dy)]
+					for _, c in ipairs(l or {}) do
+						local ddx, ddy = x - c.x, y - c.y
+						if ddx * ddx + ddy * ddy < t2 then
+							hit = c break
+						end
+					end
+					if hit then break end
 				end
+				if hit then break end
 			end
 			if hit then
 				hit.x = (hit.x * hit.n + x) / (hit.n + 1)
@@ -209,7 +224,12 @@ local function Cluster(nodes, xy, thresh)
 				hit.n = hit.n + 1
 				hit.nodes[#hit.nodes + 1] = nd
 			else
-				out[#out + 1] = { x = x, y = y, n = 1, nodes = { nd } }
+				local c = { x = x, y = y, n = 1, nodes = { nd } }
+				out[#out + 1] = c
+				local k = cx .. ":" .. cy
+				local l = grid[k]
+				if not l then l = {} grid[k] = l end
+				l[#l + 1] = c
 			end
 		end
 	end
@@ -253,11 +273,23 @@ local function MapXY(p, mapID)
 	if p.x and p.y and (not p.map or p.map == mapID) then
 		return p.x, p.y
 	end
-	-- x,y-only foreign record: hop through its own map frame
+	-- x,y-only foreign record: hop through its own map frame.
+	-- Memoized like the n,w branch — two pcall'd APIs per record
+	-- per draw was the same several-seconds problem on foreign
+	-- records (a custom zone's whole field re-projects every tick)
 	if p.x and p.y and p.map and p.map ~= mapID then
+		local pc = projCache[p]
+		if pc and pc.m == mapID and pc.fx == p.x and pc.fy == p.y then
+			return pc.x, pc.y
+		end
 		local n, w, c = GM.WorldPos(p.map, p.x, p.y)
 		if n then
-			return GM.MapPos(c or 0, n, w, mapID)
+			local mx, my = GM.MapPos(c or 0, n, w, mapID)
+			if mx then
+				projCache[p] = { m = mapID, fx = p.x, fy = p.y,
+					x = mx, y = my }
+			end
+			return mx, my
 		end
 		return -- proven foreign: raw x,y would draw in the wrong spot
 	end
