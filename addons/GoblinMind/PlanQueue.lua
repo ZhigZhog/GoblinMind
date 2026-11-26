@@ -1874,8 +1874,17 @@ end
 -- from AUCTION_HOUSE_SHOW flipping GM.AH.open
 local mev = CreateFrame("Frame")
 pcall(mev.RegisterEvent, mev, "MERCHANT_SHOW")
+pcall(mev.RegisterEvent, mev, "MERCHANT_UPDATE")
 pcall(mev.RegisterEvent, mev, "MERCHANT_CLOSED")
-mev:SetScript("OnEvent", function() PQ.Refresh() end)
+mev:SetScript("OnEvent", function(_, e)
+	PQ.Refresh()
+	if e == "MERCHANT_SHOW" then
+		-- the event precedes MerchantFrame:IsShown() — the instant
+		-- repaint can still read the merchant as closed and gray the
+		-- button; re-check on a beat (same race BANKFRAME_OPENED has)
+		GM.Time.After(0.3, function() PQ.Refresh() end)
+	end
+end)
 
 -- pinned: the planner never hides on Switch — the mode keys
 -- (dash/plan) are the only navigation onto it, and tabbing to any
