@@ -601,7 +601,12 @@ end
 
 -- trend sampling: remaining-balance history per account plus a
 -- free-gold series — capped rolling buffers in the SV
-local HIST_CAP = 200
+-- 60s sample buckets bound density at 1440/day regardless of burst
+-- rate (a buy-spree writes one mutation-sample per buy without it);
+-- the cap then guarantees >7d of coverage at maximum density so the
+-- chart's 7D window always has something to zoom into
+local MIN_SAMPLE_GAP = 60
+local HIST_CAP = 12000
 function B.Sample()
 	StampChar()
 	-- every budget mutation funnels here — coalesce a repaint of the
@@ -624,7 +629,12 @@ function B.Sample()
 		-- envelope's hole is real history, not a flat zero. Collapse
 		-- same-value adjacent samples so a flat week doesn't push
 		-- real movement out of the window
-		if n == 0 or h[n].v ~= B.Balance(a) or t - h[n].t > 3600 then
+		if n > 0 and t - h[n].t <= MIN_SAMPLE_GAP then
+			local last = h[n]
+			last.v, last.inc, last.out = B.Balance(a),
+				a.income or 0, a.spent or 0
+		elseif n == 0 or h[n].v ~= B.Balance(a)
+			or t - h[n].t > 3600 then
 			h[n + 1] = { t = t, v = B.Balance(a),
 				inc = a.income or 0, out = a.spent or 0 }
 			if #h > HIST_CAP then tremove(h, 1) end
@@ -633,7 +643,9 @@ function B.Sample()
 	local f = GM.db.budgetFree
 	if not f then f = {} GM.db.budgetFree = f end
 	local free = B.Free()
-	if #f == 0 or f[#f].v ~= free or t - f[#f].t > 3600 then
+	if #f > 0 and t - f[#f].t <= MIN_SAMPLE_GAP then
+		f[#f].v = free
+	elseif #f == 0 or f[#f].v ~= free or t - f[#f].t > 3600 then
 		f[#f + 1] = { t = t, v = free }
 		if #f > HIST_CAP then tremove(f, 1) end
 	end
@@ -665,7 +677,11 @@ function B.Sample()
 	-- loaded yet" is unknown, not zero: skip until the load ran.
 	if GM.Inventory.OwnedLoaded
 		and not GM.Inventory.OwnedLoaded() then return end
-	if #w == 0 or w[#w].g ~= gold or w[#w].a ~= posted
+	if #w > 0 and t - w[#w].t <= MIN_SAMPLE_GAP then
+		local last = w[#w]
+		last.g, last.a, last.h, last.r, last.c =
+			gold, posted, held, rcbl, GM.CharKey()
+	elseif #w == 0 or w[#w].g ~= gold or w[#w].a ~= posted
 		or w[#w].h ~= held or (w[#w].r or 0) ~= rcbl
 		or t - w[#w].t > 3600 then
 		-- c: the sampler char — wealth is per-char by nature and

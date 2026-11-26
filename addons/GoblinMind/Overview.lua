@@ -547,6 +547,24 @@ function OV.RefreshChart()
 	local axisMin = (ui.chartWin ~= "ALL") and cutoff or tMin
 	tMax = math.max(tMax, axisMin + 600)
 
+	-- drawing is bounded by pixels, not samples: samples sharing a
+	-- destination column collapse to the column's last write (the
+	-- terminal state the step line lands on). ~14 samples fall
+	-- inside one pixel at 7D — and a 12k-sample week would paint
+	-- ~24k textures without this
+	local function Decimate(pts)
+		if #pts <= 1 then return pts end
+		local out, lastCol = {}, nil
+		for _, p in ipairs(pts) do
+			local col = math.floor(
+				(p.t - axisMin) / (tMax - axisMin) * w)
+			if col == lastCol then out[#out] = p
+			else out[#out + 1] = p lastCol = col end
+		end
+		return out
+	end
+	local drawHist = Decimate(hist)
+
 	-- normalize the Y range to the sample band + padding: a
 	-- 0-pinned axis compresses the line into a ceiling sliver once
 	-- wealth sits well above zero. Robust edges — Tukey fences at
@@ -609,7 +627,7 @@ function OV.RefreshChart()
 	local cc = { cr, cg, cb }
 	local ar, ag, ab = cr * 0.22, cg * 0.22, cb * 0.22
 	local px, pgy, pwv
-	for _, p in ipairs(hist) do
+	for _, p in ipairs(drawHist) do
 		local x = gx + (p.t - axisMin) / (tMax - axisMin) * w
 		local yg = math.max(gy, wy(p.g or 0))
 		local yw = math.min(gy + h, wy((p.g or 0) + (p.a or 0)))
@@ -655,7 +673,7 @@ function OV.RefreshChart()
 		end
 		s.cc = { cr * s.shade, cg * s.shade, cb * s.shade }
 		local ax, ayv
-		for _, p in ipairs(pts) do
+		for _, p in ipairs(Decimate(pts)) do
 			local x = gx + (p.t - axisMin) / (tMax - axisMin) * w
 			local y = ay(p.v)
 			if ax then
@@ -672,7 +690,7 @@ function OV.RefreshChart()
 	-- the wealth line: step-interpolated W(t) — flat runs + vertical
 	-- jumps, honest to the samples
 	px, pwv = nil, nil
-	for _, p in ipairs(hist) do
+	for _, p in ipairs(drawHist) do
 		local x = gx + (p.t - axisMin) / (tMax - axisMin) * w
 		local yw = wy((p.g or 0) + (p.a or 0))
 		if px then
