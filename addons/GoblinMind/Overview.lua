@@ -506,7 +506,7 @@ function OV.RefreshChart()
 		end
 		if sell > 0 or buy > 0 then
 			local realized = (sell - buy) * 86400 / span
-			ui.kpiFlow:SetText(GM.CC("textDim") .. "realized |r"
+			ui.kpiFlow:SetText(GM.CC("textDim") .. "trading |r"
 				.. GM.Signed(realized) .. GM.CC("textDim")
 				.. "/d · reval |r" .. GM.Signed(slope * 86400 - realized)
 				.. GM.CC("textDim") .. "/d|r")
@@ -1073,12 +1073,16 @@ local function Build()
 	ui.kpiDelta = GM.MakeFontString(chart, GM.FONT, 9, "textDim")
 	ui.kpiDelta:SetPoint("TOPLEFT", 10, -40)
 	ui.kpiDelta:SetWordWrap(false)
-	ui.kpiFlow = GM.MakeFontString(chart, GM.FONT, 8, "textDim")
-	ui.kpiFlow:SetPoint("BOTTOM", chart, "BOTTOM", 0, 6)
-	ui.kpiFlow:SetWordWrap(false)
+	-- footer strip stacks two rows above the time labels: ledger
+	-- (anchor) then flow CHAINED to its right edge — a long ledger
+	-- line pushes flow rather than painting through it; past the
+	-- gutter labels (x<52) and above the time row (y<12)
 	ui.kpiLedger = GM.MakeFontString(chart, GM.FONT, 8, "textDim")
-	ui.kpiLedger:SetPoint("BOTTOMLEFT", chart, "BOTTOMLEFT", 8, 6)
+	ui.kpiLedger:SetPoint("BOTTOMLEFT", chart, "BOTTOMLEFT", 56, 12)
 	ui.kpiLedger:SetWordWrap(false)
+	ui.kpiFlow = GM.MakeFontString(chart, GM.FONT, 8, "textDim")
+	ui.kpiFlow:SetPoint("LEFT", ui.kpiLedger, "RIGHT", 10, 0)
+	ui.kpiFlow:SetWordWrap(false)
 	-- window segments: filter the sampled window (ALL = whole buffer)
 	ui.chartWin = "ALL"
 	ui.winSegs = {}
