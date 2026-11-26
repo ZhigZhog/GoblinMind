@@ -200,6 +200,10 @@ end
 -- ("Banded Girdle of the Bear") — the bare itemID can only give the
 -- base name
 local function TxName(e)
+	if e.ty == "transfer" then
+		return format("%s → %s", e.x and e.x.from or "?",
+			e.x and e.x.to or "?")
+	end
 	return (e.x and e.x.nm)
 		and ((GM.QHex(e.i) or "") .. e.x.nm .. "|r")
 		or QName(e.i)
@@ -302,6 +306,7 @@ local TX_LABEL = {
 	mailout = "Mail out", destroy = "Destroyed",
 	craftout = "Craft in", craftin = "Crafted",
 	loot = "Looted", bid = "Bid", bidwon = "Bid won",
+	transfer = "Transfer",
 }
 
 local function DisplayList(ck)
@@ -343,12 +348,14 @@ function OV.RefreshLog(vm)
 						or (e.ty == "cancel" or e.ty == "expire")
 							and " lost" or ""))
 				or ""
-			fs:SetText(format("%s  %s %s · %s ×%d%s%s",
+			fs:SetText(format("%s  %s %s · %s%s%s%s",
 				date("%H:%M", e.t),
 				e.ty == "sell" and GM.CC("pos") or
 					e.ty == "buy" and GM.CC("warn") or GM.CC("textDim"),
 				TX_LABEL[e.ty] or e.ty,
-				TxName(e), e.q,
+				TxName(e),
+				e.ty == "transfer" and (" " .. GM.Money(e.q))
+					or (" ×" .. e.q),
 				money and (" · " .. GM.Money(money)) or "", depTxt))
 		end
 	end
@@ -640,6 +647,8 @@ end
 -- debit (money/value arriving), negative = credit
 local JE_ORDER = { "cash", "stock", "posted", "dep", "rcbl",
 	"wip", "pnl", "ext" }
+local JE_SET = {}
+for _, a in ipairs(JE_ORDER) do JE_SET[a] = true end
 
 local function PaintJournalRow(r, e)
 	local money = e.u and e.u * e.q
@@ -647,16 +656,31 @@ local function PaintJournalRow(r, e)
 	r[2]:SetText((e.ty == "sell" and GM.CC("pos") or
 		e.ty == "buy" and GM.CC("warn") or GM.CC("textDim"))
 		.. (TX_LABEL[e.ty] or e.ty) .. "|r")
-	r[3]:SetText(format("%s ×%d%s", TxName(e), e.q,
-		money and (" · " .. GM.Money(money)) or ""))
+	if e.ty == "transfer" then
+		r[3]:SetText(format("%s · %s", TxName(e), GM.Money(e.q)))
+	else
+		r[3]:SetText(format("%s ×%d%s", TxName(e), e.q,
+			money and (" · " .. GM.Money(money)) or ""))
+	end
 	if e.je then
-		local dr, cr = {}, {}
+		local dr, cr, extra = {}, {}, {}
 		for _, a in ipairs(JE_ORDER) do
 			local d = e.je[a]
 			if d and d ~= 0 then
 				tinsert(d > 0 and dr or cr,
 					a .. " " .. GM.MoneyShort(math.abs(d)))
 			end
+		end
+		-- memo legs (transfer's acct:* keys) render after the real
+		-- accounts — they net to zero inside the tx
+		for a, d in pairs(e.je) do
+			if not JE_SET[a] and d ~= 0 then tinsert(extra, a) end
+		end
+		sort(extra)
+		for _, a in ipairs(extra) do
+			local d = e.je[a]
+			tinsert(d > 0 and dr or cr,
+				a .. " " .. GM.MoneyShort(math.abs(d)))
 		end
 		r[4]:SetText(table.concat(dr, " · "))
 		r[5]:SetText(table.concat(cr, " · "))

@@ -80,6 +80,35 @@ end
 -- under focus, not a shifted control.
 -- f.pad reserves leading width the field must not cover (crest
 -- icons) — callers measure it exactly, never guess a constant.
+-- One field open at a time, bank-form semantics: opening a second
+-- field or clicking anywhere outside validates+commits the first
+-- (the commit callback owns validation — reject = no write), Enter
+-- commits, Esc cancels. Native editbox focus exclusion covers
+-- clicks into other text fields; a screen-wide catcher covers the
+-- rest.
+local openField, editCatcher
+local function EditCatcher()
+	if editCatcher then return editCatcher end
+	editCatcher = CreateFrame("Button", nil, UIParent)
+	editCatcher:SetAllPoints(UIParent)
+	editCatcher:SetFrameStrata("FULLSCREEN_DIALOG")
+	editCatcher:SetScript("OnClick", function()
+		if openField then openField.Finish(true) end
+	end)
+	return editCatcher
+end
+local function CloseField(eb, save)
+	if openField ~= eb then return end
+	openField = nil
+	eb._finishing = true
+	eb:Hide()
+	eb:ClearFocus()
+	eb._finishing = nil
+	if editCatcher then editCatcher:Hide() end
+	local cb = eb._commit
+	eb._commit = nil
+	if save and cb then cb(eb:GetText()) end
+end
 function W.EditableLabel(parent, w)
 	local f = CreateFrame("Button", nil, parent)
 	f:SetSize(w, 18)
@@ -91,8 +120,10 @@ function W.EditableLabel(parent, w)
 	label:SetWordWrap(false)
 	f.label = label
 	-- the box is a sibling of the label button so its left edge can
-	-- overhang by the text inset without clipping
+	-- overhang by the text inset without clipping. Top strata: it
+	-- must draw above the click-off catcher while it's open.
 	local eb = W.EditBox(parent, w)
+	eb:SetFrameStrata("FULLSCREEN_DIALOG")
 	eb:Hide()
 	f.eb = eb
 	-- pad shifts the field's TEXT origin — the box edge sits
@@ -103,26 +134,32 @@ function W.EditableLabel(parent, w)
 		eb:SetWidth(w - f.pad + 6)
 	end
 	f.Layout()
+	function eb.Finish(save) CloseField(eb, save) end
 	-- Open(plain, commit): show the field with the unadorned text;
-	-- Enter fires commit(text), Esc cancels — both drop back to the
-	-- label
+	-- Enter commits, Esc cancels — both drop back to the label
 	function f.Open(plain, commit)
+		if openField and openField ~= eb then
+			openField.Finish(true)
+		end
+		local c = EditCatcher()
 		eb:SetText(plain or "")
 		eb:SetTextColor(GM.RGB("text"))
 		eb._commit = commit
+		openField = eb
+		c:Show()
+		eb:SetFrameLevel(c:GetFrameLevel() + 1)
 		eb:Show()
 		eb:SetFocus()
 		eb:HighlightText()
 	end
-	eb:SetScript("OnEnterPressed", function(self)
-		local cb = self._commit
-		self:Hide()
-		self:ClearFocus()
-		if cb then cb(self:GetText()) end
-	end)
-	eb:SetScript("OnEscapePressed", function(self)
-		self:Hide()
-		self:ClearFocus()
+	eb:SetScript("OnEnterPressed", function() eb.Finish(true) end)
+	eb:SetScript("OnEscapePressed", function() eb.Finish(false) end)
+	eb:SetScript("OnEditFocusLost", function()
+		-- losing focus to anything but our own close path is a
+		-- click-off: validate + commit, don't silently cancel
+		if not eb._finishing and openField == eb then
+			eb.Finish(true)
+		end
 	end)
 	return f
 end
@@ -845,6 +882,107 @@ function W.PopupMenu(btn, entries, opts)
 	m.catcher:Show()
 end
 
+-- forward decl: XferOpen/AcctRow/AcctAdd all repaint through it;
+-- defined below near AcctRow
+local AcctRefresh
+
+-- account-to-account transfer popover: amount + destination
+-- dropdown + SEND, bank-app style. One per host panel, re-anchored
+-- under the row that opened it; the PopupMenu catcher-dismiss
+-- pattern. B.Transfer owns validation — a rejected send flashes
+-- the amount red (bad input or insufficient funds).
+function W.XferOpen(row, fromIdx)
+	local p = row:GetParent()
+	local pop = p._gmXfer
+	if not pop then
+		local catcher = CreateFrame("Button", nil, p)
+		catcher:SetAllPoints(UIParent)
+		catcher:SetFrameLevel(p:GetFrameLevel() + 39)
+		pop = CreateFrame("Frame", nil, p)
+		pop:SetSize(256, 50)
+		pop:SetFrameLevel(p:GetFrameLevel() + 40)
+		GM.Panel(pop, "contLow", "outline")
+		pop.catcher = catcher
+		catcher:SetScript("OnClick", function()
+			pop:Hide() catcher:Hide()
+		end)
+		local title = GM.MakeFontString(pop, GM.FONT_MED, 9, "secondary")
+		title:SetPoint("TOPLEFT", 8, -6)
+		pop.title = title
+		local amt = W.EditBox(pop, 80, "0g")
+		amt:SetPoint("TOPLEFT", 8, -26)
+		pop.amt = amt
+		local toLbl = GM.MakeFontString(pop, GM.FONT, 9, "textDim")
+		toLbl:SetPoint("LEFT", amt, "RIGHT", 6, 0)
+		toLbl:SetText(LT("to"))
+		local dest = CreateFrame("Button", nil, pop)
+		dest:SetSize(96, 20)
+		dest:SetPoint("LEFT", toLbl, "RIGHT", 4, 0)
+		GM.Panel(dest, "contMedium")
+		dest.text = GM.MakeFontString(dest, GM.FONT, 9, "text")
+		dest.text:SetPoint("LEFT", 5, 0)
+		dest.text:SetPoint("RIGHT", -4, 0)
+		dest.text:SetJustifyH("LEFT")
+		dest.text:SetWordWrap(false)
+		pop.dest = dest
+		local send = CreateFrame("Button", nil, pop)
+		send:SetSize(50, 18)
+		send:SetPoint("TOPRIGHT", -6, -5)
+		GM.Panel(send, "accent")
+		send.text = GM.MakeFontString(send, GM.FONT_BOLD, 9, "contLowest")
+		send.text:SetPoint("CENTER")
+		send.text:SetText(LT("SEND"))
+		send:SetScript("OnClick", function()
+			local v = GM.Budget.ParseMoney(pop.amt:GetText())
+			if v and GM.Budget.Transfer(pop._from, pop._dest, v) then
+				pop:Hide() pop.catcher:Hide()
+				AcctRefresh()
+			else
+				pop.amt:SetTextColor(GM.RGB("err"))
+			end
+		end)
+		W.Tip(send, function() return {
+			"Move the amount to the",
+			"destination account —",
+			"journaled like a bank transfer" } end)
+		p._gmXfer = pop
+	end
+	pop._from = fromIdx
+	local src = GM.Budget.List()[fromIdx]
+	pop.title:SetText(LT("TRANSFER") .. "   "
+		.. GM.CC("textDim") .. "from|r " .. (src and src.name or "?"))
+	local targets = GM.Budget.TransferTargets(fromIdx)
+	pop._dest = targets[1] and targets[1].i
+	local function PaintDest()
+		local name = "—"
+		for _, tg in ipairs(targets) do
+			if tg.i == pop._dest then
+				name = tg.a.name .. (tg.a.pool and " (pool)" or "")
+			end
+		end
+		pop.dest.text:SetText(name)
+	end
+	pop.dest:SetScript("OnClick", function()
+		local entries = {}
+		for _, tg in ipairs(targets) do
+			local ti = tg.i
+			entries[#entries + 1] = {
+				label = tg.a.name .. (tg.a.pool and " (pool)" or ""),
+				checked = pop._dest == ti,
+				cb = function() pop._dest = ti PaintDest() end,
+			}
+		end
+		W.PopupMenu(pop.dest, entries, { raw = true, w = 150 })
+	end)
+	PaintDest()
+	pop.amt:SetText("")
+	pop.amt:SetTextColor(GM.RGB("text"))
+	pop:ClearAllPoints()
+	pop:SetPoint("TOPRIGHT", row, "BOTTOMRIGHT", 0, -4)
+	pop:Show()
+	pop.catcher:Show()
+end
+
 -- standard frame furniture: title + close X, shared offsets so every
 -- window's chrome sits identically
 function W.Chrome(f, name, titleText)
@@ -868,7 +1006,7 @@ end
 -- W.AcctRow and paint through W.PaintAcctRow, so add/cycle/bind/
 -- reset/delete behave identically on either window.
 
-local function AcctRefresh()
+AcctRefresh = function()
 	-- repaint every surface that might show this account
 	GM.View.Refresh("planner")
 	GM.View.Refresh("overview")
@@ -1028,10 +1166,28 @@ function W.AcctRow(parent, idx, compact)
 	W.Tip(rst, function() return { "Reset spent to zero" } end)
 	row.rst = rst
 
+	-- transfer: move copper between this char's accounts — the
+	-- bank-app primitive, journaled as a transfer line
+	local xfr = CreateFrame("Button", nil, row)
+	xfr:SetSize(16, 16)
+	xfr:SetPoint("RIGHT", rst, "LEFT", -4, 0)
+	xfr.text = GM.MakeFontString(xfr, GM.FONT_BOLD, 10, "textDim")
+	xfr.text:SetPoint("CENTER")
+	xfr.text:SetText("→")
+	xfr:SetScript("OnClick", function()
+		W.XferOpen(row, row._idx or idx)
+	end)
+	W.Tip(xfr, function() return {
+		"Transfer gold",
+		"move copper to another of this",
+		"char's accounts — journaled",
+		"like a bank transfer" } end)
+	row.xfr = xfr
+
 	-- 7d income/spend column: fixed-width right-justified block before
 	-- the row buttons; `left` re-anchors to it so nothing overlaps
 	row.flow = GM.MakeFontString(row, GM.FONT, 9, "textDim")
-	row.flow:SetPoint("RIGHT", rst, "LEFT", -8, 0)
+	row.flow:SetPoint("RIGHT", xfr, "LEFT", -8, 0)
 	row.flow:SetWidth(140)
 	row.flow:SetJustifyH("RIGHT")
 	row.flow:SetWordWrap(false)

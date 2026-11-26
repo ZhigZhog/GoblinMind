@@ -116,6 +116,15 @@ local function Journal(kind, s, qty, unit, extra)
 	elseif kind == "bidwon" then
 		-- won item arrives — cost = the bid paid (extra.cost)
 		return { stock = cost, ext = -cost }
+	elseif kind == "transfer" then
+		-- envelope→envelope reallocation: no real money moves, so
+		-- the legs ride named memo accounts that net to zero — the
+		-- journal line is the bank statement entry (cr the sender,
+		-- dr the receiver)
+		local amt = qty or 0
+		local from = extra and extra.from or "?"
+		local to = extra and extra.to or "?"
+		return { ["acct:" .. from] = -amt, ["acct:" .. to] = amt }
 	elseif kind == "loot" then
 		-- provenance only: zero cost basis — a later sale reads as
 		-- pure profit, which is what found value IS
@@ -142,15 +151,23 @@ end
 
 function GM.Ledger.Add(kind, itemID, qty, unit, extra)
 	local L = GM.Ledger.db
-	if not L or not itemID or not qty or qty <= 0 then return end
+	if not L then return end
+	-- transfer is the one item-less kind: a copper-only journal
+	-- line moving value between budget envelopes — everything else
+	-- needs an item and a positive qty
+	if kind ~= "transfer"
+		and (not itemID or not qty or qty <= 0) then return end
 	local tx = L.transactions
-	local s = L.itemStats[itemID]
-	if not s then s = {} L.itemStats[itemID] = s end
+	local s
+	if itemID then
+		s = L.itemStats[itemID]
+		if not s then s = {} L.itemStats[itemID] = s end
+	end
 	-- extra.t backdates: mail-derived records carry the real event
 	-- time (invoice daysLeft), not the detection time
 	local t = extra and extra.t or time()
 	tx[#tx + 1] = { t = t, ty = kind, i = itemID, q = qty, u = unit,
-		x = extra, je = Journal(kind, s, qty, unit, extra) }
+		x = extra, je = Journal(kind, s or {}, qty, unit, extra) }
 	if #tx > TX_CAP then table.remove(tx, 1) end
 	if kind == "buy" or kind == "bidwon" then
 		-- bidwon counts in buy aggregates too: a won bid IS a purchase
@@ -280,6 +297,11 @@ function GM.Ledger.Record(kind, tx)
 	if kind == "gold" then
 		return GM.Ledger.Gold(tx.delta or tx.copper or tx.total or 0,
 			tx.src or tx.source)
+	end
+	if kind == "transfer" then
+		-- copper-only journal line — qty carries the amount
+		return GM.Ledger.Add(kind, nil, tx.amt or tx.qty or 0,
+			nil, tx)
 	end
 	return GM.Ledger.Add(kind, tx.itemID or tx.id, tx.qty,
 		tx.unit or tx.price or tx.each, tx)

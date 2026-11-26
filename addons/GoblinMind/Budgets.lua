@@ -277,7 +277,7 @@ function B.Rename(i, name)
 end
 function B.ResetSpent(i)
 	local a = DB()[i]
-	if a then a.spent, a.income = 0, 0 B.Sample() end
+	if a then a.spent, a.income, a.xfer = 0, 0, 0 B.Sample() end
 end
 
 function B.SetKind(i, kind)
@@ -313,6 +313,45 @@ function B.GroupPaths()
 	return out
 end
 
+-- bank-model transfer: move copper between two envelopes on the
+-- same char. xfer is a signed accumulator that shifts Remaining
+-- without touching spent/income — a transfer is a move, not a
+-- spend. The pool is the residual purse (gold minus every claimed
+-- envelope) so it never carries a counter: the other side's shift
+-- moves it automatically. The ledger journals the line — the
+-- journal IS the bank statement.
+function B.Transfer(fromI, toI, amt)
+	local l = DB()
+	local a, b = l[fromI], l[toI]
+	amt = floor(tonumber(amt) or 0)
+	if not (a and b) or a == b or amt <= 0 then return nil end
+	-- envelopes are per-char purses — char→char gold moves by
+	-- mail, which journals its own way (mailout/mailin)
+	if not SameKey(OwnerKey(a), OwnerKey(b)) then return nil end
+	if B.Remaining(a) < amt then return nil end  -- insufficient
+	if not a.pool then a.xfer = (a.xfer or 0) - amt end
+	if not b.pool then b.xfer = (b.xfer or 0) + amt end
+	GM.Ledger.Record("transfer",
+		{ from = a.name, to = b.name, amt = amt })
+	B.Sample()
+	return amt
+end
+
+-- transfer targets: every other account owned by the same char,
+-- the pool included (transfers in/out of it are the deposit and
+-- withdraw sides of the bank model)
+function B.TransferTargets(i)
+	local a = DB()[i]
+	local out = {}
+	if not a then return out end
+	for j, o in ipairs(DB()) do
+		if j ~= i and SameKey(OwnerKey(o), OwnerKey(a)) then
+			tinsert(out, { i = j, a = o })
+		end
+	end
+	return out
+end
+
 local function Gold() return GetMoney and GetMoney() or 0 end
 
 -- effective reserve/allocation in copper right now
@@ -337,8 +376,11 @@ end
 function B.Remaining(a)
 	-- pool/save balances are already live — spent/income would
 	-- double-count against a moving alloc (they stay as bookkeeping)
-	if a.pool or a.kind == "save" then return B.Alloc(a) end
-	return math.max(0, B.Alloc(a) + (a.income or 0) - (a.spent or 0))
+	if a.pool or a.kind == "save" then
+		return math.max(0, B.Alloc(a) + (a.xfer or 0))
+	end
+	return math.max(0, B.Alloc(a) + (a.income or 0)
+		- (a.spent or 0) + (a.xfer or 0))
 end
 
 -- gold with no claim on it: minus save reserves, minus everything
