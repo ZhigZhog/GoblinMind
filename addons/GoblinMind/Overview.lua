@@ -574,8 +574,14 @@ function OV.RefreshChart()
 	-- color (class default or custom pick) — the series belongs to
 	-- that char, so it wears their color the way the account rows
 	-- and the gold strip already do
-	local cr, cg, cb = GM.Budget.CharRGB
-		and GM.Budget.CharRGB(ViewChar()) or GM.RGB("accent")
+	-- `X and CharRGB() or RGB()` collapses the RGB triple to one
+	-- return — branch explicitly so cg/cb survive
+	local cr, cg, cb
+	if GM.Budget.CharRGB then
+		cr, cg, cb = GM.Budget.CharRGB(ViewChar())
+	else
+		cr, cg, cb = GM.RGB("accent")
+	end
 	local cc = { cr, cg, cb }
 	local ar, ag, ab = cr * 0.22, cg * 0.22, cb * 0.22
 	local px, pgy, pwv
