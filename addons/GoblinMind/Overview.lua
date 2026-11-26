@@ -626,17 +626,29 @@ function OV.RefreshChart()
 	end
 	local cc = { cr, cg, cb }
 	local ar, ag, ab = cr * 0.22, cg * 0.22, cb * 0.22
+	local br, bg2, bb = cr * 0.09, cg * 0.09, cb * 0.09
 	local px, pgy, pwv
 	for _, p in ipairs(drawHist) do
 		local x = gx + (p.t - axisMin) / (tMax - axisMin) * w
 		local yg = math.max(gy, wy(p.g or 0))
 		local yw = math.min(gy + h, wy((p.g or 0) + (p.a or 0)))
-		if px and pwv > pgy then
-			local band = chart:CreateTexture(nil, "BACKGROUND")
-			band:SetPoint("BOTTOMLEFT", chart, "BOTTOMLEFT", px, pgy)
-			band:SetPoint("TOPRIGHT", chart, "BOTTOMLEFT", x, pwv)
-			band:SetColorTexture(ar, ag, ab)
-			tinsert(ui.art, band)
+		if px then
+			-- uniform base fill under the line — the posted band
+			-- alone left unshaded gaps wherever a==0 and read as a
+			-- rendering bug rather than "no listings then"
+			local base = chart:CreateTexture(nil, "BACKGROUND")
+			base:SetPoint("BOTTOMLEFT", chart, "BOTTOMLEFT", px, gy)
+			base:SetPoint("TOPRIGHT", chart, "BOTTOMLEFT", x, pgy)
+			base:SetColorTexture(br, bg2, bb)
+			tinsert(ui.art, base)
+			if pwv > pgy then
+				local band = chart:CreateTexture(nil, "BACKGROUND")
+				band:SetPoint("BOTTOMLEFT", chart, "BOTTOMLEFT",
+					px, pgy)
+				band:SetPoint("TOPRIGHT", chart, "BOTTOMLEFT", x, pwv)
+				band:SetColorTexture(ar, ag, ab)
+				tinsert(ui.art, band)
+			end
 		end
 		px, pgy, pwv = x, yg, yw
 	end
