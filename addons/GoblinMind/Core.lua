@@ -948,9 +948,16 @@ end)
 -- a suffixed link/owned row pass its key so variant market data
 -- resolves instead of the base item's
 GM.ItemEntry = function(itemID, keyOrBk)
-	local bk = type(keyOrBk) == "string" and keyOrBk
-		or (GM.AH and GM.AH.BookKey
-			and GM.AH.BookKey(itemID, keyOrBk) or itemID)
+	-- keyOrBk: an itemKey table, a variant "v…" bookKey string, a
+	-- numeric bookKey (base items — ctx.bookKey arrives this way),
+	-- or nil. Numbers pass through as-is; tables go through BookKey.
+	local bk
+	if type(keyOrBk) == "number" or type(keyOrBk) == "string" then
+		bk = keyOrBk
+	else
+		bk = GM.AH and GM.AH.BookKey
+			and GM.AH.BookKey(itemID, keyOrBk) or itemID
+	end
 	return itemEntry(tostring(itemID) .. "|" .. tostring(bk))
 end
 
