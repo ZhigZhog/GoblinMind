@@ -656,8 +656,8 @@ Cmd("ledger ", function(arg)
 		return
 	end
 	for _, r in ipairs(rows) do
-		GM.Print(format("%s %s id=%d q=%d u=%s",
-			date("%H:%M", r.t), r.ty, r.i, r.q,
+		GM.Print(format("%s %s id=%s q=%d u=%s",
+			date("%H:%M", r.t), r.ty, tostring(r.i or "—"), r.q or 0,
 			r.u and GM.Money(r.u) or "—"))
 	end
 end, true)

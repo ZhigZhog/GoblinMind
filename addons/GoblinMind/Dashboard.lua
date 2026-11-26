@@ -365,9 +365,23 @@ function DB.MountHome(host)
 		for i, fs in ipairs(recentRows) do
 			local r = rec[i]
 			if r then
-				fs:SetText(format("%s  %s  %s ×%d  %s", date("%H:%M", r.t),
-					r.ty, (GM.QHex(r.i) or "") ..
-						(GM.ItemName(r.i) or ("item " .. r.i)) .. "|r", r.q,
+				-- transfer is the item-less kind: q carries the copper
+				-- amount, and the "name" is the from → to leg
+				local name, qty
+				if r.ty == "transfer" then
+					name = format("%s → %s", r.x and r.x.from or "?",
+						r.x and r.x.to or "?")
+					qty = GM.Money(r.q or 0)
+				else
+					name = (r.x and r.x.nm)
+						and ((GM.QHex(r.i) or "") .. r.x.nm .. "|r")
+						or ((GM.QHex(r.i) or "") ..
+							(r.i and (GM.ItemName(r.i) or ("item " .. r.i))
+								or "?") .. "|r")
+					qty = "×" .. (r.q or 1)
+				end
+				fs:SetText(format("%s  %s  %s %s  %s", date("%H:%M", r.t),
+					r.ty, name, qty,
 					r.u and GM.Money(r.u) .. " /ea" or "—"))
 			else
 				fs:SetText("")
