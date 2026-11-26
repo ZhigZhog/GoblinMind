@@ -256,27 +256,28 @@ end
 
 -- ============ execution (one protected call per click) ============
 
--- pick srcSlot {bag,slot,itemID,count} up and drop it into `toScope`:
--- prefer merging onto a same-item partial stack (always legal), else
--- the first drop-legal empty slot. Shared by plan moves and BankUI's
--- manual per-stack moves. Returns true when the drop was made.
+-- dst slot in `scope` for itemID: merge onto a same-item partial
+-- stack first (always legal), else the first drop-legal empty slot.
+-- The gbank variant is GDstSlot — different slot API, same rule.
+local function DropTarget(itemID, scope)
+	local max = select(8, (C_Item and C_Item.GetItemInfo or GetItemInfo)(itemID))
+	for _, s in ipairs(Slots(scope)) do
+		if s.itemID == itemID and max and s.count < max then return s end
+	end
+	for _, s in ipairs(Slots(scope)) do
+		if not s.itemID and ItemWillGoInBag(itemID, s.bag) then
+			return s
+		end
+	end
+end
+
+-- pick srcSlot {bag,slot,itemID,count} up and drop it into `toScope`.
+-- Shared by plan moves and BankUI's manual per-stack moves. Returns
+-- true when the drop was made.
 local function MoveStack(srcSlot, toScope)
 	Dbg("src: bag=%d slot=%d count=%d → %s",
 		srcSlot.bag, srcSlot.slot, srcSlot.count, toScope)
-	local dstSlot
-	local max = select(8, (C_Item and C_Item.GetItemInfo or GetItemInfo)(srcSlot.itemID))
-	for _, s in ipairs(Slots(toScope)) do
-		if s.itemID == srcSlot.itemID and max and s.count < max then
-			dstSlot = s break
-		end
-	end
-	if not dstSlot then
-		for _, s in ipairs(Slots(toScope)) do
-			if not s.itemID and ItemWillGoInBag(srcSlot.itemID, s.bag) then
-				dstSlot = s break
-			end
-		end
-	end
+	local dstSlot = DropTarget(srcSlot.itemID, toScope)
 	if not dstSlot then return nil, "no room in " .. toScope end
 	PickupItem(srcSlot.bag, srcSlot.slot)
 	PickupItem(dstSlot.bag, dstSlot.slot)
@@ -373,6 +374,134 @@ local function DoMove(step)
 		.. " x" .. tostring(after.stackCount)) or "EMPTY (landed)")
 	step.moved = (step.moved or 0) + srcSlot.count
 	return (step.moved or 0) >= step.qty
+end
+
+-- ============ guild bank ============
+-- the gbank tab is its own slot space — GetGuildBankItemLink/Info per
+-- slot, moves via PickupGuildBankItem (same pickup-swap mechanic as
+-- bags). Open check uses the parked-native-frame rule: FramePark keeps
+-- GuildBankFrame alive and shown during the GBankUI takeover, which is
+-- what keeps the modal API answering.
+local function GBankOpen()
+	return GuildBankFrame and GuildBankFrame:IsShown() or nil
+end
+
+local function GSlots(tab)
+	local out = {}
+	local n = GetNumGuildBankSlots and GetNumGuildBankSlots(tab) or 98
+	for slot = 1, n do
+		local link = GetGuildBankItemLink
+			and GetGuildBankItemLink(tab, slot)
+		local _, count = GetGuildBankItemInfo
+			and GetGuildBankItemInfo(tab, slot)
+		out[slot] = { slot = slot,
+			itemID = link and GM.LinkID(link) or nil,
+			count = count or 0 }
+	end
+	return out
+end
+
+-- dst slot in the tab for itemID: merge onto a same-item partial
+-- first, then the first empty — the gbank-side DropTarget
+local function GDstSlot(tab, itemID)
+	local slots = GSlots(tab)
+	local max = itemID and select(8,
+		(C_Item and C_Item.GetItemInfo or GetItemInfo)(itemID))
+	for _, s in ipairs(slots) do
+		if s.itemID == itemID and max and s.count < max then
+			return s.slot
+		end
+	end
+	for _, s in ipairs(slots) do
+		if not s.itemID then return s.slot end
+	end
+end
+
+-- gmove: one stack between bags and a gbank tab, one protected call
+-- per click like move. from/to name the scopes; exactly one is
+-- "gbank". step.tab picks the tab (current tab when omitted); the
+-- optional src hints (srcBag+srcSlot / gslot) target the stack the
+-- view knows was clicked, first-match search covers planner steps.
+-- Tab perms are the hard gate here — the Ops check shares the rule,
+-- a bounced click explains itself instead of silently failing.
+local function DoGMove(step)
+	if not GBankOpen() then
+		return "bounce", "guild bank is closed"
+	end
+	if not PickupGuildBankItem then
+		return "bounce", "no guild bank API"
+	end
+	local tab = step.tab
+		or (GetCurrentGuildBankTab and GetCurrentGuildBankTab())
+	if not tab then return "bounce", "no guild bank tab" end
+	local canDep, canWd, wdLeft = true, true, nil
+	if GetGuildBankTabPermissions then
+		local _, d, w, l = GetGuildBankTabPermissions(tab)
+		canDep, canWd, wdLeft = d ~= false, w ~= false, l
+	end
+	local toGbank = step.to == "gbank"
+	if toGbank and not canDep then
+		return "bounce", "no deposit permission on this tab"
+	end
+	if not toGbank and (not canWd
+		or (wdLeft ~= nil and wdLeft <= 0)) then
+		return "bounce", wdLeft ~= nil and wdLeft <= 0
+			and "daily withdrawal limit reached"
+			or "no withdraw permission on this tab"
+	end
+	if toGbank then
+		local src
+		for _, s in ipairs(Slots("bags")) do
+			if s.itemID == step.itemID and s.count > 0
+				and (not step.srcSlot
+					or (s.bag == step.srcBag and s.slot == step.srcSlot)) then
+				src = s break
+			end
+		end
+		-- hint slot emptied since the click — fall back to any stack
+		if not src and step.srcSlot then
+			for _, s in ipairs(Slots("bags")) do
+				if s.itemID == step.itemID and s.count > 0 then
+					src = s break
+				end
+			end
+		end
+		if not src then return true end
+		local dst = GDstSlot(tab, step.itemID)
+		if not dst then
+			if (step.moved or 0) > 0 then return true end
+			return "bounce", "no room in the tab"
+		end
+		PickupItem(src.bag, src.slot)
+		PickupGuildBankItem(tab, dst)
+		step.moved = (step.moved or 0) + src.count
+	else
+		local gslot
+		local slots = GSlots(tab)
+		for _, s in ipairs(slots) do
+			if s.itemID == step.itemID
+				and (not step.gslot or s.slot == step.gslot) then
+				gslot = s.slot break
+			end
+		end
+		if not gslot and step.gslot then
+			for _, s in ipairs(slots) do
+				if s.itemID == step.itemID then gslot = s.slot break end
+			end
+		end
+		if not gslot then return true end
+		local dst = DropTarget(step.itemID, "bags")
+		if not dst then
+			if (step.moved or 0) > 0 then return true end
+			return "bounce", "no room in bags"
+		end
+		local _, cnt = GetGuildBankItemInfo(tab, gslot)
+		PickupGuildBankItem(tab, gslot)
+		PickupItem(dst.bag, dst.slot)
+		step.moved = (step.moved or 0) + (cnt or 1)
+	end
+	if GetCursorInfo and GetCursorInfo() then ClearCursor() end
+	return (step.moved or 0) >= (step.qty or 1)
 end
 
 -- send phase, shared by targeted mail steps and the compose form's
@@ -506,6 +635,7 @@ end
 
 function B.Execute(step)
 	local fn = step.kind == "move" and DoMove
+		or step.kind == "gmove" and DoGMove
 		or step.kind == "mail" and DoMail
 		or step.kind == "mailsend" and DoMailSend
 		or step.kind == "mailcollect" and DoMailCollect

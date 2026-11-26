@@ -79,12 +79,37 @@ local CHECKS = {
 		return true
 	end,
 	move = function(ctx, a)
-		-- bank↔bags warehousing — the source scope must hold the qty
-		local have = (a and a.from == "bank")
-			and (ctx.bank or 0) or (ctx.bags or 0)
+		-- bank/gbank↔bags warehousing — the source scope must hold
+		-- the qty; gbank legs also need the frame open and the tab
+		-- perms the executor will re-check at the click
+		local from = (a and a.from) or "bags"
+		local to = (a and a.to)
+			or (from == "bags" and "bank" or "bags")
+		local have = from == "bank" and (ctx.bank or 0)
+			or from == "gbank" and (ctx.gbank or 0)
+			or (ctx.bags or 0)
 		if have < (a and a.qty or 1) then
-			return nil, "nothing in " .. ((a and a.from) or "bags")
-				.. " to move"
+			return nil, "nothing in " .. from .. " to move"
+		end
+		if from == "gbank" or to == "gbank" then
+			if not (GuildBankFrame and GuildBankFrame:IsShown()) then
+				return nil, "guild bank is closed"
+			end
+			local tab = (a and a.tab)
+				or (GetCurrentGuildBankTab and GetCurrentGuildBankTab())
+			if GetGuildBankTabPermissions and tab then
+				local _, canDep, canWd, wdLeft =
+					GetGuildBankTabPermissions(tab)
+				if to == "gbank" and canDep == false then
+					return nil, "no deposit permission on this tab"
+				end
+				if from == "gbank" and canWd == false then
+					return nil, "no withdraw permission on this tab"
+				end
+				if from == "gbank" and wdLeft ~= nil and wdLeft <= 0 then
+					return nil, "daily withdrawal limit reached"
+				end
+			end
 		end
 		return true
 	end,
@@ -302,24 +327,37 @@ function O.Destroy(ctx, a)
 	return r
 end
 
--- bank↔bags move — the warehousing verb. Direction lives on the
--- step, not the verb: from="bank" deposits-to-bags, from="bags"
--- carries-to-bank; the expectation watches the BAG side either way
+-- bank/gbank↔bags move — the warehousing verb. Direction lives on
+-- the step, not the verb: from="bank"|"gbank" deposits-to-bags,
+-- from="bags" carries out; the expectation watches the BAG side
+-- either way. a.tab + a.gslot / a.srcBag+srcSlot pin the gbank tab
+-- and the clicked stack when the caller is a gbank row
 function O.Move(ctx, a)
 	ctx = AsCtx(ctx)
 	a = a or {}
 	local ok, reason = O.Check(ctx, "move", a)
 	if not ok then return fail(reason) end
-	local toBags = a.from == "bank"
+	local from = a.from or "bags"
+	local toBags = from == "bank" or from == "gbank"
+	local to = a.to or (toBags and "bags" or "bank")
 	if GM.Ledger and GM.Ledger.Expect then
 		GM.Ledger.Expect(ctx, { kind = "move",
 			qty = a.qty or 1, dir = toBags and "in" or "out" })
 	end
-	local r = GM.Banking.Execute({ kind = "move", itemID = ctx.id,
-		qty = a.qty or 1, from = a.from or "bags",
-		to = a.to or (toBags and "bags" or "bank") })
-	if r == nil and GM.Ledger and GM.Ledger.Unexpect then
-		GM.Ledger.Unexpect(ctx.id, "move") end
+	local r, why = GM.Banking.Execute({ kind =
+			(from == "gbank" or to == "gbank") and "gmove" or "move",
+		itemID = ctx.id, qty = a.qty or 1,
+		from = from, to = to, tab = a.tab,
+		gslot = a.gslot, srcBag = a.srcBag, srcSlot = a.srcSlot })
+	if r == nil or r == "bounce" then
+		-- a bounced interactive click is silent otherwise (bounce is
+		-- the plan-queue's rotate signal) — say why
+		if r == "bounce" and why then
+			GM.Print(GM.CC("warn") .. "[bank] " .. tostring(why) .. "|r")
+		end
+		if GM.Ledger and GM.Ledger.Unexpect then
+			GM.Ledger.Unexpect(ctx.id, "move") end
+	end
 	return r
 end
 
