@@ -39,7 +39,10 @@ local function Line(parent, x1, y1, x2, y2, key, thick)
 	local len = math.max(1, sqrt(dx * dx + dy * dy))
 	t:SetSize(len, thick or 1.5)
 	t:SetPoint("CENTER", parent, "BOTTOMLEFT", (x1 + x2) / 2, (y1 + y2) / 2)
-	t:SetRotation(atan2(dy, dx))
+	-- WoW's atan2/math.atan return DEGREES; SetRotation takes radians —
+	-- a raw pass tilts every non-horizontal segment (90° input landed
+	-- at 90 rad ≈ 117° — the giant "X" artifacts on steep jumps)
+	t:SetRotation(math.rad(atan2(dy, dx)))
 	if type(key) == "table" then
 		t:SetColorTexture(key[1], key[2], key[3])
 	else

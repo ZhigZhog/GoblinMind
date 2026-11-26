@@ -608,7 +608,9 @@ function W.MapLayer(host)
 		t:SetPoint("CENTER", self.host, "TOPLEFT",
 			(x1 + x2) / 2, -(y1 + y2) / 2)
 		if t.SetRotation then
-			pcall(t.SetRotation, t, atan2(-dy, dx))
+			-- WoW's atan2/math.atan return degrees — SetRotation
+			-- wants radians
+			pcall(t.SetRotation, t, math.rad(atan2(-dy, dx)))
 		end
 		t:SetVertexColor(r, g, b, a or 0.9)
 	end

@@ -294,8 +294,10 @@ local function seg(u1, v1, u2, v2, a)
 		(x1 + x2) / 2, (y1 + y2) / 2)
 	if t.SetRotation then
 		-- y is up-positive here (CENTER offsets), so no
-		-- sign flip like the TOPLEFT-space map pane uses
-		pcall(t.SetRotation, t, atan2(dy, dx))
+		-- sign flip like the TOPLEFT-space map pane uses.
+		-- WoW's atan2/math.atan return degrees — SetRotation
+		-- wants radians
+		pcall(t.SetRotation, t, math.rad(atan2(dy, dx)))
 	end
 	t:SetVertexColor(0.4, 0.85, 1.0, a)
 end
