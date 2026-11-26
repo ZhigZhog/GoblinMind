@@ -130,13 +130,20 @@ local function BankOpen()
 end
 
 -- GetOpsForPath merges defaults into every group — ops only apply where
--- the path (or an ancestor) explicitly defines them.
+-- the path (or an ancestor) explicitly defines them. Defined = anonymous
+-- g.ops fields OR a named op the user assigned — but NOT the "Default"
+-- pin Ensure writes on every group (counting that would run the scan's
+-- op on every grouped item in the world).
 local function HasOp(path, opType)
 	local seg
 	for part in (path or ""):gmatch("[^/]+") do
 		seg = seg and seg .. "/" .. part or part
 		local g = GM.Groups.db.groups[seg]
-		if g and g.ops and g.ops[opType] then return true end
+		if g then
+			if g.ops and g.ops[opType] then return true end
+			local name = g.opNames and g.opNames[opType]
+			if name and name ~= "Default" then return true end
+		end
 	end
 end
 
