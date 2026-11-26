@@ -81,6 +81,8 @@ end
 --   keepArm   -- armed cast survives a dead-source window
 --               (skin + fish: the gather isn't corpse loot even
 --               when a corpse is standing there)
+--   armWins   -- the cast names the object type; the item verdict
+--               can't override it (a chest of ore is still a chest)
 --   castIds   -- UNIT_SPELLCAST_SUCCEEDED spellIDs that arm it
 --   castNames -- spell-name substrings when spellID is missing
 --   glCats    -- GatherLite SV categories that import as it
@@ -153,6 +155,10 @@ G.RegisterKind{ id = "chest", label = "CHEST",
 	-- because the cast IS the evidence — a dead target standing
 	-- beside the chest must not drop it to a hunt kill
 	keepArm = true,
+	-- the open cast names the object type — a chest holding
+	-- ore-family items is still a chest, so the item verdict
+	-- can't re-classify the window
+	armWins = true,
 	castIds = { 3365, 5108, 22810, 22811 },
 	castNames = { "opening" } }
 
@@ -2572,7 +2578,13 @@ local function OnLoot()
 	local gKind
 	if armValid then
 		gKind = arm.kind
-		if wkind and wkind ~= gKind then
+		-- item verdict overrides the cast (instant gather arrives
+		-- unarmed on Forever — a vein beside a corpse is a NODE,
+		-- not a kill) — except where the cast names the object:
+		-- a chest holding ore-family loot is still a chest
+		if wkind and wkind ~= gKind
+			and not (G.KindDefs[gKind]
+				and G.KindDefs[gKind].armWins) then
 			gKind = wkind
 		elseif not wkind and srcDead and next(items)
 			and not (G.KindDefs[gKind]
@@ -2597,8 +2609,8 @@ local function OnLoot()
 			-- vein type), then the window target — trusted when a
 			-- cast armed this loot or no corpse could be
 			-- impersonating the node
-			local nm = NodeNameFor(items)
-				or (gKind == "chest" and "Chest")
+			local nm = (gKind == "chest" and "Chest")
+				or NodeNameFor(items)
 				or ((armValid or not srcDead) and winName)
 			local nd
 			if gKind == "fish" then
