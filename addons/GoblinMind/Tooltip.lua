@@ -477,7 +477,8 @@ end
 -- ============ section 3: Accounting ============
 
 local function P_Purchase(t, id, stack)
-	local s = GM.Ledger and GM.Ledger.db and GM.Ledger.db.itemStats[id]
+	local ctx = GM.Ctx and GM.Ctx(id)
+	local s = ctx and ctx.lstats
 	if not s or not s.buyQ or s.buyQ == 0 then return end
 	if stack then
 		t:AddTextLine("You bought ×" .. s.buyQ,
@@ -498,7 +499,8 @@ local function P_Purchase(t, id, stack)
 end
 
 local function P_Sale(t, id, stack)
-	local s = GM.Ledger and GM.Ledger.db and GM.Ledger.db.itemStats[id]
+	local ctx = GM.Ctx and GM.Ctx(id)
+	local s = ctx and ctx.lstats
 	if not s or not s.sellQ or s.sellQ == 0 then return end
 	if stack then
 		t:AddTextLine("You sold ×" .. s.sellQ,

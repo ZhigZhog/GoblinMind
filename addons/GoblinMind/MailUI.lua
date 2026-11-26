@@ -47,6 +47,8 @@ local function CommandPending()
 	return C_Mail and C_Mail.IsCommandPending and C_Mail.IsCommandPending()
 end
 
+local GateSend -- assigned next to MU.Send; Build's hooks capture it
+
 -- ============ recipient autocomplete ============
 -- TSM-style inline complete: the first prefix-match fills the box
 -- with the remainder highlighted — keep typing to refine or move on.
@@ -271,11 +273,13 @@ local function Build()
 	ui.to = EditBox(ui.sendBar, 110, "recipient")
 	ui.to:SetPoint("LEFT")
 	ui.to:SetScript("OnChar", ACOnChar)
+	ui.to:HookScript("OnTextChanged", GateSend)
 	ui.to:HookScript("OnEditFocusGained", function()
 		acList = RecipientNames()
 	end)
 	ui.money = W.GoldEdit(ui.sendBar, 108)
 	ui.money:SetPoint("LEFT", ui.to, "RIGHT", 6, 0)
+	ui.money:HookScript("OnTextChanged", GateSend)
 	-- COD toggle: when set the copper box feeds SetSendMailCOD
 	-- (payment on delivery) instead of SetSendMailMoney — the writ
 	-- board's escrow mechanism
@@ -286,6 +290,7 @@ local function Build()
 	ui.cod.text = GM.MakeFontString(ui.cod, GM.FONT, 9, "textDim")
 	ui.cod.text:SetPoint("LEFT", ui.cod, "RIGHT", 0, 0)
 	ui.cod.text:SetText("COD")
+	ui.cod:HookScript("OnClick", GateSend)
 	ui.send = Btn(ui.sendBar, 52, "SEND", function() MU.Send() end)
 	ui.send:SetPoint("LEFT", ui.cod.text, "RIGHT", 6, 0)
 	ui.send.text:SetTextColor(GM.RGB("accent"))
@@ -545,6 +550,19 @@ local function Detach(r)
 	MU.Refresh()
 end
 
+-- SEND grays on the same rule O.SendMail's commit runs — the
+-- recipient box and attachment slots both feed it, so the button
+-- can never light up on a send the spine would refuse
+function GateSend()
+	if not (ui and ui.send) then return end
+	ui.send:SetEnabled(GM.Ops.Can(nil, "sendmail", {
+		to = strtrim(ui.to:GetText() or ""),
+		cod = ui.cod:GetChecked()
+			and (ui.money:GetCopper() or 0) or nil,
+		money = not ui.cod:GetChecked()
+			and (ui.money:GetCopper() or 0) or nil }))
+end
+
 function MU.Send()
 	local to = strtrim(ui.to:GetText() or "")
 	if to == "" or to == "recipient" then
@@ -596,6 +614,7 @@ function MU.Refresh(vm)
 	vm = vm or Data()
 	local open = vm.open
 	ui.pageTabs.set(ui.page)
+	GateSend()
 	if ui.sendBarNode then
 		ui.sendBarNode:SetVisible(ui.page == "send")
 	else

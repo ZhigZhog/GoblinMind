@@ -217,6 +217,63 @@ check("envelope claims", function()
 		GM.Money(claims), GM.Money(gold), n)
 end)
 
+-- the spine is how every transaction gets requested: GM.Ctx for
+-- reads, GM.Ops verbs for commits, engine accessors for the
+-- questions views ask (book state, ledger rollups, zone value).
+-- The check can't grep the view sources in-game, so it probes the
+-- surface the views route through — a deleted accessor or dropped
+-- CHECKS intent is the regression signature. Any answer that
+-- isn't "unknown op" proves the intent is still registered.
+check("spine coverage", function()
+	local apis = {
+		{ "AH", "FreshenBook" }, { "AH", "ShopState" },
+		{ "AH", "PostShopRows" }, { "AH", "BookAsks" },
+		{ "Ledger", "Flow" }, { "Ledger", "Cashflow" },
+		{ "Gather", "ZoneValueNow" }, { "Intel", "Mark" },
+		{ "Intel", "AnalyzeLadder" }, { "Banking", "Execute" },
+	}
+	local verbs = { "Check", "Can", "Post", "Buy", "Bid",
+		"Cancel", "Mail", "SendMail", "Vendor", "VendorBuy",
+		"Destroy", "Move", "Collect" }
+	local intentList = { "post", "buy", "bid", "cancel", "mail",
+		"vendsell", "vendbuy", "destroy", "move", "collect",
+		"sendmail" }
+	local missing = {}
+	for _, p in ipairs(apis) do
+		local m = GM[p[1]]
+		if not (m and type(m[p[2]]) == "function") then
+			missing[#missing + 1] = "GM." .. p[1] .. "." .. p[2]
+		end
+	end
+	if type(GM.Ctx) ~= "function" then
+		missing[#missing + 1] = "GM.Ctx" end
+	if type(GM.FarmValue) ~= "function" then
+		missing[#missing + 1] = "GM.FarmValue" end
+	local O = GM.Ops
+	if not O then missing[#missing + 1] = "GM.Ops" end
+	for _, v in ipairs(verbs) do
+		if O and type(O[v]) ~= "function" then
+			missing[#missing + 1] = "Ops." .. v end
+	end
+	local intents = 0
+	local probe = GM.Ctx and GM.Ctx(2454) or nil
+	if O and type(O.Check) == "function" then
+		for _, it in ipairs(intentList) do
+			local _, why = O.Check(probe, it, {})
+			if why and why:match("^unknown op") then
+				missing[#missing + 1] = "intent:" .. it
+			else
+				intents = intents + 1
+			end
+		end
+	end
+	if #missing > 0 then
+		return "fail", "missing: " .. table.concat(missing, ", ")
+	end
+	return "ok", format("%d verbs, %d intents, ctx live",
+		13, intents)
+end)
+
 local LV = {
 	ok   = { c = "pos",     t = "ok"   },
 	info = { c = "textDim", t = "info" },

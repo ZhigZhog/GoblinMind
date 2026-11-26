@@ -118,7 +118,38 @@ local CHECKS = {
 			return nil, "mailbox is closed" end
 		return true
 	end,
+	-- compose-send: recipient + a payload — attached item(s), or
+	-- bare money. COD refuses empty hands. Attachments live in the
+	-- mailbox's send slots, so the probe reads the frame state
+	-- rather than an arg
+	sendmail = function(ctx, a)
+		if not (MailFrame and MailFrame:IsShown()) then
+			return nil, "mailbox is closed" end
+		if not (a and a.to and a.to ~= "") then
+			return nil, "mail needs a recipient" end
+		local attached = 0
+		if GetSendMailItem then
+			for i = 1, 12 do
+				local n1, n2 = GetSendMailItem(i)
+				if n1 or tonumber(n2) then
+					attached = attached + 1 end
+			end
+		end
+		if attached == 0 then
+			if (a.cod or 0) > 0 then
+				return nil, "COD needs an item attached" end
+			if not (a.money and a.money > 0) then
+				return nil, "nothing to send" end
+		end
+		return true
+	end,
 }
+
+-- intents that probe frame/compose state, not item state — a nil
+-- ctx still gets a real answer (O.Can(nil, "sendmail", a) for the
+-- SEND button's gray state)
+local NOCTX = { sendmail = true, collect = true }
+local EMPTY = {}
 
 -- normalize once: callers may pass a ctx, a row, or a bare id
 local function AsCtx(v)
@@ -128,7 +159,7 @@ end
 
 -- dry-run for UI state AND the verb's pre-flight — one validator
 function O.Check(ctx, intent, a)
-	ctx = AsCtx(ctx)
+	ctx = AsCtx(ctx) or (NOCTX[intent] and EMPTY)
 	if not ctx then return nil, "no item" end
 	local f = CHECKS[intent]
 	if not f then return nil, "unknown op " .. tostring(intent) end
@@ -244,12 +275,8 @@ end
 -- planner mail; a send that never happens unexpects them all.
 function O.SendMail(a)
 	a = a or {}
-	if not (MailFrame and MailFrame:IsShown()) then
-		return fail("mailbox is closed")
-	end
-	if not (a.to and a.to ~= "") then
-		return fail("mail needs a recipient")
-	end
+	local ok, reason = O.Check(nil, "sendmail", a)
+	if not ok then return fail(reason) end
 	local items = {}
 	if GetSendMailItem then
 		for i = 1, 12 do
@@ -259,14 +286,6 @@ function O.SendMail(a)
 				items[#items + 1] = { id = id,
 					qty = tonumber(ret[#ret]) or 1 }
 			end
-		end
-	end
-	if #items == 0 then
-		if (a.cod or 0) > 0 then
-			return fail("COD needs an item attached")
-		end
-		if not (a.money and a.money > 0) then
-			return fail("nothing to send")
 		end
 	end
 	local ekind = (a.cod and a.cod > 0) and "codout" or "mailout"

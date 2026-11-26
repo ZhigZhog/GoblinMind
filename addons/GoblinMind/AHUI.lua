@@ -1367,9 +1367,11 @@ function AU.Refresh(vm)
 				row.c1:SetText(r.unit and GM.Money(r.unit) or "—")
 				row.c2:SetText("×" .. (r.qty or 1)
 					.. (r.mkt and " · mkt " .. GM.Money(r.mkt) or ""))
-				-- POST appears when bags hold the item — opens the
-				-- post dialog (qty/price/duration, one call per click)
-				if r.id and (r.ctx or GM.Ctx(r.id)).bags > 0 then
+				-- POST appears when the op could commit — Ops.Can
+				-- runs CHECKS.post (bags + AH open), the same rule
+				-- the dialog's click re-validates
+				if r.id and GM.Ops.Can(r.ctx or r.id,
+						"post", { unit = 1 }) then
 					row.act:Show()
 					row.act.text:SetText("POST")
 					row.act.text:SetTextColor(GM.RGB("accent"))
