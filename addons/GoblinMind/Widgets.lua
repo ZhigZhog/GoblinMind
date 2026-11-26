@@ -851,10 +851,14 @@ function W.AcctRow(parent, idx, compact)
 	local eb = W.EditBox(row, nameW + 6)
 	eb:SetPoint("LEFT", nameBtn, "LEFT", 0, 0)
 	-- paint-time anchor: crested names indent the box so its text
-	-- lands where the name printed, not under the faction icon
+	-- lands where the name printed, not under the faction icon —
+	-- and shrink it by the pad so the right edge still clears the
+	-- kind button
 	row.nameEditAnchor = function(pad)
+		pad = pad or 0
 		eb:ClearAllPoints()
-		eb:SetPoint("LEFT", nameBtn, "LEFT", pad or 0, 0)
+		eb:SetPoint("LEFT", nameBtn, "LEFT", pad, 0)
+		eb:SetWidth(nameW + 6 - pad)
 	end
 	row.name:SetWordWrap(false)
 	eb:SetHeight(18)
@@ -1046,10 +1050,10 @@ function W.PaintAcctRow(row, a, idx, opts)
 	-- crested names pad the rename box so the field's text lands
 	-- where the printed name started, ~crest-width in
 	if row.nameEditAnchor then
-		-- pad = crest width minus the box's own 6px text inset —
-		-- 22 overshot: inset + pad compounded past the name's start
+		-- pad ≈ crest (18px icon + space ≈ 20) minus the box's 6px
+		-- text inset, so the field's text lands on the name
 		row.nameEditAnchor(ck and GM.Budget.Crest(ck) ~= ""
-			and 16 or 0)
+			and 14 or 0)
 	end
 	row.kind.text:SetText(a.pool and "POOL" or GM.Budget.KINDS[a.kind])
 	-- the pool IS every group — it can't be deleted or rebound, so
