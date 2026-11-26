@@ -1028,6 +1028,7 @@ function GM.Inventory.Outbids()
 			t[#t + 1] = {
 				aid = aid, itemID = b.itemID, qty = b.qty,
 				ourBid = b.ourBid, curBid = b.curBid,
+				ctx = GM.Ctx(b.itemID, b.itemLink, b.itemKey),
 				remain = b.tl and b.at and (b.at + b.tl - time()) or nil,
 			}
 		end

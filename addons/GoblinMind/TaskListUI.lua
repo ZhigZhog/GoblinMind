@@ -52,7 +52,8 @@ local function Tasks()
 				#ob == 1 and "" or "s",
 				ob[1].itemID and (" — " ..
 					(GM.QHex(ob[1].itemID) or "") ..
-					((GM.ItemName and GM.ItemName(ob[1].itemID))
+					((ob[1].ctx and ob[1].ctx.name)
+						or (GM.ItemName and GM.ItemName(ob[1].itemID))
 						or "item") .. "|r now " ..
 					(GM.Money and GM.Money(ob[1].curBid or 0) or "?"))
 					or ""),

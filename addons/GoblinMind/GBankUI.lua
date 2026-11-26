@@ -50,10 +50,11 @@ local function BagRows()
 	local rows = {}
 	for _, s in ipairs(GM.Banking.BagSlots()) do
 		if s.itemID then
+			local ctx = GM.Ctx(s)
 			rows[#rows + 1] = {
 				bag = s.bag, slot = s.slot, id = s.itemID,
-				qty = s.count,
-				name = GM.ItemName(s.itemID) or ("item " .. s.itemID),
+				qty = s.count, ctx = ctx,
+				name = ctx.name or ("item " .. s.itemID),
 			}
 		end
 	end
@@ -70,9 +71,11 @@ local function GBankRows(tab)
 			local id = GM.LinkID(link)
 			local _, count = GetGuildBankItemInfo(tab, slot)
 			if id then
+				local ctx = GM.Ctx(id, link)
 				rows[#rows + 1] = {
 					slot = slot, id = id, qty = count or 1,
-					name = GM.ItemName(id) or ("item " .. id),
+					ctx = ctx,
+					name = ctx.name or ("item " .. id),
 				}
 			end
 		end

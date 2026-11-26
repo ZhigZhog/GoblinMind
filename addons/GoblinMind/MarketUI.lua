@@ -113,7 +113,8 @@ local function ScanAsks()
 		return
 	end
 	M.askWait = nil
-	local id, name = M.itemID, GM.ItemName(M.itemID)
+	local id, name = M.itemID,
+		(M.ctx and M.ctx.name) or GM.ItemName(M.itemID)
 	-- throttle-dropped searches answer nothing — retry once before
 	-- declaring the book empty so a lost query doesn't read as "no asks"
 	M.askTries = (M.askTries or 0) + 1

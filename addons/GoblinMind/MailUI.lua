@@ -171,11 +171,13 @@ local function SendRows()
 	local rows, lockedByName = {}, {}
 	for _, s in ipairs(GM.Banking.BagSlots()) do
 		if s.itemID then
-			local name = GM.ItemName(s.itemID) or ("item " .. s.itemID)
+			local ctx = GM.Ctx(s)
+			local name = ctx.name or ("item " .. s.itemID)
 			if s.locked then lockedByName[name] = (lockedByName[name] or 0) + 1 end
 			rows[#rows + 1] = {
 				bag = s.bag, slot = s.slot, id = s.itemID,
 				qty = s.count, name = name, locked = s.locked,
+				ctx = ctx,
 			}
 		end
 	end

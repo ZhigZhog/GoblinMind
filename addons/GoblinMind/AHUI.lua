@@ -1242,9 +1242,13 @@ end
 -- suggested unit; qty defaults to the first stack in bags
 function AU.OpenPost(id)
 	Build()
+	-- accepts a bare id or a ctx — variant rows post their variant
+	local ctx = type(id) == "table" and id.id and id or nil
+	id = ctx and ctx.id or id
 	local pd = ui.postD
 	pd.itemID = id
-	pd.name:SetText((GM.ItemName and GM.ItemName(id)) or ("item " .. id))
+	pd.name:SetText((ctx and ctx.name)
+		or (GM.ItemName and GM.ItemName(id)) or ("item " .. id))
 	pd.name:SetTextColor(GM.NameColor(id))
 	local loc, stack = GM.AH.FindInBags(id)
 	pd.have:SetText(format("%d in bags%s", GM.BagCount(id) or 0,
@@ -1479,9 +1483,9 @@ function AU.Refresh(vm)
 					row.act:Show()
 					row.act.text:SetText("POST")
 					row.act.text:SetTextColor(GM.RGB("accent"))
-					local pid = r.id
+					local pctx = r.ctx or r.id
 					row.act:SetScript("OnClick", function()
-						AU.OpenPost(pid)
+						AU.OpenPost(pctx)
 					end)
 				else
 					row.act:Hide()
@@ -1796,7 +1800,7 @@ local function LinkHook(link)
 	if not IsShiftKeyDown() then return false end
 	local id = GM.LinkID(link)
 	if not id then return false end
-	local name = GM.ItemName(id) or link:match("%[(.-)%]")
+	local name = GM.ItemDisplayName(id, link)
 	if not name then return false end
 	ui.page = "shop"
 	ui.search:SetText(name)

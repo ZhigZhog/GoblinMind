@@ -56,12 +56,11 @@ local function StackRows(slots)
 	local rows = {}
 	for _, s in ipairs(slots) do
 		if s.itemID then
+			local ctx = GM.Ctx(s)
 			rows[#rows + 1] = {
 				bag = s.bag, slot = s.slot, id = s.itemID,
-				qty = s.count,
-				name = GM.ItemDisplayName(s.itemID, s.link,
-					s.link and GM.AH.ItemKeyFromLink(s.link))
-					or ("item " .. s.itemID),
+				qty = s.count, ctx = ctx,
+				name = ctx.name or ("item " .. s.itemID),
 				wh = WhHint(s.itemID),
 			}
 		end
