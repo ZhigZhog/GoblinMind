@@ -626,8 +626,10 @@ function A.FinishShopScan(steps, spend, mktSum, hits, shopRows)
 	table.sort(shopRows, function(a, b)
 		return (a.name or "") < (b.name or "")
 	end)
-	if GM.AHUI and GM.AHUI.PostShopRows then
-		GM.AHUI.PostShopRows(shopRows)
+	-- the shop driver owns the results pane — PostShopRows notifies
+	-- shopSubs, and AHUI's subscription repaints + resets scroll
+	if GM.AH.PostShopRows then
+		GM.AH.PostShopRows(shopRows)
 	end
 	local n = 0
 	for _ in pairs(hits) do n = n + 1 end

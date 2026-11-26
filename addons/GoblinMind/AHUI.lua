@@ -70,83 +70,6 @@ local function ScanBusy()
 			and GM.Auctioning.Busy()) or nil
 end
 
-local SEARCH_SORTS = Enum and Enum.AuctionHouseSortOrder and {
-	{ sortOrder = Enum.AuctionHouseSortOrder.Price, reverseSort = false },
-	{ sortOrder = Enum.AuctionHouseSortOrder.Name, reverseSort = false },
-} or nil
-
--- One browse query in flight at a time: ui.pendingBrowse holds it
--- until the server answers. SendBrowseQuery is silently DROPPED when
--- the throttled message pipe is busy (a book scan, TSM, rapid
--- re-search) — no results event ever comes, so a bare send leaves the
--- pane on "waiting for results…" forever. Park on
--- IsThrottledMessageSystemReady and let SYSTEM_READY drive the send;
--- a per-send watchdog clears hopeless queries.
-local function SendPendingBrowse()
-	local p = ui.pendingBrowse
-	if not p then return end
-	if (p.sends or 0) >= 5 then
-		ui.pendingBrowse = nil
-		ui.status = "server is busy — try again"
-		AU.Refresh()
-		return
-	end
-	if C_AuctionHouse.IsThrottledMessageSystemReady
-		and not C_AuctionHouse.IsThrottledMessageSystemReady() then
-		ui.status = "waiting for the server…"
-		AU.Refresh()
-		return
-	end
-	p.sends = (p.sends or 0) + 1
-	p.gen = (p.gen or 0) + 1
-	local gen = p.gen
-	ui.status = "searching…"
-	-- the send rides the shared query queue — it can't land inside
-	-- a burst with the book/market scans and get dropped
-	GM.AH.Dispatch("browse", function()
-		local ok, err = pcall(C_AuctionHouse.SendBrowseQuery, {
-			searchString = p.str, sorts = SEARCH_SORTS,
-			filters = {}, itemClassFilters = p.classFilters or {},
-		})
-		if not ok then
-			ui.pendingBrowse = nil
-			ui.status = "query error: " .. tostring(err)
-		else
-			ui.status = "waiting for results…"
-			GM.Time.After(8, function()
-				if ui.pendingBrowse == p and p.gen == gen then
-					ui.pendingBrowse = nil
-					ui.status = "query went unanswered — try again"
-					AU.Refresh()
-				end
-			end)
-		end
-		AU.Refresh()
-	end)
-	AU.Refresh()
-end
-
-local function QueueBrowse(str, classFilters, label)
-	ui.searchedAt = time()
-	ui.lastBrowseLabel = label
-	ui.browsePaging = nil
-	ui.pendingBrowse = { str = str, classFilters = classFilters }
-	SendPendingBrowse()
-end
-
--- a finished shopping scan hands its hit rows to the results pane so
--- the player can pick items out of the list (not only the plan's
--- one-BUY-at-a-time flow). Rows carry cached asks for instant
--- drill-down; a name search or book scan takes the pane back.
-function AU.PostShopRows(rows)
-	if not ui then return end
-	ui.shopRows = rows
-	ui.shopRowsT = time()
-	ui.lastBrowseLabel = "shopping scan"
-	ui.scroll = 0
-	AU.Refresh()
-end
-
 -- name search → per-itemKey aggregates {itemKey, minPrice, totalQuantity}
 local function DoSearch()
 	local q = strtrim(ui.search:GetText() or "")
@@ -156,50 +79,34 @@ local function DoSearch()
 		AU.Refresh()
 		return
 	end
-	QueueBrowse(q)
+	GM.AH.ShopSearch(q)
 end
 
--- read the shared browse array — but ONLY for our own query. A book
--- build (replicate or the BrowseBook fallback's empty search) floods
--- this same array with every auction on the house; iterating it per
--- repaint was the scroll-storm lag. Suppress during a book pass and
--- after one lands (it clobbered our results), and cap what we build.
-local RESULT_CAP = 2000
+-- the SHOP pane's row source: GM.AH.ShopState() owns the whole query
+-- lifecycle (pending send → paging → stale-clear → shop-rows
+-- precedence); this function is the painter — view filters, ctx
+-- identity, market flag, sort.
 local function Results()
+	local st = GM.AH.ShopState()
 	local rows = {}
-	if GM.AH.wantBook or GM.AH.collecting or GM.AH.browse then
-		-- live progress line — the same message the planner shows
+	if st.kind == "busy" then
 		ui.status = ui.scanMsg or "book scan in progress…"
 		return rows
-	end
-	-- a finished shopping scan posts its hits here — same precedence
-	-- rules as browse results: a newer name search or book scan wins
-	if ui.shopRows then
-		if (ui.searchedAt or 0) > ui.shopRowsT
-			or (GM.AH.bookT or 0) > ui.shopRowsT then
-			ui.shopRows = nil
-		else
-			ui.status = nil
-			return ui.shopRows
-		end
-	end
-	if not ui.searchedAt then
+	elseif st.kind == "shop" then
+		ui.status = nil
+		return st.rows
+	elseif st.kind == "none" then
 		-- a scan just finished shows its completion line briefly;
 		-- anything older falls back to the pane's empty-state text
 		ui.status = (ui.scanAt and time() - ui.scanAt < 15)
-			and ui.scanMsg or nil
+			and ui.scanMsg or st.status
+		return rows
+	elseif st.kind == "stale" then
+		ui.status = st.status
 		return rows
 	end
-	if (GM.AH.bookT or 0) > ui.searchedAt then
-		ui.searchedAt = nil
-		ui.status = "results cleared by a book scan — search again"
-		return rows
-	end
-	local rs = C_AuctionHouse and C_AuctionHouse.GetBrowseResults
-		and C_AuctionHouse.GetBrowseResults() or {}
-	local truncated = #rs > RESULT_CAP
-	for i = 1, math.min(#rs, RESULT_CAP) do
-		local r = rs[i]
+	for i = 1, math.min(#st.rows, st.cap) do
+		local r = st.rows[i]
 		local id = r.itemKey and r.itemKey.itemID
 		if id and PassFilters(id, r.minPrice) then
 			local e = GM.ItemEntry(id, r.itemKey)
@@ -220,9 +127,11 @@ local function Results()
 		if a.low ~= b.low then return a.low and true or false end
 		return (a.name or "") < (b.name or "")
 	end)
-	if truncated then
+	if st.truncated then
 		ui.status = format("%d results — first %d shown, refine the search",
-			#rs, RESULT_CAP)
+			#st.rows, st.cap)
+	else
+		ui.status = st.status
 	end
 	return rows
 end
@@ -322,42 +231,24 @@ local function Build()
 		end,
 	})
 	ui.frame = f
-	-- browse results + owned-auction changes → repaint; throttle events
-	-- drive the pending-query pump
-	pcall(f.RegisterEvent, f, "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED")
-	pcall(f.RegisterEvent, f, "AUCTION_HOUSE_BROWSE_RESULTS_ADDED")
-	pcall(f.RegisterEvent, f, "AUCTION_HOUSE_THROTTLED_SYSTEM_READY")
-	pcall(f.RegisterEvent, f, "AUCTION_HOUSE_THROTTLED_MESSAGE_DROPPED")
+	-- the browse driver lives in AH.lua now (ShopState/ShopPump own
+	-- query state + events) — the pane repaints when the shop state
+	-- changes via shopSubs, same pattern as bookSubs
 	pcall(f.RegisterEvent, f, "BAG_UPDATE")
 	f:SetScript("OnEvent", function(_, event)
-		if event == "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED" then
-			-- OUR query answered — results now own the pane; flag it so
-			-- ADDED pages keep arriving until the array is complete
-			if ui.pendingBrowse then
-				ui.pendingBrowse = nil
-				ui.browsePaging = true
-				ui.status = nil
-			end
-		elseif event == "AUCTION_HOUSE_BROWSE_RESULTS_ADDED" then
-			-- results arrive paged for broad queries — pull the next
-			-- page like the native UI does. Book builds run their own
-			-- pagination; don't double-drive the same array
-			if ui.browsePaging and not GM.AH.Busy() then
-				if C_AuctionHouse.HasFullBrowseResults
-					and C_AuctionHouse.HasFullBrowseResults() then
-					ui.browsePaging = nil
-				else
-					pcall(C_AuctionHouse.RequestMoreBrowseResults)
-				end
-			end
-		elseif event == "AUCTION_HOUSE_THROTTLED_SYSTEM_READY"
-			or event == "AUCTION_HOUSE_THROTTLED_MESSAGE_DROPPED" then
-			-- a dropped query never produces a results event — resend
-			-- once the pipe reports ready (send-side gates + cap)
-			if ui.pendingBrowse then SendPendingBrowse() return end
-		end
 		if f:IsShown() then GM.View.Coalesced("ah", AU.Refresh) end
 	end)
+	GM.AH.shopSubs[#GM.AH.shopSubs + 1] = function()
+		if ui and ui.frame and ui.frame:IsShown() then
+			-- new posted rows land the user at the top of the list
+			local s = GM.AH.shop
+			if s.rowsT and s.rowsT ~= ui.seenShopT then
+				ui.seenShopT = s.rowsT
+				ui.scroll = 0
+			end
+			GM.View.Coalesced("ah", AU.Refresh)
+		end
+	end
 
 	-- toolbar: search + page toggles + scan shortcuts — positions are
 	-- owned by the layout row wired up at the end of Build
@@ -1115,7 +1006,7 @@ local function Build()
 		local b = Btn(bb, 156, c[1], function()
 			ui.browseSel = i
 			ui.search:SetText("")
-			QueueBrowse("",
+			GM.AH.ShopSearch("",
 				c[2] and { { classID = c[2] } } or nil, c[1])
 			AU.BuildBrowseSubs()
 			AU.Refresh()
@@ -1144,7 +1035,7 @@ local function Build()
 					root[2], s[2], root[1] .. " / " .. s[1]
 				b:SetScript("OnClick", function()
 					ui.search:SetText("")
-					QueueBrowse("",
+					GM.AH.ShopSearch("",
 						{ { classID = cls, subClassID = sub } }, label)
 					bb:Hide()
 				end)
@@ -1450,12 +1341,12 @@ function AU.Refresh(vm)
 	if ui.mpLeaf then ui.mpLeaf:SetVisible(ui.page == "market") end
 
 	if ui.page == "shop" then
-		ui.lHead:SetText(ui.lastBrowseLabel
-			and strupper(ui.lastBrowseLabel) or "RESULTS")
+		ui.lHead:SetText(GM.AH.shop.label
+			and strupper(GM.AH.shop.label) or "RESULTS")
 		local rows = vm.rows
 		ui.lEmpty:SetText(not open and "open the auction house"
 			or ui.status
-			or (#rows == 0 and (ui.searchedAt
+			or (#rows == 0 and (GM.AH.shop.searchedAt
 				and "no matches" or "search for an item") or ""))
 		ui.lEmpty:SetShown(#rows == 0)
 		local maxScroll = math.max(0, #rows - VISIBLE)

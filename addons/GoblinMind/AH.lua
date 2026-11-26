@@ -47,6 +47,9 @@ for _, evt in ipairs({
 	"AUCTION_ITEM_LIST_UPDATE",
 	-- browse-all is the fallback book source when replicate is silent
 	"AUCTION_HOUSE_BROWSE_RESULTS_UPDATED", "AUCTION_HOUSE_BROWSE_RESULTS_ADDED",
+	-- the shop driver parks sends on these
+	"AUCTION_HOUSE_THROTTLED_SYSTEM_READY",
+	"AUCTION_HOUSE_THROTTLED_MESSAGE_DROPPED",
 	-- buy-result signals: silent rejections surface here
 	"BIDS_UPDATED", "AUCTION_CANCELED", "UI_ERROR_MESSAGE", "CHAT_MSG_SYSTEM",
 }) do
@@ -148,6 +151,15 @@ f:SetScript("OnEvent", function(_, event, ...)
 		-- these fire for every browse — ours and TSM's; only consume
 		-- while a browse book build is active
 		if GM.AH.browse then GM.AH.OnBrowseResults() end
+		-- the shop driver consumes the same events for its own query
+		if event == "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED" then
+			GM.AH.ShopDelivered()
+		else
+			GM.AH.ShopMore()
+		end
+	elseif event == "AUCTION_HOUSE_THROTTLED_SYSTEM_READY"
+		or event == "AUCTION_HOUSE_THROTTLED_MESSAGE_DROPPED" then
+		GM.AH.ShopRetry()
 	elseif event == "COMMODITY_SEARCH_RESULTS_UPDATED" then
 		local itemID = ...
 		-- flags are per-scan: foreign searches (TSM's scans run
@@ -691,6 +703,149 @@ function GM.AH.BookAsks(bookKey)
 	if #asks == 0 then return end
 	table.sort(asks, function(a, b) return a.unit < b.unit end)
 	return asks
+end
+
+-- ============ shop browse driver ============
+-- One name/class browse query in flight at a time — the SHOP pane's
+-- search and class-tree clicks, plus the shopping scan's hit rows.
+-- SendBrowseQuery is silently DROPPED when the throttled message
+-- pipe is busy (a book scan, TSM, rapid re-search): park on
+-- IsThrottledMessageSystemReady, resend on SYSTEM_READY/DROPPED, a
+-- per-send watchdog clears hopeless queries. Views read ShopState()
+-- and repaint on shopSubs — they never touch the query array.
+GM.AH.shop = GM.AH.shop or {}
+GM.AH.shopSubs = GM.AH.shopSubs or {}
+
+local function NotifyShop()
+	for _, cb in ipairs(GM.AH.shopSubs) do pcall(cb) end
+end
+
+local SEARCH_SORTS = Enum and Enum.AuctionHouseSortOrder and {
+	{ sortOrder = Enum.AuctionHouseSortOrder.Price, reverseSort = false },
+	{ sortOrder = Enum.AuctionHouseSortOrder.Name, reverseSort = false },
+} or nil
+
+function GM.AH.ShopPump()
+	local p = GM.AH.shop.pending
+	if not p then return end
+	if (p.sends or 0) >= 5 then
+		GM.AH.shop.pending = nil
+		GM.AH.shop.status = "server is busy — try again"
+		NotifyShop()
+		return
+	end
+	if C_AuctionHouse.IsThrottledMessageSystemReady
+		and not C_AuctionHouse.IsThrottledMessageSystemReady() then
+		GM.AH.shop.status = "waiting for the server…"
+		NotifyShop()
+		return
+	end
+	p.sends = (p.sends or 0) + 1
+	p.gen = (p.gen or 0) + 1
+	local gen = p.gen
+	GM.AH.shop.status = "searching…"
+	-- the send rides the shared query queue — it can't land inside
+	-- a burst with the book/market scans and get dropped
+	GM.AH.Dispatch("browse", function()
+		local ok, err = pcall(C_AuctionHouse.SendBrowseQuery, {
+			searchString = p.str, sorts = SEARCH_SORTS,
+			filters = {}, itemClassFilters = p.classFilters or {},
+		})
+		if not ok then
+			GM.AH.shop.pending = nil
+			GM.AH.shop.status = "query error: " .. tostring(err)
+		else
+			GM.AH.shop.status = "waiting for results…"
+			GM.Time.After(8, function()
+				if GM.AH.shop.pending == p and p.gen == gen then
+					GM.AH.shop.pending = nil
+					GM.AH.shop.status = "query went unanswered — try again"
+					NotifyShop()
+				end
+			end)
+		end
+		NotifyShop()
+	end)
+	NotifyShop()
+end
+
+function GM.AH.ShopSearch(str, classFilters, label)
+	GM.AH.shop.searchedAt = time()
+	GM.AH.shop.label = label
+	GM.AH.shop.paging = nil
+	GM.AH.shop.pending = { str = str, classFilters = classFilters }
+	GM.AH.ShopPump()
+end
+
+-- a finished shopping scan posts its hits to the results pane —
+-- same precedence rules as browse results: a newer name search or
+-- book scan wins
+function GM.AH.PostShopRows(rows)
+	GM.AH.shop.rows = rows
+	GM.AH.shop.rowsT = time()
+	GM.AH.shop.label = "shopping scan"
+	NotifyShop()
+end
+
+-- result events: UPDATED = OUR query answered (paging begins),
+-- ADDED pulls the next page like the native UI does — gated on
+-- !Busy so a book build's own pagination isn't double-driven
+function GM.AH.ShopDelivered()
+	if not GM.AH.shop.pending then return end
+	GM.AH.shop.pending = nil
+	GM.AH.shop.paging = true
+	GM.AH.shop.status = nil
+	NotifyShop()
+end
+
+function GM.AH.ShopMore()
+	if not GM.AH.shop.paging or GM.AH.Busy() then return end
+	if C_AuctionHouse.HasFullBrowseResults
+		and C_AuctionHouse.HasFullBrowseResults() then
+		GM.AH.shop.paging = nil
+	else
+		pcall(C_AuctionHouse.RequestMoreBrowseResults)
+	end
+end
+
+-- a dropped query never produces a results event — resend once the
+-- pipe reports ready
+function GM.AH.ShopRetry()
+	if GM.AH.shop.pending then GM.AH.ShopPump() end
+end
+
+-- the pane's whole query lifecycle in one read. kind:
+--   "busy"    a book pass owns the array — show the scan line
+--   "shop"    posted shopping-scan rows outrank everything stale
+--   "none"    no query outstanding — pane empty-state
+--   "stale"   a book scan clobbered our results — search again
+--   "results" raw aggregate rows are ours to paint (cap applies)
+local RESULT_CAP = 2000
+function GM.AH.ShopState()
+	local s = GM.AH.shop
+	if GM.AH.wantBook or GM.AH.collecting or GM.AH.browse then
+		return { kind = "busy" }
+	end
+	if s.rows then
+		if (s.searchedAt or 0) > s.rowsT
+			or (GM.AH.bookT or 0) > s.rowsT then
+			s.rows = nil
+		else
+			return { kind = "shop", rows = s.rows }
+		end
+	end
+	if not s.searchedAt then
+		return { kind = "none", status = s.status }
+	end
+	if (GM.AH.bookT or 0) > s.searchedAt then
+		s.searchedAt = nil
+		return { kind = "stale",
+			status = "results cleared by a book scan — search again" }
+	end
+	local rs = C_AuctionHouse and C_AuctionHouse.GetBrowseResults
+		and C_AuctionHouse.GetBrowseResults() or {}
+	return { kind = "results", rows = rs, cap = RESULT_CAP,
+		truncated = #rs > RESULT_CAP, status = s.status }
 end
 
 -- The aggregate book persists in SavedVariables across sessions so a
