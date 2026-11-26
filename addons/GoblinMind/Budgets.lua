@@ -10,8 +10,9 @@ local _, GM = ...
 GM.Budget = {}
 local B = GM.Budget
 
-B.KINDS = { craft = "CRAFT", ah = "AH", save = "SAVE" }
-B.KIND_ORDER = { "craft", "ah", "save" }
+B.KINDS = { craft = "CRAFT", ah = "AH", save = "SAVE",
+	vendor = "VENDOR" }
+B.KIND_ORDER = { "craft", "ah", "save", "vendor" }
 
 local function DB()
 	if not GM.db.budgets then GM.db.budgets = {} end
@@ -458,6 +459,42 @@ function B.CreditSale(itemID, amount)
 		target.income = (target.income or 0) + amount
 		B.Sample()
 	end
+end
+
+-- NPC-vendor envelope: vendor sales credit it, vendor buys draw it
+-- down — separate from AH so flip margins don't pollute the
+-- auction float. First self-owned vendor account takes both.
+function B.CreditVendor(amount)
+	if not amount or amount <= 0 then return end
+	for _, a in ipairs(DB()) do
+		if a.kind == "vendor" and IsSelf(a) then
+			a.income = (a.income or 0) + amount
+			B.Sample()
+			return
+		end
+	end
+end
+function B.DebitVendor(amount)
+	if not amount or amount <= 0 then return end
+	local owed = amount
+	for _, a in ipairs(DB()) do
+		if a.kind == "vendor" and IsSelf(a) and owed > 0 then
+			local take = math.min(B.Remaining(a), owed)
+			a.spent = (a.spent or 0) + take
+			owed = owed - take
+		end
+	end
+	-- overspend lands on the first vendor account — same rule as
+	-- B.Record, the row shows the hole instead of dropping it
+	if owed > 0 then
+		for _, a in ipairs(DB()) do
+			if a.kind == "vendor" and IsSelf(a) then
+				a.spent = (a.spent or 0) + owed
+				break
+			end
+		end
+	end
+	B.Sample()
 end
 
 -- trend sampling: remaining-balance history per account plus a

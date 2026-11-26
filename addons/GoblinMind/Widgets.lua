@@ -1046,8 +1046,10 @@ function W.PaintAcctRow(row, a, idx, opts)
 	-- crested names pad the rename box so the field's text lands
 	-- where the printed name started, ~crest-width in
 	if row.nameEditAnchor then
+		-- pad = crest width minus the box's own 6px text inset —
+		-- 22 overshot: inset + pad compounded past the name's start
 		row.nameEditAnchor(ck and GM.Budget.Crest(ck) ~= ""
-			and 22 or 0)
+			and 16 or 0)
 	end
 	row.kind.text:SetText(a.pool and "POOL" or GM.Budget.KINDS[a.kind])
 	-- the pool IS every group — it can't be deleted or rebound, so
@@ -1132,7 +1134,7 @@ function W.AcctAdd(parent)
 	local hint = GM.MakeFontString(f, GM.FONT, 9, "textDim")
 	hint:SetPoint("LEFT", btn, "RIGHT", 8, 0)
 	hint:SetJustifyH("LEFT")
-	hint:SetText(LT("craft/ah: gold (500 or 10g50s) · save: %"))
+	hint:SetText(LT("craft/ah/vendor: gold · save: %"))
 
 	btn:SetScript("OnClick", function()
 		local n = name:GetText()
@@ -1147,7 +1149,7 @@ function W.AcctAdd(parent)
 		if acct then
 			name:SetText("")
 			amt:SetText(addKind == "save" and "30" or "0g")
-			hint:SetText(LT("craft/ah: gold (500 or 10g50s) · save: %"))
+			hint:SetText(LT("craft/ah/vendor: gold · save: %"))
 		else
 			hint:SetText(GM.CC("err")
 				.. (addKind == "save" and "need a % (0-100)"

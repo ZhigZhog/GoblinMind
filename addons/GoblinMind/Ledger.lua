@@ -215,6 +215,14 @@ function GM.Ledger.Add(kind, itemID, qty, unit, extra)
 	if kind == "sell" and GM.Budget and GM.Budget.CreditSale then
 		GM.Budget.CreditSale(itemID, qty * (unit or 0))
 	end
+	-- vendor movements ride the vendor envelope: sales credit it,
+	-- merchant buys draw it down
+	if kind == "vendor" and GM.Budget and GM.Budget.CreditVendor then
+		GM.Budget.CreditVendor(qty * (unit or 0))
+	elseif kind == "vendorbuy" and GM.Budget
+		and GM.Budget.DebitVendor then
+		GM.Budget.DebitVendor(qty * (unit or 0))
+	end
 	-- resample wealth on stock txns — buys/posts change the held vs
 	-- posted split at event resolution, not just the 5-min tick
 	if GM.Budget and GM.Budget.Sample then GM.Budget.Sample() end
