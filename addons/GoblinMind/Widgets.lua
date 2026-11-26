@@ -850,6 +850,12 @@ function W.AcctRow(parent, idx, compact)
 	row.fold = fold
 	local eb = W.EditBox(row, nameW + 6)
 	eb:SetPoint("LEFT", nameBtn, "LEFT", 0, 0)
+	-- paint-time anchor: crested names indent the box so its text
+	-- lands where the name printed, not under the faction icon
+	row.nameEditAnchor = function(pad)
+		eb:ClearAllPoints()
+		eb:SetPoint("LEFT", nameBtn, "LEFT", pad or 0, 0)
+	end
 	row.name:SetWordWrap(false)
 	eb:SetHeight(18)
 	eb:Hide()
@@ -878,7 +884,9 @@ function W.AcctRow(parent, idx, compact)
 
 	local kind = CreateFrame("Button", nil, row)
 	kind:SetSize(50, 20)
-	kind:SetPoint("LEFT", nameW + 6, 0)
+	-- ride the name button's right edge so ind/fold indents carry
+	-- the whole row, not just the name
+	kind:SetPoint("LEFT", nameBtn, "RIGHT", 4, 0)
 	GM.Panel(kind, "contHigh")
 	kind.text = GM.MakeFontString(kind, GM.FONT_MED, 9, "secondary")
 	kind.text:SetPoint("CENTER")
@@ -1035,6 +1043,12 @@ function W.PaintAcctRow(row, a, idx, opts)
 		end
 	end
 	row.name:SetText(label)
+	-- crested names pad the rename box so the field's text lands
+	-- where the printed name started, ~crest-width in
+	if row.nameEditAnchor then
+		row.nameEditAnchor(ck and GM.Budget.Crest(ck) ~= ""
+			and 22 or 0)
+	end
 	row.kind.text:SetText(a.pool and "POOL" or GM.Budget.KINDS[a.kind])
 	-- the pool IS every group — it can't be deleted or rebound, so
 	-- both controls hide on pool rows; a stale binding left by the
@@ -1071,7 +1085,9 @@ end
 -- parse: bare number = gold for craft/ah budgets, % for saves.
 function W.AcctAdd(parent)
 	local f = CreateFrame("Frame", nil, parent)
-	f:SetHeight(22)
+	-- real width, not zero: a 0px-wide region computes a degenerate
+	-- rect on this client and every child anchored into it vanishes
+	f:SetSize(560, 22)
 
 	local name = W.EditBox(f, 130, "name")
 	name:SetPoint("LEFT", 0, 0)
