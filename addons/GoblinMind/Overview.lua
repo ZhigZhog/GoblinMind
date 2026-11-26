@@ -746,14 +746,60 @@ local function RefreshAccounts()
 		.. table.concat(parts, "   "))
 	local list = GM.Budget.List()
 	local order = GM.Budget.Order()
-	local maxOff = math.max(0, #list - #ui.acctRows)
+	-- nest accounts under their owner's pool: the pool row is the
+	-- foldable header, named accounts indent beneath it. Fold state
+	-- is session-local — default open, nothing hides unless asked
+	local fold = ui.acctFold or {}
+	ui.acctFold = fold
+	local ckSeen, ckOrder = {}, {}
+	for _, idx in ipairs(order) do
+		local ck = GM.Budget.OwnerKey(list[idx])
+		if not ckSeen[ck] then
+			ckSeen[ck] = true
+			ckOrder[#ckOrder + 1] = ck
+		end
+	end
+	local disp = {}
+	for _, ck in ipairs(ckOrder) do
+		local hdr, kids = nil, {}
+		for _, idx in ipairs(order) do
+			local a = list[idx]
+			if GM.Budget.OwnerKey(a) == ck then
+				if a.pool then hdr = { a = a, idx = idx }
+				else kids[#kids + 1] = { a = a, idx = idx } end
+			end
+		end
+		if hdr then
+			disp[#disp + 1] = { e = hdr, ck = ck,
+				fold = #kids > 0
+					and (fold[ck] and "closed" or "open") or nil }
+			if not fold[ck] then
+				for _, k in ipairs(kids) do
+					disp[#disp + 1] = { e = k, indent = 1 }
+				end
+			end
+		else
+			-- no pool row for this owner — render flat
+			for _, k in ipairs(kids) do
+				disp[#disp + 1] = { e = k }
+			end
+		end
+	end
+	local maxOff = math.max(0, #disp - #ui.acctRows)
 	if (ui.aScroll or 0) > maxOff then ui.aScroll = maxOff end
 	for i, row in ipairs(ui.acctRows) do
-		local idx = order[i + (ui.aScroll or 0)]
-		local a = idx and list[idx]
-		if a then
+		local d = disp[i + (ui.aScroll or 0)]
+		if d then
 			row:Show()
-			W.PaintAcctRow(row, a, idx)
+			local ck = d.ck
+			W.PaintAcctRow(row, d.e.a, d.e.idx, {
+				indent = d.indent,
+				fold = d.fold,
+				onFold = d.fold and function()
+					fold[ck] = not fold[ck]
+					RefreshAccounts()
+				end or nil,
+			})
 		else
 			row:Hide()
 		end
@@ -1027,26 +1073,26 @@ local function Build()
 			RefreshAccounts()
 		end
 	end)
+	-- add-row rides the strip right under the gold line — anchored
+	-- to the panel top so the create affordance can never sit below
+	-- a clipped or crowded fold
+	ui.acctAdd = W.AcctAdd(accts)
+	ui.acctAdd:SetPoint("TOPLEFT", 8, -36)
 	ui.acctRows = {}
 	local ACCT_ROWS = 7
 	for i = 1, ACCT_ROWS do
 		local row = W.AcctRow(accts, i, false)
-		-- past the gold strip: rows hang under it like journal rows
-		-- hang under their headers
-		row:SetPoint("TOPLEFT", 8, -44 - (i - 1) * 26)
+		row:SetPoint("TOPLEFT", 8, -64 - (i - 1) * 26)
 		row:SetWidth(696)
 		ui.acctRows[i] = row
 	end
 	-- onboarding line: shows only while the auto-seeded pool is the
-	-- whole list — the add-row is already right there
+	-- whole list — it sits in the empty row slot under the pool
 	ui.acctOnboard = GM.MakeFontString(accts, GM.FONT, 9, "secondary")
-	ui.acctOnboard:SetPoint("TOPLEFT", 8, -72)
+	ui.acctOnboard:SetPoint("TOPLEFT", 8, -94)
 	ui.acctOnboard:SetWordWrap(false)
-	ui.acctOnboard:SetText("create an account below to earmark gold — "
+	ui.acctOnboard:SetText("create an account above to earmark gold — "
 		.. "e.g. a 10% SAVE or an AH float")
-	-- same add-row contract as the dashboard BUDGETS panel
-	ui.acctAdd = W.AcctAdd(accts)
-	ui.acctAdd:SetPoint("BOTTOMLEFT", 10, 26)
 	ui.acctHint = GM.MakeFontString(accts, GM.FONT, 9, "secondary")
 	ui.acctHint:SetPoint("BOTTOMLEFT", 10, 6)
 	ui.acctHint:SetText(

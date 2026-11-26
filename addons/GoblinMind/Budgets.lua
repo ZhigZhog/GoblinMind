@@ -112,7 +112,7 @@ function B.Crest(ck)
 	local ch = B.CharInfo(ck)
 	local fac = ch and ch.fac
 	if fac ~= "Alliance" and fac ~= "Horde" then return "" end
-	return "|TInterface\\TargetingFrame\\UI-PVP-" .. fac .. ":13|t "
+	return "|TInterface\\TargetingFrame\\UI-PVP-" .. fac .. ":16|t "
 end
 
 -- char colors: a per-char override (ch.col = "rrggbb"), else the

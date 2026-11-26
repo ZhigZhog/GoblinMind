@@ -834,8 +834,19 @@ function W.AcctRow(parent, idx, compact)
 	row.name:SetPoint("LEFT", 0, 0)
 	row.name:SetWidth(nameW)
 	row.name:SetJustifyH("LEFT")
+	row.nameBtn = nameBtn
+	-- fold chevron: overview nests each char's named accounts under
+	-- their pool — the chevron rides the pool row's left gutter and
+	-- only paints when the row carries children
+	local fold = CreateFrame("Button", nil, row)
+	fold:SetSize(14, 18)
+	fold:SetPoint("LEFT", 2, 0)
+	fold.text = GM.MakeFontString(fold, GM.FONT_BOLD, 10, "textDim")
+	fold.text:SetPoint("CENTER")
+	fold:Hide()
+	row.fold = fold
 	local eb = W.EditBox(row, nameW + 6)
-	eb:SetPoint("LEFT", 0, 0)
+	eb:SetPoint("LEFT", nameBtn, "LEFT", 0, 0)
 	row.name:SetWordWrap(false)
 	eb:SetHeight(18)
 	eb:Hide()
@@ -872,21 +883,30 @@ function W.AcctRow(parent, idx, compact)
 	kind.text:SetWordWrap(false)
 	kind:SetScript("OnClick", function()
 		local a = GM.Budget.List()[row._idx or idx]
-		if not a then return end
+		if not a or a.pool then return end
+		-- pools can't rekind — the pool flag owns the row's function
+		-- regardless of the underlying kind field
 		local order = GM.Budget.KIND_ORDER
 		for j, k in ipairs(order) do
 			if k == a.kind then
-				GM.Budget.SetKind(idx, order[j % #order + 1])
+				GM.Budget.SetKind(row._idx or idx, order[j % #order + 1])
 				break
 			end
 		end
 		AcctRefresh()
 	end)
-	W.Tip(kind, function() return {
-		"Account function",
-		"craft: mat/craft spends · ah: auction spends",
-		"save: reserve that never leaves",
-		"click to cycle" } end)
+	W.Tip(kind, function()
+		local a = GM.Budget.List()[row._idx or idx]
+		if a and a.pool then return {
+			"The char's purse",
+			"every copper no other account claims —",
+			"it can't change function" } end
+		return {
+			"Account function",
+			"craft: mat/craft spends · ah: auction spends",
+			"save: reserve that never leaves",
+			"click to cycle" }
+	end)
 	row.kind = kind
 
 	local grp = CreateFrame("Button", nil, row)
@@ -901,23 +921,32 @@ function W.AcctRow(parent, idx, compact)
 	grp:SetScript("OnClick", function()
 		local a = GM.Budget.List()[row._idx or idx]
 		if not a then return end
-		local paths = GM.Budget.GroupPaths()
-		local cur, nextPath = a.group, nil
-		if not cur then
-			nextPath = paths[1]
-		else
-			for j, p in ipairs(paths) do
-				if p == cur then nextPath = paths[j + 1] break end
-			end
+		local ri = row._idx or idx
+		-- real dropdown: blind cycling through a dozen group paths
+		-- read like a dead text box
+		local entries = { {
+			label = "— unbound",
+			checked = not a.group,
+			cb = function() GM.Budget.SetGroup(ri, nil) AcctRefresh() end,
+		} }
+		for _, p in ipairs(GM.Budget.GroupPaths()) do
+			local path = p
+			entries[#entries + 1] = {
+				label = path,
+				checked = a.group == path,
+				cb = function()
+					GM.Budget.SetGroup(ri, path)
+					AcctRefresh()
+				end,
+			}
 		end
-		GM.Budget.SetGroup(idx, nextPath)
-		AcctRefresh()
+		W.PopupMenu(grp, entries, { w = math.max(160, grpW + 40) })
 	end)
 	W.Tip(grp, function() return {
 		"Group binding",
 		"items in this group route their",
 		"spends and sales to this account",
-		"click to cycle · wraps to unbound" } end)
+		"click for the group list" } end)
 	row.grp = grp
 
 	row.alloc = GM.MakeFontString(row, GM.FONT, 10, "text")
@@ -973,8 +1002,21 @@ end
 
 -- unified paint: alloc text per kind, save accounts show "reserved",
 -- spend accounts show left + spent (red when overdrawn)
-function W.PaintAcctRow(row, a, idx)
+function W.PaintAcctRow(row, a, idx, opts)
+	opts = opts or {}
 	row._idx = idx
+	-- nest/fold: children indent past the chevron gutter; pool rows
+	-- with kids carry the fold glyph at the far left
+	row.nameBtn:ClearAllPoints()
+	row.nameBtn:SetPoint("LEFT",
+		2 + (opts.indent or 0) * 16 + (opts.fold and 14 or 0), 0)
+	if opts.fold then
+		row.fold:Show()
+		row.fold.text:SetText(opts.fold == "closed" and "▸" or "▾")
+		row.fold:SetScript("OnClick", opts.onFold)
+	else
+		row.fold:Hide()
+	end
 	local ck = GM.Budget.OwnerKey and GM.Budget.OwnerKey(a)
 	local label = a.name
 	if ck then
@@ -1052,12 +1094,12 @@ function W.AcctAdd(parent)
 	amt:SetPoint("LEFT", kindBtn, "RIGHT", 6, 0)
 
 	local btn = CreateFrame("Button", nil, f)
-	btn:SetSize(26, 20)
+	btn:SetSize(110, 20)
 	btn:SetPoint("LEFT", amt, "RIGHT", 6, 0)
 	GM.Panel(btn, "accent")
-	btn.text = GM.MakeFontString(btn, GM.FONT_BOLD, 11, "contLowest")
+	btn.text = GM.MakeFontString(btn, GM.FONT_BOLD, 9, "contLowest")
 	btn.text:SetPoint("CENTER")
-	btn.text:SetText("+")
+	btn.text:SetText(LT("+ NEW ACCOUNT"))
 
 	local hint = GM.MakeFontString(f, GM.FONT, 9, "textDim")
 	hint:SetPoint("LEFT", btn, "RIGHT", 8, 0)
