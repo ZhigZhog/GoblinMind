@@ -158,3 +158,96 @@ function V.Execute(step)
 	if step.kind == "vendbuy" then return DoBuy(step) end
 	if step.kind == "vendsell" then return DoSell(step) end
 end
+
+-- ==== universal merchant movement detection ====
+-- Every vendor sale lands in the buyback list no matter who made it
+-- — our vendoring UI, destroy plans, or a bare Blizzard right-click.
+-- Diffing the slots is the single detector for sells: new qty = a
+-- sale (vendor leg), vanished qty = a buyback (vendorbuy). Buys get
+-- a hooksecurefunc on the global so manual purchases journal too;
+-- GM.MerchantBuy's own calls set _hookSkip so they don't double.
+local bbSnap = {}
+
+local function ReadBuyback()
+	local out = {}
+	local n = GetNumBuybackItems and GetNumBuybackItems() or 0
+	for i = 1, n do
+		local link = GetBuybackItemLink and GetBuybackItemLink(i)
+		local _, _, price, qty = GetBuybackItemInfo
+			and GetBuybackItemInfo(i)
+		local id = GM.LinkID(link)
+		if id then
+			out[i] = { id = id, qty = qty or 1, price = price or 0 }
+		end
+	end
+	return out
+end
+
+local function LastUnit(snap, id)
+	for _, e in pairs(snap) do
+		if e.id == id and e.qty > 0 and e.price > 0 then
+			return e.price / e.qty
+		end
+	end
+end
+
+local function BuybackDiff()
+	local now = ReadBuyback()
+	local before, after = {}, {}
+	for _, e in pairs(bbSnap) do
+		before[e.id] = (before[e.id] or 0) + e.qty
+	end
+	for _, e in pairs(now) do
+		after[e.id] = (after[e.id] or 0) + e.qty
+	end
+	for id, q in pairs(after) do
+		local d = q - (before[id] or 0)
+		if d > 0 then
+			GM.Ledger.Record("vendor", { itemID = id, qty = d,
+				unit = LastUnit(now, id) })
+		elseif d < 0 then
+			GM.Ledger.Record("vendorbuy", { itemID = id, qty = -d,
+				unit = LastUnit(bbSnap, id) })
+		end
+	end
+	for id, q in pairs(before) do
+		if not after[id] then
+			GM.Ledger.Record("vendorbuy", { itemID = id, qty = q,
+				unit = LastUnit(bbSnap, id) })
+		end
+	end
+	bbSnap = now
+end
+
+local bbf = CreateFrame("Frame")
+pcall(bbf.RegisterEvent, bbf, "MERCHANT_SHOW")
+pcall(bbf.RegisterEvent, bbf, "MERCHANT_UPDATE")
+pcall(bbf.RegisterEvent, bbf, "BUYBACK_UPDATE")
+bbf:SetScript("OnEvent", function(_, e)
+	if e == "MERCHANT_SHOW" then
+		bbSnap = ReadBuyback()
+	else
+		BuybackDiff()
+	end
+end)
+
+if hooksecurefunc then
+	hooksecurefunc("BuyMerchantItem", function(idx, count)
+		if V._hookSkip then return end
+		-- inside a pcall'd BuyMerchantItem the post-hook's errors
+		-- would mark the purchase failed — journal defensively
+		pcall(function()
+			local link = GetMerchantItemLink
+				and GetMerchantItemLink(idx)
+			local id = link and GM.LinkID(link)
+			local okI, price, stackQty = pcall(function()
+				local _, _, p, q = GetMerchantItemInfo(idx)
+				return p, q end)
+			if id and okI and price and price > 0 then
+				GM.Ledger.Record("vendorbuy", { itemID = id,
+					qty = count or 1,
+					unit = math.floor(price / (stackQty or 1)) })
+			end
+		end)
+	end)
+end

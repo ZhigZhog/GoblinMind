@@ -1254,11 +1254,15 @@ function GM.MerchantBuy(idx, n)
 			and info.stackCount > 0 and info.stackCount or n
 	end
 	local want = n
+	-- the BuyMerchantItem hook journals manual purchases — flag ours
+	-- so the journal block below stays the single write for this buy
+	if GM.Vendoring then GM.Vendoring._hookSkip = true end
 	while n > 0 do
 		local c = math.min(n, max)
 		if not pcall(BuyMerchantItem, idx, c) then break end
 		n = n - c
 	end
+	if GM.Vendoring then GM.Vendoring._hookSkip = nil end
 	-- journal what actually bought — merchant price is per stack,
 	-- divided by the stack qty; alt-currency goods skip the ledger
 	local bought = want - n
