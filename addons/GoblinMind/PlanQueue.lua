@@ -1113,11 +1113,9 @@ function PQ.ExecuteNext()
 		return
 	end
 	if result then
-		if (step.kind == "buy" or step.kind == "vendbuy")
-			and GM.Budget and not bagDone then
-			GM.Budget.Record(step, step.cost
-				or (step.unit or 0) * (step.qty or 1))
-		end
+		-- no budget write here: the buy/vendorbuy journal entry is the
+		-- sole envelope mutator (it fires for plan buys and hand buys
+		-- alike); a second debit at click time double-counted the spend
 		PQ.budgetConfirm = nil
 		PQ.budgetWarn = nil
 		PQ.submitFlash = GetTime()

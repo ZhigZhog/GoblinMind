@@ -312,18 +312,25 @@ function GM.Ledger.Add(kind, itemID, qty, unit, extra)
 	elseif kind == "bid" then
 		s.bidQ = (s.bidQ or 0) + qty
 	end
-	-- sell proceeds return to the matching budget envelope
-	if kind == "sell" and GM.Budget and GM.Budget.CreditSale then
-		GM.Budget.CreditSale(itemID, qty * (unit or 0))
-	end
-	-- vendor movements ride the vendor envelope: sales credit it,
-	-- merchant buys draw it down — group-bound accounts route the
-	-- item's flows to their own purse first
-	if kind == "vendor" and GM.Budget and GM.Budget.CreditVendor then
-		GM.Budget.CreditVendor(itemID, qty * (unit or 0))
-	elseif (kind == "vendorbuy" or kind == "trainer") and GM.Budget
-		and GM.Budget.DebitVendor then
-		GM.Budget.DebitVendor(itemID, qty * (unit or 0))
+	-- envelope routing: proceeds credit the item's kind-preference
+	-- purse, purchases debit it — bound group first, kind-matched
+	-- otherwise. The journal is the ONLY spend writer so plan buys
+	-- and hand buys can never diverge (the old B.Record call at
+	-- step execution double-debited every planned vendor buy).
+	if GM.Budget and GM.Budget.CreditTo then
+		local flowTot = (extra and extra.cost) or qty * (unit or 0)
+		if kind == "sell" then
+			GM.Budget.CreditTo(itemID, flowTot, "ah")
+		elseif kind == "vendor" then
+			GM.Budget.CreditTo(itemID, flowTot, "vendor")
+		elseif kind == "vendorbuy" or kind == "trainer" then
+			GM.Budget.DebitTo(itemID, flowTot, "vendor")
+		elseif kind == "buy" or kind == "bidwon" then
+			GM.Budget.DebitTo(itemID, flowTot, "ah")
+		elseif kind == "post" then
+			local dep = extra and extra.dep or 0
+			if dep > 0 then GM.Budget.DebitTo(itemID, dep, "ah") end
+		end
 	end
 	-- resample wealth on stock txns — buys/posts change the held vs
 	-- posted split at event resolution, not just the 5-min tick

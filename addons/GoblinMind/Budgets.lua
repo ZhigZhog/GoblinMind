@@ -499,41 +499,21 @@ function B.Check(step, cost)
 	return false, spendable, 0
 end
 
--- draw the cost down against matching accounts in order
-function B.Record(step, cost)
-	if not cost or cost <= 0 then return end
-	local matching = MatchingAccounts(step)
-	if #matching == 0 then return end
-	local owed = cost
-	for _, a in ipairs(matching) do
-		if a.kind ~= "save" and owed > 0 then
-			local take = math.min(B.Remaining(a), owed)
-			a.spent = (a.spent or 0) + take
-			owed = owed - take
-		end
-	end
-	-- overspend lands on the first matching account so the row shows
-	-- the hole rather than silently dropping it
-	if owed > 0 then
-		for _, a in ipairs(matching) do
-			if a.kind ~= "save" then
-				a.spent = (a.spent or 0) + owed
-				break
-			end
-		end
-	end
-	for _, a in ipairs(matching) do B.WarnOverdrawn(a) end
-	B.Sample()
-end
+-- the journal is the sole envelope mutator: every purchase kind
+-- debits DebitTo, every proceeds kind credits CreditTo — plan buys
+-- and hand buys can never diverge because both end as journal
+-- entries. B.Check stays the pre-spend warning; there is no other
+-- spend writer.
 
--- sale proceeds top the envelope back up (trading float): bound
--- account for the item's group, else the first AH account
-function B.CreditSale(itemID, amount)
+-- proceeds top an envelope back up (trading float): the bound
+-- account for the item's group takes it, else the first
+-- kind-matched account
+function B.CreditTo(itemID, amount, kind)
 	if not amount or amount <= 0 then return end
-	local target = BoundAccount(itemID, "ah")
+	local target = BoundAccount(itemID, kind)
 	if not target then
 		for _, a in ipairs(DB()) do
-			if a.kind == "ah" and IsSelf(a) then target = a break end
+			if a.kind == kind and IsSelf(a) then target = a break end
 		end
 	end
 	if target then
@@ -542,30 +522,14 @@ function B.CreditSale(itemID, amount)
 	end
 end
 
--- NPC-vendor envelope: vendor sales credit it, vendor buys draw it
--- down — separate from AH so flip margins don't pollute the
--- auction float. A group-bound account takes the item's flows
--- first (an "Ammo" envelope buys ammo, sells ammo); unbound falls
--- back to the first self-owned vendor account.
-function B.CreditVendor(itemID, amount)
+-- spends draw an envelope down: a bound account is the designated
+-- purse for this item's spends — the hole lands there even when it
+-- can't cover (save accounts never pay spends). Unbound flows
+-- waterfall over kind-matched accounts; overspend lands on the
+-- first so the row shows the hole instead of dropping it
+function B.DebitTo(itemID, amount, kind)
 	if not amount or amount <= 0 then return end
-	local target = BoundAccount(itemID, "vendor")
-	if not target then
-		for _, a in ipairs(DB()) do
-			if a.kind == "vendor" and IsSelf(a) then target = a break end
-		end
-	end
-	if target then
-		target.income = (target.income or 0) + amount
-		B.Sample()
-	end
-end
-function B.DebitVendor(itemID, amount)
-	if not amount or amount <= 0 then return end
-	-- a bound account is the designated purse for this item's
-	-- spends — the hole lands there even when it can't cover
-	-- (save accounts never pay spends, same rule as B.Record)
-	local bound = BoundAccount(itemID, "vendor")
+	local bound = BoundAccount(itemID, kind)
 	if bound and bound.kind ~= "save" then
 		bound.spent = (bound.spent or 0) + amount
 		B.WarnOverdrawn(bound)
@@ -574,24 +538,22 @@ function B.DebitVendor(itemID, amount)
 	end
 	local owed = amount
 	for _, a in ipairs(DB()) do
-		if a.kind == "vendor" and IsSelf(a) and owed > 0 then
+		if a.kind == kind and IsSelf(a) and owed > 0 then
 			local take = math.min(B.Remaining(a), owed)
 			a.spent = (a.spent or 0) + take
 			owed = owed - take
 		end
 	end
-	-- overspend lands on the first vendor account — same rule as
-	-- B.Record, the row shows the hole instead of dropping it
 	if owed > 0 then
 		for _, a in ipairs(DB()) do
-			if a.kind == "vendor" and IsSelf(a) then
+			if a.kind == kind and IsSelf(a) then
 				a.spent = (a.spent or 0) + owed
 				break
 			end
 		end
 	end
 	for _, a in ipairs(DB()) do
-		if a.kind == "vendor" and IsSelf(a) then B.WarnOverdrawn(a) end
+		if a.kind == kind and IsSelf(a) then B.WarnOverdrawn(a) end
 	end
 	B.Sample()
 end
