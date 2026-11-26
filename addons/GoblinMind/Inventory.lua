@@ -421,7 +421,8 @@ local function SaveOwned()
 		if a.itemID then
 			rows[fp] = { itemID = a.itemID, qty = a.qty,
 				buyout = a.buyout, tLeft = a.tLeft, at = a.at,
-				n = a.n, dep = a.dep, aid = a.aid, name = a.name }
+				n = a.n, dep = a.dep, aid = a.aid, name = a.name,
+				itemKey = a.itemKey, itemLink = a.itemLink }
 		end
 	end
 	local bs = {}
@@ -452,7 +453,11 @@ local function LoadOwned()
 	for fp, a in pairs(snap.rows or {}) do
 		local e = { fp = fp, itemID = a.itemID, qty = a.qty,
 			buyout = a.buyout, tLeft = a.tLeft, at = a.at, n = a.n,
-			dep = a.dep, aid = a.aid, name = a.name }
+			dep = a.dep, aid = a.aid, name = a.name,
+			-- suffix data must survive hydration: MergeOwnAsks
+			-- matches owned lots to the scan under their exact
+			-- itemKey, and the merged ask's link feeds step labels
+			itemKey = a.itemKey, itemLink = a.itemLink }
 		-- a snapshot row whose listing deadline elapsed while offline
 		-- is dead on arrival — hydrating it counts an expired auction
 		-- as live wealth until the first enum corrects it (a flat
@@ -567,7 +572,8 @@ function GM.Inventory.RefreshOwned()
 					or nil,
 				qty = info.quantity or 1,
 				-- per-ITEM buyout (Forever convention — not lot total)
-				buyout = info.buyoutAmount or info.bidAmount,
+				buyout = info.buyoutAmount or info.buyout
+					or info.bidAmount,
 				tLeft = info.timeLeftSeconds,
 				at = time(),
 				-- listing deposit estimate, captured once: the post,

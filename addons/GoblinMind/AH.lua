@@ -467,7 +467,8 @@ function GM.AH.CollectCommodityAsks(itemID)
 				own = (r.containsOwnerItem or r.isOwned) or nil })
 		end
 	end
-	GM.AH.MergeOwnAsks(asks, GM.AH.scanItemKey)
+	local apiOwn, cand, merged =
+		GM.AH.MergeOwnAsks(asks, GM.AH.scanItemKey)
 	table.sort(asks, function(a, b) return a.unit < b.unit end)
 	-- flag rows before delivery — solver/sniper consumers price off
 	-- bait/step marks; unflagged rows feed the drag. Suffixed scans
@@ -483,7 +484,10 @@ function GM.AH.CollectCommodityAsks(itemID)
 	-- did (throttle drop reads as both counts zero + no events)
 	GM.AH.lastScanDiag = { id = itemID, n = #asks, src = "comm",
 		itemEvt = GM.AH.itemEvtSeen or false,
-		commEvt = GM.AH.commEvtSeen or false, t = time() }
+		commEvt = GM.AH.commEvtSeen or false, t = time(),
+		-- own-merge trail: apiOwn rows flagged by the API, cand
+		-- owned-cache lots matching the scan, merged appended
+		apiOwn = apiOwn, ownCand = cand, ownMerged = merged }
 	GM.AH.scanT[itemID], GM.AH.scanN[itemID] = time(), #asks
 	if GM.AH.onScanDone then GM.AH.onScanDone(asks) end
 end
@@ -531,7 +535,7 @@ function GM.AH.CollectItemAsks()
 			end
 		end
 	end
-	GM.AH.MergeOwnAsks(asks, key)
+	local apiOwn, cand, merged = GM.AH.MergeOwnAsks(asks, key)
 	table.sort(asks, function(a, b) return a.unit < b.unit end)
 	local sfx = GM.AH.scanItemKey and (GM.AH.scanItemKey.itemSuffix or 0) or 0
 	if sfx == 0 and GM.Intel and GM.Intel.AnalyzeItem then
@@ -541,7 +545,8 @@ function GM.AH.CollectItemAsks()
 	GM.AH.scanConsumed = true
 	GM.AH.lastScanDiag = { id = GM.AH.scanItemID, n = #asks, src = "item",
 		itemEvt = GM.AH.itemEvtSeen or false,
-		commEvt = GM.AH.commEvtSeen or false, t = time() }
+		commEvt = GM.AH.commEvtSeen or false, t = time(),
+		apiOwn = apiOwn, ownCand = cand, ownMerged = merged }
 	if GM.AH.scanItemID then
 		GM.AH.scanT[GM.AH.scanItemID], GM.AH.scanN[GM.AH.scanItemID] =
 			time(), #asks
@@ -558,23 +563,48 @@ end
 function GM.AH.MergeOwnAsks(asks, key)
 	if not (key and key.itemID and GM.Inventory
 		and GM.Inventory.auctions) then return end
-	local have = {}
+	local have, priced, apiOwn = {}, {}, 0
 	for _, a in ipairs(asks) do
 		if a.id then have[a.id] = true end
-		if a.own then return end -- API already answers own rows
+		-- an API-flagged own row already occupies its price/qty
+		-- slot — the owned cache's matching lot must not duplicate
+		-- it. The old any-own early return skipped the REST of our
+		-- listings whenever one row was flagged, so a client that
+		-- flags only the containing tier leaked our other lots in
+		-- as foreign asks — the buy-your-own-listing plan
+		if a.own then
+			apiOwn = apiOwn + 1
+			if a.qty and a.unit then
+				priced[(a.qty or 1) .. ":" .. a.unit] = true
+			end
+		end
 	end
 	local suffix = key.itemSuffix or 0
+	local cand, merged = 0, 0
 	for _, a in pairs(GM.Inventory.auctions) do
 		local k = a.itemKey
 		if a.itemID == key.itemID and a.buyout
-			and (k and (k.itemSuffix or 0) or 0) == suffix
-			and not (a.aid and have[a.aid]) then
-			tinsert(asks, { id = a.aid, qty = a.qty or 1,
-				unit = a.buyout, total = a.buyout * (a.qty or 1),
-				own = true, seller = UnitName("player"),
-				link = a.itemLink })
+			and (k and (k.itemSuffix or 0) or 0) == suffix then
+			cand = cand + 1
+			if not (a.aid and have[a.aid])
+				and not priced[(a.qty or 1) .. ":" .. a.buyout] then
+				-- identical listings fold into one cache entry with n
+				-- count + a keys list — emit a row per lot so each
+				-- keeps its own cancel target
+				for j = 1, math.max(1, a.n or 1) do
+					merged = merged + 1
+					tinsert(asks, {
+						id = (a.keys and a.keys[j]) or a.aid,
+						qty = a.qty or 1,
+						unit = a.buyout,
+						total = a.buyout * (a.qty or 1),
+						own = true, seller = UnitName("player"),
+						link = a.itemLink })
+				end
+			end
 		end
 	end
+	return apiOwn, cand, merged
 end
 -- book[itemID] = { mb = cheapest unit incl. ours, mbx = cheapest unit
 -- excluding ours, sup = units listed, n = auctions }. Subscribers get
@@ -944,6 +974,11 @@ function GM.AH.DumpRows(itemID, maxRows)
 		GM.Print(format("last scan: id=%s n=%d src=%s itemEvt=%s commEvt=%s · %ds ago",
 			tostring(d.id), d.n, d.src, tostring(d.itemEvt),
 			tostring(d.commEvt), time() - d.t))
+		if d.apiOwn or d.ownCand or d.ownMerged then
+			GM.Print(format("own merge: apiFlagged=%s cacheCand=%s merged=%s",
+				tostring(d.apiOwn), tostring(d.ownCand),
+				tostring(d.ownMerged)))
+		end
 	end
 	if itemID and GM.AH.bookLots and GM.AH.bookLotsT then
 		local n = 0
