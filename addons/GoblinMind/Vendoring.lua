@@ -191,6 +191,15 @@ local function LastUnit(snap, id)
 	end
 end
 
+-- buyback rows on Forever can carry no price — the item's own
+-- vendor-sell field (GetItemInfo #11) is the authoritative unit:
+-- a merchant pays exactly that per piece
+local function VendorUnit(id)
+	local info = C_Item and C_Item.GetItemInfo or GetItemInfo
+	local sell = info and select(11, info(id))
+	return sell and sell > 0 and sell or nil
+end
+
 local function BuybackDiff()
 	local now = ReadBuyback()
 	local before, after = {}, {}
@@ -204,16 +213,16 @@ local function BuybackDiff()
 		local d = q - (before[id] or 0)
 		if d > 0 then
 			GM.Ledger.Record("vendor", { itemID = id, qty = d,
-				unit = LastUnit(now, id) })
+				unit = LastUnit(now, id) or VendorUnit(id) })
 		elseif d < 0 then
 			GM.Ledger.Record("vendorbuy", { itemID = id, qty = -d,
-				unit = LastUnit(bbSnap, id) })
+				unit = LastUnit(bbSnap, id) or VendorUnit(id) })
 		end
 	end
 	for id, q in pairs(before) do
 		if not after[id] then
 			GM.Ledger.Record("vendorbuy", { itemID = id, qty = q,
-				unit = LastUnit(bbSnap, id) })
+				unit = LastUnit(bbSnap, id) or VendorUnit(id) })
 		end
 	end
 	bbSnap = now
