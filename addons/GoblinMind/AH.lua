@@ -786,8 +786,14 @@ end
 
 -- a full scan of either kind is in flight — used to disable the button
 function GM.AH.Busy()
+	-- an in-flight targeted search counts too: its job leaves queryQ
+	-- at dispatch but the single-slot scan state stays live until
+	-- results land — the 10s ceiling writes off a silent scan so a
+	-- dead query can't latch the busy flag forever
+	local searching = GM.AH.scanItemID and not GM.AH.scanConsumed
+		and GetTime() - (GM.AH.scanItemT or 0) < 10
 	return GM.AH.wantBook or GM.AH.collecting or GM.AH.browse
-		or (#queryQ > 0 and true) or nil
+		or (#queryQ > 0 and true) or searching or nil
 end
 
 -- cheapest unit excluding our own listings (decisions use this). A

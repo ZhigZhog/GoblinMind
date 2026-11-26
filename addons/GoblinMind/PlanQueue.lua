@@ -1417,7 +1417,8 @@ local function Data()
 				and format(" · book: %d asks · cheapest %s",
 					PQ.scan.n, GM.Money(PQ.scan.cheapest))
 				or " · book: empty")
-			or " · RESCAN to read the book") or ""
+			or (vm.ahBusy and " · scanning…"
+				or " · RESCAN to read the book")) or ""
 	-- a proper link renders its own name — bare "4238" targets fall
 	-- back to the resolved item name
 	vm.nameTxt = (dispLink and dispLink:find("%[") and dispLink)
@@ -1534,6 +1535,16 @@ function PQ.Refresh(vm)
 		local busy = vm.ahBusy
 		ui.fullScan:SetEnabled(not busy)
 		ui.fullScan.text:SetTextColor(GM.RGB(busy and "textDim" or "text"))
+	end
+	-- RESCAN locks the same way — mid-scan the button reads the
+	-- in-flight state instead of promising a read that can't land
+	-- yet (the market page repaints on bookSubs while our solve is
+	-- still queued, which reads as "the market beat the planner")
+	if ui.rescan then
+		local busy = vm.ahBusy
+		ui.rescan:SetEnabled(not busy)
+		ui.rescan.text:SetText(busy and "SCANNING" or "RESCAN")
+		ui.rescan.text:SetTextColor(GM.RGB(busy and "textDim" or "text"))
 	end
 
 	-- header: icon, name, type/id, flow — the vm resolved the
