@@ -628,7 +628,12 @@ function VU.Refresh(vm)
 						return
 					end
 					if MerchantOpen() and UseItem then
-						pcall(UseItem, bag, slot)
+						if pcall(UseItem, bag, slot) then
+							GM.Ledger.Record("vendor", { itemID = r.id,
+								qty = r.qty,
+								unit = r.qty and r.qty > 0
+									and math.floor(r.val / r.qty) or nil })
+						end
 						VU.Refresh()
 					end
 				end)

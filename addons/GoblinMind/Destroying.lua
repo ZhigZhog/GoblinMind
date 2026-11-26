@@ -241,6 +241,11 @@ function D.SellOne(itemID)
 	local s = GM.Banking.FindStack(itemID)
 	if not s then return true end -- nothing left → done
 	UseItem(s.bag, s.slot)
+	-- the stack just sold at vendor price — proceeds arrive as a
+	-- money message, so the journal leaves the cash leg to Gold
+	local vp = VendorSell(itemID)
+	GM.Ledger.Record("vendor", { itemID = itemID, qty = s.count,
+		unit = vp })
 	return s.count
 end
 

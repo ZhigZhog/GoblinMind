@@ -298,6 +298,10 @@ end
 local TX_LABEL = {
 	buy = "Purchased", sell = "Sold", post = "Posted",
 	cancel = "Cancelled", expire = "Expired", mail = "Mail in",
+	vendor = "Vendored", vendorbuy = "Vendor buy",
+	mailout = "Mail out", destroy = "Destroyed",
+	craftout = "Craft in", craftin = "Crafted",
+	loot = "Looted", bid = "Bid", bidwon = "Bid won",
 }
 
 local function DisplayList(ck)
@@ -635,7 +639,7 @@ end
 -- journal legs render in canonical account order, positive delta =
 -- debit (money/value arriving), negative = credit
 local JE_ORDER = { "cash", "stock", "posted", "dep", "rcbl",
-	"pnl", "ext" }
+	"wip", "pnl", "ext" }
 
 local function PaintJournalRow(r, e)
 	local money = e.u and e.u * e.q

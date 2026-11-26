@@ -2517,6 +2517,15 @@ local function OnLoot()
 	end
 	lastLootSig, lastLootT = sig, t
 
+	-- ledger: everything that enters bags passes through — loot rows
+	-- carry provenance with zero cost basis (a later sale reads as
+	-- pure profit, which is what found value IS)
+	if GM.Ledger and GM.Ledger.Record then
+		for id, q in pairs(items) do
+			GM.Ledger.Record("loot", { itemID = id, qty = q })
+		end
+	end
+
 	-- the window's own target — node objects can report names on
 	-- some clients; the corpse scan below may reassign srcName to
 	-- the dead unit's name instead

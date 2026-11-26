@@ -1253,10 +1253,25 @@ function GM.MerchantBuy(idx, n)
 		max = info and info.stackCount
 			and info.stackCount > 0 and info.stackCount or n
 	end
+	local want = n
 	while n > 0 do
 		local c = math.min(n, max)
 		if not pcall(BuyMerchantItem, idx, c) then break end
 		n = n - c
+	end
+	-- journal what actually bought — merchant price is per stack,
+	-- divided by the stack qty; alt-currency goods skip the ledger
+	local bought = want - n
+	if bought > 0 and GM.Ledger and GM.Ledger.Record then
+		local link = GetMerchantItemLink and GetMerchantItemLink(idx)
+		local id = link and GM.LinkID(link)
+		local okI, price, stackQty = pcall(function()
+			local _, _, p, q = GetMerchantItemInfo(idx)
+			return p, q end)
+		if id and okI and price and price > 0 then
+			GM.Ledger.Record("vendorbuy", { itemID = id, qty = bought,
+				unit = math.floor(price / (stackQty or 1)) })
+		end
 	end
 end
 

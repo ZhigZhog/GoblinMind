@@ -63,11 +63,16 @@ end
 --   rcbl   auction receivable — sold, proceeds not yet collected
 --   pnl    realized trading P&L — CREDIT balance: negative = profit
 --   ext    outside world (loot, vendors, mail, unseen gold flows)
+--   wip    work in progress — mat cost held between craftout/craftin
 local function Journal(kind, s, qty, unit, extra)
-	local cost = s.paidQ and s.paidQ > 0
-		and s.paidT / s.paidQ * qty or 0
+	-- extra.cost overrides the paidQ-average basis — callers that know
+	-- the real basis (craftin = consumed-mat total, bidwon = the bid)
+	-- pass it so the account legs carry the right copper
+	local cost = (extra and extra.cost)
+		or (s.paidQ and s.paidQ > 0
+			and s.paidT / s.paidQ * qty or 0)
 	local dep = extra and extra.dep or 0
-	if kind == "buy" then
+	if kind == "buy" or kind == "vendorbuy" then
 		local tot = qty * (unit or 0)
 		return { cash = -tot, stock = tot }
 	elseif kind == "post" then
@@ -79,10 +84,60 @@ local function Journal(kind, s, qty, unit, extra)
 		local net = qty * (unit or 0)
 		return { rcbl = net + dep, posted = -cost, dep = -dep,
 			pnl = cost - net }
+	elseif kind == "vendor" then
+		-- vendor proceeds arrive as an unattributed money message —
+		-- NO cash leg here: CHAT_MSG_MONEY's Gold(+net) credits cash
+		-- and debits ext, settling this ext credit to zero. Missing
+		-- the message leaves ext drifted (visible) rather than
+		-- double-counted cash
+		local net = qty * (unit or 0)
+		return { stock = -cost, ext = net, pnl = cost - net }
+	elseif kind == "destroy" then
+		-- item written off — its cost basis is a realized loss
+		return { stock = -cost, pnl = cost }
+	elseif kind == "mailout" then
+		-- items leave our accounts; the basis rides ext (the world
+		-- now holds it) — matching mail-in on an alt can't correlate
+		return { stock = -cost, ext = cost }
+	elseif kind == "craftout" then
+		-- mats consumed into the craft — basis parks in wip until
+		-- the product lands (craftin pairs it the same tick)
+		return { stock = -cost, wip = cost }
+	elseif kind == "craftin" then
+		-- product at consumed-mat cost (extra.cost) — the paid basis
+		-- transfers so a later sale reports real profit
+		return { wip = -cost, stock = cost }
+	elseif kind == "bid" then
+		-- bid escrow: cash out, nothing back yet — the win pairs it
+		-- (bidwon: stock in, ext settles); a lost bid refunds via
+		-- mail gold (ext settles through Gold's catch-all)
+		local b = qty * (unit or 0)
+		return { cash = -b, ext = b }
+	elseif kind == "bidwon" then
+		-- won item arrives — cost = the bid paid (extra.cost)
+		return { stock = cost, ext = -cost }
+	elseif kind == "loot" then
+		-- provenance only: zero cost basis — a later sale reads as
+		-- pure profit, which is what found value IS
+		return {}
 	elseif kind == "cancel" or kind == "expire" then
 		return { posted = -cost, stock = cost, dep = -dep, pnl = dep }
 	end
 	-- mail items have no known cost — no money movement to balance
+end
+
+-- paid-basis helpers: Consume decrements the on-hand basis at its
+-- running average (FIFO-ish), Gain adds a fresh lot
+local function Consume(s, qty)
+	if not (s.paidQ and s.paidQ > 0) then return end
+	local avg = s.paidT / s.paidQ
+	local d = math.min(qty, s.paidQ)
+	s.paidQ = s.paidQ - d
+	s.paidT = math.max(0, (s.paidT or 0) - d * avg)
+end
+local function Gain(s, qty, tot)
+	s.paidQ = (s.paidQ or 0) + qty
+	s.paidT = (s.paidT or 0) + tot
 end
 
 function GM.Ledger.Add(kind, itemID, qty, unit, extra)
@@ -97,17 +152,24 @@ function GM.Ledger.Add(kind, itemID, qty, unit, extra)
 	tx[#tx + 1] = { t = t, ty = kind, i = itemID, q = qty, u = unit,
 		x = extra, je = Journal(kind, s, qty, unit, extra) }
 	if #tx > TX_CAP then table.remove(tx, 1) end
-	if kind == "buy" then
-		local tot = qty * (unit or 0)
+	if kind == "buy" or kind == "bidwon" then
+		-- bidwon counts in buy aggregates too: a won bid IS a purchase
+		-- (unit may be nil on bidwon — extra.cost carries the total)
+		local tot = extra and extra.cost or qty * (unit or 0)
 		s.buyQ = (s.buyQ or 0) + qty
 		s.buyT = (s.buyT or 0) + tot
-		s.paidQ = (s.paidQ or 0) + qty
-		s.paidT = (s.paidT or 0) + tot
+		Gain(s, qty, tot)
 		if unit then
 			s.buyMin = math.min(s.buyMin or math.huge, unit)
 			s.buyMax = math.max(s.buyMax or 0, unit)
 		end
 		s.lastBuy = t
+	elseif kind == "vendorbuy" then
+		-- vendor stock is a purchase but not a market trade — own
+		-- counters keep buy aggregates market-only
+		s.vendorBuyQ = (s.vendorBuyQ or 0) + qty
+		s.vendorBuyT = (s.vendorBuyT or 0) + qty * (unit or 0)
+		Gain(s, qty, qty * (unit or 0))
 	elseif kind == "sell" then
 		s.sellQ = (s.sellQ or 0) + qty
 		s.sellT = (s.sellT or 0) + qty * (unit or 0)
@@ -116,12 +178,13 @@ function GM.Ledger.Add(kind, itemID, qty, unit, extra)
 			s.sellMax = math.max(s.sellMax or 0, unit)
 		end
 		s.lastSell = t
-		if s.paidQ and s.paidQ > 0 then
-			local avg = s.paidT / s.paidQ
-			local d = math.min(qty, s.paidQ)
-			s.paidQ = s.paidQ - d
-			s.paidT = math.max(0, (s.paidT or 0) - d * avg)
-		end
+		Consume(s, qty)
+	elseif kind == "vendor" then
+		-- vendor sales are revenue but not market velocity — own
+		-- counter keeps sellQ meaning "auctioned"
+		s.vendorQ = (s.vendorQ or 0) + qty
+		s.vendorT = (s.vendorT or 0) + qty * (unit or 0)
+		Consume(s, qty)
 	elseif kind == "post" then
 		s.postQ = (s.postQ or 0) + qty
 		s.postT = (s.postT or 0) + qty * (unit or 0)
@@ -132,6 +195,21 @@ function GM.Ledger.Add(kind, itemID, qty, unit, extra)
 		s.lastExpire = t
 	elseif kind == "mail" then
 		s.mailInQ = (s.mailInQ or 0) + qty
+	elseif kind == "mailout" then
+		s.mailOutQ = (s.mailOutQ or 0) + qty
+		Consume(s, qty)
+	elseif kind == "destroy" then
+		s.destroyQ = (s.destroyQ or 0) + qty
+		Consume(s, qty)
+	elseif kind == "craftout" then
+		Consume(s, qty)
+	elseif kind == "craftin" then
+		s.craftQ = (s.craftQ or 0) + qty
+		Gain(s, qty, extra and extra.cost or 0)
+	elseif kind == "loot" then
+		s.lootQ = (s.lootQ or 0) + qty
+	elseif kind == "bid" then
+		s.bidQ = (s.bidQ or 0) + qty
 	end
 	-- sell proceeds return to the matching budget envelope
 	if kind == "sell" and GM.Budget and GM.Budget.CreditSale then
@@ -184,6 +262,29 @@ function GM.Ledger.Avg(itemID, kind)
 	end
 end
 
+-- the single write path for every wealth-relevant movement. All
+-- detectors call Record — Journal owns the account legs, so call
+-- sites pass facts ({itemID, qty, unit, dep, cost, to, t, ...}),
+-- never pre-computed deltas. kind == "gold" routes to the gold
+-- stream; every other kind journals an item transaction.
+function GM.Ledger.Record(kind, tx)
+	tx = tx or {}
+	if kind == "gold" then
+		return GM.Ledger.Gold(tx.delta or tx.copper or tx.total or 0,
+			tx.src or tx.source)
+	end
+	return GM.Ledger.Add(kind, tx.itemID or tx.id, tx.qty,
+		tx.unit or tx.price or tx.each, tx)
+end
+
+-- cost basis of stock on hand (paidQ running average), copper/unit —
+-- what the paid legs would move at right now. 0 when nothing's
+-- journaled; callers use it for craft-cost transfer
+function GM.Ledger.Basis(itemID)
+	local s = GM.Ledger.db and GM.Ledger.db.itemStats[itemID]
+	return s and s.paidQ and s.paidQ > 0 and s.paidT / s.paidQ or 0
+end
+
 function GM.Ledger.Gold(delta, source)
 	local L = GM.Ledger.db
 	if not L then return end
@@ -211,7 +312,7 @@ end
 -- the journal can't see (untracked gold flow).
 function GM.Ledger.Accounts(charKey)
 	local bal = { cash = 0, stock = 0, posted = 0, dep = 0,
-		rcbl = 0, pnl = 0, ext = 0 }
+		rcbl = 0, pnl = 0, ext = 0, wip = 0 }
 	local c = GoblinMindLedger and GoblinMindLedger.byChar
 		and GoblinMindLedger.byChar[charKey or GM.Ledger._ck]
 	if not c then return bal end

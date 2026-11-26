@@ -214,8 +214,8 @@ f:SetScript("OnEvent", function(_, event, ...)
 	elseif event == "COMMODITY_PURCHASE_SUCCEEDED" then
 		local pc = GM.AH.pendingConfirm
 		if pc then
-			GM.Ledger.Add("buy", pc.itemID, pc.qty,
-				pc.quote and math.floor(pc.quote / pc.qty) or nil)
+			GM.Ledger.Record("buy", { itemID = pc.itemID, qty = pc.qty,
+				unit = pc.quote and math.floor(pc.quote / pc.qty) or nil })
 		end
 		GM.AH.pendingConfirm = nil
 		GM.Print("purchase complete")
@@ -224,7 +224,8 @@ f:SetScript("OnEvent", function(_, event, ...)
 		local pb = GM.AH.pendingBuy
 		if pb then
 			GM.AH.pendingBuy = nil
-			GM.Ledger.Add("buy", pb.itemID, pb.qty, math.floor(pb.total / pb.qty))
+			GM.Ledger.Record("buy", { itemID = pb.itemID, qty = pb.qty,
+				unit = math.floor(pb.total / pb.qty) })
 			GM.Print(GM.CC("pos") .. "buyout confirmed|r")
 		end
 	elseif event == "AUCTION_CANCELED" then
@@ -269,7 +270,9 @@ f:SetScript("OnEvent", function(_, event, ...)
 		for v, u in tostring(msg or ""):gmatch("(%d+)%s*([gsc])") do
 			copper = copper + v * ({ g = 10000, s = 100, c = 1 })[u]
 		end
-		if copper > 0 then GM.Ledger.Gold(copper, "chat") end
+		if copper > 0 then
+			GM.Ledger.Record("gold", { delta = copper, src = "chat" })
+		end
 	elseif event == "AUCTION_HOUSE_POST_ERROR" or event == "AUCTION_MULTISELL_FAILURE" then
 		GM.Print(GM.CC("err") .. "post failed — check the item/stack and try again|r")
 		RefreshUIs()
@@ -1434,6 +1437,11 @@ function GM.AH.Execute(step)
 			return false
 		end
 		GM.Print(format("bidding %s…", GM.Money(step.total)))
+		-- escrow leaves cash now; the win pairs it via bidwon when
+		-- the buyer mail lands, a loss refunds through chat gold
+		GM.Ledger.Record("bid", { itemID = step.itemID, qty = step.qty,
+			unit = step.qty > 0 and math.floor(step.total / step.qty) or nil,
+			auctionID = step.auctionID })
 		C_AuctionHouse.PlaceBid(step.auctionID, step.total)
 		return true
 	elseif step.kind == "confirm" then
@@ -1522,9 +1530,9 @@ function GM.AH.Execute(step)
 			-- suppress by fingerprint too — the owned list can rekey
 			-- the listing on the next snapshot
 			if a.fp then GM.Inventory.recentCancels[a.fp] = now end
-			GM.Ledger.Add("cancel", a.itemID, a.qty, a.buyout,
-				{ dep = a.dep, auctionID = step.auctionID,
-					nm = a.name })
+			GM.Ledger.Record("cancel", { itemID = a.itemID, qty = a.qty,
+				unit = a.buyout, dep = a.dep,
+				auctionID = step.auctionID, nm = a.name })
 		end
 		-- CancelAuction is PROTECTED on Forever — the call throws the
 		-- client-side "Interface action failed" block, never reaches

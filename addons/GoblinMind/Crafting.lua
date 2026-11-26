@@ -614,6 +614,27 @@ end
 -- completed craft cast (spellID == recipeID) decrements the queue by
 -- one and ticks the active plan step — so queue counts always match
 -- what actually got made, whether the call batched or not.
+-- journal one craft: mats out at paid basis (craftout), product in
+-- at the consumed-mat total (craftin) — wip holds the basis between
+-- the pair so a later sale of the product reports real profit
+local function JournalCraft(spellID, n)
+	n = n or 1
+	local r = GoblinMindCrafting.recipes
+		and GoblinMindCrafting.recipes[spellID]
+	if not (r and r.mats and GM.Ledger and GM.Ledger.Record) then return end
+	-- basis BEFORE the craftout consumes paidQ — the product's cost
+	-- must equal what the mats carried, not the post-consume avg
+	local matCost = 0
+	for _, m in ipairs(r.mats) do
+		matCost = matCost + (GM.Ledger.Basis(m.id) or 0) * m.qty
+	end
+	for _, m in ipairs(r.mats) do
+		GM.Ledger.Record("craftout", { itemID = m.id, qty = m.qty * n })
+	end
+	GM.Ledger.Record("craftin", { itemID = r.itemID,
+		qty = (r.numMade or 1) * n, cost = matCost * n })
+end
+
 local function OnCastComplete(unit, castGUID, spellID)
 	if unit ~= "player" or not spellID then return end
 	-- some paths re-fire completion for one cast — same castGUID
@@ -625,6 +646,7 @@ local function OnCastComplete(unit, castGUID, spellID)
 	end
 	if GoblinMindCrafting.queue and GoblinMindCrafting.queue[spellID] then
 		C.QueueAdd(spellID, -1)
+		JournalCraft(spellID)
 		GM.View.Refresh("crafting")
 	end
 	local step = GM.PlanQueue and GM.PlanQueue.ActiveStep
@@ -671,6 +693,7 @@ local function OnCastComplete(unit, castGUID, spellID)
 				if GoblinMindCrafting.queue
 					and GoblinMindCrafting.queue[spellID] then
 					C.QueueAdd(spellID, -extra)
+					JournalCraft(spellID, extra)
 					GM.View.Refresh("crafting")
 				end
 				local st = GM.PlanQueue and GM.PlanQueue.ActiveStep

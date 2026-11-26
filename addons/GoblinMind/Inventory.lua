@@ -159,7 +159,7 @@ local function scanAuctionMail()
 	if now - mailScanAt < 2 then return end
 	mailScanAt = now
 	local L = GM.Ledger.db
-	if not (L and GM.Ledger.Add) then return end
+	if not (L and GM.Ledger.Record) then return end
 	for i = 1, (GetInboxNumItems() or 0) do
 		local invoiceType, itemName, playerName, bid, buyout,
 			deposit, consignment, _, _, _, count, invAid
@@ -185,12 +185,11 @@ local function scanAuctionMail()
 							and math.floor(net / qty + 0.5) or nil
 						local _, _, _, _, _, _, daysLeft =
 							GetInboxHeaderInfo(i)
-						GM.Ledger.Add("sell", id, qty, unit, {
-							dep = deposit or 0, nm = itemName,
-							auctionID = invAid,
+						GM.Ledger.Record("sell", { itemID = id, qty = qty,
+							unit = unit, dep = deposit or 0,
+							nm = itemName, auctionID = invAid,
 							t = daysLeft and math.floor(
-								time() + (daysLeft - 30) * 86400),
-						})
+								time() + (daysLeft - 30) * 86400) })
 						MailMark(fp)
 					end
 				end
@@ -212,11 +211,20 @@ local function scanAuctionMail()
 							and math.floor((bid or 0) / qty + 0.5) or nil
 						local _, _, _, _, _, _, daysLeft =
 							GetInboxHeaderInfo(i)
-						GM.Ledger.Add("buy", id, qty, unit, {
-							nm = itemName,
-							t = daysLeft and math.floor(
-								time() + (daysLeft - 30) * 86400),
-						})
+						local bt = daysLeft and math.floor(
+							time() + (daysLeft - 30) * 86400)
+						if TxnSeen("bid", id, qty) then
+							-- a journaled bid placed the escrow — the
+							-- win pairs it (stock in, ext settles)
+							-- instead of double-debiting cash
+							GM.Ledger.Record("bidwon", {
+								itemID = id, qty = qty, unit = unit,
+								cost = bid or 0, nm = itemName, t = bt })
+						else
+							GM.Ledger.Record("buy", { itemID = id,
+								qty = qty, unit = unit,
+								nm = itemName, t = bt })
+						end
 						MailMark(fp)
 					end
 				end
@@ -238,11 +246,10 @@ local function scanAuctionMail()
 						if TxnSeen(kind, id, qty) then
 							MailMark(fp)
 						else
-							GM.Ledger.Add(kind, id, qty, nil, {
+							GM.Ledger.Record(kind, { itemID = id, qty = qty,
 								nm = subject,
 								t = daysLeft and math.floor(
-									time() + (daysLeft - 30) * 86400),
-							})
+									time() + (daysLeft - 30) * 86400) })
 							MailMark(fp)
 						end
 					end
@@ -478,13 +485,13 @@ local function LoadOwned()
 		-- defer: the ledger isn't guaranteed primed at PLAYER_LOGIN
 		GM.Time.After(2, function()
 			for _, e in ipairs(dead) do
-				if GM.Ledger and GM.Ledger.Add then
+				if GM.Ledger and GM.Ledger.Record then
 					local dep = e.dep or (GM.AH.DepositCost
 						and GM.AH.DepositCost(e.itemID, e.qty or 1)) or 0
 					for _ = 1, (e.n or 1) do
-						GM.Ledger.Add("expire", e.itemID, e.qty, nil,
-							{ auctionID = e.aid or e.fp,
-								dep = dep, nm = e.name })
+						GM.Ledger.Record("expire", { itemID = e.itemID,
+							qty = e.qty, auctionID = e.aid or e.fp,
+							dep = dep, nm = e.name })
 					end
 				end
 			end
@@ -650,9 +657,9 @@ function GM.Inventory.RefreshOwned()
 		if ownedPrimed and extra > 0 and not recentCancels[fp]
 			and t <= postUntil then
 			for _ = 1, extra do
-				GM.Ledger.Add("post", e.itemID, e.qty, e.buyout,
-					{ dep = e.dep, aid = e.aid, dur = e.tLeft,
-						nm = e.name })
+				GM.Ledger.Record("post", { itemID = e.itemID, qty = e.qty,
+					unit = e.buyout, dep = e.dep, aid = e.aid,
+					dur = e.tLeft, nm = e.name })
 			end
 		end
 	end
@@ -698,29 +705,33 @@ function GM.Inventory.RefreshOwned()
 					if removedMarks[fp] then
 						-- the AuctionRemoved notification already said
 						-- cancel — no heuristic needed
-						GM.Ledger.Add("cancel", pl.e.itemID, pl.e.qty,
-							pl.e.buyout, { auctionID = pl.e.aid or fp,
-								dep = pl.e.dep, nm = pl.e.name })
+						GM.Ledger.Record("cancel", { itemID = pl.e.itemID,
+							qty = pl.e.qty, unit = pl.e.buyout,
+							auctionID = pl.e.aid or fp,
+							dep = pl.e.dep, nm = pl.e.name })
 					elseif soldMarks[fp] then
 						-- buyer-found beat the enum drop
 						local unit = pl.e.buyout and pl.e.qty > 0
 							and math.floor(pl.e.buyout * 0.95) or nil
-						GM.Ledger.Add("sell", pl.e.itemID, pl.e.qty,
-							unit, { auctionID = pl.e.aid or fp,
-								dep = pl.e.dep, nm = pl.e.name })
+						GM.Ledger.Record("sell", { itemID = pl.e.itemID,
+							qty = pl.e.qty, unit = unit,
+							auctionID = pl.e.aid or fp,
+							dep = pl.e.dep, nm = pl.e.name })
 					elseif couldExpire or expireMarks[fp] then
 						-- vanished on schedule without a cancel → expiry
-						GM.Ledger.Add("expire", pl.e.itemID, pl.e.qty,
-							nil, { auctionID = pl.e.aid or fp,
-								dep = pl.e.dep, nm = pl.e.name })
+						GM.Ledger.Record("expire", { itemID = pl.e.itemID,
+							qty = pl.e.qty,
+							auctionID = pl.e.aid or fp,
+							dep = pl.e.dep, nm = pl.e.name })
 					else
 						-- buyout is per-item on Forever — sale proceeds
 						-- per unit are buyout minus the 5% AH cut
 						local unit = pl.e.buyout and pl.e.qty > 0
 							and math.floor(pl.e.buyout * 0.95) or nil
-						GM.Ledger.Add("sell", pl.e.itemID, pl.e.qty,
-							unit, { auctionID = pl.e.aid or fp,
-								dep = pl.e.dep, nm = pl.e.name })
+						GM.Ledger.Record("sell", { itemID = pl.e.itemID,
+							qty = pl.e.qty, unit = unit,
+							auctionID = pl.e.aid or fp,
+							dep = pl.e.dep, nm = pl.e.name })
 					end
 				end
 			end

@@ -387,6 +387,9 @@ local function DoMail(step)
 	if attached >= step.qty then
 		SendMail(step.to, (GM.ItemName(step.itemID) or "items")
 			.. " ×" .. attached)
+		-- items left our hands — basis rides ext (Ledger mailout)
+		GM.Ledger.Record("mailout", { itemID = step.itemID,
+			qty = attached, to = step.to })
 		return true
 	end
 	local slot
