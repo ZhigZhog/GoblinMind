@@ -913,15 +913,21 @@ end
 
 -- ============ cost model ============
 
--- per-unit mat price: market first, vendor-sell as the floor (matches
--- TSM's default matPrice fallback chain minus sources we lack)
+-- per-unit mat price: cheapest acquisition route wins — market,
+-- vendor-buy, and the farm-derived cost all compete (TSM's matPrice
+-- chain minus sources we lack, plus the one TSM can't have). A mat
+-- farmable for less than market prices at the farm; vendor-sell
+-- stays the floor when no route has a price.
 function C.MatPrice(itemID)
 	local ah = GM.Price("dbmarket", itemID)
 	local vb = GM.Price("vendorbuy", itemID)
-	-- vendor mats (flux, stock, thread) price at the vendor when it's
-	-- the cheaper source — crafting math stays honest either way
-	if vb and vb > 0 and (not ah or vb < ah) then return vb end
-	return ah or GM.VendorSellPrice(itemID)
+	local fc = GM.Drops and GM.Drops.FarmCost
+		and GM.Drops.FarmCost(itemID)
+	local best
+	for _, p in ipairs({ ah, vb, fc }) do
+		if p and p > 0 and (not best or p < best) then best = p end
+	end
+	return best or GM.VendorSellPrice(itemID)
 end
 
 -- SINGLE execution path for craft economics — every surface that

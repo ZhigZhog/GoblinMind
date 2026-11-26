@@ -707,6 +707,7 @@ ItemVal = function(id)
 	if sell and sell > (best or 0) then return sell end
 	return best or sell
 end
+G.ItemVal = ItemVal -- Drops.FarmCost prices windows identically
 
 -- copper value of one loot window at record time — empty corpses
 -- and money-only corpses correctly price at zero
@@ -2352,30 +2353,15 @@ local function ArmWindow(kind, until_)
 		items = format("%.1fs", arm.until_ - GetTime()) })
 end
 
-local function ItemOfLink(link)
-	if type(link) ~= "string" then return nil end
-	local id = link:match("|Hitem:(%d+)")
-	return id and tonumber(id) or nil
-end
-
--- loot window -> itemID->qty. Same client shape Drops.lua uses:
--- slot 2 is the item NAME, GetLootSlotLink gives the link.
+-- loot window -> itemID->qty. Drops.lua owns THE decode — every
+-- loot consumer derives from GM.Drops.ReadWindow so the yield
+-- records and the drop-rate store can never disagree on what a
+-- window contained
 local function LootItems()
-	if not (GetNumLootItems and GetLootSlotInfo) then return nil end
-	local n = GetNumLootItems()
-	if not n or n < 1 then return nil end
-	local items, first
-	for i = 1, n do
-		local _, lName, lQty, _, _, _, isQuest = GetLootSlotInfo(i)
-		local link = GetLootSlotLink and GetLootSlotLink(i) or lName
-		local id = ItemOfLink(link) or ItemOfLink(lName)
-		if id and not isQuest then
-			items = items or {}
-			items[id] = (items[id] or 0) + (tonumber(lQty) or 1)
-			first = first or id
-		end
-	end
-	return items, first
+	local w = GM.Drops and GM.Drops.ReadWindow
+		and GM.Drops.ReadWindow()
+	if not w then return nil end
+	return w.items, w.firstID
 end
 
 local lastLootSig, lastLootT

@@ -87,38 +87,59 @@ local function SlotSource(i)
 end
 
 local lastLoot -- { sig, t } — LOOT_READY+LOOT_OPENED double-fire guard
+local evCache   -- SrcEV cache, defined with the farm-cost section
+	            -- below; forward-declared so Record can invalidate it
 
-local function Record()
-	if not GM.db then return end
+-- THE loot-window decode — the single parse every consumer derives
+-- from (this module's drop store AND Gather's yield records), so a
+-- window can never produce two disagreeing item maps. Returns:
+--   { n, items = {itemID -> qty}, hits = {itemID -> {qty, srcs}},
+--     winSrc, winName, firstID }
+-- items is the flat per-item map (quest items filtered);
+-- hits keeps the per-slot source attribution the rate store needs.
+function D.ReadWindow()
 	if not (GetNumLootItems and GetLootSlotInfo) then return end
 	local n = GetNumLootItems()
 	if not n or n < 1 then return end
-
 	local winSrc, winName = WinSource()
-	local hits, firstID = {}, nil
+	local items, hits, firstID = {}, {}, nil
 	for i = 1, n do
 		-- slot 2 is the item NAME on this client, not a link
 		local _, lName, lQty, _, _, _, isQuest = GetLootSlotInfo(i)
 		local link = GetLootSlotLink and GetLootSlotLink(i) or lName
 		local id = ItemOfLink(link) or ItemOfLink(lName)
-		local src = SlotSource(i) or winSrc
-		if id and src and not isQuest then
+		if id and not isQuest then
 			firstID = firstID or id
-			local h = hits[id]
-			if not h then
-				h = { qty = 0, srcs = {} }
-				hits[id] = h
+			local q = tonumber(lQty) or 1
+			items[id] = (items[id] or 0) + q
+			local src = SlotSource(i) or winSrc
+			if src then
+				local h = hits[id]
+				if not h then
+					h = { qty = 0, srcs = {} }
+					hits[id] = h
+				end
+				h.qty = h.qty + q
+				h.srcs[src] = true
 			end
-			h.qty = h.qty + (tonumber(lQty) or 1)
-			h.srcs[src] = true
 		end
 	end
 	if not firstID then return end
+	return { n = n, items = items, hits = hits,
+		winSrc = winSrc, winName = winName, firstID = firstID }
+end
+
+local function Record()
+	if not GM.db then return end
+	local w = D.ReadWindow()
+	if not w then return end
+	local n, hits = w.n, w.hits
+	if not next(hits) then return end
 
 	-- dedup: same window reported by both loot events (or a re-open
 	-- within the same instant) records once
 	local t = GetTime and GetTime() or 0
-	local sig = n .. ":" .. firstID
+	local sig = n .. ":" .. w.firstID
 	if lastLoot and lastLoot.sig == sig and t - lastLoot.t < 0.5 then
 		return
 	end
@@ -160,6 +181,7 @@ local function Record()
 		end
 		PruneItem(m)
 	end
+	evCache = {} -- every write moves a rate — EV per window is stale
 end
 
 -- ranked sources for a tooltip: { {src, name, rate, k, n, q, low,
@@ -232,6 +254,51 @@ function D.TopSources(itemID, count)
 	end)
 	while #out > (count or 3) do tremove(out) end
 	return out
+end
+
+-- ============ farm-derived cost ============
+
+-- expected copper per loot window on a source — Σ over every item
+-- it has yielded of (qty/window × ItemVal). Local observations
+-- only: crowd and static rows carry no per-source item map, so a
+-- remote source can't price a window. Cached per window-write —
+-- Record clears the table on every observation.
+evCache = evCache or {}
+local function SrcEV(src)
+	if evCache[src] then return evCache[src] end
+	local n = GM.db and GM.db.dropsN and GM.db.dropsN[src]
+	local val = GM.Gather and GM.Gather.ItemVal
+	if not (n and n > 0 and val) then return end
+	local ev = 0
+	for id, map in pairs(GM.db.drops or {}) do
+		local st = map[src]
+		if st and (st.q or 0) > 0 then
+			ev = ev + (val(id) or 0) * st.q / n
+		end
+	end
+	evCache[src] = ev
+	return ev
+end
+
+-- farm-derived cost of one unit: expected total loot value over
+-- the windows needed to farm it — windows-per-unit × the source's
+-- window EV, cheapest observed source wins. nil when no source has
+-- enough local samples (DISPLAY_FLOOR — below it a lucky streak
+-- prices a mat at pennies)
+function D.FarmCost(itemID)
+	local m = GM.db and GM.db.drops and GM.db.drops[itemID]
+	local nL = GM.db and GM.db.dropsN or {}
+	if not m then return end
+	local best
+	for src, st in pairs(m) do
+		local n, q = nL[src] or 0, st.q or 0
+		local sev = n >= DISPLAY_FLOOR and q > 0 and SrcEV(src)
+		if sev then
+			local c = (n / q) * sev
+			if not best or c < best then best = c end
+		end
+	end
+	return best
 end
 
 local f = CreateFrame("Frame")
