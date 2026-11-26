@@ -1001,9 +1001,12 @@ function GM.AH.DumpRows(itemID, maxRows)
 	end
 	if itemID and GM.AH.bookLots and GM.AH.bookLotsT then
 		local n = 0
-		local prefix = itemID .. ":"
+		-- base lots prefix "id:"; variant lots "vid:sfx:lvl:" —
+		-- the item's id still leads the key body
+		local prefix, vprefix = itemID .. ":", "v" .. itemID .. ":"
 		for fp in pairs(GM.AH.bookLots) do
-			if fp:sub(1, #prefix) == prefix then n = n + 1 end
+			if fp:sub(1, #prefix) == prefix
+				or fp:sub(1, #vprefix) == vprefix then n = n + 1 end
 		end
 		GM.Print(format("bookLots[%d]: %d fingerprints · %ds old",
 			itemID, n, time() - GM.AH.bookLotsT))

@@ -1048,9 +1048,11 @@ function GM.Inventory.MineRows()
 			if a.itemKey and (a.itemKey.itemSuffix or 0) ~= 0 then
 				-- variants are separate markets: the itemID-wide mbx
 				-- mixes every "of X" into one min that says nothing
-				-- about THIS suffix. Only a same-variant ladder (the
-				-- last targeted scan under the matching key) can prove
-				-- undercut — anything else is a false alarm
+				-- about THIS suffix. A same-variant ladder (the last
+				-- targeted scan under the matching key) is the
+				-- freshest proof; the variant's OWN book row (mbx
+				-- under "v<id>:<sfx>:<lvl>") is the standing source —
+				-- the base item's row stays a false alarm
 				local sk = GM.AH.scanItemKey
 				if sk and sk.itemID == a.itemID
 					and (sk.itemSuffix or 0) == a.itemKey.itemSuffix
@@ -1061,6 +1063,12 @@ function GM.Inventory.MineRows()
 						end
 					end
 					live = true -- a scan result is live by definition
+				end
+				if not cheap then
+					local e0 = GM.ItemEntry(a.itemID, a.itemKey)
+					cheap = e0 and e0.mbx ~= math.huge and e0.mbx
+					live = e0 and (e0._src == "mesh" or (e0._src == "book"
+						and GM.AH.BookLive and GM.AH.BookLive()))
 				end
 			else
 				-- mbx through the resolver: live book when it's
