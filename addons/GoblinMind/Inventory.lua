@@ -1231,10 +1231,14 @@ local function Snapshot(where)
 	GoblinMindSettings.inv[me] = snap
 end
 
--- this char's bank: live while the frame is open, snapshot otherwise
+-- this char's bank: live while the bank is open (0 counts — an open
+-- bank is authoritative), snapshot only while it's closed
 function GM.Inventory.BankStored(itemID)
 	local live = GM.BankCount(itemID)
-	if live > 0 then return live end
+	if live > 0 or GM.bankOpen
+		or (BankFrame and BankFrame:IsShown()) then
+		return live
+	end
 	local inv = GoblinMindSettings and GoblinMindSettings.inv
 	if not inv then return 0 end
 	-- newest snapshot keyed to THIS char — bare and realm-qualified
@@ -1361,9 +1365,11 @@ f:SetScript("OnEvent", function(_, event, ...)
 		scanGuildBank()
 	elseif event == "BANKFRAME_OPENED" then
 		-- bank contents resolve async after the frame opens — the
-		-- instant read can be empty, so snapshot on a beat
+		-- instant read can be empty, so snapshot on a beat. The event
+		-- flag is authoritative — the native frame never shows on
+		-- this client (custom bank), so gating on it never fired
 		GM.Time.After(0.5, function()
-			if BankFrame and BankFrame:IsShown() then
+			if GM.bankOpen or (BankFrame and BankFrame:IsShown()) then
 				Snapshot("bank")
 			end
 		end)
@@ -1403,7 +1409,9 @@ f:SetScript("OnEvent", function(_, event, ...)
 		GM.Time.After(0.5, function()
 			f._snapPending = nil
 			Snapshot("bags")
-			if BankFrame and BankFrame:IsShown() then Snapshot("bank") end
+			if GM.bankOpen or (BankFrame and BankFrame:IsShown()) then
+				Snapshot("bank")
+			end
 		end)
 	end
 end)
