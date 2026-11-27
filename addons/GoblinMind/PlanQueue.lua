@@ -231,6 +231,10 @@ local function Build()
 		"Scan own auctions for undercuts")
 	ui.fullScan = TitleBtn("FULL SCAN", 84, function() GM.AH.FullScan() end,
 		"Refresh the full AH book")
+	-- appears only when the targeted item was captured from ANOTHER
+	-- player's chat link — click → writ compose to that poster
+	ui.writBtn = TitleBtn("WRIT", 130, function() PQ.OpenWrit() end,
+		"Request this craft from the player who linked it")
 
 	ui.age = GM.MakeFontString(frame, GM.FONT, 10, "textDim")
 	ui.age:SetWidth(200)
@@ -451,6 +455,11 @@ local function Build()
 	end
 	ActBtn(ui.postScan, 84) ActBtn(ui.cancelScan, 104)
 	ActBtn(ui.fullScan, 84)
+	-- conditional node: SetVisible(false) collapses its slot so the
+	-- strip doesn't carry a dead gap when there is no poster
+	ui.writNode = u:Adopt(ui.writBtn)
+	act:Add(ui.writNode, { width = 130, height = 22 })
+	ui.writNode:SetVisible(false)
 
 	local main = u:Row(root, { gap = "sm" })
 	root:Add(main, { height = "fill" })
@@ -482,6 +491,59 @@ local function Build()
 	-- the managed subtree was created after the home overlay — it
 	-- wins sibling ordering unless the overlay's level climbs past it
 	ui.home:SetFrameLevel(frame:GetFrameLevel() + 200)
+
+	-- ===== writ compose popover =====
+	-- the action-strip WRIT button opens this when the target was
+	-- captured from another player's chat link — a GMW1 mail request
+	-- to that poster. Fielded by hand on purpose: barks have no
+	-- protocol, so the user confirms every field before it mails
+	local pop = CreateFrame("Frame", nil, frame)
+	pop:SetSize(400, 96)
+	GM.Panel(pop, "contHigh")
+	pop:SetFrameLevel(frame:GetFrameLevel() + 60)
+	pop.title = GM.MakeFontString(pop, GM.FONT_BOLD, 9, "secondary")
+	pop.title:SetPoint("TOPLEFT", 8, -5)
+	pop.to = GM.Widgets.EditBox(pop, 130, "recipient…")
+	pop.to:SetPoint("TOPLEFT", 8, -24)
+	pop.qty = GM.Widgets.EditBox(pop, 40, "qty")
+	pop.qty:SetPoint("LEFT", pop.to, "RIGHT", 6, 0)
+	pop.gold = GM.Widgets.GoldEdit(pop, 108)
+	pop.gold:SetPoint("LEFT", pop.qty, "RIGHT", 6, 0)
+	-- GoldEdit paints ~30px past its declared width — mats clears
+	-- the trailing "c" label, not the frame edge
+	pop.mats = GM.Widgets.Btn(pop, 66, "buyer", function()
+		local nx = { buyer = "crafter", crafter = "prepaid",
+			prepaid = "buyer" }
+		pop.mats.text:SetText(nx[pop.mats.text:GetText()] or "buyer")
+	end)
+	pop.mats:SetPoint("LEFT", pop.gold, "RIGHT", 32, 0)
+	pop.note = GM.Widgets.EditBox(pop, 300, "note…")
+	pop.note:SetPoint("TOPLEFT", 8, -46)
+	pop.send = GM.Widgets.Btn(pop, 64, "SEND", function()
+		local char = strtrim(pop.to:GetText() or "")
+		if char == "" then return end
+		local qty = math.max(1, math.floor(
+			tonumber(pop.qty:GetText()) or 1))
+		local wid = GM.Writs and GM.Writs.MailRequest(char, {
+			name = pop.itemName or "work request",
+			ref = pop.itemID and tostring(pop.itemID),
+			itemID = pop.itemID, qty = qty,
+			offer = pop.gold:GetCopper(),
+			mats = pop.mats.text:GetText() or "buyer",
+			deliver = "cod",
+			note = pop.note:GetText() })
+		GM.Print(wid and (GM.CC("accent") ..
+			"mail-writ sent to " .. char .. "|r")
+			or "writ send failed")
+		pop:Hide()
+	end)
+	pop.send:SetPoint("TOPRIGHT", -8, -46)
+	pop.hint = GM.MakeFontString(pop, GM.FONT, 9, "textDim")
+	pop.hint:SetPoint("TOPLEFT", 8, -70)
+	pop.hint:SetText("sends a [GM Writ] letter — the recipient " ..
+		"needs no addon; you track it under MY WRITS")
+	pop:Hide()
+	ui.writPop = pop
 
 	ui.frame = frame
 	-- CreateFrame defaults to visible — Build is called from scan
@@ -711,6 +773,40 @@ function PQ.SetItem(itemID, itemLink, key)
 	end
 	PQ.Refresh()
 	if GM.GroupsUI and GM.GroupsUI.Retarget then GM.GroupsUI.Retarget() end
+end
+
+-- a gold figure in the bark wins the prefill ("LFW 5g"), else the
+-- market anchor — either way the field is user-editable before send
+local function barkCopper(msg, itemID)
+	local m = msg and msg:lower() or ""
+	local g = m:match("(%d+)%s*g")
+	if g then return tonumber(g) * 10000 end
+	local s = m:match("(%d+)%s*s")
+	if s then return tonumber(s) * 100 end
+	if itemID and GM.ItemEntry then
+		local e = GM.ItemEntry(itemID)
+		if e then return e.p or e.mkt or e.mb end
+	end
+end
+
+function PQ.OpenWrit()
+	Build()
+	local lf = GM.LinkFrom
+	if not (lf and lf.char and PQ.itemID) then return end
+	local pop = ui.writPop
+	local name = GetInfo and GetInfo(PQ.itemID)
+	pop.itemName, pop.itemID = name, PQ.itemID
+	pop.title:SetText("WRIT » "
+		.. (lf.char:match("^[^-]+") or lf.char) .. " — "
+		.. (name or ("item " .. tostring(PQ.itemID))))
+	pop.to:SetText(lf.char)
+	pop.qty:SetText("1")
+	pop.gold:SetCopper(barkCopper(lf.msg, PQ.itemID))
+	pop.note:SetText("")
+	pop.mats.text:SetText("buyer")
+	pop:ClearAllPoints()
+	pop:SetPoint("TOPLEFT", ui.item, "BOTTOMLEFT", 20, -6)
+	pop:Show()
 end
 
 function PQ.Rescan()
@@ -1493,6 +1589,21 @@ function PQ.Refresh(vm)
 	PQ._refreshes = (PQ._refreshes or 0) + 1
 	Build()
 	vm = vm or Data()
+	-- the WRIT action rides only captures that came from another
+	-- player's chat link — id-match on the current target plus a
+	-- freshness TTL, so a stale capture can't arm a later target
+	if ui.writNode then
+		local lf = GM.LinkFrom
+		local armed = lf and lf.id == PQ.itemID
+			and (time() - (lf.t or 0)) < 120
+		ui.writNode:SetVisible(armed and true or false)
+		if armed then
+			ui.writBtn.text:SetText("WRIT » "
+				.. (lf.char:match("^[^-]+") or lf.char))
+		else
+			ui.writPop:Hide()
+		end
+	end
 	-- home mode: dashboard panels replace the plan inspector
 	if ui.home then
 		local h = PQ.homeMode

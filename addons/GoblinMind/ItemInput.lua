@@ -43,12 +43,63 @@ end
 -- caller skips its native follow-through — Baganator's item buttons
 -- check the return before opening StackSplitFrame, Blizzard's modified-
 -- click path does the same. Unclaimed clicks run the original verbatim.
+-- ============ link provenance ============
+-- A clicked link says WHAT was linked; the writ flow also needs WHO
+-- posted it. CHAT_MSG_* args carry the raw |H...|h markup verbatim,
+-- so a small ring of recent link-bearing messages gives a chat
+-- click a poster to address. Bag-link clicks just miss the ring and
+-- resolve nil — which is exactly how "from another player" is told
+-- from "from my own bags".
+local linkRing = {}
+local LINK_RING_MAX, LINK_RING_AGE = 40, 120
+
+local linkFeed = CreateFrame("Frame")
+for _, ev in ipairs({ "CHAT_MSG_CHANNEL", "CHAT_MSG_YELL",
+	"CHAT_MSG_SAY", "CHAT_MSG_WHISPER", "CHAT_MSG_GUILD",
+	"CHAT_MSG_OFFICER", "CHAT_MSG_PARTY", "CHAT_MSG_RAID",
+	"CHAT_MSG_RAID_LEADER", "CHAT_MSG_INSTANCE_CHAT" }) do
+	linkFeed:RegisterEvent(ev)
+end
+linkFeed:SetScript("OnEvent", function(_, _, msg, sender)
+	if not (msg and sender) or not msg:find("|H") then return end
+	linkRing[#linkRing + 1] = { sender = sender, msg = msg,
+		t = time() }
+	if #linkRing > LINK_RING_MAX then table.remove(linkRing, 1) end
+end)
+
+-- newest-ring lookup for a clicked link. "|Hkind:id" occurs in the
+-- raw message verbatim — match with a ":" or "|" boundary so an
+-- item:123 click can't false-positive inside item:1234
+local function linkPoster(link)
+	local kind, id = link:match("|H(%a+):(%d+)")
+	if not kind then kind, id = link:match("^(%a+):(%d+)") end
+	if not kind then return nil end
+	local me = UnitName("player") or ""
+	local needle = "|H" .. kind .. ":" .. id
+	local cut = time() - LINK_RING_AGE
+	for i = #linkRing, 1, -1 do
+		local e = linkRing[i]
+		if (e.t or 0) < cut then break end
+		if e.sender:match("^[^-]+") ~= me then
+			local pos = e.msg:find(needle, 1, true)
+			if pos then
+				local nxt = e.msg:sub(pos + #needle, pos + #needle)
+				if nxt == ":" or nxt == "|" then
+					return { char = e.sender, msg = e.msg, t = e.t,
+						kind = kind, id = tonumber(id) }
+				end
+			end
+		end
+	end
+end
+
 local origHMI = HandleModifiedItemClick
 if origHMI then
 	HandleModifiedItemClick = function(link)
 		if Capture() then
 			local id = GM.LinkID(link)
 			if id then
+				GM.LinkFrom = linkPoster(link)
 				GM.TargetItem(id, link)
 				return true
 			end
@@ -92,6 +143,9 @@ if SetItemRef then
 		-- pass the link through — Ctx extracts the itemKey from
 		-- its itemString suffix field, so variant chat links
 		-- target the variant, not the base
-		if id then GM.TargetItem(id, link) end
+		if id then
+			GM.LinkFrom = linkPoster(link)
+			GM.TargetItem(id, link)
+		end
 	end)
 end
