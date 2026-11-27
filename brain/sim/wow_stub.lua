@@ -134,7 +134,11 @@ GM = {
 	end,
 	OrdersUI = { Refresh = function() end },
 	PlanQueue = { SetItem = function() end },
+	-- Writs.LiveEvent repaints the orders view on every 'V' hint
+	View = { Refresh = function() end },
 }
+-- MVC refactor moved the scheduler to GM.Time — same queue, same impl
+GM.Time = { After = GM.After }
 
 -- scheduler: fire every due GM.After task; re-armers reschedule
 -- inside their own fn

@@ -392,10 +392,22 @@ local function stateApply(state)
 		if w then w.state = state end
 	end
 end
+-- a pull state AT or PAST the ev's state confirms it out — 'done'
+-- can only be reached through 'shipped', so a terminal pull also
+-- clears the earlier shadows (a fast pull cycle would otherwise
+-- leave 'shipped' painted over 'done' for the full hint TTL)
+local WRIT_RANK = { open = 1, quoted = 2, agreed = 3, shipped = 4,
+	done = 5 }
+local WRIT_TERMINAL = { done = true, declined = true,
+	cancelled = true, expired = true }
 local function stateConfirm(state)
 	return function(ev, byId)
 		local w = byId[ev.wid]
-		return w and w.state == state
+		if not w then return false end
+		if w.state == state or WRIT_TERMINAL[w.state] then
+			return true
+		end
+		return (WRIT_RANK[w.state] or 0) > (WRIT_RANK[state] or 0)
 	end
 end
 -- fields = verb-tail keys the ev needs; apply writes them onto w
@@ -535,10 +547,7 @@ WVERBS.wquote = {
 			w.price = ev.price or w.price
 		end
 	end,
-	confirm = function(ev, byId)
-		local w = byId[ev.wid]
-		return w and w.state == "quoted"
-	end,
+	confirm = stateConfirm("quoted"),
 	replay = widReplay("price"),
 }
 WVERBS.waccept = {
@@ -625,7 +634,7 @@ local function evDrop(ev, byId, res, pullT, liveIds)
 	if ev.rid then
 		local r = res[ev.rid]
 		if r and not r.ok then return true end
-		if r and r.ok and (pullT or 0) > (r.t or 0)
+		if r and r.ok and (pullT or 0) >= (r.t or 0)
 				and not evConfirmed(ev, byId, liveIds) then
 			return true
 		end

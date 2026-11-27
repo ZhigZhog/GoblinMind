@@ -48,6 +48,19 @@ def check(name, cond, detail=''):
         FAILURES.append(name)
 
 
+def ltab(c, obj):
+    """Recursive dict/list -> real Lua tables. lupa's table_from
+    only converts the outer container — nested dicts land as
+    userdata proxies that fail the addon's type(x)=='table' guards
+    (shopOffers rows, shopTerms entries)."""
+    if isinstance(obj, dict):
+        return c.lua.table_from(
+            {k: ltab(c, v) for k, v in obj.items()})
+    if isinstance(obj, (list, tuple)):
+        return c.lua.table_from([ltab(c, v) for v in obj])
+    return obj
+
+
 # ================================================================
 # client - one LuaRuntime = one WoW install + its own watcher state
 # ================================================================
@@ -82,7 +95,7 @@ class Client:
         self.g = self.lua.globals()
         self.g._NAME = name
         self.g._NOW.t = int(time.time())
-        for fn in ('Mesh.lua', 'Orders.lua'):
+        for fn in ('Mesh.lua', 'Orders.lua', 'Writs.lua'):
             src = open(os.path.join(ADDON, fn), encoding='utf-8').read()
             res = self.g.load(src, '@' + fn)
             if isinstance(res, tuple):
@@ -100,6 +113,9 @@ class Client:
     # -- access helpers --
     def OR(self):
         return self.g.GM.Orders
+
+    def W(self):
+        return self.g.GM.Writs
 
     def Mesh(self):
         return self.g.GM.Mesh
@@ -209,6 +225,44 @@ class Client:
                         ('id', 'itemID', 'qtyTotal', 'remaining',
                          'pricePerUnit', 'state', '_pendOp',
                          'poster', 'expires') if o[k] is not None})
+        return out
+
+    _WRIT_KEYS = ('id', 'board', 'state', 'name', 'ref', 'itemID',
+                  'qty', 'offer', 'price', 'quote', 'mats', 'deliver',
+                  'meet', 'cod', 'mailFrom', 'matsFp', 'fromUUID',
+                  'toUUID', 'fromChar', 'toChar', '_pendOp', '_live',
+                  '_side', 'updated', 'created', 'expires')
+
+    def writs(self, side=None):
+        """GM.Writs.Writs() -> {inb:[], out:[]} rows as plain dicts.
+        side=None returns both lists merged."""
+        v = self.W().Writs()
+        out = []
+        for s in ([side] if side else ('inb', 'out')):
+            lst = v[s]
+            for i in range(1, len(lst) + 1):
+                o = lst[i]
+                out.append({k: o[k] for k in self._WRIT_KEYS
+                            if o[k] is not None})
+        return out
+
+    def rosters(self, board):
+        rs = self.W().Rosters(board)
+        out = []
+        for i in range(1, len(rs) + 1):
+            r = rs[i]
+            offers = r.offers
+            out.append({'uuid': r.uuid,
+                        'chars': [r.chars[j] for j in
+                                  range(1, len(r.chars) + 1)]
+                        if r.chars else [],
+                        'offers': [
+                            {k: offers[j][k] for k in
+                             ('ref', 'name', 'prof', 'itemID', 'kind',
+                              'price', 'mats', 'note', 'numMade')
+                             if offers[j][k] is not None}
+                            for j in range(1, len(offers) + 1)]
+                        if offers else []})
         return out
 
     def state(self):
@@ -340,6 +394,7 @@ class World:
         else:
             gb._install_uuid()
         ops = gb.process_orders(None, c.root)
+        gb.process_writs(None, c.root)
         gb.process_relay(None, c.root)
         gb.process_board_reqs(None, c.root)
         br = gb.process_board_refresh(None, c.root)
@@ -355,6 +410,8 @@ class World:
             gb.write_db({'generated': int(time.time()),
                          'feed': 'sim', 'backend': {},
                          'boards': {}, 'orderResults': {},
+                         'rosters': {}, 'writs': {},
+                         'writResults': {},
                          'relayResults': {}, 'items': {},
                          'realms': {}}, c.out)
         gb._patch_boards_emit([c.out])
@@ -1261,6 +1318,206 @@ def s32_queue_bounded(w):
               for m in w.wire_log), w.wire_log[-2:])
 
 
+def s33_writ_lifecycle(w):
+    """Writs P0-P1: 'V' hint round-trip + full lifecycle.
+    roster publish -> request -> quote -> meet -> accept -> ship ->
+    recv -> done. 'V' records must paint shadow writs on the peer
+    before any pull lands; pulls then confirm them out."""
+    a = w.client('Alpha')
+    c = w.client('Crafty')
+    a.fire_login(); c.fire_login(); w.pump()
+    w.watcher(c); c.reload()
+    w.watcher(a); a.reload()
+    cu = c.state().get('install_uuid')
+    check('crafter uuid registered', bool(cu), cu)
+    # roster publish: hand-entered offer flipped on via shopTerms
+    c.db().shopOffers = ltab(c,
+        [{'ref': 'k:1', 'name': 'Lockpick', 'prof': 'Rogue'}])
+    c.db().shopTerms = ltab(c, {'k:1': {'on': True}})
+    c.W().Publish('main')
+    q = c.db().writQueue
+    check('roster publish staged wrt-', len(q) == 1
+          and tostring_check(q[1], 'wrt-'), q[1])
+    w.watcher(c)
+    conn = w.db()
+    ros = list(conn.execute(
+        'select board,uuid,chars,offers from rosters'))
+    conn.close()
+    check('roster row landed server-side', len(ros) == 1
+          and ros[0][0] == 'main' and ros[0][1] == cu, ros)
+    check('roster carries offer+toon',
+          'k:1' in (ros[0][3] or '') and 'Crafty' in (ros[0][2] or ''),
+          ros)
+    # customer browses rosters via pull
+    w.watcher(a); a.reload()
+    rs = a.rosters('main')
+    check('customer sees roster via pull', len(rs) == 1
+          and rs[0]['uuid'] == cu, rs)
+    check('roster offer visible', rs and len(rs[0]['offers']) == 1
+          and rs[0]['offers'][0].get('ref') == 'k:1', rs)
+    # request -> 'V' record paints shadows BEFORE any watcher pass
+    a.W().Request('main', cu, 'Crafty', a.lua.table_from(
+        {'ref': 'k:1', 'name': 'Lockpick', 'qty': 1, 'offer': 500,
+         'deliver': 'trade'}))
+    w.pump()
+    c_in = c.writs('inb')
+    check("'V' hint paints crafter inbox shadow",
+          len(c_in) == 1 and c_in[0].get('_live')
+          and c_in[0].get('_pendOp') == 'wpost'
+          and c_in[0].get('state') == 'open', c_in)
+    check('hint carries request fields',
+          c_in and c_in[0].get('qty') == 1
+          and c_in[0].get('offer') == 500
+          and c_in[0].get('deliver') == 'trade', c_in)
+    a_out = a.writs('out')
+    check('own overlay shows outgoing writ', len(a_out) == 1
+          and a_out[0].get('_pendOp') == 'wpost', a_out)
+    wid = a_out[0]['id']
+    # watcher POSTs; server applies open writ addressed to crafter
+    w.watcher(a)
+    wrows = list(w.db().execute(
+        'select id,state,qty,offer,to_uuid,from_uuid,deliver '
+        'from writs'))
+    check('writ applied server-side open', len(wrows) == 1
+          and wrows[0][1] == 'open' and wrows[0][2] == 1
+          and wrows[0][3] == 500, wrows)
+    check('writ id matches overlay wid',
+          wrows and wrows[0][0] == wid, (wrows, wid))
+    check('writ parties = customer->crafter',
+          wrows and wrows[0][4] == cu
+          and wrows[0][5] == a.state().get('install_uuid'), wrows)
+    # crafter pull: shadow confirmed -> pend flag dropped
+    w.watcher(c); c.reload()
+    got = c.writs('inb')
+    check('crafter pull confirms writ', len(got) == 1
+          and got[0].get('state') == 'open'
+          and not got[0].get('_pendOp'), got)
+    # quote: 'V' hint paints quoted state on customer side first
+    c.W().Act('wquote', wid, c.lua.table_from({'price': 800}))
+    w.pump()
+    a_out = a.writs('out')
+    check("'V' quote paints quoted on customer", len(a_out) == 1
+          and a_out[0].get('state') == 'quoted'
+          and a_out[0].get('price') == 800, a_out)
+    w.watcher(c)
+    st = list(w.db().execute('select state,quote from writs'))
+    check('quote landed server-side',
+          st and st[0] == ('quoted', 800), st)
+    # meet proposal (handshake verb) then accept -> agreed
+    a.W().Act('wmeet', wid, a.lua.table_from({'meet': 'SW bank'}))
+    w.watcher(a)
+    st = list(w.db().execute('select state,meet from writs'))
+    check('meet note landed, still quoted',
+          st and st[0] == ('quoted', 'SW bank'), st)
+    a.W().Act('waccept', wid, None)
+    w.watcher(a)
+    st = list(w.db().execute('select state from writs'))
+    check('accept -> agreed', st and st[0][0] == 'agreed', st)
+    # crafter ships, customer receives -> done (+ writs_done credit)
+    c.W().Act('wship', wid, None)
+    w.watcher(c)
+    st = list(w.db().execute('select state from writs'))
+    check('ship -> shipped', st and st[0][0] == 'shipped', st)
+    a.W().Act('wrecv', wid, None)
+    w.watcher(a)
+    st = list(w.db().execute('select state from writs'))
+    check('recv -> done', st and st[0][0] == 'done', st)
+    inst = w.stats(w.db().execute(
+        'select id from installs where uuid=?',
+        (cu,)).fetchone()[0])
+    check('crafter writs_done credited',
+          inst.get('writs_done') == 1, inst)
+    # terminal pull: server keeps done writs for 24h — the view must
+    # show the pulled 'done', not the stale 'shipped' ev shadow
+    w.watcher(c); c.reload(); w.watcher(a); a.reload()
+    got = c.writs('inb')
+    check('done pull clears wship shadow', len(got) == 1
+          and got[0].get('state') == 'done'
+          and not got[0].get('_pendOp'), got)
+
+
+def s34_writ_relay(w):
+    """Tunneled writ op: Xavier (tracker A) addresses a writ to Relay
+    (tracker B) on board 'gob'. The R envelope must carry Xavier's
+    uuid+rtoken so the server applies it under the ASKER's install."""
+    x = w.client('Xavier', tracker='a', boards=['main'])
+    r = w.client('Relay', tracker='b', boards=['gob'])
+    r.fire_login(); w.pump(); w.watcher(r); r.reload()
+    x.fire_login(); w.watcher(x); x.reload()
+    x.advance(40); r.advance(40); w.pump()   # T beacons both ways
+    check('Xavier sees remote board via T',
+          'gob' in x.board_names(), x.board_names())
+    x.OR().RefreshBoard('gob'); w.pump(16)
+    check('remote snapshot landed', x.OR().IsRemote('gob'),
+          x.board_names())
+    ru = r.state().get('install_uuid')
+    x.W().Request('gob', ru, 'Relay', x.lua.table_from(
+        {'ref': 'k:1', 'name': 'Lockpick', 'qty': 2, 'offer': 300,
+         'deliver': 'cod'}))
+    check('wpost deferred behind register',
+          not x.db().writQueue or len(x.db().writQueue) == 0,
+          x.db().writQueue)
+    w.pump()                    # R register whisper -> Relay stages
+    r.sv_write()
+    gb.API_STATE_PATH = r.state_path
+    gb.API_BOOK_PATH = r.book_path
+    gb.FEEDS_PATH = r.feeds_path
+    gb.process_relay(None, r.root)     # Relay's watcher POSTs reg
+    w.emit(r); r.reload(); r.advance(16); w.pump()  # Y creds back
+    w.pump()                    # deferred wpost flushes as R envelope
+    r.sv_write()
+    gb.process_relay(None, r.root)     # Relay's watcher POSTs op
+    gb.boards_pull(); w.emit(r); r.reload()
+    xu = x.state().get('install_uuid')
+    rows = list(w.db().execute(
+        'select id,board,state,from_uuid,to_uuid,qty,offer '
+        'from writs'))
+    hits = [o for o in rows if o[1] == 'gob']
+    check('relayed wpost applied on tracker B', len(hits) == 1
+          and hits[0][2] == 'open', rows)
+    check('applied under ASKER uuid not relay',
+          hits and hits[0][3] == xu and hits[0][4] == ru,
+          (hits, xu, ru))
+    check('qty/offer survived the tunnel',
+          hits and hits[0][5] == 2 and hits[0][6] == 300, hits)
+    # tunneled side: the staged overlay paints the outgoing writ
+    xo = x.writs('out')
+    check('tunnel-side overlay shows outgoing writ',
+          any(o.get('toUUID') == ru and o.get('state') == 'open'
+              for o in xo), xo)
+
+
+def s35_roster_stream(w):
+    """Roster 'y' stream rows: browsing a remote board streams the
+    shop roster over the Q->F->P->stream flow, feeding W.Rosters on
+    the remote store — no backend pull on the asker side."""
+    x = w.client('Xavier', tracker='a', boards=['main'])
+    r = w.client('Relay', tracker='b', boards=['gob'])
+    # Relay owns a shop on 'gob'
+    r.db().shopOffers = ltab(r,
+        [{'ref': 'k:1', 'name': 'Lockpick', 'prof': 'Rogue'}])
+    r.db().shopTerms = ltab(r, {'k:1': {'on': True}})
+    r.fire_login(); w.pump()
+    r.W().Publish('gob')
+    w.watcher(r); r.reload()
+    conn = w.db()
+    ros = list(conn.execute(
+        'select board,uuid from rosters where board=?', ('gob',)))
+    conn.close()
+    check('roster published on gob', len(ros) == 1, ros)
+    x.fire_login(); w.watcher(x); x.reload()
+    x.advance(40); r.advance(40); w.pump()
+    x.OR().RefreshBoard('gob'); w.pump(16)
+    rs = x.rosters('gob')
+    check('y-stream roster landed on remote client', len(rs) == 1
+          and rs[0]['uuid'] == r.state().get('install_uuid'), rs)
+    check('streamed roster carries the offer',
+          rs and any(o.get('ref') == 'k:1' for o in rs[0]['offers']),
+          rs)
+    check('streamed roster carries toon names',
+          rs and 'Relay' in rs[0]['chars'], rs)
+
+
 SCENARIOS = [
     ('post -> confirm', s01_post_confirm),
     ('claim -> accept -> fill', s02_claim_accept_fill),
@@ -1294,6 +1551,9 @@ SCENARIOS = [
     ('v2 item answer bound', s30_item_suppression),
     ('v2 peer cap', s31_peer_cap),
     ('v2 queue bounded on channel loss', s32_queue_bounded),
+    ('writs V hint + lifecycle', s33_writ_lifecycle),
+    ('writs relayed wpost tunnel', s34_writ_relay),
+    ('writs roster y-stream', s35_roster_stream),
 ]
 
 
