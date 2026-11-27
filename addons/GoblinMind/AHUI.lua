@@ -866,10 +866,12 @@ local function Build()
 	ui.maxIlvl = EditBox(fb, 36, "")
 	ui.maxIlvl:SetPoint("LEFT", ui.minIlvl, "RIGHT", 6, 0)
 	Lab("min price", -92)
-	ui.minC = W.GoldEdit(fb, 168)
+	-- 216px panel: GoldEdit paints ~10px past its declared width —
+	-- 160 keeps the trailing "c" label inside the box edge
+	ui.minC = W.GoldEdit(fb, 160)
 	ui.minC:SetPoint("TOPLEFT", 42, -90)
 	Lab("max price", -114)
-	ui.maxC = W.GoldEdit(fb, 168)
+	ui.maxC = W.GoldEdit(fb, 160)
 	ui.maxC:SetPoint("TOPLEFT", 42, -112)
 	local function ApplyTextFilters()
 		ui.filters.minIlvl = tonumber(ui.minIlvl:GetText())
@@ -1053,7 +1055,9 @@ local function Build()
 
 	-- ============ post dialog ============
 	local pd = CreateFrame("Frame", nil, f)
-	pd:SetSize(250, 176)
+	-- 290: the price GoldEdit paints ~26px past its declared width —
+	-- at 250 the trailing "c" label spilled off the dialog edge
+	pd:SetSize(290, 176)
 	pd:SetPoint("CENTER", 0, 30)
 	pd:SetFrameStrata("FULLSCREEN_DIALOG")
 	GM.Panel(pd, "contHigh", "outlineVar")

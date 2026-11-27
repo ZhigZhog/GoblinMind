@@ -442,8 +442,10 @@ function WU.Build(f)
 		r.ctxt:SetJustifyH("LEFT")
 		r.cgold = GM.Widgets.GoldEdit(r, 96)
 		r.cgold:SetPoint("LEFT", 364, -1)
+		-- GoldEdit paints ~26px past its declared width (unit labels);
+		-- cedit must clear the trailing "c", not the frame edge
 		r.cedit = MkEdit(r, 160, "")
-		r.cedit:SetPoint("LEFT", 466, -1)
+		r.cedit:SetPoint("LEFT", 494, -1)
 		ui.wRows[i] = r
 	end
 
