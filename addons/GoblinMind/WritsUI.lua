@@ -109,18 +109,48 @@ local function marketRows(board, q, prof)
 	-- capsule in the bark becomes a sub-line under the yeller —
 	-- "Player / | Offer" — _gs keeps the group contiguous in the
 	-- sort, _gi keeps capsule order.
+	-- q-match predicate on a raw entry — the search runs per-entry
+	-- BEFORE folder rows exist so a filtered list can't orphan a
+	-- child under a folder that didn't survive
+	local function qhit(e)
+		if not (q and q ~= "") then return true end
+		local ql = q:lower()
+		local nm = (e.offer.name or ""):lower()
+		local ch = (e.roster.chars
+			and table.concat(e.roster.chars, " ") or ""):lower()
+		return nm:find(ql, 1, true) or ch:find(ql, 1, true)
+			or (e.offer.toon or ""):lower():find(ql, 1, true)
+			or (e.offer.prof or ""):lower():find(ql, 1, true)
+	end
+	if q and q ~= "" then
+		local hit = {}
+		for _, e in ipairs(out) do
+			if qhit(e) then hit[#hit + 1] = e end
+		end
+		out = hit
+	end
+	-- yell pseudo-offers fold in as ONE section: a master YELLS
+	-- fold tab with BUY / SELL subfolders by bark intent, untagged
+	-- barks under OTHER. GS_YELL shares one sort group so the whole
+	-- section anchors the unpriced tail; _gi is just insert order
+	-- inside each bucket (header + expanded lines + capsules
+	-- already append consecutively per bark)
+	local buckets = { buy = {}, sell = {}, other = {} }
 	for _, y in ipairs(W.YellOffers and W.YellOffers() or {}) do
 		local ros = { chars = { y.char }, stats = {}, _yell = true }
-		local gs = { name = y.char }
+		local bk = y.intent == "buy" and buckets.buy
+			or y.intent == "sell" and buckets.sell
+			or buckets.other
 		-- the prof filter reaches barks too — header tests y.prof,
 		-- each capsule sub-row tests its own (a trade link's prof
 		-- can differ from the bark's keyword guess)
 		if not prof or y.prof == prof then
-			out[#out + 1] = { yell = y, _gs = gs, _gi = 0, offer = {
+			local hdr = { yell = y, offer = {
 				name = "yell: " .. y.text,
 				prof = y.prof, itemID = y.itemID, ref = y.ref,
 				_yell = true },
 				roster = ros }
+			if qhit(hdr) then bk[#bk + 1] = hdr end
 			-- unfolded bark: the full message wraps into a bounded
 			-- 500px window — markup stripped to visible text, greedy
 			-- word-wrap at ~95 chars (Montserrat under-measurement
@@ -144,12 +174,12 @@ local function marketRows(board, q, prof)
 				end
 				if cur then lines[#lines + 1] = cur end
 				for li, ln in ipairs(lines) do
-					out[#out + 1] = { yell = y, _gs = gs,
-						_gi = 0.5 + li * 0.01,
+					local e = { yell = y,
 						offer = { name = "| " .. ln,
 							prof = y.prof, _yell = true,
 							_barkText = true },
 						roster = ros }
+					if qhit(e) then bk[#bk + 1] = e end
 				end
 			end
 		end
@@ -165,8 +195,7 @@ local function marketRows(board, q, prof)
 					or y.intent == "sell"
 						and (GM.CC("good") .. "sell|r ")
 					or ""
-				out[#out + 1] = { yell = y, _gs = gs, _gi = si,
-					offer = {
+				local e = { yell = y, offer = {
 						-- disp = the printable capsule (color +
 						-- brackets, no |H payload); raw link stays in
 						-- _link for hover + click
@@ -177,23 +206,48 @@ local function marketRows(board, q, prof)
 							or nil,
 						_yell = true, _link = lnk },
 					roster = ros }
+				if qhit(e) then bk[#bk + 1] = e end
 			end
 		end
 	end
-	if q and q ~= "" then
-		local ql = q:lower()
-		local hit = {}
-		for _, e in ipairs(out) do
-			local nm = (e.offer.name or ""):lower()
-			local ch = (e.roster.chars
-				and table.concat(e.roster.chars, " ") or ""):lower()
-			if nm:find(ql, 1, true) or ch:find(ql, 1, true)
-					or (e.offer.toon or ""):lower():find(ql, 1, true)
-					or (e.offer.prof or ""):lower():find(ql, 1, true) then
-				hit[#hit + 1] = e
+	-- folder injection: the master YELLS tab counts every visible
+	-- bark; BUY / SELL / OTHER subfolders only emit when their
+	-- bucket has rows, and a closed folder keeps just its tab row.
+	-- ui.yellF holds the fold state (nil = open)
+	-- \255 sorts above every single-byte name start and any UTF-8
+	-- lead byte — the section always anchors the unpriced tail
+	local GS_YELL = { name = "\255" }
+	local F = ui.yellF or {}
+	local nb = #buckets.buy + #buckets.sell + #buckets.other
+	if nb > 0 then
+		local yRos = { chars = {}, stats = {}, _yell = true }
+		out[#out + 1] = { _gs = GS_YELL, _gi = -10,
+			offer = { name = (F.yells and "+ " or "- ")
+				.. "YELLS  ·  " .. nb, _folder = "yells" },
+			roster = yRos }
+		if not F.yells then
+			for _, s in ipairs({
+				{ "buy", "BUY", 0, buckets.buy },
+				{ "sell", "SELL", 50000, buckets.sell },
+				{ "other", "OTHER", 90000, buckets.other },
+			}) do
+				local key, label, base, L =
+					s[1], s[2], s[3], s[4]
+				if #L > 0 then
+					out[#out + 1] = { _gs = GS_YELL, _gi = base,
+						offer = { name = (F[key] and "+ " or "- ")
+							.. label .. "  ·  " .. #L,
+							_folder = key },
+						roster = yRos }
+					if not F[key] then
+						for i, e in ipairs(L) do
+							e._gs, e._gi = GS_YELL, base + i
+							out[#out + 1] = e
+						end
+					end
+				end
 			end
 		end
-		out = hit
 	end
 	table.sort(out, function(a, b)
 		-- _gs groups (yeller header + capsule subs) sort as one
@@ -926,14 +980,29 @@ local function ShopsPaint(vm)
 			-- mats) | ·crafter (provided, priced in). Unset policy
 			-- defaults to buyer — the writ contract's own default.
 			local nm = o.name or o.ref or "?"
-			if not o._yell then
+			if not o._yell and not o._folder then
 				nm = nm .. GM.CC("textDim") .. " ·"
 					.. (o.mats or "buyer") .. "|r"
 			end
 			r.name:SetText(nm)
 			r.name:SetTextColor(GM.RGB("text"))
 			r.prof:SetText(o.prof or "")
-			if o._yell then
+			if o._folder then
+				-- fold tab: the whole row is the toggle — dim
+				-- label, no price/crafter/actions of its own
+				r.name:SetText(GM.CC("accent") .. o.name .. "|r")
+				r.prof:SetText("")
+				r.price:SetText("")
+				r.who:SetText("")
+				r.act:Hide()
+				r.act2:Hide()
+				local fk = o._folder
+				r:SetScript("OnClick", function()
+					ui.yellF = ui.yellF or {}
+					ui.yellF[fk] = not ui.yellF[fk] or nil
+					WU.Paint("shops")
+				end)
+			elseif o._yell then
 				local y = e.yell
 				if o._barkText then
 					-- unfolded bark line: pre-wrapped text across
