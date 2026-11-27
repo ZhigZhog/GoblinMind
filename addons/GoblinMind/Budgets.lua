@@ -664,13 +664,17 @@ function B.Sample()
 	-- r: uncollected auction proceeds — at sale the posted term drops
 	-- but gold hasn't arrived; without the receivable the line dips
 	-- for the whole mail window then jumps back
-	local rcbl = GM.Ledger and GM.Ledger.Accounts
-		and (GM.Ledger.Accounts().rcbl or 0) or 0
+	-- d: listing deposits escrowed until the auction resolves —
+	-- posting drains g into dep, so every listing otherwise reads
+	-- as a wealth dip sized to its fee
+	local acct = GM.Ledger and GM.Ledger.Accounts
+		and GM.Ledger.Accounts() or {}
+	local rcbl, dep = acct.rcbl or 0, acct.dep or 0
 	-- an all-zero sample is never information — it's a penniless alt
 	-- writing into the shared SV or an init race where money and
 	-- inventory haven't populated yet, and either way it draws as a
 	-- giant fake dip on every char's wealth chart
-	if gold + posted + held + rcbl == 0 then return end
+	if gold + posted + held + rcbl + dep == 0 then return end
 	-- the init sample lands at ADDON_LOADED — before PLAYER_LOGIN's
 	-- LoadOwned rehydrates the owned-auction snapshot — so it would
 	-- write a=0/h=0 against real gold and dip every reload. "Not
@@ -679,10 +683,11 @@ function B.Sample()
 		and not GM.Inventory.OwnedLoaded() then return end
 	if #w > 0 and t - w[#w].t <= MIN_SAMPLE_GAP then
 		local last = w[#w]
-		last.g, last.a, last.h, last.r, last.c =
-			gold, posted, held, rcbl, GM.CharKey()
+		last.g, last.a, last.h, last.r, last.d, last.c =
+			gold, posted, held, rcbl, dep, GM.CharKey()
 	elseif #w == 0 or w[#w].g ~= gold or w[#w].a ~= posted
 		or w[#w].h ~= held or (w[#w].r or 0) ~= rcbl
+		or (w[#w].d or 0) ~= dep
 		or t - w[#w].t > 3600 then
 		-- c: the sampler char — wealth is per-char by nature and
 		-- untagged mixing drew alt logins as giant fake dips.
@@ -690,7 +695,7 @@ function B.Sample()
 		-- client and a nil tag makes the chart filter toothless —
 		-- IsSelfCharKey matches a bare name fine
 		w[#w + 1] = { t = t, g = gold, a = posted, h = held,
-			r = rcbl, c = GM.CharKey() }
+			r = rcbl, d = dep, c = GM.CharKey() }
 		if #w > HIST_CAP then tremove(w, 1) end
 	end
 end
@@ -757,7 +762,9 @@ local function RepairWealthHist()
 			if (p.c or "") == (n1.c or "")
 				and (n1.c or "") == (n2.c or "")
 				and n1.g == n2.g and n1.a == n2.a and n1.h == n2.h
-				and (p.g ~= n1.g or p.a ~= n1.a or p.h ~= n1.h) then
+				and (n1.d or 0) == (n2.d or 0)
+				and (p.g ~= n1.g or p.a ~= n1.a or p.h ~= n1.h
+					or (p.d or 0) ~= (n1.d or 0)) then
 				tremove(w, i)
 				changed = true
 			else

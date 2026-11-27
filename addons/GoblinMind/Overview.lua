@@ -348,14 +348,15 @@ end
 -- ============ wealth chart ============
 
 -- one line, one honest answer: "am I getting richer, and how fast".
--- W(t) = gold + pending-AH buyout is wealth-neutral across buys
--- (gold becomes listings ~1:1), so its step line and least-squares
--- slope measure realized P&L + revaluation — fitting the slope to
--- raw gold-on-hand reads a buy spree as "losing money" (the old
--- "-1087g/d" scare line). Posted value draws as a shaded band under
--- the line instead of a second series: same information, no
--- crossings, no legend row. Design: WoWVault/Proposals/
--- ledger-accounts-proposal.md
+-- W(t) = cash + held cost + receivable + deposit escrow + listed
+-- buyout — wealth-neutral across every flow (buys, posts, sells,
+-- collections move value between terms instead of cratering the
+-- line), so the step line and least-squares slope measure realized
+-- P&L + revaluation — fitting the slope to raw gold-on-hand reads
+-- a buy spree as "losing money" (the old "-1087g/d" scare line).
+-- The posted slice draws as a shaded band on top of the
+-- non-posted stack: same information, no crossings, no legend row.
+-- Design: WoWVault/Proposals/ledger-accounts-proposal.md
 
 local WIN_SECS = { ["24H"] = 86400, ["7D"] = 604800 }
 
@@ -406,9 +407,13 @@ function OV.RefreshChart()
 		and GM.Inventory.PostedValue() or 0
 	local held = GM.Inventory and GM.Inventory.HeldValue
 		and GM.Inventory.HeldValue() or 0
-	local rcbl = GM.Ledger and GM.Ledger.Accounts
-		and (GM.Ledger.Accounts().rcbl or 0) or 0
-	local now = gold + posted + held + rcbl
+	local dep, rcbl = 0, 0
+	do
+		local acct = GM.Ledger and GM.Ledger.Accounts
+			and GM.Ledger.Accounts() or {}
+		dep, rcbl = acct.dep or 0, acct.rcbl or 0
+	end
+	local now = gold + posted + held + rcbl + dep
 	ui.kpiTotal:SetText("TOTAL " .. GM.Money(now))
 	local split = "on hand " .. GM.MoneyShort(gold)
 	if held > 0 then
@@ -416,6 +421,9 @@ function OV.RefreshChart()
 	end
 	if rcbl > 0 then
 		split = split .. " + incoming " .. GM.MoneyShort(rcbl)
+	end
+	if dep > 0 then
+		split = split .. " + escrow " .. GM.MoneyShort(dep)
 	end
 	if posted > 0 then
 		split = split .. " + posted " .. GM.MoneyShort(posted)
@@ -438,12 +446,14 @@ function OV.RefreshChart()
 		-- Zero-total samples never draw: pre-tag alts and init races
 		-- wrote them into the shared pool as giant fake dips
 		if p.t >= cutoff
-			and (p.g or 0) + (p.a or 0) + (p.h or 0) + (p.r or 0) > 0
+			and (p.g or 0) + (p.a or 0) + (p.h or 0) + (p.r or 0)
+				+ (p.d or 0) > 0
 			and (not p.c or GM.IsSelfCharKey(p.c)) then
 			hist[#hist + 1] = p
 			if p.t < tMin then tMin = p.t end
 			if p.t > tMax then tMax = p.t end
 			local wv = (p.g or 0) + (p.a or 0) + (p.h or 0) + (p.r or 0)
+				+ (p.d or 0)
 			vals[#vals + 1] = wv
 			if wv > vMax then vMax = wv end
 			if wv < vMin then vMin = wv end
@@ -459,7 +469,8 @@ function OV.RefreshChart()
 	local dayBase
 	for _, p in ipairs(GM.Model.WealthHist()) do
 		if p.t >= midnight
-			and (p.g or 0) + (p.a or 0) + (p.h or 0) + (p.r or 0) > 0 then
+			and (p.g or 0) + (p.a or 0) + (p.h or 0) + (p.r or 0)
+				+ (p.d or 0) > 0 then
 			dayBase = p
 			break
 		end
@@ -468,7 +479,7 @@ function OV.RefreshChart()
 	local deltaTxt = ""
 	if dayBase then
 		local dv = now - (dayBase.g or 0) - (dayBase.a or 0)
-			- (dayBase.h or 0)
+			- (dayBase.h or 0) - (dayBase.r or 0) - (dayBase.d or 0)
 		deltaTxt = GM.Signed(dv) .. GM.CC("textDim") .. " "
 			.. (dayBase.t >= midnight and "today"
 				or "since " .. date("%H:%M", dayBase.t)) .. "|r"
@@ -630,8 +641,14 @@ function OV.RefreshChart()
 	local px, pgy, pwv
 	for _, p in ipairs(drawHist) do
 		local x = gx + (p.t - axisMin) / (tMax - axisMin) * w
-		local yg = math.max(gy, wy(p.g or 0))
-		local yw = math.min(gy + h, wy((p.g or 0) + (p.a or 0)))
+		-- the band stacks the non-posted wealth (cash + held +
+		-- receivable + escrow) with the posted slice on top —
+		-- deposits escrowed on live listings count or every post
+		-- draws a dip the size of its fee
+		local yg = math.max(gy, wy((p.g or 0) + (p.h or 0)
+			+ (p.r or 0) + (p.d or 0)))
+		local yw = math.min(gy + h, wy((p.g or 0) + (p.h or 0)
+			+ (p.r or 0) + (p.d or 0) + (p.a or 0)))
 		if px then
 			-- uniform base fill under the line — the posted band
 			-- alone left unshaded gaps wherever a==0 and read as a
@@ -704,7 +721,8 @@ function OV.RefreshChart()
 	px, pwv = nil, nil
 	for _, p in ipairs(drawHist) do
 		local x = gx + (p.t - axisMin) / (tMax - axisMin) * w
-		local yw = wy((p.g or 0) + (p.a or 0))
+		local yw = wy((p.g or 0) + (p.a or 0) + (p.h or 0)
+			+ (p.r or 0) + (p.d or 0))
 		if px then
 			tinsert(ui.art, Line(chart, px, pwv, x, pwv, cc))
 			if yw ~= pwv then
