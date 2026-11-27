@@ -813,14 +813,16 @@ function GM.FullName(n)
 		end
 	end
 	if not hit and C_FriendList and C_FriendList.GetNumFriends then
-		for i = 1, C_FriendList.GetNumFriends() do
+		-- counts can be nil/non-number before the friend list loads
+		-- (FullName runs inside the ADDON_LOADED window via Init)
+		for i = 1, tonumber(C_FriendList.GetNumFriends()) or 0 do
 			local info = C_FriendList.GetFriendInfoByIndex(i)
 			hit = info and try(info.name)
 			if hit then break end
 		end
 	end
 	if not hit and IsInGuild and IsInGuild() and GetNumGuildMembers then
-		for i = 1, GetNumGuildMembers() do
+		for i = 1, tonumber(GetNumGuildMembers()) or 0 do
 			hit = try((GetGuildRosterInfo(i)))
 			if hit then break end
 		end
@@ -904,7 +906,8 @@ function GM.ClassOf(n)
 		end
 	end
 	if not tok and IsInGuild and IsInGuild() and GetGuildRosterInfo then
-		local total = GetNumGuildMembers and GetNumGuildMembers() or 0
+		local total = tonumber(GetNumGuildMembers
+			and GetNumGuildMembers()) or 0
 		for i = 1, total do
 			-- return 11 = classFileName, the English token
 			local nm, _, _, _, _, _, _, _, _, _, cls =
