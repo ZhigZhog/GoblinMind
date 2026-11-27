@@ -101,7 +101,16 @@ local function marketRows(board, q, prof)
 			end
 		end
 	end
-	-- yell pseudo-offers fold in here (P4) — same row shape
+	-- yell pseudo-offers fold in here — same row shape; the offer
+	-- carries the parsed link/ref, the roster is a fake single-char
+	-- shell so crafterTag/search/sort work unchanged
+	for _, y in ipairs(W.YellOffers and W.YellOffers() or {}) do
+		out[#out + 1] = { yell = y, offer = {
+			name = y.linkName or ("yell: " .. y.text),
+			prof = y.prof, itemID = y.itemID, ref = y.ref,
+			_yell = true },
+			roster = { chars = { y.char }, stats = {}, _yell = true } }
+	end
 	if q and q ~= "" then
 		local ql = q:lower()
 		local hit = {}
@@ -331,6 +340,11 @@ function WU.Build(f)
 		r.who:SetJustifyH("LEFT")
 		r.act = MkBtn(r, "REQUEST", 62, 13)
 		r.act:SetPoint("RIGHT", -2, 0)
+		-- yell rows get a second tail button: "+" converts the bark
+		-- into a prefilled GMW1 mail-writ (2a compose path)
+		r.act2 = MkBtn(r, "+", 16, 13)
+		r.act2:SetPoint("RIGHT", r.act, "LEFT", -4, 0)
+		r.act2:Hide()
 		-- MY SHOP inline editors (hidden in other modes)
 		r.gold = GM.Widgets.GoldEdit(r, 88)
 		r.mats = MkBtn(r, "buyer", 62, 13)
@@ -495,7 +509,7 @@ local function layoutRow(r, mode)
 			gold = false, note = false }
 	end
 	for _, k in ipairs({ "on", "mats", "icon", "name", "prof",
-		"price", "who", "note", "gold", "act" }) do
+		"price", "who", "note", "gold", "act", "act2" }) do
 		local w, x = r[k], pos[k]
 		w:ClearAllPoints()
 		if not x then
@@ -745,17 +759,46 @@ local function ShopsPaint(vm)
 			r.name:SetText(o.name or o.ref or "?")
 			r.name:SetTextColor(GM.RGB("text"))
 			r.prof:SetText(o.prof or "")
-			r.price:SetText(o.price and GoldText(o.price)
-				or GM.CC("warn") .. "OFFER|r")
-			r.price:SetTextColor(GM.RGB(o.price and "text" or "warn"))
-			r.who:SetText(crafterTag(ros))
-			r.act.text:SetText("REQUEST")
-			r.act.text:SetTextColor(GM.RGB("accent"))
-			r.act:Show()
-			local ent = e
-			r.act:SetScript("OnClick", function()
-				openRequest(r, ent)
-			end)
+			if o._yell then
+				-- bark row: no price claim — badge + whisper/mail
+				-- actions instead of a server writ request
+				local y = e.yell
+				r.price:SetText(GM.CC("textDim") .. "·yell|r")
+				r.who:SetText(y.char:match("^[^-]+") or y.char)
+				r.act.text:SetText("WHISPER")
+				r.act.text:SetTextColor(GM.RGB("accent"))
+				r.act:Show()
+				r.act:SetScript("OnClick", function()
+					pcall(ChatFrame_OpenChat,
+						"/w " .. y.char .. " ")
+				end)
+				r.act2:Show()
+				r.act2:SetScript("OnClick", function()
+					local wid = W.MailRequest(y.char, {
+						name = y.linkName or y.text:sub(1, 40),
+						ref = y.ref, itemID = y.itemID, qty = 1,
+						mats = "buyer", deliver = "trade",
+						note = "saw your yell — "
+							.. y.text:sub(1, 60) })
+					ui.shopMsg:SetText(wid
+						and ("mail-writ sent to " .. y.char
+							.. " — watch MY WRITS")
+						or "mail send failed")
+				end)
+			else
+				r.price:SetText(o.price and GoldText(o.price)
+					or GM.CC("warn") .. "OFFER|r")
+				r.price:SetTextColor(GM.RGB(
+					o.price and "text" or "warn"))
+				r.who:SetText(crafterTag(ros))
+				r.act.text:SetText("REQUEST")
+				r.act.text:SetTextColor(GM.RGB("accent"))
+				r.act:Show()
+				local ent = e
+				r.act:SetScript("OnClick", function()
+					openRequest(r, ent)
+				end)
+			end
 		end
 	end
 	-- empty-state text through the count field

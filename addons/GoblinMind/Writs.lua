@@ -1222,6 +1222,85 @@ if hooksecurefunc then
 	end
 end
 
+-- ============ P4: yell listener ============
+-- Trade-channel + yell scan turns Stormwind barkers into session
+-- pseudo-offers on the SHOPS market view — no account needed, no
+-- backend. Deliberately loose keyword match; GM.db.yellTerms adds
+-- user terms. Session-only ring, deduped per sender.
+local yellRing, yellSeen = {}, {}
+local YELL_MAX, YELL_DEDUP = 100, 60
+local YELL_WORDS = { "enchant", "lockpick", "lock pick", "lfw",
+	"will craft", "crafting", "portal", "summon" }
+local YELL_PROF = { enchant = "Enchanting", lockpick = "Lockpicking",
+	["lock pick"] = "Lockpicking", portal = "Mage",
+	summon = "Warlock" }
+
+local function yellHit(msg)
+	local l = msg:lower()
+	for _, kw in ipairs(YELL_WORDS) do
+		if l:find(kw, 1, true) then return kw, YELL_PROF[kw] end
+	end
+	for _, kw in ipairs(GM.db and GM.db.yellTerms or {}) do
+		if l:find(kw:lower(), 1, true) then return kw, nil end
+	end
+end
+
+-- passive link harvest: a yeller's real [Enchant Weapon - Crusader]
+-- gives the row a typed ref + icon instead of guessed text. Forever
+-- may link enchants as |Henchant: or |Hspell: — accept both.
+local function yellLink(msg)
+	for kind, id, name in
+			msg:gmatch("|H(%a+):(%d+)|h%[(.-)%]|h") do
+		if kind == "item" then
+			return tonumber(id), name, nil
+		elseif kind == "enchant" or kind == "spell" then
+			return nil, name, "s:" .. id
+		end
+	end
+	return nil, nil, nil
+end
+
+-- SHOPS market folds these in alongside roster offers
+function W.YellOffers()
+	return yellRing
+end
+
+local yells = CreateFrame("Frame")
+yells:RegisterEvent("CHAT_MSG_CHANNEL")
+yells:RegisterEvent("CHAT_MSG_YELL")
+yells:SetScript("OnEvent", function(_, ev, msg, sender, _, _, _,
+		_, _, _, cbase)
+	if GM.Model and GM.Model.Pref("yellListen") == false then
+		return
+	end
+	if ev == "CHAT_MSG_CHANNEL" then
+		-- Trade-ish channels only; yells fire anywhere
+		local b = (cbase or ""):lower()
+		if not (b:find("trade", 1, true)
+				or b:find("lookingfor", 1, true)
+				or b:find("lfg", 1, true)) then return end
+	end
+	if not (msg and sender) or sender == CharName() then return end
+	local hit, prof = yellHit(msg)
+	if not hit then return end
+	local seen = yellSeen[sender]
+	if seen and time() - seen.t < YELL_DEDUP then
+		-- a spammer re-yelling refreshes the row, no stacking
+		seen.t, seen.text = time(), msg:sub(1, 120)
+		return
+	end
+	local itemID, lname, ref = yellLink(msg)
+	local y = { source = "yell", char = sender,
+		text = msg:sub(1, 120), t = time(), prof = prof,
+		itemID = itemID, ref = ref, linkName = lname }
+	yellSeen[sender] = y
+	yellRing[#yellRing + 1] = y
+	if #yellRing > YELL_MAX then
+		local old = table.remove(yellRing, 1)
+		if yellSeen[old.char] == old then yellSeen[old.char] = nil end
+	end
+end)
+
 -- drop ops the watcher already consumed once the player is in-world —
 -- the view's Data() pass will reconcile again when a writs pane opens
 local wrinit = CreateFrame("Frame")

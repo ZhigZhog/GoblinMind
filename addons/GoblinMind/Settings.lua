@@ -516,7 +516,7 @@ local function Build()
 	-- leaving UISpecialFrames pointing at a plain table (IsShown crash)
 	local f = GM.Widgets.Window({
 		name = "GoblinMindSettingsFrame", title = "SETTINGS",
-		w = 620, h = 1100, x = -60, y = 10, tab = "settings",
+		w = 620, h = 1124, x = -60, y = 10, tab = "settings",
 	})
 	ui.frame = f
 
@@ -545,7 +545,7 @@ local function Build()
 	if S.needReload then bar:Show() end
 
 	-- ===== GENERAL =====
-	local gen = Panel(f, 10, -34, 600, 128, "GENERAL")
+	local gen = Panel(f, 10, -34, 600, 152, "GENERAL")
 	ui.gen = gen
 	Row(gen, "Risk budget (% of gold)", 26)
 	ui.risk = EditBox(gen, 72)
@@ -613,8 +613,15 @@ local function Build()
 		{ "text", "icon" }, { text = "text", icon = "coin icons" })
 	ui.fmt:SetPoint("TOPLEFT", 500, -96)
 
+	RowAt(gen, "Trade-yell listener", 320, 120)
+	ui.yellListen = BoolSeg(gen,
+		-- default ON; off stores explicit false, on clears the key
+		function() return GM.Model.Pref("yellListen") ~= false end,
+		function(v) GM.Model.SetPref("yellListen", v and nil or false) end)
+	ui.yellListen:SetPoint("TOPLEFT", 500, -118)
+
 	-- ===== TOOLTIP LINES =====
-	local tt = Panel(f, 10, -168, 600, 256, "TOOLTIP LINES")
+	local tt = Panel(f, 10, -192, 600, 256, "TOOLTIP LINES")
 	ui.ttPanel = tt
 	-- preset sits with the grid it presets; display is derived —
 	-- any hand-toggled row reads "Custom"
@@ -653,7 +660,7 @@ local function Build()
 	ui.ttHost = ui.ttInner
 
 	-- ===== PROFILE =====
-	local prof = Panel(f, 10, -432, 600, 118, "PROFILE · EXPORT / IMPORT")
+	local prof = Panel(f, 10, -456, 600, 118, "PROFILE · EXPORT / IMPORT")
 	local expBtn = CreateFrame("Button", nil, prof)
 	expBtn:SetSize(90, 22)
 	expBtn:SetPoint("TOPLEFT", 12, -24)
@@ -697,7 +704,7 @@ local function Build()
 	-- GUI for what used to be slash-only (/goblin price set/unset):
 	-- name + expression rows into GoblinMindPrices.customSources,
 	-- validated through the real parser on add
-	local src = Panel(f, 10, -556, 600, 148, "CUSTOM PRICE SOURCES")
+	local src = Panel(f, 10, -580, 600, 148, "CUSTOM PRICE SOURCES")
 	ui.srcName = EditBox(src, 110)
 	ui.srcName:SetPoint("TOPLEFT", 12, -26)
 	ui.srcExpr = EditBox(src, 300)
@@ -774,7 +781,7 @@ local function Build()
 	-- the same layer toggles the gather window's MINIMAP: dropdown
 	-- owns; both write GoblinMindGather.mm through
 	-- GatherMinimap.Set so they can't disagree
-	local gt = Panel(f, 10, -710, 600, 78, "GATHERING · MINIMAP LAYERS")
+	local gt = Panel(f, 10, -734, 600, 78, "GATHERING · MINIMAP LAYERS")
 	ui.mmLayers = {}
 	if GM.GatherMinimap then
 		for i, k in ipairs(GM.GatherMinimap.Layers()) do
@@ -793,7 +800,7 @@ local function Build()
 	-- colors. Same mm table the layer toggles write — colors flow
 	-- through G.KindCol so rows, labels, discs, and blobs all
 	-- honor a pick
-	local ov = Panel(f, 10, -794, 600, 142, "GATHERING · MAP OVERLAY")
+	local ov = Panel(f, 10, -818, 600, 142, "GATHERING · MAP OVERLAY")
 	if GM.GatherMinimap and GM.Gather then
 		-- three opacity channels: zone blobs/borders, farm icons
 		-- + labels, node spawn clusters — settings persist
@@ -911,7 +918,7 @@ local function Build()
 	-- row list the onboarding wizard shows). Panel itself only
 	-- reports what detection sees; the window does the work
 	-- ===== TICKER =====
-	local tk = Panel(f, 10, -942, 600, 88, "TICKER TAPE")
+	local tk = Panel(f, 10, -966, 600, 88, "TICKER TAPE")
 	local function tkStore() return GM.Ticker.Opts() end
 	Row(tk, "Width (px — blank = auto)", 22)
 	ui.tkW = EditBox(tk, 72)
@@ -963,7 +970,7 @@ local function Build()
 	local cks = GM.Budget and GM.Budget.CharsOrdered
 		and GM.Budget.CharsOrdered() or {}
 	local cpH = 30 + math.max(1, #cks) * 22
-	local cp = Panel(f, 10, -1036, 600, cpH, "CHARACTERS · LEDGER")
+	local cp = Panel(f, 10, -1060, 600, cpH, "CHARACTERS · LEDGER")
 	local function paintCharRow(r)
 		r.name:SetText(GM.Budget.Crest(r.ck)
 			.. GM.Budget.CharCC(r.ck) .. GM.Budget.CharName(r.ck)
@@ -1060,7 +1067,7 @@ local function Build()
 	end
 	ui.paintCharRow = paintCharRow
 
-	local imp = Panel(f, 10, -1036, 600, 60,
+	local imp = Panel(f, 10, -1060, 600, 60,
 		"IMPORT FROM OTHER ADDONS")
 	ui.impScan = CreateFrame("Button", nil, imp)
 	ui.impScan:SetSize(110, 22)
