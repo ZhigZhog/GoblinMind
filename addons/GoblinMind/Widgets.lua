@@ -1357,14 +1357,19 @@ function W.PaintAcctRow(row, a, idx, opts)
 	end
 	local label = a.name
 	if ck then
+		-- the pool's name IS the char's — show the resolved full
+		-- name; named accounts keep their user-chosen label
 		label = (GM.Budget.Crest(ck) or "")
-			.. GM.Budget.CharCC(ck) .. a.name .. "|r"
+			.. GM.Budget.CharCC(ck)
+			.. (a.pool and GM.Budget.CharDisp
+				and GM.Budget.CharDisp(ck) or a.name) .. "|r"
 		-- an alt's named account needs its owner spelled out — the
 		-- pool's name already IS the char's, so it skips the tag
 		if not GM.IsSelfCharKey(ck)
 			and a.name ~= GM.Budget.CharName(ck) then
 			label = label .. GM.CC("textDim") .. " · "
-				.. GM.Budget.CharName(ck) .. "|r"
+				.. (GM.Budget.CharDisp and GM.Budget.CharDisp(ck)
+					or GM.Budget.CharName(ck)) .. "|r"
 		end
 	end
 	row.name:SetText(label)

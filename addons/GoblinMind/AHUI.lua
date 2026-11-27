@@ -1443,7 +1443,8 @@ function AU.Refresh(vm)
 				local lot = a.total or (a.unit or 0) * (a.qty or 1)
 				row.c3:SetText((a.id and "lot " or "tot ") .. GM.Money(lot)
 					.. (a.own and " · yours"
-						or a.seller and (" · " .. a.seller)
+						or a.seller and (" · " .. (GM.NameColored
+							and GM.NameColored(a.seller) or a.seller))
 						or (a.id and "" or " · comm")))
 				row.act:Show()
 				local confirming = ui.confirmAsk == a

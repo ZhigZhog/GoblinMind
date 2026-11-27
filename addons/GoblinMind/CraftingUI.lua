@@ -742,21 +742,43 @@ local function ProfList()
 	-- distinct professions with recipe counts, "ALL" first — C.Prof
 	-- resolves via the recipe's category root, which also heals stored
 	-- mistags as it reads
-	local counts, total = {}, 0
-	for id in pairs(GoblinMindCrafting and GoblinMindCrafting.recipes or {}) do
+	local counts, toons, total = {}, {}, 0
+	for id, r in pairs(GoblinMindCrafting
+			and GoblinMindCrafting.recipes or {}) do
 		local p = GM.Crafting.Prof(id)
 		counts[p] = (counts[p] or 0) + 1
 		total = total + 1
+		local t = type(r) == "table" and r.toon
+		if t then
+			toons[p] = toons[p] or {}
+			toons[p][t] = true
+		end
 	end
 	local mine = MyProfs()
 	local out = { { prof = nil, label = "ALL", n = total } }
 	for p, n in pairs(counts) do
 		-- alt-profession recipes stay browsable (account planning)
-		-- but sorted after the char's own and marked
+		-- but sorted after the char's own and marked — with the
+		-- owning toon's name whenever the scan stamped one
 		local alt = mine and not mine[p]
+		local tag
+		if alt then
+			local ts = toons[p]
+			local who = ts and next(ts)
+			if who and not next(ts, who) then
+				tag = GM.CC("textDim") .. " · "
+					.. (GM.NameColored and GM.NameColored(who) or who)
+					.. "|r"
+			elseif who then
+				local n2 = 0
+				for _ in pairs(ts) do n2 = n2 + 1 end
+				tag = GM.CC("textDim") .. " · " .. n2 .. " toons|r"
+			else
+				tag = GM.CC("textDim") .. " · alt|r"
+			end
+		end
 		tinsert(out, { prof = p, n = n, alt = alt,
-			label = p .. (alt and
-				(GM.CC("textDim") .. " · alt|r") or "") })
+			label = p .. (tag or "") })
 	end
 	sort(out, function(a, b)
 		if a.prof == nil then return true end

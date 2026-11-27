@@ -699,7 +699,7 @@ function MU.Refresh(vm)
 				-- writ surface: GMW1 request / writ COD / writ mats
 				local flag = GM.Writs and GM.Writs.RowFlag
 					and GM.Writs.RowFlag(r.index)
-				row.c1:SetText(r.sender)
+				GM.Widgets.NameTag(row.c1, r.sender)
 				row.c2:SetText(r.subject)
 				row.c3:SetText(r.items > 0 and ("×" .. r.items .. " item"
 					.. (r.items == 1 and "" or "s")) or "")

@@ -982,7 +982,9 @@ local function Build()
 	local cp = Panel(f, 10, -1060, 600, cpH, "CHARACTERS · LEDGER")
 	local function paintCharRow(r)
 		r.name:SetText(GM.Budget.Crest(r.ck)
-			.. GM.Budget.CharCC(r.ck) .. GM.Budget.CharName(r.ck)
+			.. GM.Budget.CharCC(r.ck)
+			.. (GM.Budget.CharDisp and GM.Budget.CharDisp(r.ck)
+				or GM.Budget.CharName(r.ck))
 			.. "|r")
 		local cr, cg, cb = GM.Budget.CharRGB(r.ck)
 		r.sw._gmBg:SetColorTexture(cr, cg, cb)
@@ -1041,7 +1043,9 @@ local function Build()
 			end
 		end)
 		W.Tip(r.sw, function() return {
-			"Ledger color for " .. GM.Budget.CharName(ck),
+			"Ledger color for " .. (GM.Budget.CharDisp
+				and GM.Budget.CharDisp(ck)
+				or GM.Budget.CharName(ck)),
 			"click = pick a custom color",
 			"class default box = Blizzard class color" } end)
 		-- class-default checkbox: checked = Blizzard class color

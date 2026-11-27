@@ -185,10 +185,13 @@ local STATE_KEY = {
 }
 
 local function partyName(w, me)
+	local NC = GM.NameColored or function(n) return n end
 	if w._side == "inb" then
-		return (w.fromChar or w.sender or "?") .. " → you"
+		return NC(w.fromChar or w.sender or "?")
+			.. GM.CC("textDim") .. " → you|r"
 	end
-	return "you → " .. (w.toChar or w.sender or "?")
+	return "you " .. GM.CC("textDim") .. "→|r "
+		.. NC(w.toChar or w.sender or "?")
 end
 
 -- state×role actions — mirrors the server's verb gates. Returns

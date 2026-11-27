@@ -890,7 +890,9 @@ local function RefreshAccounts()
 		if ch and (ch.g or 0) > 0 then
 			total = total + ch.g
 			parts[#parts + 1] = GM.Budget.Crest(ck)
-				.. GM.Budget.CharCC(ck) .. GM.Budget.CharName(ck)
+				.. GM.Budget.CharCC(ck)
+				.. (GM.Budget.CharDisp and GM.Budget.CharDisp(ck)
+					or GM.Budget.CharName(ck))
 				.. "|r " .. GM.MoneyShort(ch.g)
 		end
 	end

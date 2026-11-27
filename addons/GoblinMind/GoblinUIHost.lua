@@ -479,6 +479,7 @@ lib:RegisterLocale("GoblinMind", "enUS", {
 	["TICKER TAPE"] = "TICKER TAPE",
 	["TIME"] = "TIME",
 	["TOOLTIP LINES"] = "TOOLTIP LINES",
+	["T"] = "T",
 	["Totems"] = "Totems",
 	["to"] = "to",
 	["TRACK"] = "TRACK",

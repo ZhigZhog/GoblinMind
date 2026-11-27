@@ -107,6 +107,13 @@ function B.CharName(ck)
 	return n or "?"
 end
 
+-- display form: the full "First Last" whenever any source can
+-- resolve the surname (Core.lua's FullName); base name otherwise
+function B.CharDisp(ck)
+	local n = B.CharName(ck)
+	return (GM.FullName and GM.FullName(n)) or n
+end
+
 -- faction crest as a fontstring texture escape — renders inline in
 -- any SetText, no widget needed
 function B.Crest(ck)
@@ -149,8 +156,11 @@ function B.CharRGB(ck)
 	if type(col) == "string" and col:match("^%x%x%x%x%x%x$") then
 		return HexRGB(col)
 	end
-	local cc = ch and ch.cls and (RAID_CLASS_COLORS
-		or CLASS_RGB)[ch.cls]
+	-- recorded class wins; a char the ledger never saw in-game
+	-- resolves through the social sources instead of palette-hash
+	local tok = ch and ch.cls
+		or (GM.ClassOf and GM.ClassOf(B.CharName(ck)))
+	local cc = tok and (RAID_CLASS_COLORS or CLASS_RGB)[tok]
 	if cc then
 		return cc.r or cc[1], cc.g or cc[2], cc.b or cc[3]
 	end

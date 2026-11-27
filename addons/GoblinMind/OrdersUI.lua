@@ -627,7 +627,8 @@ local function CommitRow(r, o, c, me)
 	rating = GM.CC(rkey) .. rating .. "|r"
 	local left = (c.expires or 0) - time()
 	r.ctxt:SetText(string.format("» %s%s  x%d/%d  %s  %s  %s%s",
-		c.crafter or "?",
+		(GM.NameColored and GM.NameColored(c.crafter))
+			or c.crafter or "?",
 		c.crafterUUID == me and " |cff5fd35f(you)|r" or "",
 		c.unitsFilled or 0, c.units or 0,
 		rating,
