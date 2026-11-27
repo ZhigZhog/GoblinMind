@@ -250,11 +250,20 @@ def init_db():
         offer INTEGER, mats TEXT, deliver TEXT, note TEXT,
         quote INTEGER, cod INTEGER, mail_from TEXT,
         created REAL, updated REAL, expires REAL,
-        state TEXT DEFAULT 'open')''')
+        state TEXT DEFAULT 'open',
+        meet TEXT, mats_fp TEXT)''')
     conn.execute('''CREATE INDEX IF NOT EXISTS wri_to
         ON writs(to_install, state)''')
     conn.execute('''CREATE INDEX IF NOT EXISTS wri_from
         ON writs(from_install, state)''')
+    # v2.1 columns — meet = the arranged meet-place (trade-settle
+    # handshake), mats_fp = the prepaid-mats shipment fingerprint
+    # the crafter's client matches inbound mail against
+    wcols = {r[1] for r in conn.execute('PRAGMA table_info(writs)')}
+    for col in ('meet', 'mats_fp'):
+        if col not in wcols:
+            conn.execute(
+                'ALTER TABLE writs ADD COLUMN %s TEXT' % col)
     # staged-op dedup — SV replays POST the same op id; first result
     # is replayed verbatim instead of re-applying the mutation
     conn.execute('''CREATE TABLE IF NOT EXISTS order_ops(
@@ -1442,21 +1451,22 @@ def _writ_row(conn, wid):
     return conn.execute(
         'SELECT id,board,from_install,from_uuid,from_char,'
         'to_install,to_uuid,to_char,ref,name,item_id,qty,offer,mats,'
-        'deliver,note,quote,cod,mail_from,created,updated,expires,state '
+        'deliver,note,quote,cod,mail_from,created,updated,expires,state,'
+        'meet,mats_fp '
         'FROM writs WHERE id=?', (wid,)).fetchone()
 
 
 def _writ_dict(r):
     (wid, board, fi, fu, fc, ti, tu, tc, ref, name, iid, qty, offer,
      mats, deliver, note, quote, cod, mail_from, created, updated,
-     expires, state) = r
+     expires, state, meet, mats_fp) = r
     return {'id': wid, 'board': board,
             'fromUUID': fu, 'fromChar': fc,
             'toUUID': tu, 'toChar': tc,
             'ref': ref, 'name': name, 'itemID': iid, 'qty': qty,
             'offer': offer, 'mats': mats, 'deliver': deliver,
             'note': note, 'quote': quote, 'cod': cod,
-            'mailFrom': mail_from,
+            'mailFrom': mail_from, 'meet': meet, 'matsFp': mats_fp,
             'created': int(created), 'updated': int(updated),
             'expires': int(expires), 'state': state,
             # price currently on the table: the latest quote, else the
@@ -1632,15 +1642,18 @@ def o_wpost(conn, ctx):
     conn.execute(
         'INSERT OR IGNORE INTO writs(id,board,from_install,from_uuid,'
         'from_char,to_install,to_uuid,to_char,ref,name,item_id,qty,'
-        'offer,mats,deliver,note,created,updated,expires,state) '
-        'VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,"open")',
+        'offer,mats,deliver,note,created,updated,expires,state,'
+        'meet,mats_fp) '
+        'VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,"open",?,?)',
         (wid, board, ctx['install'], ctx['uid'],
          str(body.get('fromChar') or '')[:24], to_install, to_uuid,
          str(body.get('toChar') or '')[:24],
          str(body.get('ref') or '')[:40],
          str(body.get('name') or 'Work request')[:72], iid, qty,
          offer, mats, deliver, str(body.get('note') or '')[:200],
-         now, now, exp))
+         now, now, exp,
+         str(body.get('meet') or '')[:80] or None,
+         str(body.get('matsFp') or '')[:80] or None))
     conn.commit()
     return {'ok': True, 'writ': _writ_dict(_writ_row(conn, wid))}
 
@@ -1713,7 +1726,36 @@ def _w_quote(conn, ctx, row):
 
 
 def _w_accept(conn, ctx, row):
+    # the confirming party can lock the meet-place in the same op —
+    # the propose->confirm handshake then completes in ONE round
+    # trip instead of two
+    body = ctx['body']
+    meet, mfp = body.get('meet'), body.get('matsFp')
+    if meet is not None or mfp is not None:
+        conn.execute(
+            'UPDATE writs SET meet=COALESCE(?,meet),'
+            'mats_fp=COALESCE(?,mats_fp) WHERE id=?',
+            (str(meet)[:80] if meet else None,
+             str(mfp)[:80] if mfp else None, row[0]))
     return _w_set(conn, ctx, row, 'agreed')
+
+
+def _w_meet(conn, ctx, row):
+    # arrangement updates during negotiation — propose a meet-place
+    # and/or link the prepaid-mats mail fingerprint. Either field may
+    # ride alone; the other party's next inbox pull IS the reply
+    body = ctx['body']
+    meet, mfp = body.get('meet'), body.get('matsFp')
+    if meet is None and mfp is None:
+        ctx['send'](400, {'error': 'payload'})
+        return None
+    conn.execute(
+        'UPDATE writs SET meet=COALESCE(?,meet),'
+        'mats_fp=COALESCE(?,mats_fp),updated=? WHERE id=?',
+        (str(meet)[:80] if meet is not None else None,
+         str(mfp)[:80] if mfp is not None else None,
+         ctx['now'], row[0]))
+    return {'ok': True, 'writ': _writ_dict(_writ_row(conn, row[0]))}
 
 
 def _w_decline(conn, ctx, row):
@@ -1757,6 +1799,7 @@ WRIT_VERBS = {
     'wship':    ('to',     ('agreed',), _w_ship),
     'wrecv':    ('from',   ('shipped',), _w_recv),
     'wcancel':  ('from',   ('open', 'quoted'), _w_cancel),
+    'wmeet':    ('either', ('open', 'quoted', 'agreed'), _w_meet),
 }
 
 

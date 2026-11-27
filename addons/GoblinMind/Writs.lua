@@ -111,6 +111,9 @@ end
 
 function W.RosterOffers()
 	local out = {}
+	-- ';' is the relay envelope's field delimiter — offer text must
+	-- never carry it (JSON in the queue is hex-packed and fine; the
+	-- tunneled copy is not)
 	local profs = GoblinMindCrafting
 		and (GoblinMindCrafting.recipes or {}) or {}
 	for id, r in pairs(profs) do
@@ -118,10 +121,12 @@ function W.RosterOffers()
 			local ref = "r:" .. id
 			local t = TermsFor(ref)
 			out[#out + 1] = {
-				ref = ref, name = r.name, prof = r.prof,
+				ref = ref, name = r.name:gsub(";", " "),
+				prof = r.prof and r.prof:gsub(";", " ") or nil,
 				itemID = r.itemID, kind = "craft",
 				numMade = r.numMade or 1,
-				price = t.price, mats = t.mats, note = t.note,
+				price = t.price, mats = t.mats,
+				note = t.note and t.note:gsub(";", " ") or nil,
 			}
 		end
 	end
@@ -132,23 +137,29 @@ function W.RosterOffers()
 			local ref = "s:" .. id
 			local t = TermsFor(ref)
 			out[#out + 1] = {
-				ref = ref, name = r.name, prof = r.prof,
+				ref = ref, name = r.name:gsub(";", " "),
+				prof = r.prof and r.prof:gsub(";", " ") or nil,
 				kind = "service",
-				price = t.price, mats = t.mats, note = t.note,
+				price = t.price, mats = t.mats,
+				note = t.note and t.note:gsub(";", " ") or nil,
 			}
 		end
 	end
 	-- hand-entered work that the tradeskill scan can't see —
 	-- lockpicking, portals, summons. Every entry carries its own ref.
 	for _, s in ipairs(GM.db and GM.db.shopOffers or {}) do
-		if type(s) == "table" and s.name then
+		if type(s) == "table" and s.name and s.ref
+				and not tostring(s.ref):find(";") then
 			local t = TermsFor(s.ref)
 			out[#out + 1] = {
-				ref = s.ref, name = s.name, prof = s.prof,
+				ref = s.ref, name = tostring(s.name):gsub(";", " "),
+				prof = s.prof and tostring(s.prof):gsub(";", " ") or nil,
 				kind = s.kind == "service" and "service" or "craft",
 				itemID = s.itemID,
 				price = t.price or s.price,
-				mats = t.mats or s.mats, note = t.note or s.note,
+				mats = t.mats or s.mats,
+				note = (t.note or s.note)
+					and tostring(t.note or s.note):gsub(";", " "),
 			}
 		end
 	end
@@ -230,8 +241,7 @@ function W.Publish(board)
 	end
 	if #chars == 0 then chars[1] = CharName() end
 	table.sort(chars)
-	return W.Stage({
-		v = "roster", b = board,
+	return W.Op("roster", board, {
 		chars = table.concat(chars, ","),
 		offers = JEnc(W.RosterOffers()),
 	})
@@ -241,8 +251,8 @@ end
 function W.Request(board, toUUID, toChar, f)
 	if not (board and toUUID) then return nil end
 	f = f or {}
-	return W.Stage({
-		v = "wpost", b = board, to = toUUID,
+	return W.Op("wpost", board, {
+		to = toUUID,
 		toChar = toChar or "?", fromChar = CharName(),
 		ref = f.ref or "", name = f.name or "Work request",
 		itemID = f.itemID, qty = f.qty or 1,
@@ -253,38 +263,44 @@ function W.Request(board, toUUID, toChar, f)
 	})
 end
 
--- lifecycle verbs on an existing writ id
-function W.Act(verb, wid, fields)
+-- lifecycle verbs on an existing writ — pass the writ row (or bare
+-- id); the board resolves off the row/inbox when not given
+function W.Act(verb, w, fields)
+	local wid, board
+	if type(w) == "table" then
+		wid, board = w.id, w.board
+	else
+		wid = w
+	end
 	if not wid then return nil end
 	fields = fields or {}
-	fields.v = verb
 	fields.wid = wid
-	return W.Stage(fields)
+	return W.Op(verb, board or fields.b or W.BoardOf(wid), fields)
 end
 
 -- ============ reads ============
 
 function W.Rosters(board)
+	-- remote board = the relay stream's roster rows (y records)
+	if GM.Orders and GM.Orders.IsRemote
+			and GM.Orders.IsRemote(board) then
+		local rb = GM.Orders.RBoard and GM.Orders.RBoard(board)
+		return (rb and rb.rosters) or {}
+	end
 	local b = GoblinMindDB and GoblinMindDB.rosters
 		and GoblinMindDB.rosters[board]
 	return (b and b.rosters) or {}
 end
 
 function W.RosterStamp(board)
+	if GM.Orders and GM.Orders.IsRemote
+			and GM.Orders.IsRemote(board) then
+		local rb = GM.Orders.RBoard and GM.Orders.RBoard(board)
+		return (rb and rb.t) or 0
+	end
 	local b = GoblinMindDB and GoblinMindDB.rosters
 		and GoblinMindDB.rosters[board]
 	return (b and b.t) or 0
-end
-
--- {in = [...], out = [...], t = pull timestamp}
-function W.Writs()
-	local w = GoblinMindDB and GoblinMindDB.writs
-	return { inb = (w and w["in"]) or {}, out = (w and w.out) or {},
-		t = (w and w.t) or 0 }
-end
-
-function W.Results()
-	return GoblinMindDB and GoblinMindDB.writResults or {}
 end
 
 function W.Pending()
@@ -304,6 +320,503 @@ function W.ClearAcked()
 	for i = #q, 1, -1 do
 		local rid = q[i]:match("^(wrt%-[^|]+)")
 		if rid and res[rid] then table.remove(q, i) end
+	end
+end
+
+-- ============ live overlay (mesh 'V' events) ============
+-- Same hint-vs-truth contract as Orders' 'O' records: writ events
+-- ride the writ bus so an online crafter's MY WRITS sees a request
+-- in seconds; the /v1/writs pull stays authoritative — a pull that
+-- already shows the ev's effect CONFIRMS it out, a failed rid or a
+-- 10-min orphan TTL drops it.
+
+W.live = {}            -- [board] = {ev, ...}, session-only
+local LIVE_TTL = 600
+local _evSeq = 0
+
+function W.LiveEvent(board, ev)
+	if not board or board == "" then return end
+	ev.t = math.min(ev.t or time(), time())
+	_evSeq = _evSeq + 1
+	ev.seq = _evSeq
+	local L = W.live[board]
+	if not L then L = {} W.live[board] = L end
+	L[#L + 1] = ev
+	while #L > 200 do table.remove(L, 1) end
+	GM.View.Refresh("orders")
+end
+
+-- ';' is the record-field delimiter and ',' the batch delimiter —
+-- every free-text field scrubs both before touching either wire
+local function clean(s)
+	return (tostring(s or ""):gsub("[;,\r\n]", " "))
+end
+
+-- one-letter wire: V;<board>;<verb>;<rid>;<inst>;<actor>;<t>;<tail>
+-- ':' inside ids ('install:op') is safe — only ';' splits fields
+local WVERBS = {}
+
+local function widApply(ev, view, byId)
+	local w = byId[ev.wid]
+	if not w then return end
+	w.updated = ev.t
+	w._pendOp = ev.v
+	return w
+end
+
+-- a verb that just moves state — most verbs are this
+local function stateApply(state)
+	return function(ev, view, byId)
+		local w = widApply(ev, view, byId)
+		if w then w.state = state end
+	end
+end
+local function stateConfirm(state)
+	return function(ev, byId)
+		local w = byId[ev.wid]
+		return w and w.state == state
+	end
+end
+-- fields = verb-tail keys the ev needs; apply writes them onto w
+local function fieldApply(state, ...)
+	local keys = { ... }
+	return function(ev, view, byId)
+		local w = widApply(ev, view, byId)
+		if not w then return end
+		if state then w.state = state end
+		for _, k in ipairs(keys) do
+			if ev[k] ~= nil then w[k] = ev[k] end
+		end
+		if ev.price then w.price = ev.price end
+	end
+end
+
+WVERBS.wpost = {
+	-- the new-writ hint: only paints for a party (privacy — the
+	-- broadcast channel hears every writ but only from/to see it)
+	ev = function(f, rid)
+		local inst = GM.Orders and GM.Orders.MyInstallID
+			and GM.Orders.MyInstallID()
+		return {
+			wid = (inst or "?") .. ":" .. rid,
+			to = f.to, toChar = f.toChar, fromChar = f.fromChar,
+			ref = f.ref, name = f.name, itemID = f.itemID,
+			qty = f.qty, offer = f.offer, mats = f.mats,
+			deliver = f.deliver,
+			actor = W.MyUUID(), fromUUID = W.MyUUID(),
+		}
+	end,
+	wire = function(ev, rid, board)
+		return table.concat({ "V", board, "wpost", rid,
+			GM.Orders and GM.Orders.MyInstallID() or "?",
+			ev.actor or "?", ev.t or time(),
+			ev.to or "-", clean(ev.toChar), clean(ev.fromChar),
+			ev.ref or "-", clean(ev.name), ev.itemID or 0,
+			ev.qty or 1, ev.offer or 0, ev.mats or "buyer",
+			ev.deliver or "cod" }, ";")
+	end,
+	parse = function(f)
+		local ev = {
+			wid = (f[5] or "?") .. ":" .. (f[4] or "?"),
+			to = f[8] ~= "-" and f[8] or nil, toChar = f[9],
+			fromChar = f[10], ref = f[11] ~= "-" and f[11] or nil,
+			name = f[12], itemID = tonumber(f[13]),
+			qty = tonumber(f[14]), offer = tonumber(f[15]),
+			mats = f[16] ~= "-" and f[16] or nil,
+			deliver = f[17] ~= "-" and f[17] or nil,
+			fromUUID = f[6] ~= "-" and f[6] or nil,
+		}
+		return ev
+	end,
+	apply = function(ev, view, byId, me)
+		-- not my writ, not my pane
+		if ev.to ~= me and ev.actor ~= me then return end
+		if not ev.wid or byId[ev.wid] then return end
+		local w = {
+			id = ev.wid, board = ev.board, state = "open",
+			fromUUID = ev.actor, fromChar = ev.fromChar,
+			toUUID = ev.to, toChar = ev.toChar,
+			ref = ev.ref, name = ev.name, itemID = ev.itemID,
+			qty = ev.qty, offer = ev.offer, mats = ev.mats,
+			deliver = ev.deliver, price = ev.offer,
+			created = ev.t, updated = ev.t,
+			expires = (ev.t or time()) + 72 * 3600,
+			_live = true, _pendOp = "wpost",
+		}
+		byId[w.id] = w
+		w._side = (ev.to == me) and "inb" or "out"
+		view[w._side][#view[w._side] + 1] = w
+	end,
+	confirm = function(ev, byId)
+		return ev.wid and byId[ev.wid] ~= nil
+	end,
+	replay = function(f, ctx)
+		return {
+			wid = (ctx.inst or "?") .. ":" .. (ctx.rid or "?"),
+			to = f.to, toChar = f.toChar, fromChar = f.fromChar,
+			ref = f.ref, name = f.name, itemID = f.itemID,
+			qty = f.qty, offer = f.offer, mats = f.mats,
+			deliver = f.deliver, actor = ctx.uuid,
+		}
+	end,
+}
+
+local function widEv(f)
+	return { wid = f.wid }
+end
+local function widWire(verb, ...)
+	local keys = { ... }
+	return function(ev, rid, board)
+		local p = { "V", board, verb, rid or "-",
+			ev.inst or "?", ev.actor or "?", ev.t or time() }
+		p[#p + 1] = ev.wid or "-"
+		for _, k in ipairs(keys) do
+			p[#p + 1] = clean(ev[k]) ~= "" and clean(ev[k]) or "-"
+		end
+		return table.concat(p, ";")
+	end
+end
+local function widParse(...)
+	local keys = { ... }
+	return function(f)
+		local ev = { wid = f[8] ~= "-" and f[8] or nil }
+		if not ev.wid then return nil end
+		for i, k in ipairs(keys) do
+			local v = f[8 + i]
+			if v and v ~= "-" then
+				ev[k] = tonumber(v) or v
+			end
+		end
+		return ev
+	end
+end
+-- staged-queue replay for the simple verbs — everything needed is
+-- already on the op fields
+local function widReplay(...)
+	local keys = { ... }
+	return function(f, ctx)
+		local ev = { wid = f.wid, actor = ctx.uuid }
+		for _, k in ipairs(keys) do ev[k] = f[k] end
+		return ev
+	end
+end
+
+WVERBS.wquote = {
+	ev = function(f) return { wid = f.wid, price = f.price } end,
+	wire = widWire("wquote", "price"),
+	parse = widParse("price"),
+	apply = function(ev, view, byId)
+		local w = widApply(ev, view, byId)
+		if w then
+			w.state = "quoted"
+			w.quote = ev.price or w.quote
+			w.price = ev.price or w.price
+		end
+	end,
+	confirm = function(ev, byId)
+		local w = byId[ev.wid]
+		return w and w.state == "quoted"
+	end,
+	replay = widReplay("price"),
+}
+WVERBS.waccept = {
+	ev = function(f) return { wid = f.wid, meet = f.meet,
+		matsFp = f.matsFp } end,
+	wire = widWire("waccept", "meet", "matsFp"),
+	parse = widParse("meet", "matsFp"),
+	apply = fieldApply("agreed", "meet", "matsFp"),
+	confirm = stateConfirm("agreed"),
+	replay = widReplay("meet", "matsFp"),
+}
+WVERBS.wdecline = {
+	ev = widEv, wire = widWire("wdecline"), parse = widParse(),
+	apply = stateApply("declined"),
+	confirm = stateConfirm("declined"), replay = widReplay(),
+}
+WVERBS.wship = {
+	ev = function(f) return { wid = f.wid, cod = f.cod,
+		mailFrom = f.mailFrom } end,
+	wire = widWire("wship", "cod", "mailFrom"),
+	parse = widParse("cod", "mailFrom"),
+	apply = fieldApply("shipped", "cod", "mailFrom"),
+	confirm = stateConfirm("shipped"),
+	replay = widReplay("cod", "mailFrom"),
+}
+WVERBS.wrecv = {
+	ev = widEv, wire = widWire("wrecv"), parse = widParse(),
+	apply = stateApply("done"),
+	confirm = stateConfirm("done"), replay = widReplay(),
+}
+WVERBS.wcancel = {
+	ev = widEv, wire = widWire("wcancel"), parse = widParse(),
+	apply = stateApply("cancelled"),
+	confirm = stateConfirm("cancelled"), replay = widReplay(),
+}
+WVERBS.wmeet = {
+	ev = function(f) return { wid = f.wid, meet = f.meet,
+		matsFp = f.matsFp } end,
+	wire = widWire("wmeet", "meet", "matsFp"),
+	parse = widParse("meet", "matsFp"),
+	apply = fieldApply(nil, "meet", "matsFp"),
+	confirm = function(ev, byId)
+		local w = byId[ev.wid]
+		if not w then return false end
+		return (ev.meet and w.meet == ev.meet)
+			or (ev.matsFp and w.matsFp == ev.matsFp) or false
+	end,
+	replay = widReplay("meet", "matsFp"),
+}
+-- roster publish hints nothing — the offer payload can't ride a
+-- mesh record; stage-only verb (the pull carries the shop)
+WVERBS.roster = {}
+
+function W.MeshSend(rec)
+	if GM.Mesh and GM.Mesh.Send then
+		GM.Mesh.Send("V", { rec })
+	end
+end
+
+function W.MeshEvent(rec)
+	local f = {}
+	for x in rec:gmatch("[^;]*") do f[#f + 1] = x end
+	if f[1] ~= "V" then return end
+	local def = WVERBS[f[3]]
+	local ev = def and def.parse and def.parse(f)
+	if ev then
+		ev.v = f[3]
+		ev.rid = f[4] ~= "-" and f[4] or nil
+		ev.inst = f[5] ~= "-" and f[5] or nil
+		ev.actor = f[6] ~= "-" and f[6] or nil
+		ev.t = tonumber(f[7])
+		W.LiveEvent(f[2], ev)
+	end
+end
+
+local function evConfirmed(ev, byId, liveIds)
+	local def = WVERBS[ev.v]
+	return (def and def.confirm)
+		and (def.confirm(ev, byId, liveIds) and true or false)
+		or false
+end
+
+local function evDrop(ev, byId, res, pullT, liveIds)
+	if ev.rid then
+		local r = res[ev.rid]
+		if r and not r.ok then return true end
+		if r and r.ok and (pullT or 0) > (r.t or 0)
+				and not evConfirmed(ev, byId, liveIds) then
+			return true
+		end
+	end
+	if evConfirmed(ev, byId, liveIds) then return true end
+	return (ev.t or 0) < time() - LIVE_TTL
+end
+
+local function shallow(o)
+	local c = {}
+	for k, v in pairs(o) do c[k] = v end
+	return c
+end
+
+-- drop a staged op that never landed (remote rejects unwind the
+-- queue entry so a /reload can't re-pend it)
+function W.Unstage(rid)
+	if not rid then return end
+	local q = GM.db and GM.db.writQueue
+	if not q then return end
+	for i = #q, 1, -1 do
+		if q[i]:match("^wrt%-[^|]+") == rid then
+			table.remove(q, i)
+		end
+	end
+end
+
+-- inverse of OpJSON — flat {"k":scalar} only; jesc maps every
+-- embedded quote/backslash to \uXXXX so bare " never appears
+-- inside string values (the two-pass match below stays safe)
+local function unjson(s)
+	local out = {}
+	for k, v in s:gmatch('"([^"]-)":"(.-)"[,}]') do
+		out[k] = v:gsub("\\u(%x%x%x%x)", function(x)
+			return string.char(tonumber(x, 16) % 256)
+		end)
+	end
+	for k, v in s:gmatch('"([^"]-)":([^",}]+)') do
+		if v == "true" then out[k] = true
+		elseif v == "false" then out[k] = false
+		else out[k] = tonumber(v) end
+	end
+	return out
+end
+
+-- staged-but-unconsumed ops survive in the SV queue — replay them
+-- into the live overlay on first read, same contract as Orders:
+-- ClearAcked drops answered rids, so what's left is unconfirmed
+local _replayed = false
+function W.ReplayPending()
+	if _replayed then return end
+	_replayed = true
+	local ctx = {}
+	for _, rec in ipairs(GM.db and GM.db.writQueue or {}) do
+		local rid, h = rec:match("^(wrt%-[^|]+)|(%x+)$")
+		local f = h and unjson(unhex(h)) or nil
+		local b = f and f.b or nil
+		ctx.inst = (f and f.rly and GM.Orders
+			and GM.Orders.RelayCreds(b)
+			and GM.Orders.RelayCreds(b).i)
+			or (GM.Orders and GM.Orders.MyInstallID
+				and GM.Orders.MyInstallID()) or "?"
+		ctx.uuid = W.MyUUID()
+		ctx.rid = rid
+		local def = f and WVERBS[f.v]
+		local ev = def and def.replay and def.replay(f, ctx)
+		if ev and b then
+			ev.v, ev.rid, ev.board = f.v, rid, b
+			ev.rly = f.rly and true or nil
+			ev.t = tonumber(rid:match("^wrt%-(%d+)"))
+			local dup = false
+			for _, e in ipairs(W.live[b] or {}) do
+				if e.rid == rid then dup = true break end
+			end
+			if not dup then W.LiveEvent(b, ev) end
+		end
+	end
+end
+
+-- ============ THE op path ============
+-- Mirror of OR.Op: stage -> overlay ev -> mesh hint, with the same
+-- relay detour for boards our own tracker doesn't serve. Every verb
+-- wrapper funnels here so an op can never partially fire.
+function W.Op(verb, board, fields, evFields)
+	local def = WVERBS[verb]
+	if not def then return nil end
+	fields = fields or {}
+	fields.v = verb
+	fields.b = fields.b or board
+	board = fields.b
+	local remote = board and GM.Orders and GM.Orders.IsRemote
+		and GM.Orders.IsRemote(board)
+	local creds
+	if remote then
+		creds = GM.Orders.RelayCreds(board)
+		if not creds then
+			GM.Orders.RelayRegister(board)
+			GM.Orders.RelayQueueOp(board, verb, fields)
+			return nil
+		end
+		fields.rly = 1
+	end
+	local rid = W.Stage(fields)
+	local ev = evFields or (def.ev and def.ev(fields, rid))
+	if ev then
+		ev.v = verb
+		ev.rid = rid
+		ev.board = board
+		if remote then
+			ev.rly = true
+			-- server-side ids resolve under OUR relay install —
+			-- creds.i is the install the Y reply issued us
+			if creds.i and verb == "wpost" then
+				ev.wid = creds.i .. ":" .. rid
+			end
+		end
+		W.LiveEvent(board, ev)
+		-- remote ops skip the channel record — a same-named board
+		-- on a peer's tracker is a different swarm's data
+		if def.wire and not remote then
+			W.MeshSend(def.wire(ev, rid, board))
+		end
+	end
+	if remote then
+		GM.Orders.RelaySend(board, verb, fields, rid, creds)
+	end
+	return rid
+end
+
+-- ============ composed view (pull truth + live hints) ============
+
+-- results feed folds relayed-op failures (X records) the way
+-- OR.Results does — remote rejects must drop evs like local ones
+function W.Results()
+	local r = GoblinMindDB and GoblinMindDB.writResults or {}
+	local re = GM.db and GM.db.relayErr
+	if not re then return r end
+	local merged = {}
+	for k, v in pairs(r) do merged[k] = v end
+	for rid, code in pairs(re) do
+		if not merged[rid] then
+			merged[rid] = { ok = false, code = code }
+		end
+	end
+	return merged
+end
+
+-- {inb = [...], out = [...], t = pull ts} — pulled truth plus live
+-- 'V' hints; _live/_pendOp mark unconfirmed rows for the UI
+function W.Writs()
+	W.ReplayPending()
+	local me = W.MyUUID()
+	local w = GoblinMindDB and GoblinMindDB.writs
+	local pullT = (w and w.t) or 0
+	local view = { inb = {}, out = {}, t = pullT }
+	local byId = {}
+	for _, o in ipairs((w and w["in"]) or {}) do
+		local c = shallow(o)
+		c._side = "inb"
+		byId[c.id] = c
+		view.inb[#view.inb + 1] = c
+	end
+	for _, o in ipairs((w and w.out) or {}) do
+		local c = shallow(o)
+		c._side = "out"
+		byId[c.id] = c
+		view.out[#view.out + 1] = c
+	end
+	-- tunneled board inbox: staged relay ops are all the customer
+	-- sees until their crafter's server-side verbs hint back over
+	-- the channel — the composed overlay below is what paints them
+	local res = W.Results()
+	-- drop pass first (tail-first per list), then apply in global
+	-- event order so reordered packets land right
+	for _, L in pairs(W.live) do
+		for i = #L, 1, -1 do
+			if evDrop(L[i], byId, res, pullT) then
+				if L[i].rly then W.Unstage(L[i].rid) end
+				table.remove(L, i)
+			end
+		end
+	end
+	local ord = {}
+	for _, L in pairs(W.live) do
+		for _, ev in ipairs(L) do ord[#ord + 1] = ev end
+	end
+	table.sort(ord, function(a, b)
+		if (a.t or 0) ~= (b.t or 0) then
+			return (a.t or 0) < (b.t or 0)
+		end
+		return (a.seq or 0) < (b.seq or 0)
+	end)
+	for _, ev in ipairs(ord) do
+		local def = WVERBS[ev.v]
+		if def and def.apply then def.apply(ev, view, byId, me) end
+	end
+	return view
+end
+
+-- find a writ's board when the caller only has the id — pulls
+-- carry board on every row; live evs keep theirs
+function W.BoardOf(wid)
+	local w = GoblinMindDB and GoblinMindDB.writs
+	for _, side in ipairs({ (w and w["in"]) or {},
+		(w and w.out) or {} }) do
+		for _, o in ipairs(side) do
+			if o.id == wid then return o.board end
+		end
+	end
+	for b, L in pairs(W.live) do
+		for _, ev in ipairs(L) do
+			if ev.wid == wid or ev.id == wid then return b end
+		end
 	end
 end
 

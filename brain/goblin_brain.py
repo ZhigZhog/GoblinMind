@@ -2582,7 +2582,7 @@ def _writ_route(body):
     if v == 'wpost':
         return '/v1/writs'
     if v in ('wquote', 'waccept', 'wdecline', 'wship', 'wrecv',
-             'wcancel'):
+             'wcancel', 'wmeet'):
         return ('/v1/writs/%s/%s' % (qi(wid), v)
                 if wid else None)
     return None
@@ -2701,7 +2701,9 @@ def process_relay(appdata, root=None):
                         if r.get(k) is not None:
                             res[k] = r[k]
                 else:
-                    path = _ord_route(env)
+                    # writ verbs tunnel too — envelopes carry the
+                    # same {v,b,wid} body shape, just writ routes
+                    path = _ord_route(env) or _writ_route(env)
                     if not path:
                         done[rid] = dict(res, ok=False, err='verb')
                         dirty = True

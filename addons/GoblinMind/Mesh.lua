@@ -17,7 +17,7 @@ local CH_A, CH_B = "goblinmindx", "goblinwritx"
 -- separate buses. Writ records are rare but heavy — a 50-message
 -- snapshot stream must never starve a sale hint, and vice versa.
 local WRIT_KINDS = { T=1, D=1, Q=1, F=1, P=1, N=1, W=1, w=1, Z=1,
-                     I=1, i=1, O=1 }
+                     I=1, i=1, O=1, V=1, y=1 }
 local function ChanFor(kind)
 	return WRIT_KINDS[kind] and CH_B or CH_A
 end
@@ -423,6 +423,14 @@ local KINDS = {
 			end
 		end
 	end,
+	-- crafting-writ v2 overlay events — Writs owns its grammar
+	V = function(_, _, body)
+		if GM.Writs and GM.Writs.MeshEvent then
+			for rec in body:gmatch("[^,]+") do
+				GM.Writs.MeshEvent(rec)
+			end
+		end
+	end,
 }
 
 -- snapshot stream rows (W/w/Z) — batched comma-joined; ingest only
@@ -437,6 +445,7 @@ local function StreamRows(kind, _, body, sender)
 	end
 end
 KINDS.W, KINDS.w, KINDS.Z = StreamRows, StreamRows, StreamRows
+KINDS.y = StreamRows   -- roster rows land in the same gen-pinned ingest
 
 local function OnAddon(_, prefix, msg, ctype, sender)
 	if prefix ~= PREFIX then return end

@@ -714,10 +714,29 @@ def main():
     c, _ = req(base, '/v1/writs/%s/wship' % wid,
                {'op': 's0'}, tok_s)
     check('ship before agreement -> 409 state', c == 409, _)
+    # arrangement handshake: crafter proposes the meet-place, buyer
+    # attaches the prepaid-mats fingerprint — both inside wmeet, and
+    # the accept can confirm the meet in the same op
+    c, r = req(base, '/v1/writs/%s/wmeet' % wid,
+               {'meet': 'SW trade square', 'op': 'm1'}, tok_s)
+    check('crafter proposes meet', c == 200
+          and r['writ']['meet'] == 'SW trade square', r)
+    c, r = req(base, '/v1/writs/%s/wmeet' % wid,
+               {'matsFp': 'fp:buylin:mats1', 'op': 'm2'}, tok_u)
+    check('customer links mats fingerprint', c == 200
+          and r['writ']['matsFp'] == 'fp:buylin:mats1', r)
+    c, _ = req(base, '/v1/writs/%s/wmeet' % wid,
+               {'meet': 'gatecrash', 'op': 'm3'}, tok_p)
+    check('non-party wmeet -> 403 party', c == 403, c)
+    c, _ = req(base, '/v1/writs/%s/wmeet' % wid,
+               {'op': 'm4'}, tok_u)
+    check('empty wmeet -> 400 payload', c == 400, c)
     c, r = req(base, '/v1/writs/%s/waccept' % wid,
-               {'op': 'a1'}, tok_u)
-    check('customer accepts quote -> agreed',
-          c == 200 and r['writ']['state'] == 'agreed', r)
+               {'op': 'a1', 'meet': 'SW bank steps'}, tok_u)
+    check('customer accepts quote -> agreed (meet confirmed)',
+          c == 200 and r['writ']['state'] == 'agreed'
+          and r['writ']['meet'] == 'SW bank steps'
+          and r['writ']['matsFp'] == 'fp:buylin:mats1', r)
     c, r = req(base, '/v1/writs/%s/wship' % wid,
                {'cod': 1500, 'mailFrom': 'SmithAlt', 'op': 's1'}, tok_s)
     check('crafter ships COD -> shipped',
