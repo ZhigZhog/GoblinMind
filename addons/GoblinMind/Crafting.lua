@@ -867,6 +867,10 @@ function C.Init()
 		end
 		if e == "TRADE_SKILL_SHOW" then
 			Tr("TRADE_SKILL_SHOW")
+			-- pf:OnShow uses this to tell a fresh session open (link
+			-- click — the show lands in the same beat) from a stale
+			-- linked session a K-overview inherited
+			C._lastShowT = GetTime()
 			-- name the open line NOW from the live enum — waiting for
 			-- the debounced recipe scan leaves lastProf stale/nil
 			-- through the settle window, and stale session state can

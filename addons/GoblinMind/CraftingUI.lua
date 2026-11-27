@@ -1554,6 +1554,26 @@ function CU.HookDefault()
 		-- suggested prices, REQUEST instead of CRAFT
 		ui.foreign = GM.Crafting and GM.Crafting.Foreign
 			and GM.Crafting.Foreign() or nil
+		if ui.foreign then
+			-- a linked session outlives its window (ESC hides keep it
+			-- by design) — a K-overview that inherits one without a
+			-- fresh TRADE_SKILL_SHOW is leftover state, not an open:
+			-- paint local and kill the stale session on a delay so a
+			-- link-open whose event lands the same beat still wins
+			local last = GM.Crafting and GM.Crafting._lastShowT
+			if not (last and GetTime() - last < 2) then
+				ui.foreign, ui.foreignChar, ui.foreignProf =
+					nil, nil, nil
+				GM.Time.After(0.5, function()
+					if not ui then return end
+					local l = GM.Crafting and GM.Crafting._lastShowT
+					if l and GetTime() - l < 2 then return end
+					ui._closingStale = true
+					pcall(C_TradeSkillUI.CloseTradeSkill)
+					ui._closingStale = nil
+				end)
+			end
+		end
 		ui.foreignChar = ui.foreign and GM.LinkFrom
 			and GM.LinkFrom.t and time() - GM.LinkFrom.t < 120
 			and GM.LinkFrom.char or nil
@@ -1622,9 +1642,13 @@ end
 function CU.OnTradeSkillClose()
 	if ui then
 		ui.foreign, ui.foreignChar, ui.selRow = nil, nil, nil
-		if ui.frame and ui.frame:IsShown() then
+		-- _closingStale: the K-overview stale-session kill — the
+		-- close is bookkeeping, not a real session end, so the
+		-- local-mode window we just painted stays up
+		if ui.frame and ui.frame:IsShown() and not ui._closingStale then
 			ui.frame:Hide()
 		end
+		ui._closingStale = nil
 	end
 end
 
