@@ -266,6 +266,7 @@ local function BuildUI()
 	recHead[2]:SetText("PROFIT")
 	recHead[3]:SetText("SALES/D")
 	recHead[4]:SetText("CAN")
+	ui.recHead = recHead
 	local fs = GM.MakeFontString(recP, GM.FONT_BOLD, 9, "secondary")
 	fs:SetPoint("TOPRIGHT", -8, -22)
 	fs:SetText("Q")
@@ -1536,6 +1537,9 @@ function CU.HookDefault()
 			and GM.LinkFrom.t and time() - GM.LinkFrom.t < 120
 			and GM.LinkFrom.char or nil
 		ui.selRow = nil
+		if ui.recHead then
+			ui.recHead[2]:SetText(ui.foreign and "SUGGEST" or "PROFIT")
+		end
 		if ui.foreign then
 			local ok, line = pcall(C_TradeSkillUI.GetTradeSkillLine)
 			ui.foreignProf = ok and line or nil
@@ -1586,6 +1590,7 @@ function CU.ForeignRequest()
 	end
 	local wid = GM.Writs and GM.Writs.MailRequest(to, {
 		name = r.name, itemID = r.itemID, qty = 1,
+		offer = r.price,
 		mats = "buyer", deliver = "trade",
 		note = "from your professions link" })
 	Footer(wid and ("craft request mailed to " .. to)
@@ -1613,6 +1618,9 @@ function CU.OnTradeSkillOpen()
 		and GM.LinkFrom.t and time() - GM.LinkFrom.t < 120
 		and GM.LinkFrom.char or nil
 	ui.selRow = nil
+	if ui.recHead then
+		ui.recHead[2]:SetText(ui.foreign and "SUGGEST" or "PROFIT")
+	end
 	if ui.foreign then
 		local ok, line = pcall(C_TradeSkillUI.GetTradeSkillLine)
 		ui.foreignProf = ok and line or nil

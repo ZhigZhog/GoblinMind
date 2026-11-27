@@ -134,10 +134,51 @@ function GM.Ops.Click(ctxOrRow)
 	return true
 end
 
+-- a |Htrade:<who>:… / |Henchant:<who>:… link carries its owner in
+-- the second field — a plain name here, a Player-xxxx GUID on
+-- retail-style builds. Unparseable → newest non-self ring poster
+-- of that link kind.
+local function tradeOwner(link)
+	local tok = link
+		and (link:match("|Htrade:([^:|]+)")
+			or link:match("|Henchant:([^:|]+)")
+			or link:match("^trade:([^:|]+)")
+			or link:match("^enchant:([^:|]+)"))
+	if tok and tok ~= "" then
+		if tok:match("^Player%-") and GetPlayerInfoByGUID then
+			local ok, name = pcall(function()
+				return select(6, GetPlayerInfoByGUID(tok)) end)
+			if ok and name and name ~= "" then return name end
+		elseif not tok:match("^Player%-") then
+			return tok
+		end
+	end
+	local kind = link and link:match("|H(%a+):")
+	if not kind then return nil end
+	local cut = time() - LINK_RING_AGE
+	local me = UnitName("player") or ""
+	for i = #linkRing, 1, -1 do
+		local e = linkRing[i]
+		if (e.t or 0) < cut then break end
+		if not (GM.SameChar and GM.SameChar(e.sender, me))
+				and e.msg:find("|H" .. kind .. ":", 1, true) then
+			return e.sender
+		end
+	end
+end
+
 -- Chat links — SetItemRef may not delegate to the funnel on this
 -- client; TargetItem is idempotent if it does.
 if SetItemRef then
 	hooksecurefunc("SetItemRef", function(link)
+		-- profession clicks aren't item links — GM.LinkID is nil —
+		-- but they're the only click that needs LinkFrom before
+		-- the session opens; the owner rides inside the link
+		local who = tradeOwner(link)
+		if who then
+			GM.LinkFrom = { char = who, t = time(), kind = "trade" }
+			return
+		end
 		if not Capture() then return end
 		local id = GM.LinkID(link)
 		-- pass the link through — Ctx extracts the itemKey from
