@@ -583,6 +583,15 @@ local function Build()
 		self:ClearFocus()
 		S.Refresh()
 	end)
+	Row(gen, "Yell memory (min)", 122)
+	ui.yellTTL = EditBox(gen, 72)
+	ui.yellTTL:SetPoint("TOPLEFT", 240, -118)
+	ui.yellTTL:SetScript("OnEnterPressed", function(self)
+		local v = tonumber(self:GetText())
+		if v then GM.Model.SetPref("yellTTL", max(1, floor(v))) end
+		self:ClearFocus()
+		S.Refresh()
+	end)
 
 	RowAt(gen, "Minimap button", 320, 26)
 	ui.mmHide = BoolSeg(gen,
@@ -1200,6 +1209,7 @@ local function Data()
 		margin = GM.Model.Pref("minProfitMargin"),
 		days = GM.Model.Pref("maxDaysToClear"),
 		age = GM.Model.Pref("dataMaxAge"),
+		yellTTL = GM.Model.Pref("yellTTL"),
 		tk = ui.tkW and GM.Ticker.Opts(),
 		srcNames = names, srcCs = cs,
 		impItems = impItems, impPending = impPending,
@@ -1213,6 +1223,9 @@ function S.Refresh(vm)
 	ui.margin:SetText(tostring(floor((vm.margin or 0) * 100 + 0.5)))
 	ui.days:SetText(tostring(vm.days or ""))
 	ui.age:SetText(tostring(vm.age or ""))
+	ui.yellTTL:SetText(tostring(vm.yellTTL
+		or (GM.Writs and GM.Writs.YellTTL and GM.Writs.YellTTL())
+		or 30))
 	ui.mmHide.paint()
 	ui.embed.paint()
 	ui.mod.paint()

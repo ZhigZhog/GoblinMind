@@ -141,7 +141,9 @@ local function profChips(rows)
 	local seen, list = {}, {}
 	for _, e in ipairs(rows) do
 		local p = e.offer.prof
-		if p and not seen[p] then
+		-- yell pseudo-profs (Mage/Warlock) are classes, not
+		-- professions — they'd mint meaningless filter chips
+		if p and not seen[p] and not (e.yell and e.yell.clsProf) then
 			seen[p] = true
 			list[#list + 1] = p
 		end
@@ -769,7 +771,8 @@ local function ShopsPaint(vm)
 				-- bark row: no price claim — badge + whisper/mail
 				-- actions instead of a server writ request
 				local y = e.yell
-				r.price:SetText(GM.CC("textDim") .. "·yell|r")
+				r.price:SetText(GM.CC("textDim") .. "·yell "
+					.. GM.FmtAge(time() - (y.t or time())) .. "|r")
 				r.who:SetText(y.char:match("^[^-]+") or y.char)
 				r.act.text:SetText("WHISPER")
 				r.act.text:SetTextColor(GM.RGB("accent"))

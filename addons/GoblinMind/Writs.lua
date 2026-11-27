@@ -1261,12 +1261,22 @@ end
 -- backend. Deliberately loose keyword match; GM.db.yellTerms adds
 -- user terms. Session-only ring, deduped per sender.
 local yellRing, yellSeen = {}, {}
-local YELL_MAX, YELL_DEDUP = 100, 60
+local YELL_MAX, YELL_DEDUP, YELL_TTL = 100, 60, 30
 local YELL_WORDS = { "enchant", "lockpick", "lock pick", "lfw",
 	"will craft", "crafting", "portal", "summon" }
 local YELL_PROF = { enchant = "Enchanting", lockpick = "Lockpicking",
 	["lock pick"] = "Lockpicking", portal = "Mage",
 	summon = "Warlock" }
+-- pseudo-profs that are really classes — they display on the row
+-- but must not mint a prof filter chip
+local YELL_CLASS = { Mage = true, Warlock = true }
+
+-- user-configurable lifetime (Settings → GENERAL), minutes
+local function yellTTL()
+	local v = tonumber(GM.Model and GM.Model.Pref("yellTTL"))
+	return v and math.max(1, math.floor(v)) or YELL_TTL
+end
+W.YellTTL = yellTTL
 
 local function yellHit(msg)
 	local l = msg:lower()
@@ -1293,8 +1303,17 @@ local function yellLink(msg)
 	return nil, nil, nil
 end
 
--- SHOPS market folds these in alongside roster offers
+-- SHOPS market folds these in alongside roster offers; expired
+-- entries prune on read so a quiet session drains naturally
 function W.YellOffers()
+	local cut = time() - yellTTL() * 60
+	for i = #yellRing, 1, -1 do
+		local y = yellRing[i]
+		if (y.t or 0) < cut then
+			table.remove(yellRing, i)
+			if yellSeen[y.char] == y then yellSeen[y.char] = nil end
+		end
+	end
 	return yellRing
 end
 
@@ -1325,6 +1344,7 @@ yells:SetScript("OnEvent", function(_, ev, msg, sender, _, _, _,
 	local itemID, lname, ref = yellLink(msg)
 	local y = { source = "yell", char = sender,
 		text = msg:sub(1, 120), t = time(), prof = prof,
+		clsProf = prof and YELL_CLASS[prof] or nil,
 		itemID = itemID, ref = ref, linkName = lname }
 	yellSeen[sender] = y
 	yellRing[#yellRing + 1] = y
