@@ -148,7 +148,7 @@ local function marketRows(board, q, prof)
 			local hdr = { yell = y, offer = {
 				name = "yell: " .. y.text,
 				prof = y.prof, itemID = y.itemID, ref = y.ref,
-				_yell = true },
+				_yell = true, _indent = 2 },
 				roster = ros }
 			if qhit(hdr) then bk[#bk + 1] = hdr end
 			-- unfolded bark: the full message wraps into a bounded
@@ -177,7 +177,7 @@ local function marketRows(board, q, prof)
 					local e = { yell = y,
 						offer = { name = "| " .. ln,
 							prof = y.prof, _yell = true,
-							_barkText = true },
+							_barkText = true, _indent = 3 },
 						roster = ros }
 					if qhit(e) then bk[#bk + 1] = e end
 				end
@@ -204,7 +204,7 @@ local function marketRows(board, q, prof)
 						prof = lprof,
 						itemID = lnk.kind == "item" and lnk.id
 							or nil,
-						_yell = true, _link = lnk },
+						_yell = true, _link = lnk, _indent = 3 },
 					roster = ros }
 				if qhit(e) then bk[#bk + 1] = e end
 			end
@@ -237,7 +237,7 @@ local function marketRows(board, q, prof)
 					out[#out + 1] = { _gs = GS_YELL, _gi = base,
 						offer = { name = (F[key] and "+ " or "- ")
 							.. label .. "  ·  " .. #L,
-							_folder = key },
+							_folder = key, _indent = 1 },
 						roster = yRos }
 					if not F[key] then
 						for i, e in ipairs(L) do
@@ -669,7 +669,8 @@ end
 -- (icon|name|prof|price|crafter|act) vs MY SHOP's edit row — the
 -- mats policy button rides the on switch up front, SUGGEST tucks
 -- right against the gold field at the tail
-local function layoutRow(r, mode)
+local function layoutRow(r, mode, ind)
+	ind = ind or 0
 	local pos
 	if mode == "myshop" then
 		-- GoldEdit's trailing "c" label spills ~10px past its
@@ -682,7 +683,8 @@ local function layoutRow(r, mode)
 			prof = 232, who = 288, note = 400, gold = 486,
 			act = -2, price = false }
 	else
-		pos = { icon = 22, name = 40, prof = 250, price = 330,
+		pos = { icon = 22 + ind * 14, name = 40 + ind * 14,
+			prof = 250, price = 330,
 			who = 420, act = -2, on = false, mats = false,
 			gold = false, note = false }
 	end
@@ -705,7 +707,8 @@ local function layoutRow(r, mode)
 	if r.tail then r.tail:Hide() end
 	r:SetScript("OnClick", nil)
 	r.offerLink = nil
-	r.name:SetWidth(mode == "myshop" and 116 or 204)
+	r.name:SetWidth(mode == "myshop" and 116
+		or (204 - ind * 14))
 	r.prof:SetWidth(mode == "myshop" and 52 or 74)
 	r.who:SetWidth(mode == "myshop" and 108 or 148)
 	r.note:SetWidth(mode == "myshop" and 82 or 104)
@@ -969,7 +972,8 @@ local function ShopsPaint(vm)
 		else
 			-- market row (flat or crafter drill)
 			r:Show()
-			layoutRow(r, "browse")
+			layoutRow(r, "browse",
+				e.offer and e.offer._indent or 0)
 			local o, ros = e.offer, e.roster
 			r.offerID = o.itemID
 			r.offerLink = o._link and o._link.link or nil
