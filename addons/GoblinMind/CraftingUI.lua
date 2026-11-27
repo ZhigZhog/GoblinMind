@@ -1397,6 +1397,10 @@ function CU.HookDefault()
 				ui and ui.wantDefault)
 		end
 		if ui and ui.wantDefault then return end
+		-- linked/NPC sessions show someone else's recipes — the
+		-- native frame is the only correct viewer, don't take over
+		if GM.Crafting and GM.Crafting.Foreign
+			and GM.Crafting.Foreign() then return end
 		CU.ParkDefault()
 		BuildUI()
 		ui.selProf = nil -- overview carries no profession context

@@ -796,8 +796,13 @@ local function ShopsPaint(vm)
 				r.act.text:SetTextColor(GM.RGB("accent"))
 				r.act:Show()
 				r.act:SetScript("OnClick", function()
-					pcall(ChatFrame_OpenChat,
-						"/w " .. y.char .. " ")
+					-- SendTell takes the target as a unit arg —
+					-- "/w <text>" word-splits and eats surnames
+					-- ("Mygiraffe Mage" whispers "Mage" to Mygiraffe)
+					if not pcall(ChatFrame_SendTell, y.char) then
+						pcall(ChatFrame_OpenChat,
+							"/w " .. y.char .. " ")
+					end
 				end)
 				r.act2:Show()
 				r.act2:SetScript("OnClick", function()

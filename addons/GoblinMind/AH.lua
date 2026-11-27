@@ -447,7 +447,8 @@ function GM.AH.LinkWithKey(link, key, name)
 		-- outside the link) can correct a base-name bracket
 		link = link:gsub("%[.-%]|h", "[" .. name .. "]|h", 1)
 	end
-	if not (link and key and (key.itemSuffix or 0) ~= 0) then
+	if not (link and type(key) == "table"
+			and (key.itemSuffix or 0) ~= 0) then
 		return link
 	end
 	local s = link:match("item:([^|h]+)")

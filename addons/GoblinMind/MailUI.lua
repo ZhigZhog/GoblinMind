@@ -277,6 +277,21 @@ local function Build()
 	-- borrow its config + handlers (the dropdown knows "Unstable
 	-- Haberdasher" where our own candidate pool only sees "Unstable").
 	-- Falls back to the inline typeahead when the machinery is absent.
+	-- Forever rejects HookScript on some EditBox script types
+	-- ("script type not supported") — and a mid-Build error here
+	-- left the compose strip unbuilt (ui.compose nil, mail dead).
+	-- Attach falls back to a SetScript chain that preserves any
+	-- existing handler (W.EditBox installs its own focus scripts).
+	local function Attach(obj, h, fn)
+		local wrapped = function(...) pcall(fn, ...) end
+		if pcall(obj.HookScript, obj, h, wrapped) then return end
+		local prev = obj.GetScript and obj:GetScript(h)
+		if prev then
+			obj:SetScript(h, function(...) prev(...) wrapped(...) end)
+		else
+			obj:SetScript(h, wrapped)
+		end
+	end
 	local acs = SendMailNameEditBox
 	if acs and (acs.autoCompleteSource or acs.autoCompleteParams) then
 		ui.to.autoCompleteParams = acs.autoCompleteParams
@@ -290,22 +305,22 @@ local function Build()
 				"OnArrowPressed", "OnEscapePressed",
 				"OnEditFocusLost", "OnEditFocusGained",
 				"OnEnterPressed" }) do
-			local fn = acs:GetScript(h)
-			if fn then ui.to:HookScript(h,
-				function(...) pcall(fn, ...) end) end
+			local fn
+			pcall(function() fn = acs:GetScript(h) end)
+			if fn then Attach(ui.to, h, fn) end
 		end
 	else
 		ui.to:SetScript("OnChar", ACOnChar)
 	end
-	ui.to:HookScript("OnTextChanged", GateSend)
-	ui.to:HookScript("OnEditFocusGained", function()
+	Attach(ui.to, "OnTextChanged", GateSend)
+	Attach(ui.to, "OnEditFocusGained", function()
 		acList = RecipientNames()
 	end)
 	ui.money = W.GoldEdit(ui.sendBar, 108)
 	ui.money:SetPoint("LEFT", ui.to, "RIGHT", 6, 0)
 	-- GoldEdit is a wrapper frame — the coin EditBoxes live on it
 	for _, e in ipairs({ ui.money.g, ui.money.s, ui.money.c }) do
-		e:HookScript("OnTextChanged", GateSend)
+		Attach(e, "OnTextChanged", GateSend)
 	end
 	-- COD toggle: when set the copper box feeds SetSendMailCOD
 	-- (payment on delivery) instead of SetSendMailMoney — the writ

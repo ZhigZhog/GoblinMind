@@ -437,6 +437,7 @@ local function ForeignTradeskill()
 	end
 	return false
 end
+C.Foreign = ForeignTradeskill
 
 -- required skill isn't in GetRecipeInfo — it lives on the recipe
 -- LINK's tooltip as "Requires Cooking (125)". One hidden probe,
@@ -860,12 +861,18 @@ function C.Init()
 			end
 			-- TSM parity: opening a tradeskill IS opening our crafting
 			-- window (linked/NPC sessions excluded — not ours to drive)
-			local linked = C_TradeSkillUI
-				and C_TradeSkillUI.IsTradeSkillLinked
-				and C_TradeSkillUI.IsTradeSkillLinked()
-			local npc = C_TradeSkillUI and C_TradeSkillUI.IsNPCCrafting
-				and C_TradeSkillUI.IsNPCCrafting()
-			if not (linked or npc or C._pumping)
+			local foreign = ForeignTradeskill()
+			if foreign then
+				-- a chat-link open shows someone ELSE's recipes in
+				-- the native frame. A parked frame is still SHOWN —
+				-- Show() on a shown frame fires no OnShow, so the
+				-- park pin survives and the click looks dead (open
+				-- sound, nothing on screen). Un-park so the native
+				-- linked view actually renders.
+				if GM.CraftingUI and GM.CraftingUI.RestoreDefault then
+					GM.CraftingUI.RestoreDefault()
+				end
+			elseif not C._pumping
 				and GM.CraftingUI and GM.CraftingUI.OnTradeSkillOpen then
 				GM.CraftingUI.OnTradeSkillOpen()
 			end
