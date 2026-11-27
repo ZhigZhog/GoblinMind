@@ -1391,19 +1391,33 @@ local function yellHit(msg)
 	end
 end
 
--- passive link harvest: a yeller's real [Enchant Weapon - Crusader]
--- gives the row a typed ref + icon instead of guessed text. Forever
--- may link enchants as |Henchant: or |Hspell: — accept both.
-local function yellLink(msg)
-	for kind, id, name in
-			msg:gmatch("|H(%a+):(%d+)|h%[(.-)%]|h") do
+-- passive link harvest: every [|H..|h[..]|h] capsule in a bark is
+-- an offer the yeller advertises — items, enchant/spell services,
+-- |Htrade: profession links. Each becomes a sub-line under the
+-- yeller's row; the raw link is kept for hover tooltips. The first
+-- link still fills the legacy itemID/linkName/ref fields.
+local function yellLinks(msg)
+	local links, itemID, lname, ref = {}
+	for link, kind, payload, name in
+			msg:gmatch("(|H(%a+):([^|]*)|h%[(.-)%]|h)") do
+		local l = { kind = kind, name = name, link = link }
 		if kind == "item" then
-			return tonumber(id), name, nil
+			l.id = tonumber(payload)
+			if not itemID then
+				itemID, lname = l.id, name
+			end
 		elseif kind == "enchant" or kind == "spell" then
-			return nil, name, "s:" .. id
+			l.id = tonumber(payload:match("(%d+)"))
+			if not ref then ref, lname =
+				l.id and ("s:" .. l.id) or nil, name end
+		elseif kind == "trade" then
+			-- |Htrade:<who>:<spell>:... — no item ref, but the prof
+			-- capsule is still an offer line
+			if not ref then lname = lname or name end
 		end
+		links[#links + 1] = l
 	end
-	return nil, nil, nil
+	return links, itemID, lname, ref
 end
 
 -- SHOPS market folds these in alongside roster offers; expired
@@ -1465,7 +1479,7 @@ yells:SetScript("OnEvent", function(_, ev, msg, sender, ...)
 	if GM.SameChar and GM.SameChar(sender) then return end
 	local hit, prof = yellHit(msg)
 	if not hit then return end
-	local itemID, lname, ref = yellLink(msg)
+	local links, itemID, lname, ref = yellLinks(msg)
 	local seen = yellSeen[sender]
 	if seen then
 		-- one row per yeller: a re-yell updates it in place and
@@ -1474,6 +1488,7 @@ yells:SetScript("OnEvent", function(_, ev, msg, sender, ...)
 		seen.t, seen.text = time(), msg:sub(1, 120)
 		seen.n = (seen.n or 1) + 1
 		seen.itemID, seen.ref, seen.linkName = itemID, ref, lname
+		seen.links = links
 		if prof then seen.prof, seen.clsProf =
 			prof, YELL_CLASS[prof] or nil end
 		return
@@ -1481,7 +1496,8 @@ yells:SetScript("OnEvent", function(_, ev, msg, sender, ...)
 	local y = { source = "yell", char = sender,
 		text = msg:sub(1, 120), t = time(), prof = prof, n = 1,
 		clsProf = prof and YELL_CLASS[prof] or nil,
-		itemID = itemID, ref = ref, linkName = lname }
+		itemID = itemID, ref = ref, linkName = lname,
+		links = links }
 	yellSeen[sender] = y
 	yellRing[#yellRing + 1] = y
 	if #yellRing > YELL_MAX then

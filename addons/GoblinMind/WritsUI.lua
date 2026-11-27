@@ -105,13 +105,27 @@ local function marketRows(board, q, prof)
 	end
 	-- yell pseudo-offers fold in here — same row shape; the offer
 	-- carries the parsed link/ref, the roster is a fake single-char
-	-- shell so crafterTag/search/sort work unchanged
+	-- shell so crafterTag/search/sort work unchanged. Each |H..|h
+	-- capsule in the bark becomes a sub-line under the yeller —
+	-- "Player / | Offer" — _gs keeps the group contiguous in the
+	-- sort, _gi keeps capsule order.
 	for _, y in ipairs(W.YellOffers and W.YellOffers() or {}) do
-		out[#out + 1] = { yell = y, offer = {
-			name = y.linkName or ("yell: " .. y.text),
+		local ros = { chars = { y.char }, stats = {}, _yell = true }
+		local gs = { name = y.char }
+		out[#out + 1] = { yell = y, _gs = gs, _gi = 0, offer = {
+			name = "yell: " .. y.text,
 			prof = y.prof, itemID = y.itemID, ref = y.ref,
 			_yell = true },
-			roster = { chars = { y.char }, stats = {}, _yell = true } }
+			roster = ros }
+		for si, lnk in ipairs(y.links or {}) do
+			out[#out + 1] = { yell = y, _gs = gs, _gi = si,
+				offer = {
+					name = "│ " .. lnk.name,
+					prof = y.prof,
+					itemID = lnk.kind == "item" and lnk.id or nil,
+					_yell = true, _link = lnk },
+				roster = ros }
+		end
 	end
 	if q and q ~= "" then
 		local ql = q:lower()
@@ -129,9 +143,18 @@ local function marketRows(board, q, prof)
 		out = hit
 	end
 	table.sort(out, function(a, b)
-		local pa, pb = a.offer.price, b.offer.price
+		-- _gs groups (yeller header + capsule subs) sort as one
+		-- entry: the head carries the group's price/name position,
+		-- _gi orders members inside it
+		local ha, hb = a._gs or a.offer, b._gs or b.offer
+		local pa, pb = ha.price, hb.price
 		if (pa ~= nil) ~= (pb ~= nil) then return pa ~= nil end
 		if pa and pb and pa ~= pb then return pa < pb end
+		local na, nb = tostring(ha.name), tostring(hb.name)
+		if na ~= nb then return na < nb end
+		if (a._gi or 0) ~= (b._gi or 0) then
+			return (a._gi or 0) < (b._gi or 0)
+		end
 		return tostring(a.offer.name) < tostring(b.offer.name)
 	end)
 	return out
@@ -361,10 +384,15 @@ function WU.Build(f)
 		r.note = MkEdit(r, 104, "note…")
 		r.gold:Hide(); r.mats:Hide(); r.note:Hide()
 		r:SetScript("OnEnter", function(s)
-			local id = s.offerID
-			if not id then return end
+			-- capsule rows carry the raw link (enchants, spell and
+			-- trade capsules all tooltip through SetHyperlink);
+			-- plain offers fall back to the item id
+			local lnk, id = s.offerLink, s.offerID
+			if not (lnk or id) then return end
 			GameTooltip:SetOwner(s, "ANCHOR_RIGHT")
-			if GameTooltip.SetItemByID then
+			if lnk then
+				GameTooltip:SetHyperlink(lnk)
+			elseif GameTooltip.SetItemByID then
 				GameTooltip:SetItemByID(id)
 			else
 				GameTooltip:SetHyperlink("item:" .. id)
@@ -542,6 +570,13 @@ end
 
 local function offerIcon(o)
 	if o.itemID then return GM.ItemIcon(o.itemID) end
+	-- enchant/spell capsules icon through the spell API
+	local l = o._link
+	if l and l.id and l.kind ~= "item" and GetSpellInfo then
+		local ok, tex = pcall(function()
+			return select(3, GetSpellInfo(l.id)) end)
+		if ok and tex then return tex end
+	end
 	return nil
 end
 
@@ -781,6 +816,7 @@ local function ShopsPaint(vm)
 			layoutRow(r, "browse")
 			local o, ros = e.offer, e.roster
 			r.offerID = o.itemID
+			r.offerLink = o._link and o._link.link or nil
 			local ic = offerIcon(o)
 			if ic then r.icon:SetTexture(ic) r.icon:Show()
 			else r.icon:Hide() end
@@ -788,9 +824,46 @@ local function ShopsPaint(vm)
 			r.name:SetTextColor(GM.RGB("text"))
 			r.prof:SetText(o.prof or "")
 			if o._yell then
+				local y = e.yell
+				if o._link then
+					-- capsule sub-offer: suggested price where the
+					-- DB can derive one, hover gives the real
+					-- tooltip, "+" mails a writ for THIS item
+					local l = o._link
+					local sug
+					if l.kind == "item" and l.id then
+						sug = GM.Price("dbmarket", l.id)
+							or (GM.ItemEntry(l.id) or {}).mb
+					elseif l.id then
+						local s = W.Suggest and W.Suggest("s:" .. l.id)
+						sug = s and s.price
+					end
+					r.price:SetText(sug and GoldText(sug) or "—")
+					r.price:SetTextColor(GM.RGB(
+						sug and "text" or "textDim"))
+					r.who:SetText("")
+					r.act.text:SetText("+")
+					r.act.text:SetTextColor(GM.RGB("accent"))
+					r.act:Show()
+					r.act:SetScript("OnClick", function()
+						local wid = W.MailRequest(y.char, {
+							name = l.name,
+							ref = l.id and l.kind ~= "item"
+								and ("s:" .. l.id) or nil,
+							itemID = l.kind == "item" and l.id or nil,
+							qty = 1, offer = sug,
+							mats = "buyer", deliver = "trade",
+							note = "saw your yell — "
+								.. y.text:sub(1, 60) })
+						ui.shopMsg:SetText(wid
+							and ("mail-writ sent to " .. y.char
+								.. " — watch MY WRITS")
+							or "mail send failed")
+					end)
+					r.act2:Hide()
+				else
 				-- bark row: no price claim — badge + whisper/mail
 				-- actions instead of a server writ request
-				local y = e.yell
 				r.price:SetText(GM.CC("textDim") .. "·yell "
 					.. GM.FmtAge(time() - (y.t or time()))
 					.. ((y.n or 1) > 1 and (" ×" .. y.n) or "")
@@ -821,6 +894,7 @@ local function ShopsPaint(vm)
 							.. " — watch MY WRITS")
 						or "mail send failed")
 				end)
+				end
 			else
 				r.price:SetText(o.price and GoldText(o.price)
 					or GM.CC("warn") .. "OFFER|r")
