@@ -1296,11 +1296,16 @@ def _boards_snapshot():
     the board actually changed."""
     try:
         with open(API_BOOK_PATH, encoding='utf-8') as fh:
-            boards = json.load(fh).get('boards') or {}
+            cur = json.load(fh)
     except (OSError, ValueError):
         return None
+    boards = cur.get('boards') or {}
+    rosters = cur.get('rosters') or {}
+    writs = cur.get('writs') or {}
     return json.dumps(
-        {b: v.get('orders') for b, v in boards.items()},
+        {'o': {b: v.get('orders') for b, v in boards.items()},
+         'r': {b: v.get('rosters') for b, v in rosters.items()},
+         'w': writs},
         sort_keys=True)
 
 
@@ -1309,7 +1314,8 @@ def boards_pull(cfg=None):
     feed. Stored beside the remote books in api_book.json under
     'boards' so cmd_book's emit folds it as GoblinMindDB.boards.
     Boards unconfigured in feeds.json stop pulling (their stored
-    snapshot is dropped)."""
+    snapshot is dropped). The same pass pulls shop rosters and the
+    private writ inbox — identical cadence, one atomic store."""
     cfg = cfg or _backend_cfg()
     if not cfg.get('url'):
         return {}
@@ -1323,6 +1329,7 @@ def boards_pull(cfg=None):
     except (OSError, ValueError):
         cur = {}
     boards = cur.setdefault('boards', {})
+    rosters = cur.setdefault('rosters', {})
     for b in names:
         try:
             d = _backend_req(
@@ -1334,10 +1341,27 @@ def boards_pull(cfg=None):
                       len(d.get('orders') or []))
         except Exception as e:
             LOG.warning('board pull %s failed: %s', b, e)
+        try:
+            d = _backend_req(
+                cfg, '/v1/boards/%s/rosters'
+                % urllib.parse.quote(b, safe=''))
+            rosters[b] = {'t': int(time.time()),
+                          'rosters': d.get('rosters') or []}
+        except Exception as e:
+            LOG.warning('roster pull %s failed: %s', b, e)
     for b in list(boards):
         if b not in names:
             boards.pop(b)
-    if boards or names:
+    for b in list(rosters):
+        if b not in names:
+            rosters.pop(b)
+    try:
+        d = _backend_req(cfg, '/v1/writs')
+        cur['writs'] = {'t': int(time.time()), 'in': d.get('in') or [],
+                        'out': d.get('out') or []}
+    except Exception as e:
+        LOG.warning('writ inbox pull failed: %s', e)
+    if boards or names or 'writs' in cur:
         tmp = API_BOOK_PATH + '.tmp'
         with open(tmp, 'w', encoding='utf-8') as fh:
             json.dump(cur, fh)
@@ -1352,6 +1376,26 @@ def api_boards():
             return (json.load(fh).get('boards') or {})
     except (OSError, ValueError):
         return {}
+
+
+def api_rosters():
+    """Pulled shop rosters {board: {t, rosters[]}} for the emit."""
+    try:
+        with open(API_BOOK_PATH, encoding='utf-8') as fh:
+            return (json.load(fh).get('rosters') or {})
+    except (OSError, ValueError):
+        return {}
+
+
+def api_writs():
+    """Private writ inbox/outbox for the emit — the addon treats it
+    as server truth; local live overlays sit on top."""
+    try:
+        with open(API_BOOK_PATH, encoding='utf-8') as fh:
+            return (json.load(fh).get('writs')
+                    or {'in': [], 'out': [], 't': 0})
+    except (OSError, ValueError):
+        return {'in': [], 'out': [], 't': 0}
 
 
 def _backend_op(cfg, path, body, auth=True):
@@ -2041,6 +2085,11 @@ def cmd_book(sv_arg, out_paths, root=None, feed=None, realm=None):
         # op outcomes keyed by staging rid — Orders.lua watches both
         'boards': api_boards(),
         'orderResults': _order_results_emit(),
+        # crafting writs v2: browsable shop rosters per board plus
+        # the private request inbox/outbox and op acks — Writs.lua
+        'rosters': api_rosters(),
+        'writs': api_writs(),
+        'writResults': _writ_results_emit(),
         # relay-host results — staged relayOut envelopes we've
         # POSTed; the addon whispers register creds (Y) and op
         # failures (X) back to their requesters from this
@@ -2422,6 +2471,10 @@ BOARD_REFRESH_RE = re.compile(r'"(br-[^"|]+)\|([0-9a-fA-F]+)"')
 # /goblin audit stages 'aud-<ts>-<n>|<hex(report)>' — each new rid's
 # decoded lines are written to brain.log once (drift visibility)
 AUDIT_RE = re.compile(r'"(aud-[^"|]+)\|([0-9a-fA-F]+)"')
+# crafting writs v2 stage in GoblinMindSettings.writQueue as
+# 'wrt-<ts>-<n>|<hex(json)>' — roster publishes and point-to-point
+# request verbs share the queue and the writResults ack table
+WRIT_RE = re.compile(r'"(wrt-[^"|]+)\|([0-9a-fA-F]+)"')
 
 
 def _ord_route(body):
@@ -2503,6 +2556,84 @@ def process_orders(appdata, root=None):
             done[rid] = res
             dirty = True
             LOG.info('order op %s (%s) -> %d', rid,
+                     body.get('v'), code)
+    if dirty:
+        keys = sorted(done, key=lambda k: done[k].get('t') or 0)
+        while len(done) > 128:
+            done.pop(keys.pop(0), None)
+        _save_api_state(st)
+    return dirty
+
+
+def _writ_route(body):
+    """Crafting-writ staged verbs -> server paths. 'roster' publishes
+    the shop on a board; 'wpost' addresses a request; the rest are
+    lifecycle verbs on the writ row itself."""
+    q = lambda s: urllib.parse.quote(str(s or ''), safe='')
+    qi = lambda s: urllib.parse.quote(str(s or ''), safe=':')
+    v, b, wid = body.get('v'), body.get('b'), body.get('wid')
+    if v == 'roster':
+        return '/v1/boards/%s/roster' % q(b) if b else None
+    if v == 'wpost':
+        return '/v1/writs'
+    if v in ('wquote', 'waccept', 'wdecline', 'wship', 'wrecv',
+             'wcancel'):
+        return ('/v1/writs/%s/%s' % (qi(wid), v)
+                if wid else None)
+    return None
+
+
+def process_writs(appdata, root=None):
+    """POST staged crafting-writ ops (roster publish + request
+    lifecycle) to the backend. api_state.writ_results[rid] feeds
+    GoblinMindDB.writResults for queue clearing — identical
+    idempotent-replay contract to process_orders."""
+    cfg = _backend_cfg()
+    if not cfg.get('url'):
+        return
+    st = _load_api_state()
+    done = st.setdefault('writ_results', {})
+    dirty = False
+    for sv in sv_paths(appdata, root):
+        try:
+            with open(sv, encoding='utf-8', errors='replace') as fh:
+                text = fh.read()
+        except OSError:
+            continue
+        for rid, hexbody in WRIT_RE.findall(text):
+            if rid in done:
+                continue
+            try:
+                body = json.loads(
+                    bytes.fromhex(hexbody).decode('utf-8'))
+            except (ValueError, UnicodeDecodeError):
+                done[rid] = {'ok': False, 'err': 'decode',
+                             't': int(time.time())}
+                dirty = True
+                continue
+            if body.get('rly'):
+                continue
+            path = _writ_route(body)
+            if not path:
+                done[rid] = {'ok': False, 'err': 'verb',
+                             't': int(time.time())}
+                dirty = True
+                continue
+            body['op'] = rid
+            try:
+                code, r = _backend_op(cfg, path, body)
+            except Exception as e:
+                LOG.warning('writ op %s transport failed: %s',
+                            rid, e)
+                continue
+            res = {'ok': 200 <= code < 300, 'code': code,
+                   't': int(time.time())}
+            for k in ('error', 'writ', 'state', 'offers'):
+                if r.get(k) is not None:
+                    res[k] = r[k]
+            done[rid] = res
+            dirty = True
+            LOG.info('writ op %s (%s) -> %d', rid,
                      body.get('v'), code)
     if dirty:
         keys = sorted(done, key=lambda k: done[k].get('t') or 0)
@@ -2606,6 +2737,9 @@ def _patch_boards_emit(out_paths):
     to run instead (first run, hand-edited file, TSM-feed output)."""
     updates = {
         'boards': api_boards(),
+        'rosters': api_rosters(),
+        'writs': api_writs(),
+        'writResults': _writ_results_emit(),
         'orderResults': _order_results_emit(),
         'relayResults': _relay_results_emit(),
         'backend': _backend_emit(),
@@ -2762,13 +2896,18 @@ def process_audit(appdata, root=None):
 # SV_CONSUMERS are fire-and-forget staged requests consumed on the SV
 # mtime tick before the emit that follows. process_bugs stays out —
 # its return value gates the tsm re-emit.
-OPS_CONSUMERS = (process_orders, process_relay, process_board_refresh)
+OPS_CONSUMERS = (process_orders, process_writs, process_relay,
+                 process_board_refresh)
 SV_CONSUMERS = (process_backend_reqs, process_api_reqs,
                 process_board_reqs, process_audit)
 
 
 def _order_results_emit():
     return (_load_api_state().get('order_results') or {})
+
+
+def _writ_results_emit():
+    return (_load_api_state().get('writ_results') or {})
 
 
 def _api_emit():

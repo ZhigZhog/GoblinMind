@@ -34,6 +34,7 @@ Sniper.lua
 Mesh.lua
 Budgets.lua
 Orders.lua
+Writs.lua
 Shopping.lua
 Chrome.lua
 Widgets.lua

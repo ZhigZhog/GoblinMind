@@ -524,7 +524,38 @@ local function Scan()
 		if info and info.learned then
 			local sc = C_TradeSkillUI.GetRecipeSchematic
 				and C_TradeSkillUI.GetRecipeSchematic(recipeID, false)
-			if sc and sc.outputItemID then
+			-- service recipes (enchants, lock work) craft nothing —
+			-- they still belong in the recipe DB and drive the shop
+			-- roster; without this branch the scan silently skipped
+			-- every craft that produces no output item. Kept in a
+			-- separate table: every recipes[] consumer assumes an
+			-- itemID exists.
+			if sc and not sc.outputItemID then
+				local prev = GoblinMindCrafting.services[recipeID] or {}
+				local mats = prev.mats or {}
+				if sc.reagentSlotSchematics then
+					mats = {}
+					for _, slot in ipairs(sc.reagentSlotSchematics) do
+						local r = slot.reagents and slot.reagents[1]
+						if r and r.itemID and slot.quantityRequired then
+							tinsert(mats, { id = r.itemID,
+								qty = slot.quantityRequired })
+						end
+					end
+				end
+				GoblinMindCrafting.services[recipeID] = {
+					name = info.name or prev.name,
+					svc = true,
+					prof = ProfForRecipe(recipeID) or prof
+						or (type(prev.prof) == "string"
+							and prev.prof ~= "" and prev.prof or nil),
+					mats = mats,
+					cat = info.categoryID or prev.cat,
+					diff = info.relativeDifficulty
+						or info.difficulty or prev.diff,
+				}
+				n = n + 1
+			elseif sc and sc.outputItemID then
 				local mats = {}
 				for _, slot in ipairs(sc.reagentSlotSchematics or {}) do
 					-- regular reagent slots only: reagents[1].itemID +
@@ -599,11 +630,14 @@ end
 function C.PurgeProf(name)
 	if not name or name == "" then return 0 end
 	local n = 0
-	for id, r in pairs(GoblinMindCrafting.recipes or {}) do
-		if type(r.prof) == "string"
-			and r.prof:lower() == name:lower() then
-			GoblinMindCrafting.recipes[id] = nil
-			n = n + 1
+	for _, tbl in ipairs({ GoblinMindCrafting.recipes,
+							GoblinMindCrafting.services }) do
+		for id, r in pairs(tbl or {}) do
+			if type(r.prof) == "string"
+				and r.prof:lower() == name:lower() then
+				tbl[id] = nil
+				n = n + 1
+			end
 		end
 	end
 	if n > 0 then C.dirty = true end
@@ -747,6 +781,7 @@ end
 function C.Init()
 	GoblinMindCrafting = GoblinMindCrafting or {}
 	GoblinMindCrafting.recipes = GoblinMindCrafting.recipes or {}
+	GoblinMindCrafting.services = GoblinMindCrafting.services or {}
 	GoblinMindCrafting.queue = GoblinMindCrafting.queue or {}
 	-- K opens the professions OVERVIEW — no TRADE_SKILL_SHOW fires —
 	-- so the takeover hook on the native frame has to exist at load
