@@ -1342,8 +1342,8 @@ function OR.StreamBoard(board, gen)
 	end
 	-- roster rows (writs v2): one row per published shop — uuid,
 	-- '~'-joined chars, '+'-joined slim offer tuples
-	-- (ref~itemID~price~mats~numMade~name — names only matter for
-	-- hand-entered offers; r:/s: refs resolve client-side), and
+	-- (ref~itemID~price~mats~numMade~name~toon — names only matter
+	-- for hand-entered offers; r:/s: refs resolve client-side), and
 	-- '~'-joined writ stats. ',' can't live inside a field — the
 	-- batch comma-join eats it (statCSV's fragmenting wart).
 	local ros = GoblinMindDB and GoblinMindDB.rosters
@@ -1354,7 +1354,8 @@ function OR.StreamBoard(board, gen)
 		for _, o in ipairs(r.offers or {}) do
 			offers[#offers + 1] = table.concat({
 				o.ref or "-", o.itemID or 0, o.price or 0,
-				o.mats or "-", o.numMade or 1, o.name or "-" }, "~")
+				o.mats or "-", o.numMade or 1, o.name or "-",
+				o.toon or "-" }, "~")
 		end
 		local st = r.stats or {}
 		ys[#ys + 1] = table.concat({ board, gen, r.uuid or "-",
@@ -1516,6 +1517,7 @@ function OR.RelayIngest(kind, f, sender)
 				mats = p[4] ~= "-" and p[4] or nil,
 				numMade = tonumber(p[5]),
 				name = p[6] ~= "-" and p[6] or nil,
+				toon = p[7] ~= "-" and p[7] or nil,
 			}
 		end
 		local sp = {}

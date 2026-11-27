@@ -139,6 +139,9 @@ function W.RosterOffers()
 				prof = r.prof and r.prof:gsub(";", " ") or nil,
 				itemID = r.itemID, kind = "craft",
 				numMade = r.numMade or 1, on = t.on == true,
+				-- the toon stamped at scan time owns the recipe —
+				-- requests route to it, not to chars[1]
+				toon = r.toon or CharName(),
 				price = t.price, mats = t.mats,
 				note = t.note and t.note:gsub(";", " ") or nil,
 			}
@@ -154,6 +157,7 @@ function W.RosterOffers()
 				ref = ref, name = r.name:gsub(";", " "),
 				prof = r.prof and r.prof:gsub(";", " ") or nil,
 				kind = "service", on = t.on == true,
+				toon = r.toon or CharName(),
 				price = t.price, mats = t.mats,
 				note = t.note and t.note:gsub(";", " ") or nil,
 			}
@@ -170,6 +174,8 @@ function W.RosterOffers()
 				prof = s.prof and tostring(s.prof):gsub(";", " ") or nil,
 				kind = s.kind == "service" and "service" or "craft",
 				itemID = s.itemID, on = t.on == true,
+				toon = s.toon and tostring(s.toon):gsub(";", " ")
+					or CharName(),
 				price = t.price or s.price,
 				mats = t.mats or s.mats,
 				note = (t.note or s.note)

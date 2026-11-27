@@ -119,6 +119,7 @@ local function marketRows(board, q, prof)
 			local ch = (e.roster.chars
 				and table.concat(e.roster.chars, " ") or ""):lower()
 			if nm:find(ql, 1, true) or ch:find(ql, 1, true)
+					or (e.offer.toon or ""):lower():find(ql, 1, true)
 					or (e.offer.prof or ""):lower():find(ql, 1, true) then
 				hit[#hit + 1] = e
 			end
@@ -499,10 +500,12 @@ local function layoutRow(r, mode)
 	local pos
 	if mode == "myshop" then
 		-- GoldEdit's trailing "c" label spills ~10px past its
-		-- declared width — leave real air before SUGGEST
+		-- declared width — leave real air before SUGGEST. `who`
+		-- doubles as the toon column: on an account-shared recipe
+		-- DB the crafter attribution is per-offer, not per-roster.
 		pos = { on = 0, mats = 24, icon = 92, name = 112,
-			prof = 296, note = 366, gold = 486, act = -2,
-			price = false, who = false }
+			prof = 256, who = 320, note = 388, gold = 486,
+			act = -2, price = false }
 	else
 		pos = { icon = 22, name = 40, prof = 250, price = 330,
 			who = 420, act = -2, on = false, mats = false,
@@ -520,8 +523,10 @@ local function layoutRow(r, mode)
 			else w:SetPoint("LEFT", x, 0) end
 		end
 	end
-	r.name:SetWidth(mode == "myshop" and 176 or 204)
-	r.prof:SetWidth(mode == "myshop" and 66 or 74)
+	r.name:SetWidth(mode == "myshop" and 140 or 204)
+	r.prof:SetWidth(mode == "myshop" and 60 or 74)
+	r.who:SetWidth(mode == "myshop" and 64 or 196)
+	r.note:SetWidth(mode == "myshop" and 92 or 104)
 end
 
 local function offerIcon(o)
@@ -536,7 +541,8 @@ local function openRequest(row, e)
 	local o = e.offer
 	pop.e = e
 	pop.title:SetText("REQUEST — " .. (o.name or "?") .. "  ·  "
-		.. ((e.roster.chars and e.roster.chars[1]) or "?"))
+		.. (o.toon or (e.roster.chars and e.roster.chars[1])
+			or "?"))
 	pop.qty:SetText(tostring(o.numMade or 1))
 	local sug = W.Suggest(o.ref, o.numMade or 1)
 	pop.gold:SetCopper(o.price or (sug and sug.price) or nil)
@@ -559,7 +565,7 @@ local function openRequest(row, e)
 			tonumber(pop.qty:GetText()) or 1))
 		local price = pop.gold:GetCopper()
 		W.Request(ui.board, e.roster.uuid,
-			(e.roster.chars and e.roster.chars[1]) or nil, {
+			o.toon or (e.roster.chars and e.roster.chars[1]) or nil, {
 				ref = o.ref, name = o.name, itemID = o.itemID,
 				qty = qty, offer = price or 0,
 				mats = pop.mats.text:GetText() or "buyer",
@@ -673,7 +679,7 @@ local function ShopsPaint(vm)
 			r.name:SetTextColor(GM.RGB("text"))
 			r.prof:SetText(e.prof or "")
 			r.price:SetText(e.price and GoldText(e.price) or "")
-			r.who:SetText("")
+			r.who:SetText(e.toon or "")
 			r.act.text:SetText("SUGGEST")
 			r.act.text:SetTextColor(GM.RGB("textDim"))
 			r.act:Show()
@@ -790,7 +796,7 @@ local function ShopsPaint(vm)
 					or GM.CC("warn") .. "OFFER|r")
 				r.price:SetTextColor(GM.RGB(
 					o.price and "text" or "warn"))
-				r.who:SetText(crafterTag(ros))
+				r.who:SetText(o.toon or crafterTag(ros))
 				r.act.text:SetText("REQUEST")
 				r.act.text:SetTextColor(GM.RGB("accent"))
 				r.act:Show()
