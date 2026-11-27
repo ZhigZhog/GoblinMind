@@ -230,17 +230,19 @@ function WU.Build(f)
 		WU.Paint("shops")
 	end)
 
-	-- mode toggles ride the header right edge
+	-- mode toggles ride the search row's right edge — the header
+	-- corner already belongs to the count fontstring
 	ui.modeBtns = {}
 	local modes = { { "market", "MARKET" }, { "crafter", "CRAFTERS" },
 		{ "myshop", "MY SHOP" } }
 	for i, m in ipairs(modes) do
 		local b = MkBtn(sp, m[2], 62, 13)
-		b:SetPoint("TOPRIGHT", -4 - (3 - i) * 66, -2)
+		b:SetPoint("TOPRIGHT", -4 - (3 - i) * 66, -16)
 		b:SetScript("OnClick", function()
 			ui.mode = m[1]
 			ui.scroll = 0
 			ui.drill = nil
+			ui.shopMsg:SetText("") -- hints don't cross modes
 			WU.Paint("shops")
 		end)
 		ui.modeBtns[m[1]] = b
@@ -266,7 +268,7 @@ function WU.Build(f)
 	end)
 	ui.shopMsg = GM.MakeFontString(sp, GM.FONT, 9, "textDim")
 	ui.shopMsg:SetPoint("LEFT", ui.pubBtn, "RIGHT", 8, 0)
-	ui.shopMsg:SetWidth(400)
+	ui.shopMsg:SetWidth(210)
 	ui.shopMsg:SetWordWrap(false)
 	ui.shopMsg:SetJustifyH("LEFT")
 
@@ -433,16 +435,18 @@ function WU.Build(f)
 		r.a1:SetPoint("RIGHT", -2, 0)
 		r.a2 = MkBtn(r, "", 64, 13)
 		r.a2:SetPoint("RIGHT", r.a1, "LEFT", -4, 0)
-		-- detail-row widgets (expanded writ)
+		-- detail-row widgets (expanded writ): field text runs the
+		-- left half, the two context inputs own the right — no
+		-- shared x-range, nothing prints under the edit boxes
 		r.ctxt = GM.MakeFontString(r, GM.FONT, 9, "textDim")
 		r.ctxt:SetPoint("LEFT", 36, 0)
-		r.ctxt:SetWidth(430)
+		r.ctxt:SetWidth(320)
 		r.ctxt:SetWordWrap(false)
 		r.ctxt:SetJustifyH("LEFT")
-		r.cgold = GM.Widgets.GoldEdit(r, 100)
-		r.cgold:SetPoint("LEFT", 36, -1)
-		r.cedit = MkEdit(r, 150, "")
-		r.cedit:SetPoint("LEFT", 140, -1)
+		r.cgold = GM.Widgets.GoldEdit(r, 96)
+		r.cgold:SetPoint("LEFT", 364, -1)
+		r.cedit = MkEdit(r, 160, "")
+		r.cedit:SetPoint("LEFT", 466, -1)
 		ui.wRows[i] = r
 	end
 
@@ -473,6 +477,37 @@ function WU.SetTab(tab)
 end
 
 -- ============ SHOPS paint ============
+
+-- re-anchor the shared row widgets per pane mode: the browse grid
+-- (icon|name|prof|price|crafter|act) vs MY SHOP's edit row — the
+-- mats policy button rides the on switch up front, SUGGEST tucks
+-- right against the gold field at the tail
+local function layoutRow(r, mode)
+	local pos
+	if mode == "myshop" then
+		pos = { on = 0, mats = 24, icon = 92, name = 112,
+			prof = 296, note = 372, gold = 520, act = -2,
+			price = false, who = false }
+	else
+		pos = { icon = 22, name = 40, prof = 250, price = 330,
+			who = 420, act = -2, on = false, mats = false,
+			gold = false, note = false }
+	end
+	for _, k in ipairs({ "on", "mats", "icon", "name", "prof",
+		"price", "who", "note", "gold", "act" }) do
+		local w, x = r[k], pos[k]
+		w:ClearAllPoints()
+		if not x then
+			w:Hide()
+		else
+			w:Show()
+			if x < 0 then w:SetPoint("RIGHT", x, 0)
+			else w:SetPoint("LEFT", x, 0) end
+		end
+	end
+	r.name:SetWidth(mode == "myshop" and 176 or 204)
+	r.prof:SetWidth(mode == "myshop" and 66 or 74)
+end
 
 local function offerIcon(o)
 	if o.itemID then return GM.ItemIcon(o.itemID) end
@@ -548,7 +583,7 @@ local function ShopsPaint(vm)
 		sp.count:SetText(en .. " listed")
 		ui.shopMsg:SetText(ui.shopMsg:GetText() ~= ""
 			and ui.shopMsg:GetText()
-			or ("toggle ON + set terms, then PUBLISH · "
+			or ("ON + terms → PUBLISH · "
 				.. en .. "/" .. #rows .. " listed"))
 		for i = 1, 8 do ui.chips[i]:Hide() end
 		for i = 1, #ui.sHeads do ui.sHeads[i]:Hide() end
@@ -603,16 +638,15 @@ local function ShopsPaint(vm)
 	for i = 1, ROWS do
 		local r = ui.sRows[i]
 		local e = rows[i + (ui.scroll or 0)]
-		r.gold:Hide(); r.mats:Hide(); r.note:Hide(); r.on:Hide()
 		if not e then
 			r:Hide()
 		elseif mode == "myshop" then
 			r:Show()
+			layoutRow(r, "myshop")
 			r.offerID = e.itemID
 			local ic = offerIcon(e)
 			if ic then r.icon:SetTexture(ic) r.icon:Show()
 			else r.icon:Hide() end
-			r.on:Show()
 			r.on.text:SetText(e.on and "on" or "—")
 			r.on.text:SetTextColor(GM.RGB(e.on and "pos" or "textDim"))
 			local ref = e.ref
@@ -671,6 +705,7 @@ local function ShopsPaint(vm)
 			end)
 		elseif mode == "crafter" and not ui.drill then
 			r:Show()
+			layoutRow(r, "browse")
 			r.offerID = nil
 			r.icon:Hide()
 			local st = e.stats or {}
@@ -700,6 +735,7 @@ local function ShopsPaint(vm)
 		else
 			-- market row (flat or crafter drill)
 			r:Show()
+			layoutRow(r, "browse")
 			local o, ros = e.offer, e.roster
 			r.offerID = o.itemID
 			local ic = offerIcon(o)
