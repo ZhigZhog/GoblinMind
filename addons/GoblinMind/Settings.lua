@@ -536,7 +536,9 @@ local function Build()
 	ui.tabLeaves = {}
 	function ui.SetTab(key)
 		for _, l in ipairs(ui.tabLeaves) do
-			l.leaf:SetVisible(l.key == key)
+			local on = l.key == key
+			l.leaf:SetVisible(on)
+			l.frame:SetShown(on)
 		end
 		ui.tabs.set(key)
 	end
@@ -575,7 +577,7 @@ local function Build()
 	if S.needReload then bar:Show() end
 
 	-- ===== GENERAL =====
-	local gen = Panel(f, 10, -34, 600, 152, "GENERAL")
+	local gen = Panel(f, 10, -34, 600, 232, "GENERAL")
 	ui.gen = gen
 	Row(gen, "Risk budget (% of gold)", 26)
 	ui.risk = EditBox(gen, 72)
@@ -658,6 +660,39 @@ local function Build()
 		function() return GM.Model.Pref("yellListen") ~= false end,
 		function(v) GM.Model.SetPref("yellListen", v and nil or false) end)
 	ui.yellListen:SetPoint("TOPLEFT", 500, -118)
+	Row(gen, "Auto-scan while AH open", 146)
+	ui.autoscan = BoolSeg(gen,
+		function() return GM.AH.AutoScanOn() end,
+		function(v) GM.AH.SetAutoScan(v) end)
+	ui.autoscan:SetPoint("TOPLEFT", 240, -144)
+	Row(gen, "Market item autoscan", 170)
+	ui.mktScan = BoolSeg(gen,
+		function() return GM.Model.Pref("mktAutoscan") and true or false end,
+		function(v) GM.Model.SetPref("mktAutoscan", v and true or nil) end)
+	ui.mktScan:SetPoint("TOPLEFT", 240, -168)
+	Row(gen, "Hide unlearned recipes", 194)
+	ui.hideUnl = BoolSeg(gen,
+		function() return GM.Model.Pref("hideUnlearned") and true or false end,
+		function(v) GM.Model.SetPref("hideUnlearned", v and true or nil) end)
+	ui.hideUnl:SetPoint("TOPLEFT", 240, -192)
+
+	RowAt(gen, "Task list window", 320, 146)
+	ui.taskList = BoolSeg(gen,
+		function() return GM.View.IsShown("tasks") and true or false end,
+		function(v)
+			if v ~= (GM.View.IsShown("tasks") and true or false) then
+				GM.View.Toggle("tasks")
+			end
+		end)
+	ui.taskList:SetPoint("TOPLEFT", 500, -144)
+	RowAt(gen, "First-run guide", 320, 170)
+	ui.replay = W.ActionBtn(gen, "replay", 76, 18)
+	ui.replay:SetPoint("TOPLEFT", 500, -168)
+	ui.replay:SetScript("OnClick", function()
+		GM.Model.SetPref("obDone", nil)
+		GM.Model.SetPref("obDismissed", nil)
+		if GM.Onboard and GM.Onboard.MaybeShow then GM.Onboard.MaybeShow() end
+	end)
 
 	-- ===== TOOLTIP LINES =====
 	local tt = Panel(f, 10, -192, 600, 256, "TOOLTIP LINES")
@@ -957,7 +992,7 @@ local function Build()
 	-- row list the onboarding wizard shows). Panel itself only
 	-- reports what detection sees; the window does the work
 	-- ===== TICKER =====
-	local tk = Panel(f, 10, -966, 600, 88, "TICKER TAPE")
+	local tk = Panel(f, 10, -966, 600, 680, "TICKER TAPE")
 	local function tkStore() return GM.Ticker.Opts() end
 	Row(tk, "Width (px — blank = auto)", 22)
 	ui.tkW = EditBox(tk, 72)
@@ -999,6 +1034,68 @@ local function Build()
 			GM.Ticker.Apply()
 		end)
 	ui.tkClick:SetPoint("TOPLEFT", 500, -44)
+	RowAt(tk, "Show ticker", 320, 70)
+	ui.tkOn = BoolSeg(tk,
+		function() return tkStore().on and true or false end,
+		function(v)
+			tkStore().on = v
+			GM.Ticker.Apply()
+		end)
+	ui.tkOn:SetPoint("TOPLEFT", 500, -68)
+	Row(tk, "Dim idle %", 94)
+	ui.tkDimA = EditBox(tk, 60)
+	ui.tkDimA:SetPoint("TOPLEFT", 240, -92)
+	ui.tkDimA:SetScript("OnEnterPressed", function(self)
+		local v = tonumber(self:GetText())
+		if v then
+			tkStore().alpha = max(0, min(100, floor(v)))
+			GM.Ticker.Apply()
+		end
+		self:ClearFocus()
+		S.Refresh()
+	end)
+	Row(tk, "Dim hover %", 118)
+	ui.tkDimH = EditBox(tk, 60)
+	ui.tkDimH:SetPoint("TOPLEFT", 240, -116)
+	ui.tkDimH:SetScript("OnEnterPressed", function(self)
+		local v = tonumber(self:GetText())
+		if v then
+			tkStore().hover = max(0, min(100, floor(v)))
+			GM.Ticker.Apply()
+		end
+		self:ClearFocus()
+		S.Refresh()
+	end)
+
+	-- tape item manager: drop-add slot plus a removable row per
+	-- taped item — the window-side surface for /goblin ticker add/del
+	local itemsLbl = GM.MakeFontString(tk, GM.FONT, 10, "textDim")
+	itemsLbl:SetPoint("TOPLEFT", 12, -148)
+	itemsLbl:SetText("TAPE ITEMS — drop one on the slot, x removes")
+	ui.tkSlot = W.ItemSlot(tk, { w = 300, h = 24, hint = "drop item here",
+		onItem = function(id) GM.Ticker.Add(id) S.Refresh() end })
+	ui.tkSlot:SetPoint("TOPLEFT", 12, -168)
+	ui.tkItemRows = {}
+	for i = 1, 24 do
+		local r = CreateFrame("Frame", nil, tk)
+		r:SetSize(576, 20)
+		r:SetPoint("TOPLEFT", 12, -198 - (i - 1) * 20)
+		W.Zebra(r, i)
+		r.icon = r:CreateTexture(nil, "ARTWORK")
+		r.icon:SetSize(14, 14)
+		r.icon:SetPoint("LEFT", 4, 0)
+		r.name = GM.MakeFontString(r, GM.FONT, 10, "text")
+		r.name:SetPoint("LEFT", 26, 0)
+		r.name:SetWidth(530)
+		r.name:SetJustifyH("LEFT")
+		local x = W.XBtn(r, 14)
+		x:SetPoint("RIGHT", -4, 0)
+		x:SetScript("OnClick", function()
+			if r.id then GM.Ticker.Del(r.id) end
+			S.Refresh()
+		end)
+		ui.tkItemRows[i] = r
+	end
 
 	-- ===== CHARACTERS · LEDGER =====
 	-- one row per char the budget registry knows: crest + name in
@@ -1144,22 +1241,24 @@ local function Build()
 	ui.barLeaf = root:Add(u:Adopt(bar, { width = 600, height = 24 }),
 		{ height = 24 })
 	ui.barLeaf:SetVisible(S.needReload and true or false)
-	local function StackPanel(p, h, tab)
+	-- one leaf per tab absorbs the whole host so every tab's panel
+	-- runs top to bottom; the rest keep their natural height
+	local function StackPanel(p, h, tab, fill)
 		local leaf = root:Add(u:Adopt(p, { width = 600, height = h }),
-			{ height = h })
-		tinsert(ui.tabLeaves, { key = tab, leaf = leaf })
+			fill and { height = "fill", minHeight = h } or { height = h })
+		tinsert(ui.tabLeaves, { key = tab, leaf = leaf, frame = p })
 	end
-	StackPanel(gen, 128, "general")
+	StackPanel(gen, 232, "general", true)
 	tinsert(ui.tabLeaves, { key = "tooltips",
 		leaf = root:Add(u:Adopt(tt, { width = 600, height = 256 }),
-			{ height = "fill", minHeight = 60 }) })
+			{ height = "fill", minHeight = 256 }), frame = tt })
 	StackPanel(prof, 118, "profile")
-	StackPanel(src, 148, "profile")
+	StackPanel(src, 148, "profile", true)
 	StackPanel(gt, 78, "gather")
-	StackPanel(ov, 142, "gather")
-	StackPanel(tk, 88, "ticker")
-	StackPanel(cp, cpH, "chars")
-	StackPanel(imp, 60, "import")
+	StackPanel(ov, 142, "gather", true)
+	StackPanel(tk, 680, "ticker", true)
+	StackPanel(cp, cpH, "chars", true)
+	StackPanel(imp, 60, "import", true)
 	ui.SetTab("general")
 	-- the tooltip panel's height is layout-owned now — keep the clip
 	-- viewport tracking it (Relayout used to resize it by hand)
@@ -1271,6 +1370,11 @@ function S.Refresh(vm)
 		for _, seg in ipairs(ui.mmLayers) do seg.paint() end
 	end
 	ui.fmt.paint()
+	ui.yellListen.paint()
+	ui.autoscan.paint()
+	ui.mktScan.paint()
+	ui.hideUnl.paint()
+	ui.taskList.paint()
 	if ui.detail then ui.detail.paint() end
 	if ui.tkW then
 		local st = vm.tk
@@ -1279,6 +1383,23 @@ function S.Refresh(vm)
 		ui.tkF:SetText(tostring(st.fs or GM.Ticker.DEF_FS))
 		ui.tkLock.paint()
 		ui.tkClick.paint()
+		ui.tkOn.paint()
+		ui.tkDimA:SetText(tostring(st.alpha or 70))
+		ui.tkDimH:SetText(tostring(st.hover or 100))
+		for i, r in ipairs(ui.tkItemRows or {}) do
+			local id = st.items and st.items[i]
+			if id then
+				r:Show()
+				r.id = id
+				local icon = GM.ItemIcon and GM.ItemIcon(id)
+				if icon then r.icon:SetTexture(icon) r.icon:Show()
+				else r.icon:Hide() end
+				r.name:SetText(GM.ItemNameOr(id))
+			else
+				r:Hide()
+				r.id = nil
+			end
+		end
 	end
 	for _, r in ipairs(ui.ttRows or {}) do
 		if r.ctl.paint then r.ctl.paint() end
@@ -1320,6 +1441,10 @@ end
 function S.Show()
 	Build()
 	BuildTooltipRows()
+	-- tooltips is the deepest tab — fit the window to its natural
+	-- height; each tab's fill leaf stretches into the same space
+	ui.frame:SetHeight(math.max(420,
+		math.min(ui.ttInnerH + 96, 940)))
 	S.Refresh()
 	ui.frame:Show()
 end
