@@ -995,6 +995,55 @@ function W.PageTabs(parent, defs, onPick)
 	return strip
 end
 
+-- vertical variant of PageTabs — left-rail section tabs. Same
+-- contract: defs = {{key, label}...}, strip.set(key) marks active.
+-- Active paints an accent edge bar + accent text.
+function W.VTabs(parent, defs, onPick, opts)
+	opts = opts or {}
+	local w, h = opts.w or 108, opts.h or 22
+	local strip = { btns = {} }
+	local y = 0
+	for _, d in ipairs(defs) do
+		local key, label = d[1], d[2]
+		local b = CreateFrame("Button", nil, parent)
+		b:SetSize(w, h)
+		b:SetPoint("TOPLEFT", 0, -y)
+		b.bar = b:CreateTexture(nil, "ARTWORK")
+		b.bar:SetSize(3, h - 6)
+		b.bar:SetPoint("LEFT", 0, 0)
+		b.bar:SetColorTexture(GM.RGB("accent"))
+		b.bar:Hide()
+		b.text = GM.MakeFontString(b, GM.FONT_BOLD, 10, "textDim")
+		b.text:SetPoint("LEFT", 10, 0)
+		b.text:SetWidth(w - 14)
+		b.text:SetJustifyH("LEFT")
+		b.text:SetWordWrap(false)
+		b.text:SetText(LT(label))
+		b:SetScript("OnEnter", function()
+			if not b.active then
+				b.text:SetTextColor(GM.RGB("text"))
+			end
+		end)
+		b:SetScript("OnLeave", function()
+			if not b.active then
+				b.text:SetTextColor(GM.RGB("textDim"))
+			end
+		end)
+		b:SetScript("OnClick", function() onPick(key) end)
+		strip.btns[key] = b
+		y = y + h + 2
+	end
+	function strip.set(key)
+		for k, b in pairs(strip.btns) do
+			b.active = (k == key) or nil
+			b.bar:SetShown(k == key)
+			b.text:SetTextColor(GM.RGB(
+				k == key and "accent" or "textDim"))
+		end
+	end
+	return strip
+end
+
 -- scroll range readout for pane headers — "1–14 of 47" or "" when the
 -- list fits. Anchor fs at the pane header's RIGHT edge.
 function W.ScrollText(fs, off, visible, total)

@@ -516,9 +516,39 @@ local function Build()
 	-- leaving UISpecialFrames pointing at a plain table (IsShown crash)
 	local f = GM.Widgets.Window({
 		name = "GoblinMindSettingsFrame", title = "SETTINGS",
-		w = 620, h = 1124, x = -60, y = 10, tab = "settings",
+		w = 748, h = 1124, x = -60, y = 10, tab = "settings",
 	})
 	ui.frame = f
+
+	-- left rail tabs + right options host: every section panel is a
+	-- leaf in the host's column root; a tab switch toggles leaf
+	-- visibility — the same mechanism the reload banner uses, so the
+	-- layout reflows itself
+	local rail = CreateFrame("Frame", nil, f)
+	rail:SetPoint("TOPLEFT", 10, -34)
+	rail:SetPoint("BOTTOMLEFT", 10, 10)
+	rail:SetWidth(112)
+	GM.Panel(rail, "contLowest")
+	local host = CreateFrame("Frame", nil, f)
+	host:SetPoint("TOPLEFT", 130, -34)
+	host:SetPoint("BOTTOMRIGHT", -10, 10)
+
+	ui.tabLeaves = {}
+	function ui.SetTab(key)
+		for _, l in ipairs(ui.tabLeaves) do
+			l.leaf:SetVisible(l.key == key)
+		end
+		ui.tabs.set(key)
+	end
+	ui.tabs = W.VTabs(rail, {
+		{ "general", "GENERAL" },
+		{ "tooltips", "TOOLTIPS" },
+		{ "profile", "PROFILE" },
+		{ "gather", "GATHERING" },
+		{ "ticker", "TICKER" },
+		{ "chars", "CHARS" },
+		{ "import", "IMPORT" },
+	}, ui.SetTab)
 
 	-- reload-required banner: appears when a flagged option changes
 	local bar = CreateFrame("Frame", nil, f)
@@ -1103,30 +1133,34 @@ local function Build()
 		.. "· merges into your setup, never deletes")
 
 	-- ============ layout wiring ============
-	-- the window is a vertical stack of titled panels — one managed
+	-- the host is a vertical stack of titled panels — one managed
 	-- Column owns their slots; the reload banner is a toggleable
-	-- node and the tooltip panel fills whatever height remains
+	-- node, each panel carries a tab tag for rail visibility, and
+	-- the tooltip panel fills whatever height remains
 	local u = GM.ui
-	local root = u:AttachRoot(f, {
+	local root = u:AttachRoot(host, {
 		direction = "column", gap = 6,
-		pad = { top = 34, right = 10, bottom = 4, left = 10 },
 	})
 	ui.barLeaf = root:Add(u:Adopt(bar, { width = 600, height = 24 }),
 		{ height = 24 })
 	ui.barLeaf:SetVisible(S.needReload and true or false)
-	local function StackPanel(p, h)
-		root:Add(u:Adopt(p, { width = 600, height = h }), { height = h })
+	local function StackPanel(p, h, tab)
+		local leaf = root:Add(u:Adopt(p, { width = 600, height = h }),
+			{ height = h })
+		tinsert(ui.tabLeaves, { key = tab, leaf = leaf })
 	end
-	StackPanel(gen, 128)
-	root:Add(u:Adopt(tt, { width = 600, height = 256 }),
-		{ height = "fill", minHeight = 60 })
-	StackPanel(prof, 118)
-	StackPanel(src, 148)
-	StackPanel(gt, 78)
-	StackPanel(ov, 142)
-	StackPanel(tk, 88)
-	StackPanel(cp, cpH)
-	StackPanel(imp, 60)
+	StackPanel(gen, 128, "general")
+	tinsert(ui.tabLeaves, { key = "tooltips",
+		leaf = root:Add(u:Adopt(tt, { width = 600, height = 256 }),
+			{ height = "fill", minHeight = 60 }) })
+	StackPanel(prof, 118, "profile")
+	StackPanel(src, 148, "profile")
+	StackPanel(gt, 78, "gather")
+	StackPanel(ov, 142, "gather")
+	StackPanel(tk, 88, "ticker")
+	StackPanel(cp, cpH, "chars")
+	StackPanel(imp, 60, "import")
+	ui.SetTab("general")
 	-- the tooltip panel's height is layout-owned now — keep the clip
 	-- viewport tracking it (Relayout used to resize it by hand)
 	tt:HookScript("OnSizeChanged", function(_, _, th)
