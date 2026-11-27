@@ -154,25 +154,35 @@ local function BuildUI()
 	-- the "open sound, close sound, frozen OPEN" bug — the window hid
 	-- right after the spell opened the line and took the line with it.
 	f:SetScript("OnHide", function()
-		-- restore the native frame only when the user asked for it
-		-- (wantDefault), the window is deliberately closing (the
-		-- session dies via CloseTradeSkill below — unpark the
-		-- bookkeeping), or the parked frame is already hidden
-		-- (session died elsewhere — unpark quietly). Tab swaps and
-		-- other programmatic hides keep it parked: restoring a
-		-- still-shown parked frame pops Blizzard's UI over ours.
 		-- DefaultFrame() is declared below this scope — inline it.
 		-- IsShown can return secret values on protected frames —
 		-- read + compare inside one pcall (FramePark convention)
 		local pf = ProfessionsFrame or TradeSkillFrame
+		-- deliberate close: end the session FIRST — the parked frame's
+		-- own close path can then hide it before we touch the parking
+		if ui.closing and not ui.wantDefault
+			and C_TradeSkillUI and C_TradeSkillUI.CloseTradeSkill then
+			pcall(C_TradeSkillUI.CloseTradeSkill)
+		end
+		-- session close may leave the native frame shown (handler
+		-- gaps) — hide it ourselves; safe now that the session is
+		-- dead, its OnHide can't kill anything we still need
+		if ui.closing and not ui.wantDefault and pf then
+			local stillShown = select(2, pcall(function()
+				return pf:IsShown() == true end)) == true
+			if stillShown then pcall(function() pf:Hide() end) end
+		end
+		-- restore the native frame only when the user asked for it
+		-- (wantDefault), the window is deliberately closing (unpark
+		-- the bookkeeping — the frame is hidden by now), or the
+		-- parked frame is already hidden (session died elsewhere —
+		-- unpark quietly). Tab swaps and other programmatic hides
+		-- keep it parked: restoring a still-shown parked frame pops
+		-- Blizzard's UI over ours.
 		local pfHidden = pf ~= nil and select(2, pcall(function()
 			return pf:IsShown() == false end)) == true
 		if ui.wantDefault or ui.closing or pfHidden then
 			CU.RestoreDefault()
-		end
-		if ui.closing and not ui.wantDefault
-			and C_TradeSkillUI and C_TradeSkillUI.CloseTradeSkill then
-			pcall(C_TradeSkillUI.CloseTradeSkill)
 		end
 		ui.closing = nil
 	end)
