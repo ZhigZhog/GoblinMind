@@ -1399,7 +1399,7 @@ end
 local function yellLinks(msg)
 	local links, itemID, lname, ref = {}
 	for link, kind, payload, name in
-			msg:gmatch("(|H(%a+):([^|]*)|h%[(.-)%]|h)") do
+			msg:gmatch("(|?c?%x*|H(%a+):([^|]*)|h%[(.-)%]|h)") do
 		local l = { kind = kind, name = name, link = link }
 		if kind == "item" then
 			l.id = tonumber(payload)
@@ -1418,6 +1418,67 @@ local function yellLinks(msg)
 		links[#links + 1] = l
 	end
 	return links, itemID, lname, ref
+end
+
+-- foreign-capsule pricing: our DB only knows OUR recipes, so an
+-- advertised enchant's mats come from the link's own tooltip —
+-- the Reagents: section lists "Name (n)" chunks until a line
+-- stops resolving to items. Any chunk that won't resolve to a
+-- priced item kills the suggestion — a partial sum understates.
+-- Same 25% service margin as W.Suggest's mat-only fallback.
+local reagTT
+local function ReagentCost(link)
+	if reagTT == nil then
+		local ok, tt = pcall(CreateFrame, "GameTooltip",
+			"GMReagProbe", UIParent, "GameTooltipTemplate")
+		reagTT = (ok and tt) or false
+	end
+	if not reagTT then return nil end
+	reagTT:SetOwner(UIParent, "ANCHOR_NONE")
+	if not pcall(reagTT.SetHyperlink, reagTT, link) then
+		return nil
+	end
+	local cost, on = 0
+	for i = 1, reagTT:NumLines() or 0 do
+		local fs = _G["GMReagProbeTextLeft" .. i]
+		local s = fs and fs:GetText()
+		if s then
+			if s:find("^Reagents:") then
+				on = i
+			elseif on then
+				local resolved = true
+				for chunk in s:gmatch("[^,]+") do
+					local nm, cnt = chunk:match(
+						"^%s*(.-)%s*%(%s*(%d+)%s*%)%s*$")
+					nm = nm or chunk:match("^%s*(.-)%s*$")
+					local _, lk = GetItemInfo and GetItemInfo(nm)
+					local id = lk and GM.LinkID(lk)
+					if not id then resolved = nil break end
+					cost = cost + (tonumber(cnt) or 1)
+						* (GM.Price("dbmarket", id)
+							or (GM.ItemEntry(id) or {}).mb or 0)
+				end
+				if not resolved then break end
+			end
+		end
+	end
+	return cost > 0 and cost or nil
+end
+
+-- what a capsule line advertises at market: item links price
+-- direct; service links try our own recipe first, then the
+-- link tooltip's reagent list with the service margin
+function W.CapsulePrice(l)
+	if not l then return nil end
+	if l.kind == "item" and l.id then
+		return GM.Price("dbmarket", l.id)
+			or (GM.ItemEntry(l.id) or {}).mb
+	end
+	if not l.id then return nil end
+	local s = W.Suggest and W.Suggest("s:" .. l.id)
+	if s and s.price then return s.price end
+	local m = ReagentCost(l.link)
+	return m and math.floor(m * 1.25 + 0.5) or nil
 end
 
 -- SHOPS market folds these in alongside roster offers; expired

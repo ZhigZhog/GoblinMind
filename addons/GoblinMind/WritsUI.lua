@@ -120,8 +120,11 @@ local function marketRows(board, q, prof)
 		for si, lnk in ipairs(y.links or {}) do
 			out[#out + 1] = { yell = y, _gs = gs, _gi = si,
 				offer = {
-					name = "│ " .. lnk.name,
-					prof = y.prof,
+					-- the raw capsule renders bracketed + link-
+					-- colored; plain text version lives in _link.name
+					name = "| " .. (lnk.link or lnk.name),
+					prof = (lnk.kind == "trade" and lnk.name)
+						or y.prof,
 					itemID = lnk.kind == "item" and lnk.id or nil,
 					_yell = true, _link = lnk },
 				roster = ros }
@@ -830,14 +833,7 @@ local function ShopsPaint(vm)
 					-- DB can derive one, hover gives the real
 					-- tooltip, "+" mails a writ for THIS item
 					local l = o._link
-					local sug
-					if l.kind == "item" and l.id then
-						sug = GM.Price("dbmarket", l.id)
-							or (GM.ItemEntry(l.id) or {}).mb
-					elseif l.id then
-						local s = W.Suggest and W.Suggest("s:" .. l.id)
-						sug = s and s.price
-					end
+					local sug = W.CapsulePrice and W.CapsulePrice(l)
 					r.price:SetText(sug and GoldText(sug) or "—")
 					r.price:SetTextColor(GM.RGB(
 						sug and "text" or "textDim"))
