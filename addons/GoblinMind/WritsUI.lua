@@ -121,14 +121,36 @@ local function marketRows(board, q, prof)
 				prof = y.prof, itemID = y.itemID, ref = y.ref,
 				_yell = true },
 				roster = ros }
-			-- unfolded bark: the full message as its own sub-row
-			-- (_gi 0.5 sits between header 0 and capsules 1..n)
+			-- unfolded bark: the full message wraps into a bounded
+			-- 500px window — markup stripped to visible text, greedy
+			-- word-wrap at ~95 chars (Montserrat under-measurement
+			-- makes pixel math unreliable), ONE SUB-ROW PER LINE so
+			-- each gets its own 21px vertical clearance
 			if y._expanded then
-				out[#out + 1] = { yell = y, _gs = gs, _gi = 0.5,
-					offer = { name = "| " .. y.text,
-						prof = y.prof, _yell = true,
-						_barkText = true },
-					roster = ros }
+				local plain = y.text
+					:gsub("|c%x%x%x%x%x%x%x%x", "")
+					:gsub("|H[^|]*|h", "")
+					:gsub("|h", "")
+					:gsub("|r", "")
+				local lines, cur = {}, nil
+				for w in plain:gmatch("%S+") do
+					if not cur then cur = w
+					elseif #cur + 1 + #w <= 95 then
+						cur = cur .. " " .. w
+					else
+						lines[#lines + 1] = cur
+						cur = w
+					end
+				end
+				if cur then lines[#lines + 1] = cur end
+				for li, ln in ipairs(lines) do
+					out[#out + 1] = { yell = y, _gs = gs,
+						_gi = 0.5 + li * 0.01,
+						offer = { name = "| " .. ln,
+							prof = y.prof, _yell = true,
+							_barkText = true },
+						roster = ros }
+				end
 			end
 		end
 		for si, lnk in ipairs(y.links or {}) do
@@ -876,12 +898,12 @@ local function ShopsPaint(vm)
 			if o._yell then
 				local y = e.yell
 				if o._barkText then
-					-- unfolded bark: the full message across the
-					-- offer+prof+price span — the name cell would
-					-- clip at 204 so widen it for this row kind
+					-- unfolded bark line: pre-wrapped text across
+					-- the offer+prof+price span — the name cell
+					-- would clip at 204 so widen it for this row
 					r.name:SetWidth(500)
-					r.name:SetText(GM.CC("textDim") .. "| "
-						.. y.text .. "|r")
+					r.name:SetText(GM.CC("textDim")
+						.. o.name .. "|r")
 					r.prof:SetText("")
 					r.price:SetText("")
 					r.who:SetText("")
@@ -948,43 +970,12 @@ local function ShopsPaint(vm)
 						or "")
 					.. "|r")
 				GM.Widgets.NameTag(r.who, y.char, "textDim")
-				-- the bark's first capsule splices out of the raw
-				-- text into a real chip — the inline |c|H|h markup
-				-- renders colored but answers no click; the chip
-				-- gets Blizzard click behavior + the link tooltip
-				local first = y.links and y.links[1]
-				local pos = first and first.link
-					and y.text:find(first.link, 1, true)
-				if pos then
-					r.name:SetText("yell: "
-						.. y.text:sub(1, pos - 1))
-					r.chip = r.chip
-						or GM.Widgets.LinkChip(r, 200, 13)
-					r.chip._pre = function()
-						GM.LinkFrom = { char = y.char,
-							t = time(), kind = "trade" }
-					end
-					r.chip.fs:SetWidth(280)
-					r.chip:SetCapsule(first.link, first.disp)
-					local px = 40 + math.min(200,
-						r.name:GetStringWidth() or 0)
-					-- keep clear of the price badge at x=330
-					local budget = math.max(0, 322 - px)
-					local cw = math.min(budget,
-						(r.chip.fs:GetStringWidth() or 0) + 4)
-					r.chip:SetWidth(cw)
-					r.chip.fs:SetWidth(cw)
-					r.chip:ClearAllPoints()
-					r.chip:SetPoint("LEFT", px, 0)
-					r.tail = r.tail or GM.MakeFontString(
-						r, GM.FONT, 9, "text")
-					r.tail:SetWordWrap(false)
-					r.tail:SetJustifyH("LEFT")
-					r.tail:SetWidth(math.max(0, budget - cw - 4))
-					r.tail:SetPoint("LEFT", r.chip, "RIGHT", 0, 0)
-					r.tail:SetText(y.text:sub(pos + #first.link))
-					r.tail:SetShown(cw > 0)
-				end
+				-- the bark's capsule stays INLINE in the name cell —
+				-- it renders colored + bracketed like chat. The
+				-- interactive copy lives in the sub-row chips;
+				-- splicing a chip mid-text needs pixel widths and
+				-- GetStringWidth under-measures Montserrat on this
+				-- client, which painted text on text
 				r:SetScript("OnClick", function()
 					y._expanded = not y._expanded
 					WU.Paint("shops")
