@@ -790,7 +790,9 @@ local function ShopsPaint(vm)
 				-- actions instead of a server writ request
 				local y = e.yell
 				r.price:SetText(GM.CC("textDim") .. "·yell "
-					.. GM.FmtAge(time() - (y.t or time())) .. "|r")
+					.. GM.FmtAge(time() - (y.t or time()))
+					.. ((y.n or 1) > 1 and (" ×" .. y.n) or "")
+					.. "|r")
 				GM.Widgets.NameTag(r.who, y.char, "textDim")
 				r.act.text:SetText("WHISPER")
 				r.act.text:SetTextColor(GM.RGB("accent"))

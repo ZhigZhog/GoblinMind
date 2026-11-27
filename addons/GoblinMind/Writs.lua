@@ -1341,7 +1341,7 @@ end
 -- backend. Deliberately loose keyword match; GM.db.yellTerms adds
 -- user terms. Session-only ring, deduped per sender.
 local yellRing, yellSeen = {}, {}
-local YELL_MAX, YELL_DEDUP, YELL_TTL = 100, 60, 30
+local YELL_MAX, YELL_TTL = 100, 30
 local YELL_WORDS = { "enchant", "lockpick", "lock pick", "lfw",
 	"will craft", "crafting", "portal", "summon" }
 local YELL_PROF = { enchant = "Enchanting", lockpick = "Lockpicking",
@@ -1387,11 +1387,21 @@ end
 -- entries prune on read so a quiet session drains naturally
 function W.YellOffers()
 	local cut = time() - yellTTL() * 60
+	local kept = {}
 	for i = #yellRing, 1, -1 do
 		local y = yellRing[i]
-		if (y.t or 0) < cut then
+		local drop = (y.t or 0) < cut
+		-- newest row per yeller survives; older dupes fold their
+		-- count in and go (rows from before stacking existed)
+		if not drop and kept[y.char] then
+			kept[y.char].n = (kept[y.char].n or 1) + (y.n or 1)
+			drop = true
+		end
+		if drop then
 			table.remove(yellRing, i)
 			if yellSeen[y.char] == y then yellSeen[y.char] = nil end
+		else
+			kept[y.char] = y
 		end
 	end
 	return yellRing
@@ -1412,18 +1422,25 @@ yells:SetScript("OnEvent", function(_, ev, msg, sender, _, _, _,
 				or b:find("lookingfor", 1, true)
 				or b:find("lfg", 1, true)) then return end
 	end
-	if not (msg and sender) or sender == CharName() then return end
+	if not (msg and sender) then return end
+	if GM.SameChar and GM.SameChar(sender) then return end
 	local hit, prof = yellHit(msg)
 	if not hit then return end
+	local itemID, lname, ref = yellLink(msg)
 	local seen = yellSeen[sender]
-	if seen and time() - seen.t < YELL_DEDUP then
-		-- a spammer re-yelling refreshes the row, no stacking
+	if seen then
+		-- one row per yeller: a re-yell updates it in place and
+		-- counts (loot-line stacking, same idea) — a serial
+		-- advertiser can't flood the list every dedup window
 		seen.t, seen.text = time(), msg:sub(1, 120)
+		seen.n = (seen.n or 1) + 1
+		seen.itemID, seen.ref, seen.linkName = itemID, ref, lname
+		if prof then seen.prof, seen.clsProf =
+			prof, YELL_CLASS[prof] or nil end
 		return
 	end
-	local itemID, lname, ref = yellLink(msg)
 	local y = { source = "yell", char = sender,
-		text = msg:sub(1, 120), t = time(), prof = prof,
+		text = msg:sub(1, 120), t = time(), prof = prof, n = 1,
 		clsProf = prof and YELL_CLASS[prof] or nil,
 		itemID = itemID, ref = ref, linkName = lname }
 	yellSeen[sender] = y
