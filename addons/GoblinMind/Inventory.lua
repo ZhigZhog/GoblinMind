@@ -7,6 +7,8 @@ local _, GM = ...
 GM.Inventory = {}
 
 local mailCache = {}      -- [itemID] = qty, refreshed at the mailbox
+local mailScanned = false -- one honest inbox read happened this session
+local mailGrace = 0       -- GetTime() when "empty inbox" becomes trustable
 local guildCache = {}     -- [itemID] = qty, current gbank tab only
 -- Listings are keyed by fingerprint ("itemID:qty:buyout"), not
 -- auctionID: Forever's GetOwnedAuctionInfo hands the same listing
@@ -77,6 +79,7 @@ local function scanInbox()
 		end
 	end
 	mailCache = t
+	mailScanned = true
 end
 
 -- ============ auction-mail records (TSM's invoice model) ============
@@ -412,7 +415,12 @@ end
 -- (Outflow legs drain paidQ at the running average — Consume runs on
 -- sell/vendor/mailout/destroy/craftout — so only unjournaled stock
 -- moves (loots, trades) leave residue; BagCount bounds it.
--- Bank-only stock isn't reachable — bags are the trading boundary.)
+-- Mail counts with bags: posting never consumed paidQ, so stock
+-- that comes back expired/cancelled sits in the mailbox still
+-- ledger-carried — without it every login re-evicts dead rows and
+-- the wealth chart dips until the return is looted.
+-- Bank-only stock isn't reachable — bags+mail are the trading
+-- boundary.)
 function GM.Inventory.HeldValue()
 	local st = GM.Ledger and GM.Ledger.db and GM.Ledger.db.itemStats
 	if not st then return 0 end
@@ -421,11 +429,22 @@ function GM.Inventory.HeldValue()
 		local pq, pt = s.paidQ or 0, s.paidT or 0
 		if pq > 0 and pt > 0 then
 			local inBags = math.max(0, pq - GM.Inventory.PostedQty(id))
-			held = held + math.min(inBags, GM.BagCount(id) or 0)
-				* (pt / pq)
+			local seen = (GM.BagCount(id) or 0)
+				+ (mailCache[id] or 0)
+			held = held + math.min(inBags, seen) * (pt / pq)
 		end
 	end
 	return held
+end
+
+-- mailCache honesty for the wealth gate — true once scanInbox ran
+-- this session. An empty read is only honest after the grace window:
+-- GetInboxNumItems can't tell "no mail" from "inbox not streamed
+-- yet", so a zero count is accepted once streaming has had its time
+function GM.Inventory.MailLoaded()
+	return mailScanned
+		or (mailGrace > 0 and GetTime() > mailGrace
+			and GM.MailCount() == 0)
 end
 
 -- persist the owned snapshot so the MINE surfaces are a real log: the
@@ -1446,7 +1465,16 @@ f:SetScript("OnEvent", function(_, event, ...)
 	elseif event == "AUCTION_HOUSE_SHOW_FORMATTED_NOTIFICATION" then
 		OnNotification(...)
 	elseif event == "AUCTION_HOUSE_SHOW" or event == "PLAYER_LOGIN" then
-		if event == "PLAYER_LOGIN" then LoadOwned() end
+		if event == "PLAYER_LOGIN" then
+			LoadOwned()
+			-- the inbox streams in async; CheckInbox pulls it on
+			-- clients that don't push, MAIL_INBOX_UPDATE covers the
+			-- rest. The grace marks when an empty read may stand as
+			-- truth (MailLoaded gate)
+			mailGrace = GetTime() + 15
+			if CheckInbox then pcall(CheckInbox) end
+			GM.Time.After(10, scanInbox)
+		end
 		GM.Inventory.QueryOwned()
 		GM.Inventory.QueryBids()
 	elseif event == "GUILDBANKBAGSLOTS_CHANGED" then

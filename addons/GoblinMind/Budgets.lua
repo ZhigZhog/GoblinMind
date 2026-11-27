@@ -692,6 +692,11 @@ function B.Sample()
 	-- loaded yet" is unknown, not zero: skip until the load ran.
 	if GM.Inventory.OwnedLoaded
 		and not GM.Inventory.OwnedLoaded() then return end
+	-- same rule for mailCache: returned stock counts in h via the
+	-- inbox — sampling before the first honest inbox read writes
+	-- h=0 and dips every login
+	if GM.Inventory.MailLoaded
+		and not GM.Inventory.MailLoaded() then return end
 	if #w > 0 and t - w[#w].t <= MIN_SAMPLE_GAP then
 		local last = w[#w]
 		last.g, last.a, last.h, last.r, last.d, last.c =
