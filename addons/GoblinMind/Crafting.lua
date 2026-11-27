@@ -487,9 +487,30 @@ local function SourceTextFor(recipeID)
 	if ok and type(s) == "string" and s ~= "" then return s end
 end
 
+-- a char's own GetProfessions list is the ONLY source that can't
+-- lie about who knows what — recipe toon-stamps can (foreign-
+-- session scans wrote them). Recorded per char for attribution.
+local function RecordMyProfs()
+	if not (GetProfessions and GetProfessionInfo and GM.db) then return end
+	local me = GM.OwnName and GM.OwnName()
+	local key = me and GM.FirstName and GM.FirstName(me)
+	if not (key and key ~= "") then return end
+	local set = {}
+	for _, idx in ipairs({ GetProfessions() }) do
+		local name = GetProfessionInfo(idx)
+		if type(name) == "string" and name ~= "" then
+			set[name:lower()] = true
+		end
+	end
+	if not next(set) then return end
+	GM.db.charProfs = GM.db.charProfs or {}
+	GM.db.charProfs[key:lower()] = set
+end
+
 local function Scan()
 	C._scans = (C._scans or 0) + 1
 	if not C_TradeSkillUI then return end
+	RecordMyProfs()
 	if ForeignTradeskill() then return end
 	-- GetAllRecipeIDs first: the full line regardless of the Blizzard
 	-- filter — filtered enum can hide unlearned rows from capture
@@ -759,6 +780,7 @@ end
 -- the UI takeover so the window doesn't flash once per line.
 local function ProfPump()
 	if not (GetProfessions and GetProfessionInfo) then return end
+	RecordMyProfs()
 	local seen = {}
 	for id in pairs(GoblinMindCrafting.recipes) do
 		local p = C.Prof(id)

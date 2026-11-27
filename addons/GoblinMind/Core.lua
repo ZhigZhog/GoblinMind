@@ -859,6 +859,20 @@ end
 -- through this; anything comparing names goes through SameChar.
 function GM.OwnName()
 	local n = UnitName and UnitName("player")
+	-- the client's own GUID lookup carries the surname on Forever —
+	-- the only source that knows "me" without a mail/friend trail
+	if n and UnitGUID and GetPlayerInfoByGUID then
+		local ok, full = pcall(function()
+			return select(6, GetPlayerInfoByGUID(UnitGUID("player")))
+		end)
+		if ok and type(full) == "string" and full:find(" ") then
+			if GM.db then
+				GM.db.fullNames = GM.db.fullNames or {}
+				GM.db.fullNames[n:lower()] = full
+			end
+			return full
+		end
+	end
 	return (n and GM.FullName(n)) or n
 end
 

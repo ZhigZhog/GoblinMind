@@ -129,6 +129,19 @@ end
 -- profession's known owner rather than crediting whoever happens
 -- to be publishing (the "alt owns my Engineer's offers" bug).
 -- Two stamped owners for one prof → ambiguous → don't guess.
+-- a stamp is a claim that char knows the recipe — a char whose
+-- recorded prof list lacks the profession provably can't (foreign-
+-- session scans stamped lies). nil recorded list = unknown →
+-- benefit of the doubt.
+local function TrustedStamp(toon, prof)
+	if not toon then return nil end
+	local known = GM.db and GM.db.charProfs
+	local tk = (GM.FirstName and GM.FirstName(toon)) or toon
+	local cp = known and known[tostring(tk):lower()]
+	if cp and not cp[tostring(prof or ""):lower()] then return nil end
+	return toon
+end
+
 local function ProfOwners()
 	local own = {}
 	for _, tbl in ipairs({ GoblinMindCrafting
@@ -136,9 +149,12 @@ local function ProfOwners()
 			GoblinMindCrafting and GoblinMindCrafting.services }) do
 		for _, r in pairs(tbl or {}) do
 			if type(r) == "table" and r.toon and r.prof then
-				local k = tostring(r.prof):lower()
-				if own[k] == nil then own[k] = r.toon
-				elseif own[k] ~= r.toon then own[k] = false end
+				local stamp = TrustedStamp(r.toon, r.prof)
+				if stamp then
+					local k = tostring(r.prof):lower()
+					if own[k] == nil then own[k] = stamp
+					elseif own[k] ~= stamp then own[k] = false end
+				end
 			end
 		end
 	end
@@ -150,7 +166,8 @@ function W.RosterOffers()
 	local owners
 	local function ownerFor(stamp, prof)
 		owners = owners or ProfOwners()
-		return stamp or owners[(prof or ""):lower()] or CharName()
+		return TrustedStamp(stamp, prof)
+			or owners[(prof or ""):lower()] or CharName()
 	end
 	-- ';' is the relay envelope's field delimiter — offer text must
 	-- never carry it (JSON in the queue is hex-packed and fine; the
