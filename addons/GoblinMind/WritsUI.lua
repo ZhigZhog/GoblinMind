@@ -79,7 +79,9 @@ end
 -- browsers shop by price, not by crafter.
 
 local function crafterTag(r)
-	local c = (r.chars and r.chars[1]) or "?"
+	local c = (GM.NameColored and GM.NameColored(
+		(r.chars and r.chars[1]) or "?"))
+		or ((r.chars and r.chars[1]) or "?")
 	local st = r.stats or {}
 	local done = st.writs_done or 0
 	if done > 0 then
@@ -505,8 +507,10 @@ local function layoutRow(r, mode)
 		-- declared width — leave real air before SUGGEST. `who`
 		-- doubles as the toon column: on an account-shared recipe
 		-- DB the crafter attribution is per-offer, not per-roster.
+		-- `who` carries surnames now — it needs real width; the
+		-- note field absorbs the cost (user text clips anyway)
 		pos = { on = 0, mats = 24, icon = 92, name = 112,
-			prof = 256, who = 320, note = 388, gold = 486,
+			prof = 232, who = 288, note = 400, gold = 486,
 			act = -2, price = false }
 	else
 		pos = { icon = 22, name = 40, prof = 250, price = 330,
@@ -525,10 +529,10 @@ local function layoutRow(r, mode)
 			else w:SetPoint("LEFT", x, 0) end
 		end
 	end
-	r.name:SetWidth(mode == "myshop" and 140 or 204)
-	r.prof:SetWidth(mode == "myshop" and 60 or 74)
-	r.who:SetWidth(mode == "myshop" and 64 or 196)
-	r.note:SetWidth(mode == "myshop" and 92 or 104)
+	r.name:SetWidth(mode == "myshop" and 116 or 204)
+	r.prof:SetWidth(mode == "myshop" and 52 or 74)
+	r.who:SetWidth(mode == "myshop" and 108 or 196)
+	r.note:SetWidth(mode == "myshop" and 82 or 104)
 end
 
 local function offerIcon(o)
@@ -543,7 +547,8 @@ local function openRequest(row, e)
 	local o = e.offer
 	pop.e = e
 	pop.title:SetText("REQUEST — " .. (o.name or "?") .. "  ·  "
-		.. (o.toon or (e.roster.chars and e.roster.chars[1])
+		.. ((GM.NameColored and GM.NameColored(
+			o.toon or (e.roster.chars and e.roster.chars[1]) or "?"))
 			or "?"))
 	pop.qty:SetText(tostring(o.numMade or 1))
 	local sug = W.Suggest(o.ref, o.numMade or 1)
@@ -681,7 +686,7 @@ local function ShopsPaint(vm)
 			r.name:SetTextColor(GM.RGB("text"))
 			r.prof:SetText(e.prof or "")
 			r.price:SetText(e.price and GoldText(e.price) or "")
-			r.who:SetText(e.toon or "")
+			GM.Widgets.NameTag(r.who, e.toon or "")
 			r.act.text:SetText("SUGGEST")
 			r.act.text:SetTextColor(GM.RGB("textDim"))
 			r.act:Show()
@@ -739,7 +744,17 @@ local function ShopsPaint(vm)
 					profs[#profs + 1] = o.prof
 				end
 			end
-			r.name:SetText((e.chars and table.concat(e.chars, ", "))
+			-- dedup + class-color each char — bare/realm/resolved
+			-- forms of one toon can arrive as separate entries
+			local seenC, parts = {}, {}
+			for _, ch in ipairs(e.chars or {}) do
+				local k = ch:lower()
+				if not seenC[k] then
+					seenC[k] = true
+					parts[#parts + 1] = GM.NameColored(ch)
+				end
+			end
+			r.name:SetText(#parts > 0 and table.concat(parts, ", ")
 				or "?")
 			r.name:SetTextColor(GM.RGB("text"))
 			r.prof:SetText(table.concat(profs, ","):sub(1, 20))
@@ -773,7 +788,7 @@ local function ShopsPaint(vm)
 				local y = e.yell
 				r.price:SetText(GM.CC("textDim") .. "·yell "
 					.. GM.FmtAge(time() - (y.t or time())) .. "|r")
-				r.who:SetText(y.char:match("^[^-]+") or y.char)
+				GM.Widgets.NameTag(r.who, y.char, "textDim")
 				r.act.text:SetText("WHISPER")
 				r.act.text:SetTextColor(GM.RGB("accent"))
 				r.act:Show()
@@ -799,7 +814,8 @@ local function ShopsPaint(vm)
 					or GM.CC("warn") .. "OFFER|r")
 				r.price:SetTextColor(GM.RGB(
 					o.price and "text" or "warn"))
-				r.who:SetText(o.toon or crafterTag(ros))
+				if o.toon then GM.Widgets.NameTag(r.who, o.toon)
+				else r.who:SetText(crafterTag(ros)) end
 				r.act.text:SetText("REQUEST")
 				r.act.text:SetTextColor(GM.RGB("accent"))
 				r.act:Show()

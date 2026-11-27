@@ -797,6 +797,17 @@ function W.HoverTint(row)
 	row.hl:SetColorTexture(HL_R, HL_G, HL_B, 0.35)
 end
 
+-- resolved-name painter: writes the full "First Last" (surname
+-- whenever a source knows it) in Blizzard class colors; falls
+-- back to the theme colorKey when the class is unknowable. The
+-- color rides inside the string (|cff embed), so it also works
+-- inside comma-joined lists — no per-name fontstring needed.
+function W.NameTag(fs, name, colorKey)
+	fs:SetTextColor(GM.RGB(colorKey or "text"))
+	fs:SetText(GM.NameColored and GM.NameColored(name)
+		or name or "?")
+end
+
 -- page toggle strip: text tabs with an accent underline under the
 -- active one (reads as tabs, not action buttons). defs = {{key,label}}
 -- onPick(key) fires on click. Returns {btns={key=btn}, set=fn}.

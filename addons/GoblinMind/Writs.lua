@@ -253,15 +253,21 @@ end
 -- publish the whole roster (replace semantics) on a joined board
 function W.Publish(board)
 	if not board or board == "" then return nil end
-	local chars = {}
+	local chars, seenC = {}, {}
 	-- every char key the ledger knows = a toon the shop can be
 	-- reached through; the mail channel needs real names
 	for k in pairs(GoblinMindLedger and GoblinMindLedger.byChar or {}) do
 		local c = tostring(k):match("^(.-)%-") or tostring(k)
 		-- mail needs the surname on Forever — publish the
 		-- deliverable form when any source can resolve it
-		chars[#chars + 1] =
-			(GM.FullName and GM.FullName(c)) or c
+		c = (GM.FullName and GM.FullName(c)) or c
+		-- bare + realm-qualified + resolved forms of one toon
+		-- collapse — dedup AFTER resolution
+		local key = c:lower()
+		if not seenC[key] then
+			seenC[key] = true
+			chars[#chars + 1] = c
+		end
 	end
 	if #chars == 0 then chars[1] =
 		(GM.FullName and GM.FullName(CharName())) or CharName() end
@@ -274,6 +280,15 @@ function W.Publish(board)
 				or o.toon
 			enabled[#enabled + 1] = o
 		end
+	end
+	-- our own roster is known NOW — the pulled copy lags by
+	-- watcher-flush cadence (staged op → POST → pull → emit →
+	-- reload). Cache it so W.Rosters can overlay instantly; a
+	-- pulled row for our uuid wins once it proves newer.
+	if GM.db then
+		GM.db.localRosters = GM.db.localRosters or {}
+		GM.db.localRosters[board] = { t = time(), uuid = W.MyUUID(),
+			chars = chars, offers = enabled }
 	end
 	return W.Op("roster", board, {
 		chars = table.concat(chars, ","),
@@ -315,27 +330,66 @@ end
 
 -- ============ reads ============
 
+-- a locally-published roster rides over the pulled copy for this
+-- long — beyond boards-pull cadence + slack; after it the server
+-- view (however old) is honest again
+local LOCAL_ROSTER_TTL = 1800
+
 function W.Rosters(board)
 	-- remote board = the relay stream's roster rows (y records)
+	local rows
 	if GM.Orders and GM.Orders.IsRemote
 			and GM.Orders.IsRemote(board) then
 		local rb = GM.Orders.RBoard and GM.Orders.RBoard(board)
-		return (rb and rb.rosters) or {}
+		rows = (rb and rb.rosters) or {}
+	else
+		local b = GoblinMindDB and GoblinMindDB.rosters
+			and GoblinMindDB.rosters[board]
+		rows = (b and b.rosters) or {}
 	end
-	local b = GoblinMindDB and GoblinMindDB.rosters
-		and GoblinMindDB.rosters[board]
-	return (b and b.rosters) or {}
+	-- overlay our own publish while the pull lags behind it
+	local lr = GM.db and GM.db.localRosters
+		and GM.db.localRosters[board]
+	local me = W.MyUUID()
+	if lr and me and lr.uuid == me
+			and time() - (lr.t or 0) < LOCAL_ROSTER_TTL then
+		local mine
+		for _, r in ipairs(rows) do
+			if r.uuid == me then mine = r break end
+		end
+		if not mine or (mine.t or 0) < lr.t then
+			local out = {}
+			for _, r in ipairs(rows) do
+				if r.uuid ~= me then out[#out + 1] = r end
+			end
+			out[#out + 1] = { uuid = me, chars = lr.chars,
+				offers = lr.offers, t = lr.t,
+				stats = mine and mine.stats }
+			return out
+		end
+	end
+	return rows
 end
 
 function W.RosterStamp(board)
+	local t
 	if GM.Orders and GM.Orders.IsRemote
 			and GM.Orders.IsRemote(board) then
 		local rb = GM.Orders.RBoard and GM.Orders.RBoard(board)
-		return (rb and rb.t) or 0
+		t = (rb and rb.t) or 0
+	else
+		local b = GoblinMindDB and GoblinMindDB.rosters
+			and GoblinMindDB.rosters[board]
+		t = (b and b.t) or 0
 	end
-	local b = GoblinMindDB and GoblinMindDB.rosters
-		and GoblinMindDB.rosters[board]
-	return (b and b.t) or 0
+	local lr = GM.db and GM.db.localRosters
+		and GM.db.localRosters[board]
+	if lr and lr.uuid == W.MyUUID()
+			and time() - (lr.t or 0) < LOCAL_ROSTER_TTL
+			and (lr.t or 0) > t then
+		t = lr.t
+	end
+	return t
 end
 
 function W.Pending()

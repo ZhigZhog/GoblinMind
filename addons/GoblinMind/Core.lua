@@ -849,6 +849,108 @@ function GM.FullName(n)
 	return base
 end
 
+-- class-color companion to FullName: resolve a character's class
+-- TOKEN ("MAGE", "WARLOCK", ...) through every social source that
+-- reports it — own toon, party, guild roster, friends — cached in
+-- GM.db.classOf[first-lower]. UnitClass needs a unit token, so
+-- names we can't observe return nil (callers fall back to the
+-- theme text color). The cache keys off the FIRST name — Forever's
+-- rule is two chars can share first or last, never both.
+local locToToken
+function GM.ClassOf(n)
+	local base = GM.FirstName(n)
+	if not base or base == "" then return nil end
+	local low = base:lower()
+	local me = UnitName and UnitName("player")
+	if me and low == me:lower() then
+		local tok = select(2, UnitClass("player"))
+		if tok and GM.db then
+			GM.db.classOf = GM.db.classOf or {}
+			GM.db.classOf[low] = tok
+		end
+		return tok
+	end
+	local c = GM.db and GM.db.classOf and GM.db.classOf[low]
+	if c then return c end
+	local tok
+	if UnitName and UnitClass then
+		for _, u in ipairs({ "party1", "party2", "party3", "party4" }) do
+			local un = UnitName(u)
+			if un and GM.FirstName(un):lower() == low then
+				tok = select(2, UnitClass(u))
+				break
+			end
+		end
+	end
+	if not tok and IsInGuild and IsInGuild() and GetGuildRosterInfo then
+		local total = GetNumGuildMembers and GetNumGuildMembers() or 0
+		for i = 1, total do
+			-- return 11 = classFileName, the English token
+			local nm, _, _, _, _, _, _, _, _, _, cls =
+				GetGuildRosterInfo(i)
+			if cls and GM.FirstName(nm or ""):lower() == low then
+				tok = cls
+				break
+			end
+		end
+	end
+	if not tok then
+		-- friends report a LOCALIZED class name — reverse-map once
+		if not locToToken then
+			locToToken = {}
+			for _, tbl in ipairs({ LOCALIZED_CLASS_NAMES_MALE,
+					LOCALIZED_CLASS_NAMES_FEMALE }) do
+				for t, loc in pairs(tbl or {}) do
+					locToToken[loc:lower()] = t
+				end
+			end
+			if not next(locToToken) and FillLocalizedClassList then
+				for _, female in ipairs({ false, true }) do
+					local t = {}
+					FillLocalizedClassList(t, female)
+					for _, c2 in pairs(t) do
+						locToToken[(c2.name or ""):lower()] = c2.token
+					end
+				end
+			end
+		end
+		if C_FriendList and C_FriendList.GetNumFriends
+				and C_FriendList.GetFriendInfoByIndex then
+			for i = 1, C_FriendList.GetNumFriends() do
+				local info = C_FriendList.GetFriendInfoByIndex(i)
+				if info and GM.FirstName(info.name or ""):lower()
+						== low then
+					tok = locToToken[(info.className or ""):lower()]
+					break
+				end
+			end
+		end
+	end
+	if tok and GM.db then
+		GM.db.classOf = GM.db.classOf or {}
+		GM.db.classOf[low] = tok
+	end
+	return tok
+end
+
+-- "|cffRRGGBB" prefix for the name's class color, nil when unknown
+function GM.ClassCC(n)
+	local tok = GM.ClassOf(n)
+	local c = tok and (CUSTOM_CLASS_COLORS or RAID_CLASS_COLORS or {})[tok]
+	return c and string.format("|cff%02x%02x%02x",
+		math.floor(c.r * 255 + 0.5), math.floor(c.g * 255 + 0.5),
+		math.floor(c.b * 255 + 0.5)) or nil
+end
+
+-- resolved full name wrapped in its class color — for fontstring
+-- text and concat contexts alike (embeds |cff, so a plain
+-- SetText already carries the color)
+function GM.NameColored(n)
+	local disp = (GM.FullName and GM.FullName(n)) or n or "?"
+	local cc = GM.ClassCC(n)
+	return cc and (cc .. disp .. "|r") or disp
+end
+
 -- Fold bare-name keys (written during the empty-realm window) into
 -- "Name-<realm>" form inside a char-keyed SV table. merge(old,
 -- existing) picks the value kept under the qualified key. Bare keys
