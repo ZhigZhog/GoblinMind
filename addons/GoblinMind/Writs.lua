@@ -602,7 +602,12 @@ local function stateConfirm(state)
 		if w.state == state or WRIT_TERMINAL[w.state] then
 			return true
 		end
-		return (WRIT_RANK[w.state] or 0) > (WRIT_RANK[state] or 0)
+		-- rank compare is for PROGRESSIVE states only — declined/
+		-- cancelled/expired aren't ranked, so (rank or 0) made any
+		-- past-open writ 'confirm' the terminal ev and evDrop ate
+		-- it before apply could ever run (dead DECLINE/CANCEL)
+		local rank = WRIT_RANK[state]
+		return rank ~= nil and (WRIT_RANK[w.state] or 0) > rank
 	end
 end
 -- fields = verb-tail keys the ev needs; apply writes them onto w
