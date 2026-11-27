@@ -641,6 +641,13 @@ local function layoutRow(r, mode)
 			else w:SetPoint("LEFT", x, 0) end
 		end
 	end
+	-- capsule/unfold leftovers aren't in the position table — a
+	-- browse-mode link chip or bark OnClick survives a mode switch
+	-- and bleeds through the next mode's rows
+	if r.chip then r.chip:Hide() end
+	if r.tail then r.tail:Hide() end
+	r:SetScript("OnClick", nil)
+	r.offerLink = nil
 	r.name:SetWidth(mode == "myshop" and 116 or 204)
 	r.prof:SetWidth(mode == "myshop" and 52 or 74)
 	r.who:SetWidth(mode == "myshop" and 108 or 148)
