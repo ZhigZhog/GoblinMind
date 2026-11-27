@@ -342,9 +342,20 @@ local function Build()
 	ui.send.text:SetTextColor(GM.RGB("accent"))
 	local clear = Btn(ui.sendBar, 52, "CLEAR", function()
 		pcall(ClearSendMail)
+		ui._shipWrit = nil
 		MU.Refresh()
 	end)
 	clear:SetPoint("LEFT", ui.send, "RIGHT", 6, 0)
+	local writsBtn = Btn(ui.sendBar, 56, "WRITS", function()
+		ui.writOpen = not ui.writOpen
+		MU.Refresh()
+	end)
+	writsBtn:SetPoint("LEFT", clear, "RIGHT", 6, 0)
+	Tip(writsBtn, function()
+		return { "Writ deliveries",
+			"Agreed orders waiting on shipment — COMPOSE writes",
+			"the letter, sets COD, and pulls the goods in." }
+	end)
 
 	local blizz = Btn(f, 84, "BLIZZARD UI", function()
 		ui.wantDefault = true
@@ -455,6 +466,44 @@ local function Build()
 	ui.to:SetScript("OnTabPressed", function() ui.subject:SetFocus() end)
 	ui.subject:SetScript("OnTabPressed", function() ui.body:SetFocus() end)
 	ui.body:SetScript("OnTabPressed", function() ui.body:ClearFocus() end)
+
+	-- DELIVER side pane: agreed writs waiting on the mail — one row
+	-- per order; COMPOSE writes the letter, sets the COD, and pulls
+	-- the goods into the send slots. SEND + the take-hook close the
+	-- loop (wship on send, wrecv when the buyer loots it)
+	local wp = CreateFrame("Frame", nil, f)
+	wp:SetSize(240, 396)
+	wp:SetPoint("TOPLEFT", f, "TOPRIGHT", 4, 0)
+	GM.Panel(wp, "contHigh")
+	wp.title = GM.MakeFontString(wp, GM.FONT_BOLD, 9, "secondary")
+	wp.title:SetPoint("TOPLEFT", 8, -6)
+	wp.title:SetText("DELIVER — open writs")
+	wp.rows = {}
+	for i = 1, 10 do
+		local r = CreateFrame("Frame", nil, wp)
+		r:SetSize(224, 32)
+		r:SetPoint("TOPLEFT", 8, -22 - (i - 1) * 34)
+		r.l1 = GM.MakeFontString(r, GM.FONT, 9, "text")
+		r.l1:SetPoint("TOPLEFT", 0, 0)
+		r.l1:SetWidth(156)
+		r.l1:SetWordWrap(false)
+		r.l1:SetJustifyH("LEFT")
+		r.l2 = GM.MakeFontString(r, GM.FONT, 9, "textDim")
+		r.l2:SetPoint("TOPLEFT", r.l1, "BOTTOMLEFT", 0, -1)
+		r.l2:SetWidth(156)
+		r.l2:SetWordWrap(false)
+		r.l2:SetJustifyH("LEFT")
+		r.act = Btn(r, 62, "COMPOSE", function() end)
+		r.act:SetPoint("TOPRIGHT", 0, -4)
+		r:Hide()
+		wp.rows[i] = r
+	end
+	wp.empty = GM.MakeFontString(wp, GM.FONT, 9, "textDim")
+	wp.empty:SetPoint("TOPLEFT", 8, -24)
+	wp.foot = GM.MakeFontString(wp, GM.FONT, 9, "textDim")
+	wp.foot:SetPoint("BOTTOMLEFT", 8, 8)
+	wp:Hide()
+	ui.writPane = wp
 
 	ui.foot = GM.MakeFontString(f, GM.FONT, 9, "textDim")
 	ui.foot:SetPoint("BOTTOMLEFT", 14, 10)
@@ -596,6 +645,114 @@ local function Detach(r)
 	MU.Refresh()
 end
 
+-- ============ writ deliveries ============
+-- seller-side open orders: mesh writs I owe goods (agreed + COD
+-- delivery) and letter-channel writIn recs at agreed. Prices are
+-- per-unit — the row shows unit/ea, the COD is unit × qty
+local function DeliverRows()
+	local out = {}
+	local WR = GM.Writs
+	if WR and WR.Writs then
+		for _, w in ipairs((WR.Writs() or {}).inb or {}) do
+			if w.state == "agreed" and w.deliver == "cod" then
+				local unit = w.quote or w.price or w.offer or 0
+				out[#out + 1] = { w = w, mail = false,
+					name = w.name or "order",
+					to = w.fromChar or w.from or "?",
+					qty = w.qty or 1, unit = unit,
+					total = unit * (w.qty or 1) }
+			end
+		end
+	end
+	for _, rec in pairs(GM.db and GM.db.writIn or {}) do
+		if rec.state == "agreed" then
+			local unit = rec.price or rec.quote or rec.offer or 0
+			out[#out + 1] = { w = rec, mail = true,
+				name = rec.name or "order",
+				to = rec.fromChar or rec.sender or "?",
+				qty = rec.qty or 1, unit = unit,
+				total = unit * (rec.qty or 1) }
+		end
+	end
+	return out
+end
+
+local function PaintDeliver()
+	local wp = ui.writPane
+	if not (wp and wp:IsShown()) then return end
+	local rows, grand = DeliverRows(), 0
+	for i, r in ipairs(wp.rows) do
+		local e = rows[i]
+		if e then
+			grand = grand + e.total
+			r:Show()
+			r.l1:SetText((e.name or "?") .. " ×" .. e.qty
+				.. " → " .. (e.to or "?"))
+			r.l2:SetText(((GM.MoneyShort and GM.MoneyShort(e.unit))
+					or tostring(e.unit)) .. "/ea · "
+				.. ((GM.MoneyShort and GM.MoneyShort(e.total))
+					or tostring(e.total)) .. " due")
+			local ee = e
+			r.act:SetScript("OnClick", function()
+				MU.ComposeWrit(ee)
+			end)
+		else r:Hide() end
+	end
+	wp.empty:SetShown(#rows == 0)
+	wp.empty:SetText(#rows == 0 and "no orders to deliver" or "")
+	wp.foot:SetText(#rows > 0 and string.format(
+		"%d deliveries · %s total due", #rows,
+		(GM.MoneyShort and GM.MoneyShort(grand)) or tostring(grand))
+		or "")
+end
+
+-- one click writes the whole shipment: recipient, [GM Ship]
+-- subject, COD = unit × qty, GMW1S wire in the body, goods pulled
+-- into the send slots. _shipWrit tags the compose so MU.Send can
+-- advance the writ to 'shipped' when the letter actually goes
+function MU.ComposeWrit(e)
+	if not (e and e.w and MailOpen()) then return end
+	local w = e.w
+	pcall(ClearSendMail)
+	ui.to:SetText((GM.FullName and GM.FullName(e.to)) or e.to or "")
+	ui.subject:SetText("[GM Ship] " .. (e.name or "order"))
+	ui.cod:SetChecked(e.total > 0)
+	ui.money:SetCopper(e.total)
+	local WR = GM.Writs
+	ui.body:SetText(string.format(
+		"Your order ships COD — %s due on pickup (%s each).\n\n— %s\n%s\n%s",
+		(GM.MoneyShort and GM.MoneyShort(e.total)) or tostring(e.total),
+		(GM.MoneyShort and GM.MoneyShort(e.unit)) or tostring(e.unit),
+		CharName(),
+		table.concat({ "GMW1S", w.wid or w.id or "-",
+			tostring(e.unit), CharName() }, ";"),
+		(WR and WR.MAIL_TAGLINE) or ""))
+	-- pull the goods: stacks matching the writ's item, capped at
+	-- the order qty and the client's send slots; a stack that
+	-- overshoots stays attached (DETACH pulls it back)
+	local want, slots = e.qty, ATTACHMENTS_MAX_SEND or 12
+	local pickup = C_Container and C_Container.PickupContainerItem
+	if pickup and ClickSendMailItemButton then
+		for _, s in ipairs(GM.Banking.BagSlots()) do
+			if want <= 0 or slots <= 0 then break end
+			local hit = s.itemID and not s.locked
+				and ((w.itemID and s.itemID == w.itemID)
+					or (not w.itemID and w.name
+						and (GM.Ctx(s) or {}).name == w.name))
+			if hit then
+				pickup(s.bag, s.slot)
+				ClickSendMailItemButton()
+				slots = slots - 1
+				want = want - (s.count or 1)
+			end
+		end
+		if GetCursorInfo and GetCursorInfo() then ClearCursor() end
+	end
+	ui._shipWrit = e
+	GateSend()
+	MU.Refresh()
+end
+
 -- SEND grays on the same rule O.SendMail's commit runs — the
 -- recipient box and attachment slots both feed it, so the button
 -- can never light up on a send the spine would refuse
@@ -635,7 +792,23 @@ function MU.Send()
 	local ok = GM.Ops.SendMail({ to = to, subject = subj, body = body,
 		cod = isCod and copper > 0 and copper or nil,
 		money = not isCod and copper > 0 and copper or nil })
-	if ok then PushRecent(to) end
+	if ok then
+		-- a composed writ shipment: the letter going out IS the
+		-- ship event — advance the order so 'shipped' always
+		-- means a real letter is in transit
+		local sw = ui._shipWrit
+		if sw then
+			ui._shipWrit = nil
+			if sw.mail then
+				sw.w.state, sw.w.updated = "shipped", time()
+			elseif GM.Writs then
+				GM.Writs.Act("wship", sw.w, {
+					cod = isCod and copper or 0,
+					mailFrom = CharName() })
+			end
+		end
+		PushRecent(to)
+	end
 	MU.Refresh()
 end
 
@@ -679,6 +852,10 @@ function MU.Refresh(vm)
 	else
 		ui.compose:SetShown(ui.page == "send")
 	end
+	-- DELIVER pane lives only on SEND — the writ list repaints
+	-- with every refresh (sends clear their own row via wship)
+	ui.writPane:SetShown(ui.page == "send" and ui.writOpen or false)
+	PaintDeliver()
 	local vis = VISIBLE
 	if not ui.hostNode then
 		ui.hdr:ClearAllPoints()

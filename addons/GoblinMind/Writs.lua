@@ -1103,11 +1103,14 @@ function W.MailBody(fields)
 		fields.mats or "buyer", fields.deliver or "cod",
 		CharName() }, ";")
 	local body = string.format(
-		"Hello %s,\n\nI need %d x %s made. I can pay %s%s.\n\n— %s\n%s",
+		"Hello %s,\n\nI need %d x %s made. I can pay %s each (%s total)%s.\n\n— %s\n%s",
 		fields.toChar or "crafter", fields.qty or 1,
 		fields.name or "work",
 		(GM.MoneyShort and GM.MoneyShort(fields.offer or 0))
 			or tostring(fields.offer or 0),
+		(GM.MoneyShort and GM.MoneyShort(
+			(fields.offer or 0) * (fields.qty or 1)))
+			or tostring((fields.offer or 0) * (fields.qty or 1)),
 		fields.note and fields.note ~= ""
 			and ("\n" .. fields.note) or "",
 		CharName(), wire)
@@ -1229,9 +1232,12 @@ function W.MailReply(rec, price, note)
 	if not to then return nil end
 	local body = string.format("%s\n%s\n%s",
 		(note and note ~= "") and note or string.format(
-			"I can do that for %s.",
+			"I can do that for %s each (%s total).",
 			(GM.MoneyShort and GM.MoneyShort(price or 0))
-				or tostring(price or 0)),
+				or tostring(price or 0),
+			(GM.MoneyShort and GM.MoneyShort(
+				(price or 0) * (rec.qty or 1)))
+				or tostring((price or 0) * (rec.qty or 1))),
 		table.concat({ "GMW1R", rec.wid or "-",
 			tostring(price or 0), CharName() }, ";"),
 		W.MAIL_TAGLINE)
@@ -1260,9 +1266,12 @@ function W.MailAccept(rec)
 	local to = rec and (rec.fromChar or rec.sender)
 	if not to then return nil end
 	local ok = mailWire(to, "Re: " .. (rec.subject or "[GM Writ]"),
-		string.format("I can take that on for %s.",
+		string.format("I can take that on for %s each (%s total).",
 			(GM.MoneyShort and GM.MoneyShort(rec.offer or 0))
-				or tostring(rec.offer or 0)),
+				or tostring(rec.offer or 0),
+			(GM.MoneyShort and GM.MoneyShort(
+				(rec.offer or 0) * (rec.qty or 1)))
+				or tostring((rec.offer or 0) * (rec.qty or 1))),
 		"A", rec.wid, rec.offer)
 	if ok then
 		rec.state, rec.price, rec.updated = "agreed", rec.offer,
@@ -1288,9 +1297,11 @@ function W.MailConfirmOut(w)
 	local ok = mailWire(w.toChar, string.format(
 		"Re: [GM Writ] %s x%d", w.name or "Work request",
 		w.qty or 1),
-		string.format("Deal — %s it is.",
+		string.format("Deal — %s each it is (%s total).",
 			(GM.MoneyShort and GM.MoneyShort(price))
-				or tostring(price)),
+				or tostring(price),
+			(GM.MoneyShort and GM.MoneyShort(price * (w.qty or 1)))
+				or tostring(price * (w.qty or 1))),
 		"A", w.id, price)
 	if ok then w.state, w.updated = "agreed", time() end
 	return ok
@@ -1311,20 +1322,23 @@ end
 -- shipped the moment the letter lands
 function W.MailShip(rec)
 	local to = rec and (rec.fromChar or rec.sender)
-	local price = rec and (rec.price or rec.quote or rec.offer) or 0
+	local unit = rec and (rec.price or rec.quote or rec.offer) or 0
+	local total = unit * (rec and rec.qty or 1)
 	if not to then return nil end
 	local ok = GM.Ops.SendMail({ to = to,
 		subject = "[GM Ship] "
 			.. (rec.name or rec.subject or "order"),
 		body = string.format(
-			"Your order ships COD — %s due on pickup.\n\n— %s\n%s\n%s",
-			(GM.MoneyShort and GM.MoneyShort(price))
-				or tostring(price),
+			"Your order ships COD — %s due on pickup (%s each).\n\n— %s\n%s\n%s",
+			(GM.MoneyShort and GM.MoneyShort(total))
+				or tostring(total),
+			(GM.MoneyShort and GM.MoneyShort(unit))
+				or tostring(unit),
 			CharName(),
 			table.concat({ "GMW1S", rec.wid or "-",
-				tostring(price), CharName() }, ";"),
+				tostring(unit), CharName() }, ";"),
 			W.MAIL_TAGLINE),
-		cod = price })
+		cod = total })
 	if ok then rec.state, rec.updated = "shipped", time() end
 	return ok
 end
@@ -1334,23 +1348,25 @@ end
 -- the letter for a GM buyer. wship only stages AFTER the send
 -- lands so 'shipped' always means a real letter is in transit —
 -- the buyer's take then fires wrecv and the writ closes
-function W.MeshShip(w, codOverride, mailFrom)
+function W.MeshShip(w, unitOverride, mailFrom)
 	local to = w and (w.fromChar or w.from)
-	local price = tonumber(codOverride)
+	local unit = tonumber(unitOverride)
 		or (w and (w.quote or w.price or w.offer)) or 0
+	local total = unit * (w and w.qty or 1)
 	if not to then return nil end
 	local ok = GM.Ops.SendMail({ to = to,
 		subject = "[GM Ship] " .. (w.name or "order"),
 		body = string.format(
-			"Your order ships COD — %s due on pickup.\n\n— %s\n%s\n%s",
-			(GM.MoneyShort and GM.MoneyShort(price)) or tostring(price),
+			"Your order ships COD — %s due on pickup (%s each).\n\n— %s\n%s\n%s",
+			(GM.MoneyShort and GM.MoneyShort(total)) or tostring(total),
+			(GM.MoneyShort and GM.MoneyShort(unit)) or tostring(unit),
 			CharName(),
 			table.concat({ "GMW1S", w.id or "-",
-				tostring(price), CharName() }, ";"),
+				tostring(unit), CharName() }, ";"),
 			W.MAIL_TAGLINE),
-		cod = price })
+		cod = total })
 	if ok then
-		W.Act("wship", w, { cod = price,
+		W.Act("wship", w, { cod = total,
 			mailFrom = mailFrom or CharName() })
 	end
 	return ok
@@ -1540,7 +1556,10 @@ function W.ScanInbox(force)
 		elseif (cod or 0) > 0 then
 			local w = codWants[FN(sender)]
 			if w then
-				local price = w.price or w.quote or w.offer or 0
+				-- expected COD is the total due — the sent wship
+				-- cod when known, else price-per-unit × qty
+				local price = w.cod or ((w.price or w.quote
+					or w.offer or 0) * (w.qty or 1))
 				if price <= 0 or math.abs(cod - price)
 						<= math.max(1, price * 0.02) then
 					inIdx[i] = { kind = "cod", w = w, cod = cod,

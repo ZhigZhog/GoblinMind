@@ -570,9 +570,13 @@ function WU.Build(f)
 		r.cgold = GM.Widgets.GoldEdit(r, 96)
 		r.cgold:SetPoint("LEFT", 364, -1)
 		-- GoldEdit paints ~26px past its declared width (unit labels);
-		-- cedit must clear the trailing "c", not the frame edge
-		r.cedit = MkEdit(r, 160, "")
-		r.cedit:SetPoint("LEFT", 494, -1)
+		-- the "per unit" tag parks on that trailing edge — writ
+		-- prices are per-unit, totals only appear computed
+		r.cunit = GM.MakeFontString(r, GM.FONT, 8, "textDim")
+		r.cunit:SetPoint("LEFT", 486, -1)
+		r.cunit:SetText("per unit")
+		r.cedit = MkEdit(r, 128, "")
+		r.cedit:SetPoint("LEFT", 550, -1)
 		ui.wRows[i] = r
 	end
 
@@ -682,11 +686,16 @@ local function openRequest(row, e)
 			or "?"))
 	pop.qty:SetText(tostring(o.numMade or 1))
 	local sug = W.Suggest(o.ref, o.numMade or 1)
-	pop.gold:SetCopper(o.price or (sug and sug.price) or nil)
+	local perUnit = sug and sug.price
+		and math.floor(sug.price / math.max(1, o.numMade or 1))
+		or nil
+	pop.gold:SetCopper(o.price or perUnit)
 	pop.sug = sug
 	pop.hint:SetText(sug and string.format(
-		"suggest %s (mats %s + market %s)",
+		"suggest %s/ea (%s for x%d · mats %s + market %s)",
+		perUnit and GoldText(perUnit) or "—",
 		sug.price and GoldText(sug.price) or "—",
+		o.numMade or 1,
 		sug.mats and GoldText(sug.mats) or "—",
 		sug.market and GoldText(sug.market) or "—")
 		or "no market data — set a price or send OFFER")
@@ -1085,6 +1094,7 @@ end
 local function writRowPaint(r, w, me)
 	r.dbg:Hide()
 	r.ctxt:Hide(); r.cgold:Hide(); r.cedit:Hide()
+	r.cunit:Hide()
 	r.fold:Show(); r.name:Show(); r.party:Show()
 	r.state:Show(); r.age:Show()
 	local pend = w._pendOp
@@ -1135,9 +1145,17 @@ local function detailRowPaint(r, w, me)
 	local bits = {}
 	if w.ref then bits[#bits + 1] = "ref " .. w.ref end
 	if w.qty then bits[#bits + 1] = "x" .. w.qty end
-	if w.offer then bits[#bits + 1] = "offer " .. GoldText(w.offer) end
+	-- prices are per-unit everywhere — /ea on the stored fields,
+	-- the derived total spelled out so nobody multiplies in head
+	if w.offer then
+		bits[#bits + 1] = "offer " .. GoldText(w.offer) .. "/ea"
+	end
 	if w.quote and w.quote ~= w.offer then
-		bits[#bits + 1] = "quote " .. GoldText(w.quote)
+		bits[#bits + 1] = "quote " .. GoldText(w.quote) .. "/ea"
+	end
+	local unit = w.quote or w.price or w.offer or 0
+	if unit > 0 and (w.qty or 1) > 1 then
+		bits[#bits + 1] = "total " .. GoldText(unit * w.qty)
 	end
 	if w.mats then bits[#bits + 1] = "mats " .. w.mats end
 	if w.deliver then bits[#bits + 1] = "via " .. w.deliver end
@@ -1174,10 +1192,12 @@ local function detailRowPaint(r, w, me)
 		mode = "meet"
 	end
 	r.cgold:SetShown(showGold)
+	r.cunit:SetShown(showGold)
 	r.cedit:SetShown(mode ~= nil)
 	r.ceditMode = mode
 	if showGold and r.cgold.ref ~= w.id then
-		r.cgold:SetCopper(w.quote or w.offer or w.cod)
+		r.cgold:SetCopper(w.quote or w.offer
+			or (w.cod and math.floor(w.cod / (w.qty or 1))) or nil)
 		r.cgold.ref = w.id
 	end
 	if mode and r.cedit.ref ~= w.id .. mode then
