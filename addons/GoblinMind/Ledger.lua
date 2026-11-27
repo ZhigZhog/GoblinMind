@@ -9,6 +9,44 @@ local _, GM = ...
 GM.Ledger = {}
 
 local TX_CAP = 5000
+-- loot folding: a farming run is dozens of +1 events interleaved
+-- with whatever else dropped. Same-kind + same-item events inside
+-- the window merge into their existing line no matter how many
+-- different items landed between — the line keeps its first-seen
+-- position, qty accumulates, t tracks the latest pickup. Legs
+-- sum, so a replay still reproduces balances exactly.
+local LOOT_FOLD_WIN = 300
+local LOOT_FOLD_DEPTH = 60
+local function FoldLootInto(tx, e)
+	for j = #tx, math.max(1, #tx - LOOT_FOLD_DEPTH), -1 do
+		local c = tx[j]
+		if c.ty == "loot" and c.i == e.i
+				and (e.t - (c.t or 0)) <= LOOT_FOLD_WIN then
+			c.q = (c.q or 0) + (e.q or 0)
+			c.t = e.t
+			if e.je then
+				c.je = c.je or {}
+				for acct, d in pairs(e.je) do
+					c.je[acct] = (c.je[acct] or 0) + d
+				end
+			end
+			return true
+		end
+	end
+end
+-- entries appended before folding existed stay split across
+-- reloads — replay the list and fold the same way. In place:
+-- readers hold a reference to the bucket's table.
+local function CompactLoot(tx)
+	local out = {}
+	for _, e in ipairs(tx) do
+		if e.ty ~= "loot" or not FoldLootInto(out, e) then
+			out[#out + 1] = e
+		end
+	end
+	for i = #tx, 1, -1 do tx[i] = nil end
+	for i = 1, #out do tx[i] = out[i] end
+end
 local GOLD_CAP = 200
 
 local CharKey = GM.CharKey
@@ -42,6 +80,7 @@ function GM.Ledger.Init()
 		L.gold = nil
 	end
 	c.transactions = c.transactions or {}
+	CompactLoot(c.transactions)
 	c.gold = c.gold or {}
 	-- mailSeen: fingerprints of auction-mail rows already ledgered —
 	-- the invoice scan is the authoritative record for offline
@@ -270,22 +309,11 @@ function GM.Ledger.Add(kind, itemID, qty, unit, extra)
 		depOut = GM.Ledger.Accounts().dep or 0
 	end
 	local je = Journal(kind, s or {}, qty, unit, extra, depOut)
-	-- loot runs (a mining session is dozens of +1 events) update
-	-- the top line in place — same kind + same item + contiguous,
-	-- no backdating. Legs sum so a replay still reproduces
-	-- balances; the timestamp tracks the latest pickup.
-	local top = tx[#tx]
-	if kind == "loot" and top and top.ty == "loot"
-			and top.i == itemID and not (extra and extra.t) then
-		top.q = (top.q or 0) + qty
-		top.t = t
-		if je then
-			top.je = top.je or {}
-			for acct, d in pairs(je) do
-				top.je[acct] = (top.je[acct] or 0) + d
-			end
-		end
-	else
+	-- backdated records (mail-derived) never fold — they belong to
+	-- their own point in the stream
+	if kind ~= "loot" or (extra and extra.t)
+			or not FoldLootInto(tx,
+				{ t = t, ty = kind, i = itemID, q = qty, je = je }) then
 		tx[#tx + 1] = { t = t, ty = kind, i = itemID, q = qty,
 			u = unit, x = extra, je = je }
 	end
@@ -738,6 +766,7 @@ local function MergeHist(dst, src)
 		local d = dst[f] or {}
 		for _, e in ipairs(src[f] or {}) do d[#d + 1] = e end
 		sort(d, function(x, y) return (x.t or 0) < (y.t or 0) end)
+		if f == "transactions" then CompactLoot(d) end
 		local cap = f == "gold" and GOLD_CAP or TX_CAP
 		while #d > cap do table.remove(d, 1) end
 		dst[f] = d
