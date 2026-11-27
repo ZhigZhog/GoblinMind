@@ -838,6 +838,7 @@ local function ShopsPaint(vm)
 			local o, ros = e.offer, e.roster
 			r.offerID = o.itemID
 			r.offerLink = o._link and o._link.link or nil
+			if r.chip then r.chip:Hide() end
 			r:SetScript("OnClick", nil)
 			local ic = offerIcon(o)
 			if ic then r.icon:SetTexture(ic) r.icon:Show()
@@ -865,6 +866,19 @@ local function ShopsPaint(vm)
 					r.price:SetTextColor(GM.RGB(
 						sug and "text" or "textDim"))
 					r.who:SetText("")
+					-- the capsule IS the advert: prof/who cells stay
+					-- empty so the chip gets the whole left span
+					r.prof:SetText("")
+					r.name:SetText("")
+					r.chip = r.chip
+						or GM.Widgets.LinkChip(r, 286, 13)
+					r.chip._pre = function()
+						-- the yeller IS the owner — pre-stamp so
+						-- attribution never needs the chat ring
+						GM.LinkFrom = { char = y.char,
+							t = time(), kind = "trade" }
+					end
+					r.chip:SetCapsule(l.link, o.name)
 					r.act.text:SetText("+")
 					r.act.text:SetTextColor(GM.RGB("accent"))
 					r.act:Show()
@@ -884,17 +898,6 @@ local function ShopsPaint(vm)
 							or "mail send failed")
 					end)
 					r.act2:Hide()
-					-- clicking the capsule opens it — the yeller IS
-					-- the owner, so attribution never needs the
-					-- chat ring (trade links open the foreign
-					-- session; item/enchant links open tooltips)
-					r:SetScript("OnClick", function()
-						if not (l.link and SetItemRef) then return end
-						GM.LinkFrom = { char = y.char,
-							t = time(), kind = "trade" }
-						pcall(SetItemRef, l.link, l.link,
-							"LeftButton")
-					end)
 				else
 				-- bark row: no price claim — badge + whisper/mail
 				-- actions instead of a server writ request

@@ -326,6 +326,73 @@ function W.ModifiedClick(f, idFn)
 	end)
 end
 
+-- link capsule click resolution — THE path for turning a click on a
+-- |H..|h[..]|h capsule into Blizzard's own behavior, for EVERY kind:
+-- shift = chat-insert, ctrl = dress-up, otherwise the payload's
+-- default open (item tooltip, tradeskill session, spell book…).
+-- SetItemRef takes the BARE payload ("item:123"), not the capsule —
+-- feeding the whole |c|H..|h string parses for trade links by luck
+-- and silently fails on items.
+function W.LinkClick(link, text, button)
+	if type(link) ~= "string" then return end
+	text, button = text or link, button or "LeftButton"
+	if IsModifiedClick then
+		if IsModifiedClick("CHATLINK") then
+			if ChatEdit_InsertLink then ChatEdit_InsertLink(text) end
+			return
+		end
+		if IsModifiedClick("DRESSUP") and DressUpLink then
+			DressUpLink(text)
+			return
+		end
+	end
+	if not SetItemRef then return end
+	local id = GetItemRefFromLink and GetItemRefFromLink(link)
+		or link:match("|H(.-)|h") or link
+	pcall(SetItemRef, id, text, button)
+end
+
+-- a capsule as a widget: one Button + its FontString. SetCapsule
+-- (raw[, disp]) paints the printable text and binds the payload —
+-- every click type routes through LinkClick; hover tooltips via
+-- SetHyperlink EXCEPT |Htrade:, which OPENS the session on this
+-- client (text tooltip + click hint instead). _pre fires before
+-- LinkClick for provenance stamping (GM.LinkFrom).
+function W.LinkChip(parent, w, h)
+	local b = CreateFrame("Button", nil, parent)
+	b:SetSize(w or 200, h or 14)
+	b.fs = GM.MakeFontString(b, GM.FONT, 9, "text")
+	b.fs:SetPoint("LEFT")
+	b.fs:SetJustifyH("LEFT")
+	b.fs:SetWordWrap(false)
+	b.fs:SetWidth((w or 200) - 4)
+	b:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+	b:SetScript("OnClick", function(self, btn)
+		if self._pre then self._pre(self, btn) end
+		W.LinkClick(self._link, self._text, btn)
+	end)
+	b:SetScript("OnEnter", function(self)
+		local l = self._link
+		if not l then return end
+		GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+		if l:match("|Htrade:") then
+			GameTooltip:AddLine(l)
+			GameTooltip:AddLine("click to open their professions",
+				0.6, 0.6, 0.6)
+		else
+			GameTooltip:SetHyperlink(l)
+		end
+		GameTooltip:Show()
+	end)
+	b:SetScript("OnLeave", function() GameTooltip:Hide() end)
+	function b:SetCapsule(link, disp)
+		self._link, self._text = link, link
+		self.fs:SetText(disp or link or "")
+		self:SetShown(link ~= nil)
+	end
+	return b
+end
+
 -- paneled action button, larger variant (contHigh + FONT_BOLD 10
 -- accent, centered). No handlers wired — callers SetScript their own
 -- OnClick; CraftingUI's secure OPEN overlay needs a bare button to
