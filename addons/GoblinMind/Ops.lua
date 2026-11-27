@@ -275,6 +275,9 @@ end
 -- planner mail; a send that never happens unexpects them all.
 function O.SendMail(a)
 	a = a or {}
+	-- Forever requires the surname for delivery — resolve the
+	-- "First" form into "First Last" before anything stages
+	if GM.FullName and a.to then a.to = GM.FullName(a.to) end
 	local ok, reason = O.Check(nil, "sendmail", a)
 	if not ok then return fail(reason) end
 	local items = {}

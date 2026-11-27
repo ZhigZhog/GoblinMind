@@ -776,6 +776,79 @@ function GM.IsSelfCharKey(key)
 	return realm == "" or krealm == realm
 end
 
+-- Forever surnames: UnitName returns the base name ("Unstable") but
+-- mail delivery needs the full "Unstable Haberdasher". FirstName
+-- normalizes any form to the base for identity compares; FullName
+-- resolves base -> deliverable through every source that can carry
+-- surnames, caching hits in GM.db.fullNames (user-seedable: set
+-- GM.db.fullNames["first"] = "First Last" when no source knows it).
+function GM.FirstName(n)
+	if not n then return nil end
+	if Ambiguate then n = Ambiguate(n, "mail") end
+	n = (n:match("^([^%-]+)")) or n            -- strip -Realm
+	return (n:match("^(%S+)")) or n            -- base before the surname
+end
+
+function GM.FullName(n)
+	if not n then return nil end
+	local base = Ambiguate and Ambiguate(n, "mail") or n
+	base = strtrim(base)
+	if base == "" or base:find(" ") then return base end
+	local low = base:lower()
+	-- a surname hit is "<base> <surname…>", not the bare base again
+	local function try(cand)
+		if type(cand) == "table" then cand = cand.name or cand[1] end
+		if type(cand) ~= "string" then return nil end
+		if Ambiguate then cand = Ambiguate(cand, "mail") end
+		cand = strtrim(cand)
+		return cand:lower():sub(1, #low + 1) == low .. " "
+			and cand or nil
+	end
+	local hit = GM.db and GM.db.fullNames and try(GM.db.fullNames[low])
+	if not hit then
+		for _, r in ipairs(GM.Model and GM.Model.Pref
+				and GM.Model.Pref("mailRecent") or {}) do
+			hit = try(r)
+			if hit then break end
+		end
+	end
+	if not hit and C_FriendList and C_FriendList.GetNumFriends then
+		for i = 1, C_FriendList.GetNumFriends() do
+			local info = C_FriendList.GetFriendInfoByIndex(i)
+			hit = info and try(info.name)
+			if hit then break end
+		end
+	end
+	if not hit and IsInGuild and IsInGuild() and GetNumGuildMembers then
+		for i = 1, GetNumGuildMembers() do
+			hit = try((GetGuildRosterInfo(i)))
+			if hit then break end
+		end
+	end
+	-- last resort: Blizzard's own mail-completion source — the same
+	-- provider its send box's dropdown reads
+	if not hit and SendMailNameEditBox
+			and type(SendMailNameEditBox.autoCompleteSource)
+				== "function" then
+		local ok, res = pcall(SendMailNameEditBox.autoCompleteSource,
+			base, SendMailNameEditBox)
+		if ok and type(res) == "table" then
+			for _, cand in ipairs(res) do
+				hit = try(cand)
+				if hit then break end
+			end
+		end
+	end
+	if hit then
+		if GM.db then
+			GM.db.fullNames = GM.db.fullNames or {}
+			GM.db.fullNames[low] = hit
+		end
+		return hit
+	end
+	return base
+end
+
 -- Fold bare-name keys (written during the empty-realm window) into
 -- "Name-<realm>" form inside a char-keyed SV table. merge(old,
 -- existing) picks the value kept under the qualified key. Bare keys

@@ -257,14 +257,21 @@ function W.Publish(board)
 	-- every char key the ledger knows = a toon the shop can be
 	-- reached through; the mail channel needs real names
 	for k in pairs(GoblinMindLedger and GoblinMindLedger.byChar or {}) do
-		chars[#chars + 1] = tostring(k):match("^(.-)%-") or tostring(k)
+		local c = tostring(k):match("^(.-)%-") or tostring(k)
+		-- mail needs the surname on Forever — publish the
+		-- deliverable form when any source can resolve it
+		chars[#chars + 1] =
+			(GM.FullName and GM.FullName(c)) or c
 	end
-	if #chars == 0 then chars[1] = CharName() end
+	if #chars == 0 then chars[1] =
+		(GM.FullName and GM.FullName(CharName())) or CharName() end
 	table.sort(chars)
 	local enabled = {}
 	for _, o in ipairs(W.RosterOffers()) do
 		if o.on then
 			o.on = nil
+			o.toon = (GM.FullName and GM.FullName(o.toon))
+				or o.toon
 			enabled[#enabled + 1] = o
 		end
 	end
@@ -280,7 +287,8 @@ function W.Request(board, toUUID, toChar, f)
 	f = f or {}
 	return W.Op("wpost", board, {
 		to = toUUID,
-		toChar = toChar or "?", fromChar = CharName(),
+		toChar = (GM.FullName and GM.FullName(toChar))
+			or toChar or "?", fromChar = CharName(),
 		ref = f.ref or "", name = f.name or "Work request",
 		itemID = f.itemID, qty = f.qty or 1,
 		offer = f.offer or 0,
@@ -928,6 +936,7 @@ end
 -- the TTL ages it out. An intentional fork in the lifecycle.
 
 function W.MailRequest(toChar, fields)
+	toChar = (GM.FullName and GM.FullName(toChar)) or toChar
 	if not (toChar and toChar ~= "") then return nil end
 	fields = fields or {}
 	fields.wid = fields.wid
@@ -1040,7 +1049,10 @@ local function sendItemCSV()
 end
 
 local function matsFp(sender, subject, csv)
-	return (sender or "?"):lower() .. "|" .. (subject or "")
+	-- sender rides the fingerprint — normalize to the base name so a
+	-- surname-carrying inbox header still matches the staged fp
+	local s = (GM.FirstName and GM.FirstName(sender)) or sender
+	return (s or "?"):lower() .. "|" .. (subject or "")
 		.. "|" .. (csv or "")
 end
 
@@ -1052,12 +1064,18 @@ function W.ScanInbox(force)
 	if not force and now - inScanAt < 1.5 then return inIdx end
 	inScanAt = now
 	for k in pairs(inIdx) do inIdx[k] = nil end
-	local me, myName = W.MyUUID(), CharName():lower()
+	-- toChar stores the deliverable "First Last" on Forever but
+	-- inbox senders may come back either form — compare identities
+	-- by first name only
+	local function FN(s)
+		return ((GM.FirstName and GM.FirstName(s)) or s or ""):lower()
+	end
+	local me, myName = W.MyUUID(), FN(CharName())
 	-- customer side: my shipped writs → the crafter's COD lands here
 	local codWants, matsWants = {}, nil
 	for _, w in ipairs(W.Writs().out) do
 		if w.state == "shipped" and w.toChar then
-			codWants[w.toChar:lower()] = w
+			codWants[FN(w.toChar)] = w
 		end
 	end
 	-- crafter side: agreed writs with a mats fingerprint staged
@@ -1073,7 +1091,7 @@ function W.ScanInbox(force)
 			GetInboxHeaderInfo(i)
 		subject = subject or ""
 		local sLow = (sender or ""):lower()
-		if subject:match("^%[GM Writ%]") and sLow ~= myName then
+		if subject:match("^%[GM Writ%]") and FN(sender) ~= myName then
 			inIdx[i] = { kind = "gmw1", sender = sender,
 				subject = subject }
 			local key = sLow .. "|" .. subject
@@ -1088,7 +1106,7 @@ function W.ScanInbox(force)
 				end
 			end
 		elseif (cod or 0) > 0 then
-			local w = codWants[sLow]
+			local w = codWants[FN(sender)]
 			if w then
 				local price = w.price or w.quote or w.offer or 0
 				if price <= 0 or math.abs(cod - price)

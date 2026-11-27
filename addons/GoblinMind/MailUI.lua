@@ -73,6 +73,7 @@ local function RecipientNames()
 		if not seen[k] then seen[k] = true names[#names + 1] = n end
 	end
 	for _, r in ipairs(GM.Model.Pref("mailRecent") or {}) do add(r) end
+	for _, v in pairs(GM.db and GM.db.fullNames or {}) do add(v) end
 	for _, ck in ipairs(GM.Ledger and GM.Ledger.Chars() or {}) do add(ck) end
 	local nf = C_FriendList and C_FriendList.GetNumFriends
 		and C_FriendList.GetNumFriends() or 0
@@ -272,7 +273,30 @@ local function Build()
 	ui.sendBar:SetPoint("LEFT", scan, "RIGHT", 8, 0)
 	ui.to = EditBox(ui.sendBar, 110, "recipient")
 	ui.to:SetPoint("LEFT")
-	ui.to:SetScript("OnChar", ACOnChar)
+	-- Forever surnames live only in Blizzard's completion layer —
+	-- borrow its config + handlers (the dropdown knows "Unstable
+	-- Haberdasher" where our own candidate pool only sees "Unstable").
+	-- Falls back to the inline typeahead when the machinery is absent.
+	local acs = SendMailNameEditBox
+	if acs and (acs.autoCompleteSource or acs.autoCompleteParams) then
+		ui.to.autoCompleteParams = acs.autoCompleteParams
+		ui.to.autoCompleteSource = acs.autoCompleteSource
+		if ui.to.SetAutoCompleteSource then
+			pcall(ui.to.SetAutoCompleteSource, ui.to,
+				acs.autoCompleteSource, acs.GetAutoCompleteParams
+				and acs:GetAutoCompleteParams())
+		end
+		for _, h in ipairs({ "OnChar", "OnTextChanged",
+				"OnArrowPressed", "OnEscapePressed",
+				"OnEditFocusLost", "OnEditFocusGained",
+				"OnEnterPressed" }) do
+			local fn = acs:GetScript(h)
+			if fn then ui.to:HookScript(h,
+				function(...) pcall(fn, ...) end) end
+		end
+	else
+		ui.to:SetScript("OnChar", ACOnChar)
+	end
 	ui.to:HookScript("OnTextChanged", GateSend)
 	ui.to:HookScript("OnEditFocusGained", function()
 		acList = RecipientNames()
@@ -572,6 +596,10 @@ function MU.Send()
 		GM.Print(GM.CC("warn") .. "recipient first|r")
 		return
 	end
+	-- Forever delivery needs the surname — resolve before send and
+	-- echo what actually went out back into the box
+	to = (GM.FullName and GM.FullName(to)) or to
+	ui.to:SetText(to)
 	local copper = ui.money:GetCopper() or 0
 	if copper < 0 then copper = 0 end
 	local isCod = ui.cod and ui.cod:GetChecked()
