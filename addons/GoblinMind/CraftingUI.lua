@@ -567,6 +567,7 @@ local function BuildUI()
 	ui.craftHint:SetWidth(136)
 	ui.craftHint:SetJustifyH("LEFT")
 	ui.craft1:SetScript("OnClick", function()
+		if ui.foreign then return CU.ForeignRequest() end
 		if not ui.sel then return end
 		local n = GM.Crafting.Craftable(ui.sel)
 		if n < 1 then
@@ -797,6 +798,53 @@ local function ProfList()
 	return out
 end
 
+-- foreign (linked/NPC) session rows: the live tradeskill list is
+-- the OTHER player's — our recipe DB can't model it, so the view
+-- reads the session APIs directly. Prices reuse W.Suggest's math
+-- (mats value + market anchor); controls become REQUEST, not CRAFT.
+local function ForeignRows()
+	local out = {}
+	if not (C_TradeSkillUI and C_TradeSkillUI.GetFilteredRecipeIDs
+			and C_TradeSkillUI.GetRecipeInfo) then return out end
+	local ok, ids = pcall(C_TradeSkillUI.GetFilteredRecipeIDs)
+	if not (ok and type(ids) == "table") then return out end
+	for _, id in ipairs(ids) do
+		local info = C_TradeSkillUI.GetRecipeInfo(id)
+		local sc = C_TradeSkillUI.GetRecipeSchematic
+			and select(2, pcall(C_TradeSkillUI.GetRecipeSchematic,
+				id, false))
+		if info and info.name then
+			local itemID = sc and sc.outputItemID
+			local mats, mlist = 0, {}
+			for _, slot in ipairs(
+					sc and sc.reagentSlotSchematics or {}) do
+				local rr = slot.reagents and slot.reagents[1]
+				if rr and rr.itemID and slot.quantityRequired then
+					mlist[#mlist + 1] = { id = rr.itemID,
+						qty = slot.quantityRequired }
+					mats = mats + ((GM.Price("dbmarket", rr.itemID)
+						or (GM.ItemEntry(rr.itemID) or {}).mb or 0)
+						* slot.quantityRequired)
+				end
+			end
+			local market = itemID and (GM.Price("dbmarket", itemID)
+				or (GM.ItemEntry(itemID) or {}).mb)
+			local price
+			if market and market > 0 then
+				price = math.floor(math.max(market * 0.97,
+					mats * 1.15) + 0.5)
+			elseif mats > 0 then
+				price = math.floor(mats * 1.25 + 0.5)
+			end
+			out[#out + 1] = { recipeID = id, name = info.name,
+				itemID = itemID, mats = mlist, price = price,
+				cost = mats > 0 and mats or nil, foreign = true }
+		end
+	end
+	sort(out, function(a, b) return (a.name or "") < (b.name or "") end)
+	return out
+end
+
 local function RecipeRows()
 	local out = {}
 	local queue = GoblinMindCrafting.queue or {}
@@ -882,6 +930,15 @@ local DIFF_NAMES = { "optimal", "medium", "easy", "trivial" }
 -- the collapse-aware recipe tree, and the queue list. ui.levels is
 -- assigned in Refresh — a view-side cache the detail pane reads
 local function Data()
+	if ui.foreign then
+		local disp = ForeignRows()
+		return {
+			profs = { { hdr = true,
+				label = (ui.foreignChar and (ui.foreignChar .. " — ") or "")
+					.. (ui.foreignProf or "linked tradeskill") } },
+			levels = nil, disp = disp, nItems = #disp, qs = {},
+		}
+	end
 	local disp, nItems = RecDisplay()
 	return {
 		profs = ProfList(),
@@ -1000,7 +1057,19 @@ function CU.Refresh(vm)
 			local nc = ep and (ep > 0
 				and ((row.craftable or 0) > 0 and "accent" or "pos") or "err")
 				or "textDim"
-			if row.unlearned then
+			if row.foreign then
+				-- linked-session row: name + suggested price — the
+				-- detail pane carries the REQUEST action
+				r.name:SetText(row.name or ("recipe " .. row.recipeID))
+				r.name:SetTextColor(GM.NameColor(row.itemID, "text"))
+				r.skill:Hide()
+				r.profit:SetText(row.price and GM.Money(row.price) or "—")
+				r.profit:SetTextColor(GM.RGB(
+					row.price and "pos" or "textDim"))
+				r.sale:SetText("")
+				r.can:SetText("")
+				r.qbtn:Hide()
+			elseif row.unlearned then
 				-- missing recipe: ghosted name, "req N" instead of bags,
 				-- no queue button — clicking selects it and the detail
 				-- pane explains where it comes from
@@ -1072,6 +1141,9 @@ function CU.Refresh(vm)
 					Footer("removed from '" .. ui.selCat .. "'")
 				else
 					ui.sel = id
+					-- foreign rows aren't in our recipe DB — the
+					-- detail pane reads the row itself
+					ui.selRow = row.foreign and row or nil
 				end
 				CU.Refresh()
 			end)
@@ -1162,7 +1234,62 @@ function CU.Refresh(vm)
 	-- selected-recipe detail — Blizzard's right pane
 	local dr = ui.sel and GoblinMindCrafting.recipes
 		and GoblinMindCrafting.recipes[ui.sel]
-	if dr and dr.unlearned then
+	if ui.foreign then
+		-- linked session: read-only detail + a REQUEST button that
+		-- mail-writs the crafter (the link poster, via ItemInput's
+		-- ring). recipeID here isn't ours — selRow carries the row.
+		local r = ui.selRow
+		if r then
+			ui.det:Show()
+			ui.detIcon:SetTexture(GM.ItemIcon(r.itemID) or 134400)
+			ui.detIconBtn.itemID = r.itemID
+			ui.detName:SetText(GM.ItemName(r.itemID) or r.name or "?")
+			ui.detName:SetTextColor(GM.NameColor(r.itemID))
+			ui.trackBtn:Hide()
+			ui.catBtn:Hide()
+			ui.craft1:Show()
+			ui.craft1.text:SetText("REQUEST")
+			ui.craft1.text:SetTextColor(GM.RGB("contLowest"))
+			ui.craft1._gmBg:SetColorTexture(GM.RGB(
+				ui.foreignChar and "accent" or "contHigh"))
+			ui.craft1:SetWidth(max(66,
+				(ui.craft1.text:GetStringWidth() or 0) + 18))
+			ui.detSub:SetText((ui.foreignChar
+					and ("from " .. (GM.NameColored
+						and GM.NameColored(ui.foreignChar)
+						or ui.foreignChar)) or "crafter unknown")
+				.. (r.cost and (" · mats ≈ " .. GM.Money(r.cost)) or "")
+				.. (r.price and (" · suggest " .. GM.Money(r.price)) or ""))
+			for i, m in ipairs(ui.detMats) do
+				local mat = r.mats and r.mats[i]
+				if mat then
+					m.icon:Show()
+					m.icon:SetTexture(GM.ItemIcon(mat.id) or 134400)
+					m.hit.itemID = mat.id
+					m.hit:Show()
+					m._mat = mat
+					m.name:Show()
+					m.name:SetText(GM.ItemName(mat.id)
+						or ("item " .. mat.id))
+					m.name:SetTextColor(GM.NameColor(mat.id))
+					m.have:Show()
+					m.have:SetText("×" .. mat.qty)
+					m.have:SetTextColor(GM.RGB("textDim"))
+				else
+					m._mat = nil
+					m.hit:Hide()
+					m.icon:Hide()
+					m.name:Hide()
+					m.have:Hide()
+				end
+			end
+			ui.craftHint:SetText(ui.foreignChar
+				and ("mails a craft request to " .. ui.foreignChar)
+				or "link poster unknown — can't address a request")
+		else
+			ui.det:Hide()
+		end
+	elseif dr and dr.unlearned then
 		-- missing-recipe detail: never queues — the pane explains
 		-- acquisition instead of showing craft controls
 		ui.det:Show()
@@ -1259,6 +1386,7 @@ function CU.Refresh(vm)
 			.. (GM.ItemName(dr.itemID) or dr.name or "?"))
 		ui.detName:SetTextColor(GM.NameColor(dr.itemID))
 		ui.trackBtn:Show()
+		ui.catBtn:Show() -- a foreign view hides it
 		ui.craft1:Show()
 		ui.trackBtn.text:SetText(tracked and "TRACKED" or "TRACK")
 		ui.trackBtn.text:SetTextColor(GM.RGB(
@@ -1397,13 +1525,21 @@ function CU.HookDefault()
 				ui and ui.wantDefault)
 		end
 		if ui and ui.wantDefault then return end
-		-- linked/NPC sessions show someone else's recipes — the
-		-- native frame is the only correct viewer, don't take over
-		if GM.Crafting and GM.Crafting.Foreign
-			and GM.Crafting.Foreign() then return end
 		CU.ParkDefault()
 		BuildUI()
 		ui.selProf = nil -- overview carries no profession context
+		-- linked/NPC sessions open in foreign mode — their recipes,
+		-- suggested prices, REQUEST instead of CRAFT
+		ui.foreign = GM.Crafting and GM.Crafting.Foreign
+			and GM.Crafting.Foreign() or nil
+		ui.foreignChar = ui.foreign and GM.LinkFrom
+			and GM.LinkFrom.t and time() - GM.LinkFrom.t < 120
+			and GM.LinkFrom.char or nil
+		ui.selRow = nil
+		if ui.foreign then
+			local ok, line = pcall(C_TradeSkillUI.GetTradeSkillLine)
+			ui.foreignProf = ok and line or nil
+		end
 		ui.frame:Show()
 		CU.Refresh()
 		Footer("tradeskill open — BLIZZARD UI gives the "
@@ -1438,9 +1574,30 @@ end
 -- with it (TSM parity: their frame closes on the same action). Our
 -- OnHide restores the parked frame; CloseTradeSkill stays gated on
 -- ui.closing because the client already ended the session itself.
+-- foreign-session REQUEST: a mail-writ addressed to whoever linked
+-- the profession (ItemInput's linkRing captured them at click time)
+function CU.ForeignRequest()
+	local r = ui and ui.selRow
+	if not r then return end
+	local to = ui.foreignChar
+	if not to then
+		Footer("link poster unknown — can't address a request", true)
+		return
+	end
+	local wid = GM.Writs and GM.Writs.MailRequest(to, {
+		name = r.name, itemID = r.itemID, qty = 1,
+		mats = "buyer", deliver = "trade",
+		note = "from your professions link" })
+	Footer(wid and ("craft request mailed to " .. to)
+		or "request send failed", not wid)
+end
+
 function CU.OnTradeSkillClose()
-	if ui and ui.frame and ui.frame:IsShown() then
-		ui.frame:Hide()
+	if ui then
+		ui.foreign, ui.foreignChar, ui.selRow = nil, nil, nil
+		if ui.frame and ui.frame:IsShown() then
+			ui.frame:Hide()
+		end
 	end
 end
 
@@ -1450,6 +1607,16 @@ function CU.OnTradeSkillOpen()
 	EnsureSwitchBtn()
 	if ui.wantDefault then return end
 	ui.selProf = nil -- scan selects the opened profession (C.lastProf)
+	ui.foreign = GM.Crafting and GM.Crafting.Foreign
+		and GM.Crafting.Foreign() or nil
+	ui.foreignChar = ui.foreign and GM.LinkFrom
+		and GM.LinkFrom.t and time() - GM.LinkFrom.t < 120
+		and GM.LinkFrom.char or nil
+	ui.selRow = nil
+	if ui.foreign then
+		local ok, line = pcall(C_TradeSkillUI.GetTradeSkillLine)
+		ui.foreignProf = ok and line or nil
+	end
 	ui.frame:Show()
 	CU.Refresh()
 	-- say who owns the open — otherwise a user who pressed the default

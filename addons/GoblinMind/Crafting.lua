@@ -860,19 +860,12 @@ function C.Init()
 				end
 			end
 			-- TSM parity: opening a tradeskill IS opening our crafting
-			-- window (linked/NPC sessions excluded — not ours to drive)
-			local foreign = ForeignTradeskill()
-			if foreign then
-				-- a chat-link open shows someone ELSE's recipes in
-				-- the native frame. A parked frame is still SHOWN —
-				-- Show() on a shown frame fires no OnShow, so the
-				-- park pin survives and the click looks dead (open
-				-- sound, nothing on screen). Un-park so the native
-				-- linked view actually renders.
-				if GM.CraftingUI and GM.CraftingUI.RestoreDefault then
-					GM.CraftingUI.RestoreDefault()
-				end
-			elseif not C._pumping
+			-- window — linked/NPC sessions included: they take over in
+			-- foreign mode (their recipes + suggested prices, REQUEST
+			-- instead of CRAFT). The frame may already be shown+parked,
+			-- so the OnShow hook won't refire — this is the entry that
+			-- actually puts our window up for a chat-link click.
+			if not C._pumping
 				and GM.CraftingUI and GM.CraftingUI.OnTradeSkillOpen then
 				GM.CraftingUI.OnTradeSkillOpen()
 			end
