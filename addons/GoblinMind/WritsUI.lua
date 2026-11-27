@@ -479,9 +479,11 @@ function WU.Build(f)
 	end
 
 	-- REQUEST popover: qty + price (prefilled offer or W.Suggest) +
-	-- mats policy + SEND. Anchored under the clicked row.
+	-- SEND. The offer's own mats term rides along — the listing is
+	-- take-it-or-leave-it, not a negotiation form. Anchored under
+	-- the clicked row.
 	local pop = CreateFrame("Frame", nil, sp)
-	pop:SetSize(430, 66)
+	pop:SetSize(300, 66)
 	GM.Panel(pop, "contHigh")
 	pop:SetFrameLevel(sp:GetFrameLevel() + 10)
 	ui.reqPop = pop
@@ -491,13 +493,11 @@ function WU.Build(f)
 	pop.qty:SetPoint("TOPLEFT", 8, -24)
 	pop.gold = GM.Widgets.GoldEdit(pop, 110)
 	pop.gold:SetPoint("LEFT", pop.qty, "RIGHT", 6, 0)
-	pop.mats = MkBtn(pop, "buyer", 66, 15)
-	pop.mats:SetPoint("LEFT", pop.gold, "RIGHT", 8, 0)
 	pop.send = MkBtn(pop, "SEND", 56, 15)
-	pop.send:SetPoint("LEFT", pop.mats, "RIGHT", 8, 0)
+	pop.send:SetPoint("LEFT", pop.gold, "RIGHT", 8, 0)
 	pop.hint = GM.MakeFontString(pop, GM.FONT, 9, "textDim")
 	pop.hint:SetPoint("TOPLEFT", 8, -46)
-	pop.hint:SetWidth(414)
+	pop.hint:SetWidth(284)
 	pop.hint:SetWordWrap(false)
 	pop.hint:SetJustifyH("LEFT")
 	pop:Hide()
@@ -655,12 +655,27 @@ local function offerIcon(o)
 	return nil
 end
 
+-- identity for repaint survival — marketRows rebuilds entries
+-- every paint, so match on the offer's stable fields; ShopsPaint
+-- re-anchors the popover to wherever this entry landed
+local function reqKey(e)
+	local o = e and e.offer
+	if not o then return nil end
+	if e.yell then
+		return "y|" .. tostring(e.yell.id) .. "|" .. tostring(e._gi)
+	end
+	return "o|" .. tostring(e.roster and e.roster.uuid)
+		.. "|" .. tostring(o.ref or o.name)
+		.. "|" .. tostring(o.toon)
+end
+
 -- REQUEST popover state: which roster+offer is being ordered
 local function openRequest(row, e)
 	local pop = ui.reqPop
 	ui.req = e
 	local o = e.offer
 	pop.e = e
+	pop._reqKey = reqKey(e)
 	pop.title:SetText("REQUEST — " .. (o.name or "?") .. "  ·  "
 		.. ((GM.NameColored and GM.NameColored(
 			o.toon or (e.roster.chars and e.roster.chars[1]) or "?"))
@@ -669,19 +684,12 @@ local function openRequest(row, e)
 	local sug = W.Suggest(o.ref, o.numMade or 1)
 	pop.gold:SetCopper(o.price or (sug and sug.price) or nil)
 	pop.sug = sug
-	pop.mats.text:SetText(o.mats or "buyer")
 	pop.hint:SetText(sug and string.format(
 		"suggest %s (mats %s + market %s)",
 		sug.price and GoldText(sug.price) or "—",
 		sug.mats and GoldText(sug.mats) or "—",
 		sug.market and GoldText(sug.market) or "—")
 		or "no market data — set a price or send OFFER")
-	-- mats policy cycles the three modes
-	pop.mats:SetScript("OnClick", function()
-		local next_ = { buyer = "crafter", crafter = "prepaid",
-			prepaid = "buyer" }
-		pop.mats.text:SetText(next_[pop.mats.text:GetText()] or "buyer")
-	end)
 	pop.send:SetScript("OnClick", function()
 		local qty = math.max(1, math.floor(
 			tonumber(pop.qty:GetText()) or 1))
@@ -690,7 +698,7 @@ local function openRequest(row, e)
 			o.toon or (e.roster.chars and e.roster.chars[1]) or nil, {
 				ref = o.ref, name = o.name, itemID = o.itemID,
 				qty = qty, offer = price or 0,
-				mats = pop.mats.text:GetText() or "buyer",
+				mats = o.mats or "buyer",
 				deliver = (o.kind == "service") and "trade" or "cod",
 			})
 		pop:Hide()
@@ -706,7 +714,6 @@ local function ShopsPaint(vm)
 	ui.board = vm and vm.board or ui.board
 	local sp = ui.shopsP
 	local mode = ui.mode
-	ui.reqPop:Hide()
 	for i, b in pairs(ui.modeBtns) do
 		b.text:SetTextColor(GM.RGB(
 			ui.mode == i and "accent" or "textDim"))
@@ -781,6 +788,7 @@ local function ShopsPaint(vm)
 	for i = 1, ROWS do
 		local r = ui.sRows[i]
 		local e = rows[i + (ui.scroll or 0)]
+		r._ent = e
 		if not e then
 			r:Hide()
 		elseif mode == "myshop" then
@@ -1042,6 +1050,25 @@ local function ShopsPaint(vm)
 		sp.count:SetText(mode == "myshop"
 			and "no offers — learn recipes or add shopOffers"
 			or "no rosters on this board yet")
+	end
+	-- the REQUEST popover survives repaints — re-anchor to wherever
+	-- its entry landed; the entry leaving the painted set (sold
+	-- out, filtered, scrolled off) is what actually closes it
+	local pop, keep = ui.reqPop, nil
+	if pop:IsShown() and pop._reqKey then
+		for i = 1, ROWS do
+			local r = ui.sRows[i]
+			if r:IsShown() and r._ent
+					and reqKey(r._ent) == pop._reqKey then
+				keep = r break
+			end
+		end
+	end
+	if keep then
+		pop:ClearAllPoints()
+		pop:SetPoint("TOPLEFT", keep, "BOTTOMLEFT", 60, -2)
+	else
+		pop:Hide()
 	end
 end
 
