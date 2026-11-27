@@ -135,7 +135,7 @@ local function marketRows(board, q, prof)
 			-- bark intent tags the row: buying (WTB/lf) vs selling
 			-- (WTS/lfw) — read the tag before the capsule, the writ
 			-- direction depends on it
-			local lprof = (lnk.kind == "trade" and lnk.name)
+			local lprof = (lnk.kind == "trade" and lnk.prof)
 				or y.prof
 			if not prof or lprof == prof then
 				local itag = y.intent == "buy"

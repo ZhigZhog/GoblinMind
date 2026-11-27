@@ -1418,8 +1418,14 @@ local YELL_BUY = { " wtb ", " lf ", " buying ", " buy ", " want ",
 	" need ", " looking for " }
 local YELL_SELL = { " wts ", " selling ", " sell ", " lfw ",
 	" for sale " }
+-- padded word haystack: ALL punctuation counts as a boundary —
+-- barks glue keywords to capsules ("wtb[Alchemy", "sell/")
+-- and a bare space-pad misses them
+local function yellWords(msg)
+	return " " .. msg:lower():gsub("%p", " ") .. " "
+end
 local function yellIntent(msg)
-	local l = " " .. msg:lower() .. " "
+	local l = yellWords(msg)
 	local function hit(t)
 		for _, kw in ipairs(t) do
 			if l:find(kw, 1, true) then return true end
@@ -1428,6 +1434,17 @@ local function yellIntent(msg)
 	local buy, sell = hit(YELL_BUY), hit(YELL_SELL)
 	if buy == sell then return nil end
 	return buy and "buy" or "sell"
+end
+-- unambiguous trade-speak — qualifies a message on ANY numbered
+-- channel (custom world/market channels carry real barks; the
+-- channel-name gate would drop them otherwise)
+local YELL_STRONG = { " wtb ", " wts ", " lfw " }
+local function yellStrong(msg)
+	if msg:find("|H", 1, true) then return true end
+	local l = yellWords(msg)
+	for _, kw in ipairs(YELL_STRONG) do
+		if l:find(kw, 1, true) then return true end
+	end
 end
 
 -- passive link harvest: every [|H..|h[..]|h] capsule in a bark is
@@ -1469,7 +1486,8 @@ local function yellLinks(msg)
 		end
 		l.disp = color .. "[" .. dname .. "]|r"
 		if kind == "item" then
-			l.id = tonumber(payload)
+			-- payload is "id:enchant:gem:..." — first field only
+			l.id = tonumber(payload:match("^(%d+)"))
 			if not itemID then
 				itemID, lname = l.id, name
 			end
@@ -1479,7 +1497,10 @@ local function yellLinks(msg)
 				l.id and ("s:" .. l.id) or nil, name end
 		elseif kind == "trade" then
 			-- |Htrade:<who>:<spell>:... — no item ref, but the prof
-			-- capsule is still an offer line
+			-- capsule is still an offer line. The bracket text is
+			-- "Blacksmithing: Lionheart Helm" — the prof is the
+			-- first colon segment, which the filter chips match
+			l.prof = name:match("^(.-):")
 			if not ref then lname = lname or name end
 		end
 		links[#links + 1] = l
@@ -1601,7 +1622,8 @@ yells:SetScript("OnEvent", function(_, ev, msg, sender, ...)
 		ch = (ch or ""):lower()
 		if not (ch:find("trade", 1, true)
 				or ch:find("lookingfor", 1, true)
-				or ch:find("lfg", 1, true)) then return end
+				or ch:find("lfg", 1, true)
+				or yellStrong(msg)) then return end
 	end
 	if not (msg and sender) then return end
 	if GM.SameChar and GM.SameChar(sender) then return end
@@ -1616,7 +1638,7 @@ yells:SetScript("OnEvent", function(_, ev, msg, sender, ...)
 		hit = "link"
 		for _, l in ipairs(links) do
 			if not prof then
-				prof = l.kind == "trade" and l.name
+				prof = l.kind == "trade" and l.prof
 					or l.kind == "enchant" and "Enchanting" or nil
 			end
 		end
