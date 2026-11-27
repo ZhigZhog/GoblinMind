@@ -1545,6 +1545,7 @@ function CU.HookDefault()
 			ui.foreignProf = ok and line or nil
 		end
 		ui.frame:Show()
+		TileForeign()
 		CU.Refresh()
 		Footer("tradeskill open — BLIZZARD UI gives the "
 			.. "default frame back")
@@ -1572,6 +1573,17 @@ end
 -- the user has switched to default (TSM's defaultUISwitchBtn)
 local function EnsureSwitchBtn()
 	W.EnsureSwitchBtn(ui, DefaultFrame(), CU.OnTradeSkillOpen, CU.ParkDefault)
+end
+
+-- a foreign session opens on a chat-link click — the user is
+-- usually mid-read on the writs board, and both windows anchor
+-- screen-center. Tile beside it rather than painting over it.
+local function TileForeign()
+	local ou = _G["GoblinMindOrders"]
+	if ui and ui.foreign and ou and ou:IsShown() then
+		ui.frame:ClearAllPoints()
+		ui.frame:SetPoint("TOPLEFT", ou, "TOPRIGHT", 8, 0)
+	end
 end
 
 -- TRADE_SKILL_CLOSE entry — the session ended, so our window goes
@@ -1626,6 +1638,7 @@ function CU.OnTradeSkillOpen()
 		ui.foreignProf = ok and line or nil
 	end
 	ui.frame:Show()
+	TileForeign()
 	CU.Refresh()
 	-- say who owns the open — otherwise a user who pressed the default
 	-- professions button sees our window appear with no explanation and

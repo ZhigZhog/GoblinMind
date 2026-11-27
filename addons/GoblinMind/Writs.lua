@@ -1366,7 +1366,8 @@ end
 local yellRing, yellSeen = {}, {}
 local YELL_MAX, YELL_TTL = 100, 30
 local YELL_WORDS = { "enchant", "lockpick", "lock pick", "lfw",
-	"will craft", "crafting", "portal", "summon" }
+	"will craft", "crafting", "portal", "summon", "wts", "wtb",
+	"selling", "buying" }
 local YELL_PROF = { enchant = "Enchanting", lockpick = "Lockpicking",
 	["lock pick"] = "Lockpicking", portal = "Mage",
 	summon = "Warlock" }
@@ -1539,8 +1540,21 @@ yells:SetScript("OnEvent", function(_, ev, msg, sender, ...)
 	if not (msg and sender) then return end
 	if GM.SameChar and GM.SameChar(sender) then return end
 	local hit, prof = yellHit(msg)
-	if not hit then return end
 	local links, itemID, lname, ref = yellLinks(msg)
+	if not hit then
+		-- a bare capsule IS the bark — nobody links their
+		-- profession in Trade conversationally, and item/enchant
+		-- links there are sellers by context. Link-free and
+		-- keyword-free is the only "not a bark" left.
+		if #links == 0 then return end
+		hit = "link"
+		for _, l in ipairs(links) do
+			if not prof then
+				prof = l.kind == "trade" and l.name
+					or l.kind == "enchant" and "Enchanting" or nil
+			end
+		end
+	end
 	local seen = yellSeen[sender]
 	if seen then
 		-- one row per yeller: a re-yell updates it in place and
