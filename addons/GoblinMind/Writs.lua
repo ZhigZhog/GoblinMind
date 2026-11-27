@@ -1449,8 +1449,25 @@ local function yellLinks(msg)
 		if kind == "trade" then
 			dname = name:match("^.-: (.+)$") or name
 		end
-		l.disp = (link:match("(|c%x+)") or "")
-			.. "[" .. dname .. "]|r"
+		local color = link:match("(|c%x+)") or link:match("(|C%x+)")
+		if not color then
+			-- no escape in the bark — derive it: items take their
+			-- own quality color, professions gold, spells/enchants
+			-- the standard link blue
+			if kind == "item" and l.id and GetItemInfo
+					and GetItemQualityColor then
+				local ok, _, _, q = pcall(GetItemInfo, l.id)
+				if ok and q then
+					color = "|cff"
+						.. select(4, GetItemQualityColor(q))
+				end
+			end
+			if not color then
+				color = kind == "trade" and "|cffffd000"
+					or kind ~= "item" and "|cff71d5ff" or ""
+			end
+		end
+		l.disp = color .. "[" .. dname .. "]|r"
 		if kind == "item" then
 			l.id = tonumber(payload)
 			if not itemID then
