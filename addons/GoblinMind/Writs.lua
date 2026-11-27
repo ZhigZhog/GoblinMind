@@ -1042,6 +1042,22 @@ function W.MailParse(subject, body)
 	}
 end
 
+-- reply-class wires — the eStore handshake rides "Re: [GM Writ]"
+-- and "[GM Ship]" letters. GMW1R = seller counter-quote · GMW1A =
+-- confirm (seller accepting the ask, or buyer confirming a quote)
+-- · GMW1D = decline · GMW1S = ship notice on the COD letter.
+-- wid;price;char layout on every one.
+function W.MailParseReply(body)
+	if type(body) ~= "string" then return nil end
+	local verb, rest = body:match("GMW1([RADS]);([^\n]+)")
+	if not verb then return nil end
+	local f = {}
+	for x in rest:gmatch("[^;]*") do f[#f + 1] = x end
+	return { verb = verb, wid = f[1] ~= "-" and f[1] or nil,
+		price = tonumber(f[2]),
+		fromChar = f[3] ~= "-" and f[3] or nil }
+end
+
 W.MAIL_TAGLINE = "— sent via GoblinMind (CurseForge)"
 local MAIL_TTL = 7 * 86400
 
@@ -1098,6 +1114,8 @@ function W.FromMail(parsed, sender)
 	if box[key] then return box[key] end
 	local rec = { id = key, via = "mail", state = "received",
 		sender = sender, t = time(), subject = parsed.subject,
+		name = parsed.subject
+			and parsed.subject:match("%[GM Writ%] (.+) x%d"),
 		wid = parsed.wid, ref = parsed.ref, qty = parsed.qty,
 		offer = parsed.offer, mats = parsed.mats,
 		deliver = parsed.deliver,
@@ -1121,9 +1139,98 @@ function W.MailReply(rec, price, note)
 		table.concat({ "GMW1R", rec.wid or "-",
 			tostring(price or 0), CharName() }, ";"),
 		W.MAIL_TAGLINE)
-	return GM.Ops.SendMail({ to = to,
+	local ok = GM.Ops.SendMail({ to = to,
 		subject = "Re: " .. (rec.subject or "[GM Writ]"),
 		body = body })
+	if ok then
+		rec.state, rec.quote, rec.updated = "quoted", price, time()
+	end
+	return ok
+end
+
+-- every handshake letter is a human line + a machine wire + the
+-- tagline — one send path so accept/decline/confirm stay identical
+local function mailWire(to, subject, human, verb, wid, price)
+	local wire = table.concat({ "GMW1" .. verb, wid or "-",
+		tostring(price or 0), CharName() }, ";")
+	return GM.Ops.SendMail({ to = to, subject = subject,
+		body = string.format("%s\n\n— %s\n%s\n%s",
+			human, CharName(), wire, W.MAIL_TAGLINE) })
+end
+
+-- crafter accepts the order at the asking offer — seller-side
+-- confirmation, the counterpart of the buyer's request commit
+function W.MailAccept(rec)
+	local to = rec and (rec.fromChar or rec.sender)
+	if not to then return nil end
+	local ok = mailWire(to, "Re: " .. (rec.subject or "[GM Writ]"),
+		string.format("I can take that on for %s.",
+			(GM.MoneyShort and GM.MoneyShort(rec.offer or 0))
+				or tostring(rec.offer or 0)),
+		"A", rec.wid, rec.offer)
+	if ok then
+		rec.state, rec.price, rec.updated = "agreed", rec.offer,
+			time()
+	end
+	return ok
+end
+
+function W.MailDecline(rec)
+	local to = rec and (rec.fromChar or rec.sender)
+	if not to then return nil end
+	local ok = mailWire(to, "Re: " .. (rec.subject or "[GM Writ]"),
+		"I have to pass on this one.", "D", rec.wid)
+	if ok then rec.state, rec.updated = "declined", time() end
+	return ok
+end
+
+-- buyer confirms the seller's quote — the second signature that
+-- moves a negotiated order into 'agreed'
+function W.MailConfirmOut(w)
+	if not (w and w.toChar) then return nil end
+	local price = w.quote or w.offer or 0
+	local ok = mailWire(w.toChar, string.format(
+		"Re: [GM Writ] %s x%d", w.name or "Work request",
+		w.qty or 1),
+		string.format("Deal — %s it is.",
+			(GM.MoneyShort and GM.MoneyShort(price))
+				or tostring(price)),
+		"A", w.id, price)
+	if ok then w.state, w.updated = "agreed", time() end
+	return ok
+end
+
+function W.MailDeclineOut(w)
+	if not (w and w.toChar) then return nil end
+	local ok = mailWire(w.toChar, string.format(
+		"Re: [GM Writ] %s x%d", w.name or "Work request",
+		w.qty or 1),
+		"Pass for now, thanks.", "D", w.id)
+	if ok then w.state, w.updated = "declined", time() end
+	return ok
+end
+
+-- crafter ships: the COD letter IS the delivery — item rides the
+-- send slots, price rides COD, GMW1S lets a GM buyer mark the writ
+-- shipped the moment the letter lands
+function W.MailShip(rec)
+	local to = rec and (rec.fromChar or rec.sender)
+	local price = rec and (rec.price or rec.quote or rec.offer) or 0
+	if not to then return nil end
+	local ok = GM.Ops.SendMail({ to = to,
+		subject = "[GM Ship] "
+			.. (rec.name or rec.subject or "order"),
+		body = string.format(
+			"Your order ships COD — %s due on pickup.\n\n— %s\n%s\n%s",
+			(GM.MoneyShort and GM.MoneyShort(price))
+				or tostring(price),
+			CharName(),
+			table.concat({ "GMW1S", rec.wid or "-",
+				tostring(price), CharName() }, ";"),
+			W.MAIL_TAGLINE),
+		cod = price })
+	if ok then rec.state, rec.updated = "shipped", time() end
+	return ok
 end
 
 -- ============ inbox wiring (2b/2c/2d) ============
@@ -1176,6 +1283,60 @@ local function matsFp(sender, subject, csv)
 		.. "|" .. (csv or "")
 end
 
+-- a parsed reply wire lands on whichever store owns the wid:
+-- seller-side writIn (buyer confirmed my quote / declined it) or
+-- buyer-side writMail (seller quoted / accepted / declined / the
+-- ship notice). Price rides the wire so 'agreed' knows the deal
+local function routeReply(rep, sender)
+	if not (rep and rep.wid) then return end
+	-- letters persist until collected — the same reply re-routes on
+	-- every scan; prints fire on the transition only
+	local dirty
+	for _, rec in pairs(mailDB("writIn")) do
+		if rec.wid == rep.wid then
+			if rep.verb == "A" and rec.state ~= "agreed" then
+				rec.state, rec.price = "agreed",
+					rep.price or rec.offer
+				GM.Print(GM.CC("accent")
+					.. "buyer confirmed — ship when ready|r")
+				dirty = true
+			elseif rep.verb == "D" and rec.state ~= "declined" then
+				rec.state = "declined"
+				dirty = true
+			end
+			rec.updated = time()
+			break
+		end
+	end
+	local m = mailDB("writMail")[rep.wid]
+	if m then
+		if rep.verb == "R" and (m.state ~= "quoted"
+				or m.quote ~= rep.price) then
+			m.state, m.quote = "quoted", rep.price
+			GM.Print(GM.CC("accent") .. "quote back on your writ — "
+				.. ((GM.MoneyShort and GM.MoneyShort(rep.price))
+					or tostring(rep.price)) .. "|r")
+			dirty = true
+		elseif rep.verb == "A" and m.state ~= "agreed" then
+			m.state, m.quote = "agreed", rep.price or m.offer
+			GM.Print(GM.CC("accent")
+				.. "order accepted — expect a COD shipment|r")
+			dirty = true
+		elseif rep.verb == "D" and m.state ~= "declined" then
+			m.state = "declined"
+			dirty = true
+		elseif rep.verb == "S" and m.state ~= "shipped"
+				and m.state ~= "done" then
+			m.state = "shipped"
+			dirty = true
+		end
+		m.updated = time()
+	end
+	if dirty and GM.View and GM.View.Refresh then
+		GM.View.Refresh("orders")
+	end
+end
+
 function W.ScanInbox(force)
 	if not (GetInboxNumItems and GetInboxHeaderInfo) then
 		return inIdx
@@ -1198,6 +1359,15 @@ function W.ScanInbox(force)
 			codWants[FN(w.toChar)] = w
 		end
 	end
+	-- mail-channeled orders join the same expectation — a confirmed
+	-- letter-order waits on the seller's COD exactly like a mesh
+	-- 'shipped' writ
+	for _, m in pairs(mailDB("writMail")) do
+		if m.toChar
+				and (m.state == "agreed" or m.state == "shipped") then
+			codWants[FN(m.toChar)] = m
+		end
+	end
 	-- crafter side: agreed writs with a mats fingerprint staged
 	for _, w in ipairs(W.Writs().inb) do
 		if w.matsFp and w.toUUID == me then
@@ -1212,17 +1382,30 @@ function W.ScanInbox(force)
 		subject = subject or ""
 		local sLow = (sender or ""):lower()
 		if subject:match("^%[GM Writ%]") and FN(sender) ~= myName then
-			inIdx[i] = { kind = "gmw1", sender = sender,
-				subject = subject }
-			local key = sLow .. "|" .. subject
-			if box[key] then
-				inIdx[i].rec = box[key]
-			elseif bodyReads < 2 and GetInboxText then
-				bodyReads = bodyReads + 1
-				local ok, body = pcall(GetInboxText, i)
-				local parsed = ok and W.MailParse(subject, body)
-				if parsed then
-					inIdx[i].rec = W.FromMail(parsed, sender)
+			if subject:match(" mats ") and (items or 0) > 0
+					and matsWants then
+				-- mats shipment BEFORE the request gate — "[GM
+				-- Writ] mats x" matches the order prefix too and
+				-- would mint a phantom order
+				local w = matsWants[matsFp(sender, subject,
+					mailItemCSV(i))]
+				if w then
+					inIdx[i] = { kind = "mats", w = w,
+						sender = sender, subject = subject }
+				end
+			else
+				inIdx[i] = { kind = "gmw1", sender = sender,
+					subject = subject }
+				local key = sLow .. "|" .. subject
+				if box[key] then
+					inIdx[i].rec = box[key]
+				elseif bodyReads < 2 and GetInboxText then
+					bodyReads = bodyReads + 1
+					local ok, body = pcall(GetInboxText, i)
+					local parsed = ok and W.MailParse(subject, body)
+					if parsed then
+						inIdx[i].rec = W.FromMail(parsed, sender)
+					end
 				end
 			end
 		elseif (cod or 0) > 0 then
@@ -1233,6 +1416,20 @@ function W.ScanInbox(force)
 						<= math.max(1, price * 0.02) then
 					inIdx[i] = { kind = "cod", w = w, cod = cod,
 						sender = sender, subject = subject }
+				end
+			end
+		elseif subject:find("%[GM %a+%]") and FN(sender) ~= myName then
+			-- reply-class letters — "Re: [GM Writ] x" quotes,
+			-- confirms, declines; "[GM Ship] x" notices without
+			-- COD. The wire lives in the body, subject only gates
+			if bodyReads < 2 and GetInboxText then
+				bodyReads = bodyReads + 1
+				local ok, body = pcall(GetInboxText, i)
+				local rep = ok and W.MailParseReply(body)
+				if rep then
+					inIdx[i] = { kind = "gmr", sender = sender,
+						subject = subject, rep = rep }
+					routeReply(rep, sender)
 				end
 			end
 		elseif (items or 0) > 0 and matsWants then
@@ -1249,8 +1446,8 @@ end
 -- MailUI's per-row hook — "WRIT" | "RECV" | "MATS" | nil
 function W.RowFlag(index)
 	local m = W.ScanInbox()[index]
-	return m and ({ gmw1 = "WRIT", cod = "RECV", mats = "MATS" })
-		[m.kind] or nil
+	return m and ({ gmw1 = "WRIT", cod = "RECV", mats = "MATS",
+		gmr = "REPLY" })[m.kind] or nil
 end
 
 function W.MailHit(index)
@@ -1346,7 +1543,16 @@ local function hookTake(index)
 	if not stillMatch(index, m) then return end
 	if m.kind == "cod" and m.w then
 		m.done = true  -- AutoLoot may route through TakeInboxItem too
-		W.Act("wrecv", m.w)
+		if m.w.via == "mail" then
+			-- letter-channeled order — no server verb; taking the
+			-- COD IS the buyer's delivery confirmation, and the
+			-- payment letter is the seller's
+			m.w.state, m.w.updated = "done", time()
+			GM.Print(GM.CC("accent") .. "writ order delivered — "
+				.. (m.w.name or m.w.id or "?") .. "|r")
+		else
+			W.Act("wrecv", m.w)
+		end
 	elseif m.kind == "mats" and m.w then
 		m.done = true
 		mailDB("writMatsGot")[m.w.id] = time()
@@ -1359,7 +1565,13 @@ local function hookReturn(index)
 	local m = inIdx[index]
 	if stillMatch(index, m) and m.kind == "cod" and m.w then
 		m.done = true
-		W.Act("wdecline", m.w, { reason = "shipment-returned" })
+		if m.w.via == "mail" then
+			-- refusing the COD declines the letter-order — the
+			-- bounced shipment tells the seller without a wire
+			m.w.state, m.w.updated = "declined", time()
+		else
+			W.Act("wdecline", m.w, { reason = "shipment-returned" })
+		end
 	end
 end
 

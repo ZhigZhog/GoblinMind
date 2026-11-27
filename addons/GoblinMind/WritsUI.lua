@@ -275,8 +275,19 @@ end
 -- row's edit boxes are reachable.
 local function writActions(w, me)
 	if w._mail then
-		if w._side == "out" then return { "WITHDRAW" } end
-		return { "REPLY" }  -- received GMW1 letter
+		-- letter-channeled eStore: seller confirms (accept/quote/
+		-- decline), buyer confirms a quote or declines, seller
+		-- ships COD on the agreed deal — two signatures each side
+		local st = w.state or "mailed"
+		if w._side == "out" then
+			if st == "mailed" then return { "WITHDRAW" } end
+			if st == "quoted" then return { "CONFIRM", "DECLINE" } end
+			return {}
+		end
+		if st == "received" then return { "ACCEPT", "DECLINE" } end
+		if st == "quoted" then return { "DECLINE" } end
+		if st == "agreed" then return { "SHIP", "DECLINE" } end
+		return {}
 	end
 	local st, side = w.state, w._side
 	if w._pendOp then return {} end
@@ -1144,6 +1155,18 @@ local function detailRowPaint(r, w, me)
 		r.cedit.hint:SetText(mode == "meet" and "meet place…"
 			or "mail from…")
 	end
+	-- counter-quote rides the detail row: the header only has two
+	-- buttons (ACCEPT/DECLINE), so a price counter lives here with
+	-- the gold field it reads
+	if w._mail and w._side == "inb"
+			and (st == "received" or st == "quoted") then
+		r.a1.text:SetText("SEND QUOTE")
+		r.a1.text:SetTextColor(GM.RGB("warn"))
+		r.a1:Show()
+		r.a1:SetScript("OnClick", function()
+			WU.Act(w, "SEND QUOTE")
+		end)
+	end
 	r:Show()
 end
 
@@ -1173,11 +1196,41 @@ function WU.Act(w, lbl)
 		W.Act("wquote", w, { price = p })
 		msg("quote staged (flush to apply)")
 	elseif lbl == "ACCEPT" then
-		W.Act("waccept", w, {})
-		msg("accept staged")
+		if w._mail then
+			local ok = W.MailAccept(w)
+			msg(ok and "accepted — confirmation mailed to the buyer"
+				or "accept failed — mailbox needed")
+		else
+			W.Act("waccept", w, {})
+			msg("accept staged")
+		end
+	elseif lbl == "CONFIRM" then
+		-- buyer countersigns the quote — GMW1A back to the seller
+		local ok = W.MailConfirmOut(w)
+		msg(ok and "quote confirmed — expect a COD shipment"
+			or "confirm failed — mailbox needed")
 	elseif lbl == "DECLINE" then
-		W.Act("wdecline", w, {})
-		msg("decline staged")
+		if w._mail then
+			local ok = w._side == "inb" and W.MailDecline(w)
+				or W.MailDeclineOut(w)
+			msg(ok and "decline mailed" or "decline failed")
+		else
+			W.Act("wdecline", w, {})
+			msg("decline staged")
+		end
+	elseif lbl == "SEND QUOTE" or lbl == "REPLY" then
+		local p = goldIn() or w.offer
+		if w._mail then
+			local ok = p and W.MailReply(w, p)
+			msg(ok and "quote mailed" or "quote failed — mailbox needed")
+		else
+			if not p or p <= 0 then
+				msg("enter a quote price in the detail field first")
+				return
+			end
+			W.Act("wquote", w, { price = p })
+			msg("quote staged (flush to apply)")
+		end
 	elseif lbl == "CANCEL" then
 		W.Act("wcancel", w, {})
 		msg("cancel staged")
@@ -1190,13 +1243,21 @@ function WU.Act(w, lbl)
 		W.Act("wmeet", w, { meet = mt ~= "" and mt or nil })
 		msg("meet note staged")
 	elseif lbl == "SHIP" then
-		local f = {}
-		if w.deliver == "cod" then
-			f.cod = goldIn()
-			f.mailFrom = textIn("mailFrom")
+		if w._mail then
+			-- attach the goods in the send slots at a mailbox —
+			-- SendMail carries the letter + COD + GMW1S wire
+			local ok = W.MailShip(w)
+			msg(ok and "COD shipment sent — writ marked shipped"
+				or "ship failed — attach the item at a mailbox")
+		else
+			local f = {}
+			if w.deliver == "cod" then
+				f.cod = goldIn()
+				f.mailFrom = textIn("mailFrom")
+			end
+			W.Act("wship", w, f)
+			msg("ship staged — customer confirms on receipt")
 		end
-		W.Act("wship", w, f)
-		msg("ship staged — customer confirms on receipt")
 	elseif lbl == "RECEIVED" then
 		W.Act("wrecv", w, {})
 		msg("received staged — marks the writ done")
@@ -1207,9 +1268,6 @@ function WU.Act(w, lbl)
 	elseif lbl == "WITHDRAW" then
 		if GM.db.writMail then GM.db.writMail[w.id] = nil end
 		msg("mailed writ withdrawn")
-	elseif lbl == "REPLY" then
-		local ok = W.MailReply(w, goldIn() or w.offer or 0)
-		msg(ok and "reply letter sent" or "reply failed")
 	elseif lbl == "RENEW" then
 		W.Request(board, w.toUUID or w.to, w.toChar, {
 			ref = w.ref, name = w.name, itemID = w.itemID,
