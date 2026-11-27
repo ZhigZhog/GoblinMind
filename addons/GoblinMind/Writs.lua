@@ -494,6 +494,21 @@ local _evSeq = 0
 -- before a Writs() view build ever ran
 local myWids = {}
 
+-- live-hint writs are session-only — a remote wpost that never
+-- landed in pull evaporates on /reload and the party's follow-up
+-- verbs have no byId to land on. The wpost's own fields are the
+-- whole writ record, so shadow it into SV at record time; the pull
+-- or the expiry takes it back over once either catches up
+local function shadowDB()
+	GM.db.writShadow = GM.db.writShadow or {}
+	return GM.db.writShadow
+end
+
+local SHADOW_KEYS = { "id", "board", "state", "_side", "fromUUID",
+	"fromChar", "toUUID", "toChar", "ref", "name", "itemID",
+	"qty", "offer", "mats", "deliver", "price", "quote", "meet",
+	"cod", "mailFrom", "matsFp", "expires", "created", "updated" }
+
 -- attention chime when the other party moves a writ — the whisper
 -- sound if the client exposes it; pcall'd so a missing kit/file
 -- fails silent, not loud
@@ -521,6 +536,20 @@ function W.LiveEvent(board, ev)
 	if me and ev.wid then
 		if ev.to == me then myWids[ev.wid] = "inb"
 		elseif ev.actor == me then myWids[ev.wid] = "out" end
+	end
+	if me and ev.v == "wpost" and ev.to == me then
+		-- durably shadow an inbound order the moment it lands —
+		-- session-only live evs evaporate on /reload, the order
+		-- shouldn't
+		shadowDB()[ev.wid] = {
+			id = ev.wid, board = board, state = "open",
+			_side = "inb", fromUUID = ev.actor or ev.fromUUID,
+			fromChar = ev.fromChar, toUUID = ev.to,
+			toChar = ev.toChar, ref = ev.ref, name = ev.name,
+			itemID = ev.itemID, qty = ev.qty, offer = ev.offer,
+			mats = ev.mats, deliver = ev.deliver, price = ev.offer,
+			created = ev.t, updated = ev.t,
+			expires = (ev.t or time()) + 72 * 3600 }
 	end
 	if me and PING_VERBS[ev.v] and ev.actor ~= me
 			and (ev.to == me or myWids[ev.wid]) then
@@ -799,7 +828,12 @@ end
 local function evDrop(ev, byId, res, pullT, liveIds)
 	if ev.rid then
 		local r = res[ev.rid]
-		if r and not r.ok then return true end
+		if r and not r.ok then
+			-- a rejected request means the order itself was bogus —
+			-- don't let its shadow resurrect it
+			if ev.v == "wpost" then shadowDB()[ev.wid] = nil end
+			return true
+		end
 		if r and r.ok and (pullT or 0) >= (r.t or 0)
 				and not evConfirmed(ev, byId, liveIds) then
 			return true
@@ -969,6 +1003,24 @@ function W.Writs()
 		byId[c.id] = c
 		view.out[#view.out + 1] = c
 	end
+	-- remerge shadowed orders ahead of the ev replay — replayed
+	-- verbs (our staged queue) need their wid's row to exist or the
+	-- apply is a silent no-op, which is exactly how the accepted
+	-- writ vanished on /reload
+	local sh = shadowDB()
+	for wid, s in pairs(sh) do
+		if byId[wid] then
+			sh[wid] = nil  -- pull covers it — server truth resumes
+		elseif (s.expires or math.huge) > time() then
+			local c = shallow(s)
+			c._live, c._shadow = true, true
+			byId[wid] = c
+			view[c._side or "inb"][#view[c._side or "inb"] + 1] = c
+			myWids[wid] = c._side or "inb"
+		else
+			sh[wid] = nil  -- order expired while offline
+		end
+	end
 	-- tunneled board inbox: staged relay ops are all the customer
 	-- sees until their crafter's server-side verbs hint back over
 	-- the channel — the composed overlay below is what paints them
@@ -996,6 +1048,17 @@ function W.Writs()
 	for _, ev in ipairs(ord) do
 		local def = WVERBS[ev.v]
 		if def and def.apply then def.apply(ev, view, byId, me) end
+	end
+	-- write-back: every live-backed row re-shadows with its current
+	-- state so transitions made this session survive a reload
+	for _, side in ipairs({ "inb", "out" }) do
+		for _, c in ipairs(view[side]) do
+			if c._live then
+				local s = sh[c.id] or {}
+				for _, k in ipairs(SHADOW_KEYS) do s[k] = c[k] end
+				sh[c.id] = s
+			end
+		end
 	end
 	-- local mail channel — never reaches the server: my mailed
 	-- requests ride out, parsed GMW1 letters ride in. MY WRITS
