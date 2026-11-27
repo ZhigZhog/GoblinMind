@@ -136,32 +136,35 @@ end
 
 -- a |Htrade:<who>:… / |Henchant:<who>:… link carries its owner in
 -- the second field — a plain name here, a Player-xxxx GUID on
--- retail-style builds. Unparseable → newest non-self ring poster
--- of that link kind.
+-- retail-style builds, a bare spellID on some payloads. A numeric
+-- token isn't an owner — resolve the poster through the ring by
+-- matching the link ITSELF: two players barking [Enchanting] are
+-- prefix-identical, only the full payload tells them apart.
 local function tradeOwner(link)
-	local tok = link
-		and (link:match("|Htrade:([^:|]+)")
-			or link:match("|Henchant:([^:|]+)")
-			or link:match("^trade:([^:|]+)")
-			or link:match("^enchant:([^:|]+)"))
-	if tok and tok ~= "" then
-		if tok:match("^Player%-") and GetPlayerInfoByGUID then
-			local ok, name = pcall(function()
-				return select(6, GetPlayerInfoByGUID(tok)) end)
-			if ok and name and name ~= "" then return name end
-		elseif not tok:match("^Player%-") then
+	local kind, payload = link and (link:match("|H(%a+):([^|]*)")
+		or link:match("^(%a+):([^|]*)"))
+	if kind ~= "trade" and kind ~= "enchant" then return nil end
+	local tok = payload and payload:match("^([^:]+)")
+	if tok and tok ~= "" and not tok:match("^%d+$") then
+		if tok:match("^Player%-") then
+			if GetPlayerInfoByGUID then
+				local ok, name = pcall(function()
+					return select(6, GetPlayerInfoByGUID(tok)) end)
+				if ok and name and name ~= "" then return name end
+			end
+		else
 			return tok
 		end
 	end
-	local kind = link and link:match("|H(%a+):")
-	if not kind then return nil end
+	if not payload then return nil end
+	local needle = "|H" .. kind .. ":" .. payload
 	local cut = time() - LINK_RING_AGE
 	local me = UnitName("player") or ""
 	for i = #linkRing, 1, -1 do
 		local e = linkRing[i]
 		if (e.t or 0) < cut then break end
 		if not (GM.SameChar and GM.SameChar(e.sender, me))
-				and e.msg:find("|H" .. kind .. ":", 1, true) then
+				and e.msg:find(needle, 1, true) then
 			return e.sender
 		end
 	end
@@ -173,10 +176,15 @@ if SetItemRef then
 	hooksecurefunc("SetItemRef", function(link)
 		-- profession clicks aren't item links — GM.LinkID is nil —
 		-- but they're the only click that needs LinkFrom before
-		-- the session opens; the owner rides inside the link
-		local who = tradeOwner(link)
-		if who then
-			GM.LinkFrom = { char = who, t = time(), kind = "trade" }
+		-- the session opens; the owner rides inside the link. An
+		-- unresolvable click CLEARS — a stale owner mis-attributes
+		-- this session to the previous link's poster.
+		local kind = link and (link:match("|H(%a+):")
+			or link:match("^(%a+):"))
+		if kind == "trade" or kind == "enchant" then
+			local who = tradeOwner(link)
+			GM.LinkFrom = who and { char = who, t = time(),
+				kind = "trade" } or nil
 			return
 		end
 		if not Capture() then return end
