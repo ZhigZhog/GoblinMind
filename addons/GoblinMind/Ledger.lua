@@ -209,6 +209,11 @@ local function Consume(s, qty)
 	s.paidT = math.max(0, (s.paidT or 0) - d * avg)
 end
 local function Gain(s, qty, tot)
+	-- paidQ pairs with paidT by construction: a zero-cost gain
+	-- (craft from unpaid mats, a 0-copper buy) has NO paid basis,
+	-- so it enters like unpaid loot — paidQ stays untouched and
+	-- Consume's clamp treats it as costless stock
+	if (tot or 0) <= 0 then return end
 	s.paidQ = (s.paidQ or 0) + qty
 	s.paidT = (s.paidT or 0) + tot
 end
