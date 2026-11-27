@@ -872,6 +872,8 @@ local function ShopsPaint(vm)
 					r.name:SetText("")
 					r.chip = r.chip
 						or GM.Widgets.LinkChip(r, 286, 13)
+					r.chip:ClearAllPoints()
+					r.chip:SetPoint("LEFT", 40, 0)
 					r.chip._pre = function()
 						-- the yeller IS the owner — pre-stamp so
 						-- attribution never needs the chat ring
