@@ -332,12 +332,9 @@ function WU.Build(f)
 		r.act = MkBtn(r, "REQUEST", 62, 13)
 		r.act:SetPoint("RIGHT", -2, 0)
 		-- MY SHOP inline editors (hidden in other modes)
-		r.gold = GM.Widgets.GoldEdit(r, 100)
-		r.gold:SetPoint("LEFT", 330, -1)
+		r.gold = GM.Widgets.GoldEdit(r, 88)
 		r.mats = MkBtn(r, "buyer", 62, 13)
-		r.mats:SetPoint("LEFT", 436, 0)
-		r.note = MkEdit(r, 168, "note…")
-		r.note:SetPoint("LEFT", 504, -1)
+		r.note = MkEdit(r, 118, "note…")
 		r.gold:Hide(); r.mats:Hide(); r.note:Hide()
 		r:SetScript("OnEnter", function(s)
 			local id = s.offerID
@@ -485,8 +482,10 @@ end
 local function layoutRow(r, mode)
 	local pos
 	if mode == "myshop" then
+		-- GoldEdit's trailing "c" label spills ~10px past its
+		-- declared width — leave real air before SUGGEST
 		pos = { on = 0, mats = 24, icon = 92, name = 112,
-			prof = 296, note = 372, gold = 520, act = -2,
+			prof = 296, note = 370, gold = 498, act = -2,
 			price = false, who = false }
 	else
 		pos = { icon = 22, name = 40, prof = 250, price = 330,
