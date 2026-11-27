@@ -901,6 +901,19 @@ function C.Init()
 			end
 		elseif e == "TRADE_SKILL_CLOSE" then
 			Tr("TRADE_SKILL_CLOSE")
+			-- Forever swap order: the OLD line's CLOSE can land
+			-- AFTER the NEW line's SHOW (linked-link hops do this).
+			-- A live session means this close is stale bookkeeping —
+			-- honoring it would hide our window under the new one.
+			local live
+			if C_TradeSkillUI and C_TradeSkillUI.GetAllRecipeIDs then
+				local ok, ids = pcall(C_TradeSkillUI.GetAllRecipeIDs)
+				live = ok and type(ids) == "table" and ids[1] ~= nil
+			end
+			if live then
+				Tr("stale close — session still live")
+				return
+			end
 			C.lastProf = nil -- session ended; a stale prof would
 			-- read as "line open" in LineOpenFor's fallback
 			C.batchQty = nil -- a dead line can't finish its batch
@@ -946,6 +959,11 @@ function C.Init()
 				if C.lastProf and GM.CraftingUI.SelectProf then
 					GM.CraftingUI.SelectProf(C.lastProf)
 				else GM.View.Refresh("crafting") end
+				-- a foreign swap reuses the same profession name —
+				-- SelectProf early-returns and the new owner's list
+				-- never paints; a settled repaint is the whole
+				-- point of this debounce (no-op when not shown)
+				GM.View.Refresh("crafting")
 			end
 		end)
 	end)
