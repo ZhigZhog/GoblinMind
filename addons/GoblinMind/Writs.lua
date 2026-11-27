@@ -1410,17 +1410,33 @@ end
 local yells = CreateFrame("Frame")
 yells:RegisterEvent("CHAT_MSG_CHANNEL")
 yells:RegisterEvent("CHAT_MSG_YELL")
-yells:SetScript("OnEvent", function(_, ev, msg, sender, _, _, _,
-		_, _, _, cbase)
+yells:SetScript("OnEvent", function(_, ev, msg, sender, ...)
 	if GM.Model and GM.Model.Pref("yellListen") == false then
 		return
 	end
 	if ev == "CHAT_MSG_CHANNEL" then
-		-- Trade-ish channels only; yells fire anywhere
-		local b = (cbase or ""):lower()
-		if not (b:find("trade", 1, true)
-				or b:find("lookingfor", 1, true)
-				or b:find("lfg", 1, true)) then return end
+		-- Trade-ish channels only; yells fire anywhere. Channel
+		-- identity can't ride a fixed slot — Forever's payload
+		-- inserts fields (surnames shift everything) and Trade's
+		-- number varies per char. Haystack every string field plus
+		-- GetChannelName on any numeric one — a hit anywhere means
+		-- the message came from a trade-ish channel.
+		local ch
+		for i = 1, select("#", ...) do
+			local v = select(i, ...)
+			if type(v) == "string" then
+				ch = (ch or "") .. " " .. v
+			elseif type(v) == "number" and GetChannelName then
+				local ok, n = pcall(GetChannelName, v)
+				if ok and type(n) == "string" then
+					ch = (ch or "") .. " " .. n
+				end
+			end
+		end
+		ch = (ch or ""):lower()
+		if not (ch:find("trade", 1, true)
+				or ch:find("lookingfor", 1, true)
+				or ch:find("lfg", 1, true)) then return end
 	end
 	if not (msg and sender) then return end
 	if GM.SameChar and GM.SameChar(sender) then return end
