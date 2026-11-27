@@ -1587,6 +1587,10 @@ function W.GoldEdit(parent, w)
 	-- "44s 43c" painted as "4s 3c"
 	local gw = math.max(34, math.floor(w * 0.42))
 	local sw = math.max(26, math.floor((w - gw - 24) / 2))
+	-- painted width ≠ declared w: unit labels draw after each box
+	-- (label offset 2 + ~7px glyph + 4 gap per section). Callers
+	-- anchoring off this frame's right edge get effW instead.
+	h.effW = gw + 2 * sw + 30
 	local function mk(ww, maxc)
 		local e = CreateFrame("EditBox", nil, h)
 		e:SetSize(ww, 18)

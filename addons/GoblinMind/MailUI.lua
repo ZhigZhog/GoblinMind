@@ -271,7 +271,7 @@ local function Build()
 	ui.sendBar = CreateFrame("Frame", nil, f)
 	ui.sendBar:SetSize(300, 20)
 	ui.sendBar:SetPoint("LEFT", scan, "RIGHT", 8, 0)
-	ui.to = EditBox(ui.sendBar, 110, "recipient")
+	ui.to = EditBox(ui.sendBar, 170, "recipient")
 	ui.to:SetPoint("LEFT")
 	-- Forever surnames live only in Blizzard's completion layer —
 	-- borrow its config + handlers (the dropdown knows "Unstable
@@ -313,7 +313,10 @@ local function Build()
 	ui.cod = CreateFrame("CheckButton", nil, ui.sendBar,
 		"UICheckButtonTemplate")
 	ui.cod:SetSize(18, 18)
-	ui.cod:SetPoint("LEFT", ui.money, "RIGHT", 4, 0)
+	-- GoldEdit paints ~19px past its declared width (the trailing
+	-- "c" label) — anchor off the painted edge, not the frame
+	ui.cod:SetPoint("LEFT", ui.money, "LEFT",
+		(ui.money.effW or 108) + 8, 0)
 	ui.cod.text = GM.MakeFontString(ui.cod, GM.FONT, 9, "textDim")
 	ui.cod.text:SetPoint("LEFT", ui.cod, "RIGHT", 0, 0)
 	ui.cod.text:SetText("COD")
