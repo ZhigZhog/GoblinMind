@@ -654,24 +654,31 @@ local function DeliverRows()
 	local WR = GM.Writs
 	if WR and WR.Writs then
 		for _, w in ipairs((WR.Writs() or {}).inb or {}) do
-			if w.state == "agreed" and w.deliver == "cod" then
+			-- 'quoted' counts as open too — the buyer's confirm is
+			-- still out, but the terms exist and shipping early is
+			-- harmless: the COD take closes the writ either way
+			if (w.state == "agreed" or w.state == "quoted")
+					and w.deliver == "cod" then
 				local unit = w.quote or w.price or w.offer or 0
 				out[#out + 1] = { w = w, mail = false,
 					name = w.name or "order",
 					to = w.fromChar or w.from or "?",
 					qty = w.qty or 1, unit = unit,
-					total = unit * (w.qty or 1) }
+					total = unit * (w.qty or 1),
+					pend = w.state == "quoted" }
 			end
 		end
 	end
 	for _, rec in pairs(GM.db and GM.db.writIn or {}) do
-		if rec.state == "agreed" then
+		if (rec.state == "agreed" or rec.state == "quoted")
+				and (rec.deliver or "cod") == "cod" then
 			local unit = rec.price or rec.quote or rec.offer or 0
 			out[#out + 1] = { w = rec, mail = true,
 				name = rec.name or "order",
 				to = rec.fromChar or rec.sender or "?",
 				qty = rec.qty or 1, unit = unit,
-				total = unit * (rec.qty or 1) }
+				total = unit * (rec.qty or 1),
+				pend = rec.state == "quoted" }
 		end
 	end
 	return out
@@ -688,7 +695,9 @@ local function PaintDeliver()
 			r:Show()
 			r.l1:SetText((e.name or "?") .. " ×" .. e.qty
 				.. " → " .. (e.to or "?"))
-			r.l2:SetText(((GM.MoneyShort and GM.MoneyShort(e.unit))
+			r.l2:SetText((e.pend and (GM.CC("warn") .. "quoted|r ")
+					or "")
+				.. ((GM.MoneyShort and GM.MoneyShort(e.unit))
 					or tostring(e.unit)) .. "/ea · "
 				.. ((GM.MoneyShort and GM.MoneyShort(e.total))
 					or tostring(e.total)) .. " due")
