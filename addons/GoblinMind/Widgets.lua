@@ -1565,16 +1565,19 @@ function W.GoldEdit(parent, w)
 	w = w or 118
 	h:SetSize(w, 18)
 	-- gold gets the extra room (the big number); silver/copper are
-	-- two-digit by construction like Blizzard's own coin fields
+	-- two-digit by construction like Blizzard's own coin fields.
+	-- sw floor 26: at 20px the 4px inset left ~14px of text — two
+	-- digits overflowed and this client right-anchors the clip, so
+	-- "44s 43c" painted as "4s 3c"
 	local gw = math.max(34, math.floor(w * 0.42))
-	local sw = math.max(20, math.floor((w - gw - 24) / 2))
+	local sw = math.max(26, math.floor((w - gw - 24) / 2))
 	local function mk(ww, maxc)
 		local e = CreateFrame("EditBox", nil, h)
 		e:SetSize(ww, 18)
 		e:SetAutoFocus(false)
 		e:SetFont(GM.FONT, 10, "")
 		e:SetTextColor(GM.RGB("text"))
-		e:SetTextInsets(4, 2, 0, 0)
+		e:SetTextInsets(2, 1, 0, 0)
 		e:SetMaxLetters(maxc)
 		GM.Panel(e, "contLowest")
 		e:SetScript("OnTextChanged", function(s)

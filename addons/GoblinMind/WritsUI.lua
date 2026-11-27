@@ -334,7 +334,7 @@ function WU.Build(f)
 		-- MY SHOP inline editors (hidden in other modes)
 		r.gold = GM.Widgets.GoldEdit(r, 88)
 		r.mats = MkBtn(r, "buyer", 62, 13)
-		r.note = MkEdit(r, 118, "note…")
+		r.note = MkEdit(r, 104, "note…")
 		r.gold:Hide(); r.mats:Hide(); r.note:Hide()
 		r:SetScript("OnEnter", function(s)
 			local id = s.offerID
@@ -485,7 +485,7 @@ local function layoutRow(r, mode)
 		-- GoldEdit's trailing "c" label spills ~10px past its
 		-- declared width — leave real air before SUGGEST
 		pos = { on = 0, mats = 24, icon = 92, name = 112,
-			prof = 296, note = 370, gold = 498, act = -2,
+			prof = 296, note = 366, gold = 486, act = -2,
 			price = false, who = false }
 	else
 		pos = { icon = 22, name = 40, prof = 250, price = 330,
