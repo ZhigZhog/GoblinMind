@@ -109,6 +109,20 @@ local function TermsFor(ref)
 	return (type(t) == "table") and t or {}
 end
 
+-- MY SHOP writes these: on/off, price, mats policy, note — all
+-- persist so republishing keeps the shop's pricing across sessions
+function W.SetTerms(ref, key, val)
+	if not (GM.db and ref) then return end
+	GM.db.shopTerms = GM.db.shopTerms or {}
+	local t = GM.db.shopTerms[ref] or {}
+	t[key] = val
+	GM.db.shopTerms[ref] = t
+end
+
+function W.Terms(ref)
+	return TermsFor(ref)
+end
+
 function W.RosterOffers()
 	local out = {}
 	-- ';' is the relay envelope's field delimiter — offer text must
@@ -124,7 +138,7 @@ function W.RosterOffers()
 				ref = ref, name = r.name:gsub(";", " "),
 				prof = r.prof and r.prof:gsub(";", " ") or nil,
 				itemID = r.itemID, kind = "craft",
-				numMade = r.numMade or 1,
+				numMade = r.numMade or 1, on = t.on == true,
 				price = t.price, mats = t.mats,
 				note = t.note and t.note:gsub(";", " ") or nil,
 			}
@@ -139,7 +153,7 @@ function W.RosterOffers()
 			out[#out + 1] = {
 				ref = ref, name = r.name:gsub(";", " "),
 				prof = r.prof and r.prof:gsub(";", " ") or nil,
-				kind = "service",
+				kind = "service", on = t.on == true,
 				price = t.price, mats = t.mats,
 				note = t.note and t.note:gsub(";", " ") or nil,
 			}
@@ -155,7 +169,7 @@ function W.RosterOffers()
 				ref = s.ref, name = tostring(s.name):gsub(";", " "),
 				prof = s.prof and tostring(s.prof):gsub(";", " ") or nil,
 				kind = s.kind == "service" and "service" or "craft",
-				itemID = s.itemID,
+				itemID = s.itemID, on = t.on == true,
 				price = t.price or s.price,
 				mats = t.mats or s.mats,
 				note = (t.note or s.note)
@@ -241,9 +255,16 @@ function W.Publish(board)
 	end
 	if #chars == 0 then chars[1] = CharName() end
 	table.sort(chars)
+	local enabled = {}
+	for _, o in ipairs(W.RosterOffers()) do
+		if o.on then
+			o.on = nil
+			enabled[#enabled + 1] = o
+		end
+	end
 	return W.Op("roster", board, {
 		chars = table.concat(chars, ","),
-		offers = JEnc(W.RosterOffers()),
+		offers = JEnc(enabled),
 	})
 end
 
@@ -434,6 +455,7 @@ WVERBS.wpost = {
 		if not ev.wid or byId[ev.wid] then return end
 		local w = {
 			id = ev.wid, board = ev.board, state = "open",
+			_rid = ev.rid,
 			fromUUID = ev.actor, fromChar = ev.fromChar,
 			toUUID = ev.to, toChar = ev.toChar,
 			ref = ev.ref, name = ev.name, itemID = ev.itemID,
@@ -962,7 +984,7 @@ end
 
 -- ============ inbox wiring (2b/2c/2d) ============
 -- one scan feeds three matches: inbound GMW1 letters, mats
--- shipments whose fingerprint rides the writ's mats_fp, and COD
+-- shipments whose fingerprint rides the writ's matsFp, and COD
 -- deliveries on shipped writs. GetInboxText is the costly read —
 -- subject-gated and capped per pass.
 
@@ -1025,9 +1047,9 @@ function W.ScanInbox(force)
 	end
 	-- crafter side: agreed writs with a mats fingerprint staged
 	for _, w in ipairs(W.Writs().inb) do
-		if w.mats_fp and w.to == me then
+		if w.matsFp and w.toUUID == me then
 			matsWants = matsWants or {}
-			matsWants[w.mats_fp] = w
+			matsWants[w.matsFp] = w
 		end
 	end
 	local box, bodyReads = mailDB("writIn"), 0
@@ -1120,7 +1142,7 @@ end
 
 -- mats status for a crafter-side writ: sent | transit | arrived
 function W.MatsStatus(w)
-	if not (w and w.mats_fp) then return nil end
+	if not (w and w.matsFp) then return nil end
 	if mailDB("writMatsGot")[w.id] then return "arrived" end
 	for _, m in pairs(W.ScanInbox()) do
 		if m.kind == "mats" and m.w == w then return "transit" end

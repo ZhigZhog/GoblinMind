@@ -55,6 +55,7 @@ BankUI.lua
 GBankUI.lua
 SniperUI.lua
 OrdersUI.lua
+WritsUI.lua
 GatherUI.lua
 MapRevealData.lua
 GatherMap.lua
