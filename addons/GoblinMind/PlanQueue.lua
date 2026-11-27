@@ -243,16 +243,9 @@ local function Build()
 
 	-- close X rides the title corner like every other window —
 	-- frame.closeBtn also gives the module tab strip its right bound
-	local close = CreateFrame("Button", nil, frame)
-	close:SetSize(16, 16)
+	local close = GM.Widgets.XBtn(frame, 16)
 	close:SetPoint("TOPRIGHT", -6, -6)
-	close.text = GM.MakeFontString(close, GM.FONT_BOLD, 12, "textDim")
-	close.text:SetPoint("CENTER")
-	close.text:SetWordWrap(false)
-	close.text:SetText("x")
 	close:SetScript("OnClick", function() frame:Hide() end)
-	close:SetScript("OnEnter", function() close.text:SetTextColor(GM.RGB("text")) end)
-	close:SetScript("OnLeave", function() close.text:SetTextColor(GM.RGB("textDim")) end)
 	frame.closeBtn = close
 	-- freshness text lives on the action-strip row's right edge —
 	-- the title row is title + module tabs now and a long age string

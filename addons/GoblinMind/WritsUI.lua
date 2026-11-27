@@ -19,29 +19,8 @@ local ui
 local ROWS = 17
 local GoldText = GM.MoneyShort
 
-local function Panel(parent, x, y, w, h, title)
-	local p = CreateFrame("Frame", nil, parent)
-	p:SetPoint("TOPLEFT", x, y)
-	p:SetSize(w, h)
-	GM.Panel(p, "contLowest")
-	local t = GM.MakeFontString(p, GM.FONT_BOLD, 9, "secondary")
-	t:SetPoint("TOPLEFT", 8, -5)
-	t:SetText(title)
-	p.title = t
-	p.count = GM.MakeFontString(p, GM.FONT, 9, "textDim")
-	p.count:SetPoint("TOPRIGHT", -8, -5)
-	return p
-end
-
-local function MkBtn(parent, label, w, h)
-	local b = CreateFrame("Button", nil, parent)
-	b:SetSize(w or 60, h or 18)
-	GM.Panel(b, "contHigh")
-	b.text = GM.MakeFontString(b, GM.FONT_BOLD, 9, "accent")
-	b.text:SetPoint("CENTER")
-	b.text:SetText(label)
-	return b
-end
+local TitledPanel = GM.Widgets.TitledPanel
+local MkBtn = GM.Widgets.ActionBtn
 
 -- Enter commits a GoldEdit — it's a 3-box composite, so each
 -- sub-edit gets the handler (the frame itself never sees it)
@@ -56,22 +35,7 @@ local function GoldCommit(ge, fn)
 	end
 end
 
-local function MkEdit(parent, w, hint, numeric)
-	local e = CreateFrame("EditBox", nil, parent)
-	e:SetSize(w, 18)
-	e:SetAutoFocus(false)
-	e:SetFont(GM.FONT, 10, "")
-	GM.Panel(e, "contLowest")
-	e.hint = GM.MakeFontString(e, GM.FONT, 9, "textDim")
-	e.hint:SetPoint("LEFT", 4, 0)
-	e.hint:SetText(hint)
-	e:SetScript("OnTextChanged", function(s)
-		s.hint:SetShown(s:GetText() == "")
-	end)
-	e:SetScript("OnEscapePressed", function(s) s:ClearFocus() end)
-	e:SetTextInsets(4, 4, 0, 0)
-	return e
-end
+local MkEdit = GM.Widgets.HintEdit
 
 -- ============ SHOPS data ============
 -- flat offer market: one row per offer across every roster on the
@@ -377,7 +341,7 @@ function WU.Build(f)
 		expanded = {}, prof = nil, drill = nil }
 
 	-- ===== SHOPS pane =====
-	local sp = Panel(f, 10, -76, 700, 458, "SHOPS")
+	local sp = TitledPanel(f, "SHOPS", 10, -76, 700, 458)
 	ui.shopsP = sp
 	sp:EnableMouseWheel(true)
 	sp:SetScript("OnMouseWheel", function(_, d)
@@ -537,7 +501,7 @@ function WU.Build(f)
 	ui.reqPop = pop
 	pop.title = GM.MakeFontString(pop, GM.FONT_BOLD, 9, "secondary")
 	pop.title:SetPoint("TOPLEFT", 8, -5)
-	pop.qty = MkEdit(pop, 44, "qty", true)
+	pop.qty = MkEdit(pop, 44, "qty")
 	pop.qty:SetPoint("TOPLEFT", 8, -24)
 	pop.gold = GM.Widgets.GoldEdit(pop, 110)
 	pop.gold:SetPoint("LEFT", pop.qty, "RIGHT", 6, 0)
@@ -551,7 +515,7 @@ function WU.Build(f)
 	pop:Hide()
 
 	-- ===== MY WRITS pane =====
-	local wp = Panel(f, 10, -76, 700, 458, "MY WRITS")
+	local wp = TitledPanel(f, "MY WRITS", 10, -76, 700, 458)
 	ui.writsP = wp
 	wp:EnableMouseWheel(true)
 	wp:SetScript("OnMouseWheel", function(_, d)

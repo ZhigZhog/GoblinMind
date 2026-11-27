@@ -89,12 +89,8 @@ local function Build()
 	title:SetPoint("TOPLEFT", 12, -10)
 	title:SetText("BUG REPORT")
 
-	local close = CreateFrame("Button", nil, f)
-	close:SetSize(16, 16)
+	local close = W.XBtn(f, 16)
 	close:SetPoint("TOPRIGHT", -6, -6)
-	close.text = GM.MakeFontString(close, GM.FONT_BOLD, 12, "textDim")
-	close.text:SetPoint("CENTER")
-	close.text:SetText("x")
 	close:SetScript("OnClick", function() f:Hide() end)
 
 	local hint = GM.MakeFontString(f, GM.FONT, 9, "textDim")
@@ -103,17 +99,8 @@ local function Build()
 		.. "attach the screenshot there too")
 
 	-- scrollable multiline editbox carrying the diagnostics block
-	local scroll = CreateFrame("ScrollFrame", nil, f,
-		"UIPanelScrollFrameTemplate")
-	GM.Panel(scroll, "contLowest")
-	local eb = CreateFrame("EditBox", nil, scroll)
-	eb:SetMultiLine(true)
-	eb:SetAutoFocus(false)
-	eb:SetFont(GM.FONT, 10, "")
-	eb:SetTextColor(GM.RGB("text"))
-	eb:SetWidth(500)
+	local scroll, eb = W.ScrollEdit(f, 500)
 	eb:SetScript("OnEscapePressed", function() f:Hide() end)
-	scroll:SetScrollChild(eb)
 	ui.eb = eb
 
 	local copy = Btn(f, 90, "SELECT ALL", function()

@@ -73,6 +73,27 @@ function W.EditBox(parent, w, hint)
 	return eb
 end
 
+-- same bordered editbox, but the hint is an OVERLAY fontstring —
+-- it survives focus and reads as a label instead of pre-filled
+-- text (W.EditBox clears its hint on focus)
+function W.HintEdit(parent, w, hint)
+	local e = CreateFrame("EditBox", nil, parent)
+	e:SetSize(w, 18)
+	e:SetAutoFocus(false)
+	e:SetFont(GM.FONT, 10, "")
+	e:SetTextColor(GM.RGB("text"))
+	e:SetTextInsets(4, 4, 0, 0)
+	GM.Panel(e, "contLowest")
+	e.hint = GM.MakeFontString(e, GM.FONT, 9, "textDim")
+	e.hint:SetPoint("LEFT", 4, 0)
+	e.hint:SetText(LT(hint))
+	e:SetScript("OnTextChanged", function(s)
+		s.hint:SetShown(s:GetText() == "")
+	end)
+	e:SetScript("OnEscapePressed", function(s) s:ClearFocus() end)
+	return e
+end
+
 -- canonical display for money input: "10g", "5s", "1g 2s 30c"
 local function MoneyText(copper)
 	if not copper or copper <= 0 then return "0c" end
@@ -409,6 +430,24 @@ function W.ActionBtn(parent, label, w, h)
 	return b
 end
 
+-- small text-× dismiss/remove button — textDim glyph that flashes
+-- err on hover (was four hand-rolled copies with only one having
+-- the hover; now they all do)
+function W.XBtn(parent, s)
+	local x = CreateFrame("Button", nil, parent)
+	x:SetSize(s or 14, s or 14)
+	x.text = GM.MakeFontString(x, GM.FONT_BOLD, (s or 14) - 4, "textDim")
+	x.text:SetPoint("CENTER")
+	x.text:SetText("x")
+	x:SetScript("OnEnter", function()
+		x.text:SetTextColor(GM.RGB("err"))
+	end)
+	x:SetScript("OnLeave", function()
+		x.text:SetTextColor(GM.RGB("textDim"))
+	end)
+	return x
+end
+
 -- status line setter — the ui.footer pattern in the takeover windows
 function W.Footer(fs, msg, err)
 	fs:SetText(msg)
@@ -455,6 +494,22 @@ function W.SetMark(eb, state)
 	eb.mark:SetColorTexture(GM.RGB(
 		state == "err" and "err" or state == "ok" and "pos"
 			or state == "dirty" and "accent" or "outlineVar"))
+end
+
+-- scrollable multiline editbox — returns (scroll, eb). Callers
+-- keep their own esc/enter handling and geometry
+function W.ScrollEdit(parent, w)
+	local scroll = CreateFrame("ScrollFrame", nil, parent,
+		"UIPanelScrollFrameTemplate")
+	GM.Panel(scroll, "contLowest")
+	local eb = CreateFrame("EditBox", nil, scroll)
+	eb:SetMultiLine(true)
+	eb:SetAutoFocus(false)
+	eb:SetFont(GM.FONT, 10, "")
+	eb:SetTextColor(GM.RGB("text"))
+	eb:SetWidth(w or 500)
+	scroll:SetScrollChild(eb)
+	return scroll, eb
 end
 
 -- text segment button (toggle-strip member) + selected-state paint.
@@ -784,10 +839,10 @@ end
 -- positions under the toolbar row — CraftingUI uses -52, OpsUI -34.
 -- Was two near-identical Panel()s; p.titleFs and p.count are both set
 -- so either consumer's field name resolves.
-function W.ColPanel(parent, x, w, title, topY)
+function W.ColPanel(parent, x, w, title, topY, botY)
 	local p = CreateFrame("Frame", nil, parent)
 	p:SetPoint("TOPLEFT", x, topY or -52)
-	p:SetPoint("BOTTOM", 0, 30)
+	p:SetPoint("BOTTOM", 0, botY or 30)
 	p:SetWidth(w)
 	GM.Panel(p, "contLowest")
 	p:SetClipsChildren(true)
@@ -807,15 +862,25 @@ end
 -- when the user wants OUR window back; onShow hooks the native
 -- frame's show so the caller can re-park it. Returns nil if the
 -- native frame doesn't exist yet.
--- a standalone framed box with a bold title — callers position it.
--- Returns (panel, titleFS) — the title fs lets callers recolor/wrap.
-function W.TitledPanel(f, title)
+-- a standalone framed box with a bold title — callers position it,
+-- or pass (x, y, w, h) to place it here. p.title/p.count name the
+-- header cells (count is the TOPRIGHT convention — Panel header
+-- collisions note in AGENTS.md). Returns (panel, titleFS) — the
+-- title fs lets callers recolor/wrap.
+function W.TitledPanel(f, title, x, y, w, h)
 	local p = CreateFrame("Frame", nil, f)
+	if x then
+		p:SetPoint("TOPLEFT", x, y or 0)
+		if w then p:SetSize(w, h or 20) end
+	end
 	GM.Panel(p, "contLowest")
 	local t = GM.MakeFontString(p, GM.FONT_BOLD, 9, "secondary")
 	t:SetPoint("TOPLEFT", 8, -6)
 	t:SetWordWrap(false)
 	t:SetText(LT(title))
+	p.title = t
+	p.count = GM.MakeFontString(p, GM.FONT, 9, "textDim")
+	p.count:SetPoint("TOPRIGHT", -8, -7)
 	return p, t
 end
 
@@ -862,6 +927,19 @@ function W.HoverTint(row)
 	row.hl = row:CreateTexture(nil, "HIGHLIGHT")
 	row.hl:SetAllPoints()
 	row.hl:SetColorTexture(HL_R, HL_G, HL_B, 0.35)
+end
+
+-- zebra stripe background for list rows — odd contLowest, even
+-- contMedium. Creates row.bg once; later calls just recolor, so
+-- repaint paths can re-zebra in place (was ~10 hand-drawn copies)
+function W.Zebra(row, i)
+	if not row.bg then
+		row.bg = row:CreateTexture(nil, "BACKGROUND")
+		row.bg:SetAllPoints()
+	end
+	row.bg:SetColorTexture(GM.RGB(
+		i % 2 == 0 and "contMedium" or "contLowest"))
+	return row
 end
 
 -- resolved-name painter: writes the full "First Last" (surname
@@ -2027,10 +2105,7 @@ function W.ColumnRow(parent, opts)
 		else row.name:SetTextColor(GM.RGB("text")) end
 	end
 	-- zebra parity lives on the row so reordered pools repaint right
-	function row:SetZebra(i)
-		row.bg:SetColorTexture(GM.RGB(
-			i % 2 == 0 and "contMedium" or "contLowest"))
-	end
+	function row:SetZebra(i) W.Zebra(row, i) end
 	return row
 end
 

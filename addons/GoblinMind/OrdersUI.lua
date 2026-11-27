@@ -15,46 +15,9 @@ local ROWS = 14
 local BROWSEROWS = 12
 local BROWSE_MAX = 600
 
-local function Panel(parent, x, y, w, h, title)
-	local p = CreateFrame("Frame", nil, parent)
-	p:SetPoint("TOPLEFT", x, y)
-	p:SetSize(w, h)
-	GM.Panel(p, "contLowest")
-	local t = GM.MakeFontString(p, GM.FONT_BOLD, 9, "secondary")
-	t:SetPoint("TOPLEFT", 8, -5)
-	t:SetText(title)
-	p.title = t
-	p.count = GM.MakeFontString(p, GM.FONT, 9, "textDim")
-	p.count:SetPoint("TOPRIGHT", -8, -5)
-	return p
-end
-
-local function MkBtn(parent, label, w, h)
-	local b = CreateFrame("Button", nil, parent)
-	b:SetSize(w or 60, h or 18)
-	GM.Panel(b, "contHigh")
-	b.text = GM.MakeFontString(b, GM.FONT_BOLD, 9, "accent")
-	b.text:SetPoint("CENTER")
-	b.text:SetText(label)
-	return b
-end
-
-local function MkEdit(parent, w, hint, numeric)
-	local e = CreateFrame("EditBox", nil, parent)
-	e:SetSize(w, 18)
-	e:SetAutoFocus(false)
-	e:SetFont(GM.FONT, 10, "")
-	GM.Panel(e, "contLowest")
-	e.hint = GM.MakeFontString(e, GM.FONT, 9, "textDim")
-	e.hint:SetPoint("LEFT", 4, 0)
-	e.hint:SetText(hint)
-	e:SetScript("OnTextChanged", function(s)
-		s.hint:SetShown(s:GetText() == "")
-	end)
-	e:SetScript("OnEscapePressed", function(s) s:ClearFocus() end)
-	e:SetTextInsets(4, 4, 0, 0)
-	return e
-end
+local TitledPanel = GM.Widgets.TitledPanel
+local MkBtn = GM.Widgets.ActionBtn
+local MkEdit = GM.Widgets.HintEdit
 
 local GoldText = GM.MoneyShort
 
@@ -111,7 +74,7 @@ local function Build()
 	ui.ordNodes = {}
 
 	-- ===== POST bar: item strip on top, inputs below =====
-	local post = Panel(f, 10, -76, 700, 84, "POST BUY ORDER")
+	local post = TitledPanel(f, "POST BUY ORDER", 10, -76, 700, 84)
 	ui.post = post
 
 	-- shared slot widget — drop retargets the shared item channel
@@ -151,7 +114,7 @@ local function Build()
 	-- column grid: [fold 0-16][icon 18][item 36][qty 190][price 258]
 	-- [poster 348][status 452][action right] — headers label the
 	-- same x's so the eye learns the grid once
-	local list = Panel(f, 10, -166, 700, 216, "BOARD")
+	local list = TitledPanel(f, "BOARD", 10, -166, 700, 216)
 	ui.listP = list
 	list:EnableMouseWheel(true)
 	list:SetScript("OnMouseWheel", function(_, d)
@@ -340,7 +303,7 @@ local function Build()
 	end
 
 	-- ===== my commits + inbound COD =====
-	local mine = Panel(f, 10, -388, 342, 146, "MY COMMITS")
+	local mine = TitledPanel(f, "MY COMMITS", 10, -388, 342, 146)
 	ui.mineP = mine
 	mine.hint = GM.MakeFontString(mine, GM.FONT, 9, "textDim")
 	mine.hint:SetPoint("LEFT", mine.title, "RIGHT", 6, 0)
@@ -363,7 +326,7 @@ local function Build()
 		ui.mineRows[i] = r
 	end
 
-	local inc = Panel(f, 362, -388, 348, 146, "INBOUND CODs")
+	local inc = TitledPanel(f, "INBOUND CODs", 362, -388, 348, 146)
 	ui.incP = inc
 	inc.hint = GM.MakeFontString(inc, GM.FONT, 9, "textDim")
 	inc.hint:SetPoint("LEFT", inc.title, "RIGHT", 6, 0)

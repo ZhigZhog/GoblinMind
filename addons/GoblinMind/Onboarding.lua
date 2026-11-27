@@ -98,12 +98,8 @@ local function Build()
 	title:SetPoint("TOPLEFT", 12, -10)
 	ui.title = title
 
-	local close = CreateFrame("Button", nil, f)
-	close:SetSize(16, 16)
+	local close = W.XBtn(f, 16)
 	close:SetPoint("TOPRIGHT", -6, -6)
-	close.text = GM.MakeFontString(close, GM.FONT_BOLD, 12, "textDim")
-	close.text:SetPoint("CENTER")
-	close.text:SetText("x")
 	close:SetScript("OnClick", function() f:Hide() end)
 	-- every hide that isn't the DONE button = dismissed mid-flow;
 	-- MaybeShow re-opens it at login until the wizard is finished

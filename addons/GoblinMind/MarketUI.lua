@@ -472,8 +472,7 @@ local function BindAskRow(row, a, idx)
 	-- list updates and flip IsSuspect under a painted row
 	a.solver = a.seller and GM.Intel
 		and GM.Intel.IsSuspect(a.seller) or nil
-	row.bg:SetColorTexture(GM.RGB(idx % 2 == 0
-		and "contMedium" or "contLowest"))
+	W.Zebra(row, idx)
 	row.c1:SetText((a.bait and GM.CC("err") or a.wall and GM.CC("warn")
 		or GM.CC("text")) .. GM.Money(a.unit) .. "|r")
 	row.c2:SetText("×" .. a.qty)
