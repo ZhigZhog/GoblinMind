@@ -113,9 +113,12 @@ end
 
 function NodeIdx:SetVisible(b)
 	b = b and true or false
+	-- frame and flag can desync: adopted panes get :Hide()n at
+	-- build while the node defaults visible=true — an early return
+	-- would leave a "visible" node over a hidden frame forever
+	self.frame:SetShown(b)
 	if b == self.visible then return end
 	self.visible = b
-	self.frame:SetShown(b)
 	self:InvalidateLayout()
 end
 
