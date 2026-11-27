@@ -342,8 +342,10 @@ function WU.Build(f)
 		r.price:SetWidth(84)
 		r.price:SetJustifyH("LEFT")
 		r.who = GM.MakeFontString(r, GM.FONT, 9, "textDim")
-		r.who:SetPoint("LEFT", 420, 0)
-		r.who:SetWidth(196)
+		-- starts right of the price badge; surnames run long so the
+		-- cell claims all the space the REQUEST button leaves
+		r.who:SetPoint("LEFT", 398, 0)
+		r.who:SetWidth(148)
 		r.who:SetWordWrap(false)
 		r.who:SetJustifyH("LEFT")
 		r.act = MkBtn(r, "REQUEST", 62, 13)
@@ -534,7 +536,7 @@ local function layoutRow(r, mode)
 	end
 	r.name:SetWidth(mode == "myshop" and 116 or 204)
 	r.prof:SetWidth(mode == "myshop" and 52 or 74)
-	r.who:SetWidth(mode == "myshop" and 108 or 196)
+	r.who:SetWidth(mode == "myshop" and 108 or 148)
 	r.note:SetWidth(mode == "myshop" and 82 or 104)
 end
 
