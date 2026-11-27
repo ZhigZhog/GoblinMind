@@ -1512,6 +1512,9 @@ def _clean_offers(raw):
             'mats': str(o.get('mats'))[:12]
                     if o.get('mats') in MATS_KINDS else None,
             'note': str(o.get('note') or '')[:96],
+            # which toon owns the recipe — requests route to it.
+            # Surnames make 24 too small ("Firstname Surname").
+            'toon': str(o.get('toon') or '')[:48],
         }
         if o.get('itemID'):
             try:
@@ -1531,7 +1534,7 @@ def _clean_chars(raw):
         raw = raw.split(',')
     if not isinstance(raw, list):
         return []
-    return [str(c)[:24] for c in raw[:8] if str(c).strip()]
+    return [str(c)[:40] for c in raw[:8] if str(c).strip()]
 
 
 @_route('POST', '/v1/boards/{b}/roster', ORDOP)

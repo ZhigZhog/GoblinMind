@@ -394,6 +394,29 @@ function W.Rosters(board)
 			return out
 		end
 	end
+	-- the published payload's toon is whatever the stamp chain said
+	-- at publish time — an old publish can mis-attribute (or drop
+	-- the field outright: older servers whitelisted it away). Our
+	-- own row re-resolves against the live recipe DB so a stale
+	-- publish can't outlive current truth.
+	if me then
+		for _, r in ipairs(rows) do
+			if r.uuid == me and type(r.offers) == "table" then
+				local live
+				for _, o in ipairs(r.offers) do
+					if o.ref then
+						if not live then
+							live = {}
+							for _, ro in ipairs(W.RosterOffers()) do
+								live[ro.ref] = ro.toon
+							end
+						end
+						if live[o.ref] then o.toon = live[o.ref] end
+					end
+				end
+			end
+		end
+	end
 	return rows
 end
 
