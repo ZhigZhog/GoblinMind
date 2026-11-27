@@ -1329,6 +1329,33 @@ function W.MailShip(rec)
 	return ok
 end
 
+-- mesh writ shipping — same COD-letter receipt the mail channel
+-- uses: item rides the send slots, price rides COD, GMW1S marks
+-- the letter for a GM buyer. wship only stages AFTER the send
+-- lands so 'shipped' always means a real letter is in transit —
+-- the buyer's take then fires wrecv and the writ closes
+function W.MeshShip(w, codOverride, mailFrom)
+	local to = w and (w.fromChar or w.from)
+	local price = tonumber(codOverride)
+		or (w and (w.quote or w.price or w.offer)) or 0
+	if not to then return nil end
+	local ok = GM.Ops.SendMail({ to = to,
+		subject = "[GM Ship] " .. (w.name or "order"),
+		body = string.format(
+			"Your order ships COD — %s due on pickup.\n\n— %s\n%s\n%s",
+			(GM.MoneyShort and GM.MoneyShort(price)) or tostring(price),
+			CharName(),
+			table.concat({ "GMW1S", w.id or "-",
+				tostring(price), CharName() }, ";"),
+			W.MAIL_TAGLINE),
+		cod = price })
+	if ok then
+		W.Act("wship", w, { cod = price,
+			mailFrom = mailFrom or CharName() })
+	end
+	return ok
+end
+
 -- ============ inbox wiring (2b/2c/2d) ============
 -- one scan feeds three matches: inbound GMW1 letters, mats
 -- shipments whose fingerprint rides the writ's matsFp, and COD
@@ -1451,10 +1478,13 @@ function W.ScanInbox(force)
 		return ((GM.FirstName and GM.FirstName(s)) or s or ""):lower()
 	end
 	local me, myName = W.MyUUID(), FN(CharName())
-	-- customer side: my shipped writs → the crafter's COD lands here
+	-- customer side: my shipped writs → the crafter's COD lands here.
+	-- 'agreed' with cod delivery counts too — the letter can beat
+	-- the mesh wship ev and the take must still close the writ
 	local codWants, matsWants = {}, nil
 	for _, w in ipairs(W.Writs().out) do
-		if w.state == "shipped" and w.toChar then
+		if w.toChar and (w.state == "shipped"
+				or (w.state == "agreed" and w.deliver == "cod")) then
 			codWants[FN(w.toChar)] = w
 		end
 	end

@@ -1254,13 +1254,14 @@ function WU.Act(w, lbl)
 			local ok = W.MailShip(w)
 			msg(ok and "COD shipment sent — writ marked shipped"
 				or "ship failed — attach the item at a mailbox")
+		elseif w.deliver == "cod" then
+			-- attach the goods at a mailbox — the COD letter is
+			-- the delivery receipt; wship stages on send success
+			local ok = W.MeshShip(w, goldIn(), textIn("mailFrom"))
+			msg(ok and "COD shipment sent — writ marked shipped"
+				or "ship failed — attach the item at a mailbox")
 		else
-			local f = {}
-			if w.deliver == "cod" then
-				f.cod = goldIn()
-				f.mailFrom = textIn("mailFrom")
-			end
-			W.Act("wship", w, f)
+			W.Act("wship", w, {})
 			msg("ship staged — customer confirms on receipt")
 		end
 	elseif lbl == "RECEIVED" then
