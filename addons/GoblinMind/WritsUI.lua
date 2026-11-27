@@ -839,6 +839,7 @@ local function ShopsPaint(vm)
 			r.offerID = o.itemID
 			r.offerLink = o._link and o._link.link or nil
 			if r.chip then r.chip:Hide() end
+			if r.tail then r.tail:Hide() end
 			r:SetScript("OnClick", nil)
 			local ic = offerIcon(o)
 			if ic then r.icon:SetTexture(ic) r.icon:Show()
@@ -913,6 +914,43 @@ local function ShopsPaint(vm)
 						or "")
 					.. "|r")
 				GM.Widgets.NameTag(r.who, y.char, "textDim")
+				-- the bark's first capsule splices out of the raw
+				-- text into a real chip — the inline |c|H|h markup
+				-- renders colored but answers no click; the chip
+				-- gets Blizzard click behavior + the link tooltip
+				local first = y.links and y.links[1]
+				local pos = first and first.link
+					and y.text:find(first.link, 1, true)
+				if pos then
+					r.name:SetText("yell: "
+						.. y.text:sub(1, pos - 1))
+					r.chip = r.chip
+						or GM.Widgets.LinkChip(r, 200, 13)
+					r.chip._pre = function()
+						GM.LinkFrom = { char = y.char,
+							t = time(), kind = "trade" }
+					end
+					r.chip.fs:SetWidth(280)
+					r.chip:SetCapsule(first.link, first.disp)
+					local px = 40 + math.min(200,
+						r.name:GetStringWidth() or 0)
+					-- keep clear of the price badge at x=330
+					local budget = math.max(0, 322 - px)
+					local cw = math.min(budget,
+						(r.chip.fs:GetStringWidth() or 0) + 4)
+					r.chip:SetWidth(cw)
+					r.chip.fs:SetWidth(cw)
+					r.chip:ClearAllPoints()
+					r.chip:SetPoint("LEFT", px, 0)
+					r.tail = r.tail or GM.MakeFontString(
+						r, GM.FONT, 9, "text")
+					r.tail:SetWordWrap(false)
+					r.tail:SetJustifyH("LEFT")
+					r.tail:SetWidth(math.max(0, budget - cw - 4))
+					r.tail:SetPoint("LEFT", r.chip, "RIGHT", 0, 0)
+					r.tail:SetText(y.text:sub(pos + #first.link))
+					r.tail:SetShown(cw > 0)
+				end
 				r.act.text:SetText("WHISPER")
 				r.act.text:SetTextColor(GM.RGB("accent"))
 				r.act:Show()
