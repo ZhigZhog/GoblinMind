@@ -121,6 +121,15 @@ local function marketRows(board, q, prof)
 				prof = y.prof, itemID = y.itemID, ref = y.ref,
 				_yell = true },
 				roster = ros }
+			-- unfolded bark: the full message as its own sub-row
+			-- (_gi 0.5 sits between header 0 and capsules 1..n)
+			if y._expanded then
+				out[#out + 1] = { yell = y, _gs = gs, _gi = 0.5,
+					offer = { name = "| " .. y.text,
+						prof = y.prof, _yell = true,
+						_barkText = true },
+					roster = ros }
+			end
 		end
 		for si, lnk in ipairs(y.links or {}) do
 			-- bark intent tags the row: buying (WTB/lf) vs selling
@@ -866,7 +875,19 @@ local function ShopsPaint(vm)
 			r.prof:SetText(o.prof or "")
 			if o._yell then
 				local y = e.yell
-				if o._link then
+				if o._barkText then
+					-- unfolded bark: the full message across the
+					-- offer+prof+price span — the name cell would
+					-- clip at 204 so widen it for this row kind
+					r.name:SetWidth(500)
+					r.name:SetText(GM.CC("textDim") .. "| "
+						.. y.text .. "|r")
+					r.prof:SetText("")
+					r.price:SetText("")
+					r.who:SetText("")
+					r.act:Hide()
+					r.act2:Hide()
+				elseif o._link then
 					-- capsule sub-offer: suggested price where the
 					-- DB can derive one, hover gives the real
 					-- tooltip, "+" mails a writ for THIS item
@@ -912,8 +933,12 @@ local function ShopsPaint(vm)
 					r.act2:Hide()
 				else
 				-- bark row: no price claim — badge + whisper/mail
-				-- actions instead of a server writ request
-				r.price:SetText(GM.CC("textDim") .. "·yell "
+				-- actions instead of a server writ request. The
+				-- +/- marker is the unfold affordance — clicking
+				-- the row splices in a full-text sub-row
+				r.price:SetText(GM.CC("textDim")
+					.. (y._expanded and "- " or "+ ")
+					.. "·yell "
 					.. GM.FmtAge(time() - (y.t or time()))
 					.. ((y.n or 1) > 1 and (" ×" .. y.n) or "")
 					.. (y.intent == "buy"
@@ -960,6 +985,10 @@ local function ShopsPaint(vm)
 					r.tail:SetText(y.text:sub(pos + #first.link))
 					r.tail:SetShown(cw > 0)
 				end
+				r:SetScript("OnClick", function()
+					y._expanded = not y._expanded
+					WU.Paint("shops")
+				end)
 				r.act.text:SetText("WHISPER")
 				r.act.text:SetTextColor(GM.RGB("accent"))
 				r.act:Show()
