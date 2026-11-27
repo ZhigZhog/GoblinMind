@@ -324,7 +324,7 @@ local function P_InventoryFull(t, id)
 	local inv = GM.Inventory.Count(id)
 	if inv.total == 0 then return end
 	t:AddTextLine("You own", GM.CC("text") .. inv.total .. "|r")
-	local who = UnitName("player") or "player"
+	local who = (GM.OwnName and GM.OwnName()) or "player"
 	local mine = InvParts(inv.bags, inv.bank, inv.auction, inv.mail)
 	t:AddTextLine("    " .. who,
 		GM.CC("text") .. (mine ~= "" and mine or "0 held") .. "|r")

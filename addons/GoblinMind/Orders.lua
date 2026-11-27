@@ -64,7 +64,8 @@ local function unjson(s)
 end
 
 local function CharName()
-	return UnitName("player") or "?"
+	return (GM.OwnName and GM.OwnName())
+		or (UnitName and UnitName("player")) or "?"
 end
 
 -- ============ identity ============
@@ -1229,7 +1230,7 @@ function OR.RelayPeer(body, sender)
 	-- never register ourselves: Mesh's echo filter can miss when it
 	-- captured "Unknown Entity" pre-login, and a self-whispered Q is
 	-- dropped by the client (REFRESH would dead-end asking ourselves)
-	if sender:match("^[^-]+") == UnitName("player") then return end
+	if GM.SameChar and GM.SameChar(sender) then return end
 	for entry in (body or ""):gmatch("[^,]+") do
 		-- "board[:tag]" — tag is the serving peer's tracker hash;
 		-- absent = legacy beacon (only trusted for remote boards).
@@ -1401,7 +1402,7 @@ end
 -- poison the view); a remote board admits the first S answering
 -- our ask's gen.
 function OR.StreamStart(body, sender)
-	if not sender or sender:match("^[^-]+") == UnitName("player") then
+	if not sender or GM.SameChar and GM.SameChar(sender) then
 		return
 	end
 	local b, gen, tag = (body or ""):match("^([^;]+);(%d+);?(.*)$")
@@ -1631,7 +1632,7 @@ end
 
 -- host side: 'I' record asks for open listings of one item
 function OR.MeshItemQuery(body, sender)
-	if not sender or sender:match("^[^-]+") == UnitName("player") then
+	if not sender or GM.SameChar and GM.SameChar(sender) then
 		return
 	end
 	local iid, gen, tag = (body or ""):match("^(%d+);(%d+);?(.*)$")
@@ -1722,7 +1723,7 @@ end
 -- then on jitter — re-check at fire time so answers that landed
 -- during the delay silence us (mDNS known-answer)
 function OR.MeshProbe(body, sender)
-	if not sender or sender:match("^[^-]+") == UnitName("player") then
+	if not sender or GM.SameChar and GM.SameChar(sender) then
 		return
 	end
 	OR.relay.lastD = time()
@@ -1740,7 +1741,7 @@ end
 -- stream. askT = the asker's known snapshot t — servers with
 -- nothing newer don't speak at all
 function OR.MeshQuery(body, sender)
-	if not sender or sender:match("^[^-]+") == UnitName("player") then
+	if not sender or GM.SameChar and GM.SameChar(sender) then
 		return
 	end
 	OR.relay.heard[sender] = time()
@@ -1781,7 +1782,7 @@ end
 -- an F offer heard: update dominance for pending offers, and feed
 -- the asker's selection when it's our nonce
 function OR.MeshOffer(body, sender)
-	if not sender or sender:match("^[^-]+") == UnitName("player") then
+	if not sender or GM.SameChar and GM.SameChar(sender) then
 		return
 	end
 	OR.relay.heard[sender] = time()
@@ -1804,7 +1805,7 @@ end
 -- the asker's pick: board;nonce;sender — the named server alone
 -- streams; everyone else drops whatever they queued for the nonce
 function OR.MeshPull(body, sender)
-	if not sender or sender:match("^[^-]+") == UnitName("player") then
+	if not sender or GM.SameChar and GM.SameChar(sender) then
 		return
 	end
 	OR.relay.heard[sender] = time()

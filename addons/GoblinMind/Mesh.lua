@@ -455,7 +455,8 @@ local function OnAddon(_, prefix, msg, ctype, sender)
 		local n = UnitName("player")
 		if n and n ~= "Unknown Entity" then me = n end
 	end
-	if me and sender and sender:match("^[^-]+") == me then
+	if me and sender and GM.SameChar
+		and GM.SameChar(sender) then
 		return -- own echo
 	end
 	if not GM.db then return end

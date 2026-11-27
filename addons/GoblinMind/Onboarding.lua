@@ -170,7 +170,8 @@ local function Build()
 	nameLab:SetText("YOUR NAME (shown to the server)")
 	local nameEb = W.EditBox(p1, 200)
 	nameEb:SetPoint("TOPLEFT", nameLab, "BOTTOMLEFT", -2, -4)
-	nameEb:SetText(UnitName and UnitName("player") or "goblinmind")
+	nameEb:SetText((GM.OwnName and GM.OwnName())
+		or (UnitName and UnitName("player")) or "goblinmind")
 	ui.nameEb = nameEb
 
 	local keyLab = GM.MakeFontString(p1, GM.FONT, 9, "textDim")

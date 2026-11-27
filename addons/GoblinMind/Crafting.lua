@@ -549,7 +549,7 @@ local function Scan()
 					svc = true,
 					-- which toon knows it — the shop roster routes
 					-- requests to the crafter, not the install
-					toon = UnitName("player") or prev.toon,
+					toon = (GM.OwnName and GM.OwnName()) or prev.toon,
 					prof = ProfForRecipe(recipeID) or prof
 						or (type(prev.prof) == "string"
 							and prev.prof ~= "" and prev.prof or nil),
@@ -573,7 +573,7 @@ local function Scan()
 				GoblinMindCrafting.recipes[recipeID] = {
 					name = info.name or prev.name,
 					itemID = sc.outputItemID,
-					toon = UnitName("player") or prev.toon,
+					toon = (GM.OwnName and GM.OwnName()) or prev.toon,
 					prof = ProfForRecipe(recipeID) or prof
 						or (type(prev.prof) == "string"
 							and prev.prof ~= "" and prev.prof or nil),
@@ -613,7 +613,7 @@ local function Scan()
 				name = info.name or prev.name,
 				itemID = sc and sc.outputItemID or prev.itemID,
 				unlearned = true,
-				toon = UnitName("player") or prev.toon,
+				toon = (GM.OwnName and GM.OwnName()) or prev.toon,
 				prof = ProfForRecipe(recipeID) or prof
 					or (type(prev.prof) == "string"
 						and prev.prof ~= "" and prev.prof or nil),

@@ -73,7 +73,8 @@ local function OpJSON(f)
 end
 
 local function CharName()
-	return UnitName("player") or "?"
+	return (GM.OwnName and GM.OwnName())
+		or (UnitName and UnitName("player")) or "?"
 end
 
 -- ============ identity (delegated to Orders when present) ============
@@ -123,8 +124,34 @@ function W.Terms(ref)
 	return TermsFor(ref)
 end
 
+-- profession → owning toon, inferred from stamped rows: a recipe
+-- scanned before toon-stamps existed has no owner — guess its
+-- profession's known owner rather than crediting whoever happens
+-- to be publishing (the "alt owns my Engineer's offers" bug).
+-- Two stamped owners for one prof → ambiguous → don't guess.
+local function ProfOwners()
+	local own = {}
+	for _, tbl in ipairs({ GoblinMindCrafting
+			and GoblinMindCrafting.recipes,
+			GoblinMindCrafting and GoblinMindCrafting.services }) do
+		for _, r in pairs(tbl or {}) do
+			if type(r) == "table" and r.toon and r.prof then
+				local k = tostring(r.prof):lower()
+				if own[k] == nil then own[k] = r.toon
+				elseif own[k] ~= r.toon then own[k] = false end
+			end
+		end
+	end
+	return own
+end
+
 function W.RosterOffers()
 	local out = {}
+	local owners
+	local function ownerFor(stamp, prof)
+		owners = owners or ProfOwners()
+		return stamp or owners[(prof or ""):lower()] or CharName()
+	end
 	-- ';' is the relay envelope's field delimiter — offer text must
 	-- never carry it (JSON in the queue is hex-packed and fine; the
 	-- tunneled copy is not)
@@ -141,7 +168,7 @@ function W.RosterOffers()
 				numMade = r.numMade or 1, on = t.on == true,
 				-- the toon stamped at scan time owns the recipe —
 				-- requests route to it, not to chars[1]
-				toon = r.toon or CharName(),
+				toon = ownerFor(t.toon or r.toon, r.prof),
 				price = t.price, mats = t.mats,
 				note = t.note and t.note:gsub(";", " ") or nil,
 			}
@@ -157,7 +184,7 @@ function W.RosterOffers()
 				ref = ref, name = r.name:gsub(";", " "),
 				prof = r.prof and r.prof:gsub(";", " ") or nil,
 				kind = "service", on = t.on == true,
-				toon = r.toon or CharName(),
+				toon = ownerFor(t.toon or r.toon, r.prof),
 				price = t.price, mats = t.mats,
 				note = t.note and t.note:gsub(";", " ") or nil,
 			}
@@ -175,7 +202,7 @@ function W.RosterOffers()
 				kind = s.kind == "service" and "service" or "craft",
 				itemID = s.itemID, on = t.on == true,
 				toon = s.toon and tostring(s.toon):gsub(";", " ")
-					or CharName(),
+					or ownerFor(t.toon, s.prof),
 				price = t.price or s.price,
 				mats = t.mats or s.mats,
 				note = (t.note or s.note)
@@ -269,8 +296,7 @@ function W.Publish(board)
 			chars[#chars + 1] = c
 		end
 	end
-	if #chars == 0 then chars[1] =
-		(GM.FullName and GM.FullName(CharName())) or CharName() end
+	if #chars == 0 then chars[1] = CharName() end
 	table.sort(chars)
 	local enabled = {}
 	for _, o in ipairs(W.RosterOffers()) do

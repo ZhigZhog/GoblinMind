@@ -68,7 +68,8 @@ local function RecipientNames()
 	local me = UnitName and UnitName("player") or ""
 	local function add(n)
 		n = n and strtrim(ShortName(n) or "")
-		if not n or n == "" or n == me then return end
+		if not n or n == "" then return end
+		if GM.SameChar and GM.SameChar(n, me) then return end
 		local k = n:lower()
 		if not seen[k] then seen[k] = true names[#names + 1] = n end
 	end

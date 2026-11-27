@@ -552,7 +552,8 @@ end
 function GM.AH.CollectItemAsks()
 	local key = GM.AH.scanItemKey
 	local asks = {}
-	local me, meGUID = UnitName("player"),
+	local me, meGUID = (GM.OwnName and GM.OwnName())
+		or UnitName("player"),
 		UnitGUID and UnitGUID("player")
 	for i = 1, C_AuctionHouse.GetNumItemSearchResults(key) do
 		local r = C_AuctionHouse.GetItemSearchResultInfo(key, i)
@@ -655,7 +656,8 @@ function GM.AH.MergeOwnAsks(asks, key)
 						qty = a.qty or 1,
 						unit = a.buyout,
 						total = a.buyout * (a.qty or 1),
-						own = true, seller = UnitName("player"),
+						own = true, seller = (GM.OwnName
+							and GM.OwnName()) or UnitName("player"),
 						link = a.itemLink })
 				end
 			end

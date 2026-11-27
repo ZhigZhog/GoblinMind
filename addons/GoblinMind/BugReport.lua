@@ -28,7 +28,8 @@ local function Collect()
 			tostring(v), tostring(b), tostring(t)))
 	end
 	if UnitName then
-		line(format("toon: %s @ %s", tostring(UnitName("player")),
+		line(format("toon: %s @ %s", tostring(GM.OwnName
+			and GM.OwnName() or UnitName and UnitName("player")),
 			tostring(GetRealmName and GetRealmName())))
 	end
 	local n = 0

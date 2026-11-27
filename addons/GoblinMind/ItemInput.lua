@@ -80,7 +80,7 @@ local function linkPoster(link)
 	for i = #linkRing, 1, -1 do
 		local e = linkRing[i]
 		if (e.t or 0) < cut then break end
-		if e.sender:match("^[^-]+") ~= me then
+		if not (GM.SameChar and GM.SameChar(e.sender, me)) then
 			local pos = e.msg:find(needle, 1, true)
 			if pos then
 				local nxt = e.msg:sub(pos + #needle, pos + #needle)

@@ -770,8 +770,8 @@ function GM.IsSelfCharKey(key)
 		return false
 	end
 	local kname, krealm = key:match("^(.-)%-(.*)$")
-	if not kname then return key == name end
-	if kname ~= name then return false end
+	if not kname then return GM.SameChar(key, name) == true end
+	if not GM.SameChar(kname, name) then return false end
 	local realm = GetRealmName and GetRealmName() or ""
 	return realm == "" or krealm == realm
 end
@@ -849,6 +849,28 @@ function GM.FullName(n)
 	return base
 end
 
+-- canonical self-identity — THE way every capture of "me" reads
+-- the player name. UnitName alone returns the short form, and on
+-- Forever two toons can share a first name (only the pair is
+-- unique), so stored/wire identity needs the resolved form.
+-- Anything persisting or transmitting the local char's name goes
+-- through this; anything comparing names goes through SameChar.
+function GM.OwnName()
+	local n = UnitName and UnitName("player")
+	return (n and GM.FullName(n)) or n
+end
+
+-- form-agnostic identity compare: "Zhig", "Zhig-Realm", and
+-- "Zhig Zhog" all test equal — first name is the key (Forever's
+-- rule: a first OR last name may repeat, never both).
+-- SameChar(x) compares x to the local player.
+function GM.SameChar(a, b)
+	a = GM.FirstName(a)
+	b = GM.FirstName(b ~= nil and b
+		or (UnitName and UnitName("player")))
+	return a ~= nil and b ~= nil and a:lower() == b:lower()
+end
+
 -- class-color companion to FullName: resolve a character's class
 -- TOKEN ("MAGE", "WARLOCK", ...) through every social source that
 -- reports it — own toon, party, guild roster, friends — cached in
@@ -861,8 +883,7 @@ function GM.ClassOf(n)
 	local base = GM.FirstName(n)
 	if not base or base == "" then return nil end
 	local low = base:lower()
-	local me = UnitName and UnitName("player")
-	if me and low == me:lower() then
+	if GM.SameChar(base) then
 		local tok = select(2, UnitClass("player"))
 		if tok and GM.db then
 			GM.db.classOf = GM.db.classOf or {}

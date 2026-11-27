@@ -64,7 +64,8 @@ end
 local function StampChar()
 	if not GM.db then return end
 	local ck = GM.CharKey()
-	local name = UnitName and UnitName("player") or ck
+	local name = (GM.OwnName and GM.OwnName())
+		or (UnitName and UnitName("player")) or ck
 	local cls = PlayerClassToken()
 	local fac = UnitFactionGroup and UnitFactionGroup("player")
 	local ch = Chars()[ck]
@@ -789,7 +790,8 @@ function B.Init()
 	RepairWealthHist()
 	GM.db.acctColorMode = nil -- replaced by per-char ch.col
 	local me = GM.CharKey()
-	local myName = (UnitName and UnitName("player")) or me
+	local myName = (GM.OwnName and GM.OwnName())
+		or (UnitName and UnitName("player")) or me
 	-- legacy accounts carry no owner — whoever loads first after the
 	-- migration claims them; that char was the de-facto owner anyway
 	-- since the envelope math always used the live purse
