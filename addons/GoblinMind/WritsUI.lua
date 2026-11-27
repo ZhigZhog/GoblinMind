@@ -112,32 +112,41 @@ local function marketRows(board, q, prof)
 	for _, y in ipairs(W.YellOffers and W.YellOffers() or {}) do
 		local ros = { chars = { y.char }, stats = {}, _yell = true }
 		local gs = { name = y.char }
-		out[#out + 1] = { yell = y, _gs = gs, _gi = 0, offer = {
-			name = "yell: " .. y.text,
-			prof = y.prof, itemID = y.itemID, ref = y.ref,
-			_yell = true },
-			roster = ros }
+		-- the prof filter reaches barks too — header tests y.prof,
+		-- each capsule sub-row tests its own (a trade link's prof
+		-- can differ from the bark's keyword guess)
+		if not prof or y.prof == prof then
+			out[#out + 1] = { yell = y, _gs = gs, _gi = 0, offer = {
+				name = "yell: " .. y.text,
+				prof = y.prof, itemID = y.itemID, ref = y.ref,
+				_yell = true },
+				roster = ros }
+		end
 		for si, lnk in ipairs(y.links or {}) do
 			-- bark intent tags the row: buying (WTB/lf) vs selling
 			-- (WTS/lfw) — read the tag before the capsule, the writ
 			-- direction depends on it
-			local itag = y.intent == "buy"
-					and (GM.CC("secondary") .. "buy|r ")
-				or y.intent == "sell"
-					and (GM.CC("good") .. "sell|r ")
-				or ""
-			out[#out + 1] = { yell = y, _gs = gs, _gi = si,
-				offer = {
-					-- disp = the printable capsule (color +
-					-- brackets, no |H payload); raw link stays in
-					-- _link for hover + click
-					name = "| " .. itag
-						.. (lnk.disp or lnk.link or lnk.name),
-					prof = (lnk.kind == "trade" and lnk.name)
-						or y.prof,
-					itemID = lnk.kind == "item" and lnk.id or nil,
-					_yell = true, _link = lnk },
-				roster = ros }
+			local lprof = (lnk.kind == "trade" and lnk.name)
+				or y.prof
+			if not prof or lprof == prof then
+				local itag = y.intent == "buy"
+						and (GM.CC("secondary") .. "buy|r ")
+					or y.intent == "sell"
+						and (GM.CC("good") .. "sell|r ")
+					or ""
+				out[#out + 1] = { yell = y, _gs = gs, _gi = si,
+					offer = {
+						-- disp = the printable capsule (color +
+						-- brackets, no |H payload); raw link stays in
+						-- _link for hover + click
+						name = "| " .. itag
+							.. (lnk.disp or lnk.link or lnk.name),
+						prof = lprof,
+						itemID = lnk.kind == "item" and lnk.id
+							or nil,
+						_yell = true, _link = lnk },
+					roster = ros }
+			end
 		end
 	end
 	if q and q ~= "" then
