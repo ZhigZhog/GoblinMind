@@ -1409,6 +1409,27 @@ local function yellHit(msg)
 	end
 end
 
+-- bark intent: WTB/lf/want = they're buying; WTS/selling/lfw =
+-- they're selling. lf = "looking for" (a crafter — buying the
+-- service); lfw = "looking for work" (selling it). Word-padded
+-- matching so "sell" can't fire inside "seller's". Both or
+-- neither → untagged.
+local YELL_BUY = { " wtb ", " lf ", " buying ", " buy ", " want ",
+	" need ", " looking for " }
+local YELL_SELL = { " wts ", " selling ", " sell ", " lfw ",
+	" for sale " }
+local function yellIntent(msg)
+	local l = " " .. msg:lower() .. " "
+	local function hit(t)
+		for _, kw in ipairs(t) do
+			if l:find(kw, 1, true) then return true end
+		end
+	end
+	local buy, sell = hit(YELL_BUY), hit(YELL_SELL)
+	if buy == sell then return nil end
+	return buy and "buy" or "sell"
+end
+
 -- passive link harvest: every [|H..|h[..]|h] capsule in a bark is
 -- an offer the yeller advertises — items, enchant/spell services,
 -- |Htrade: profession links. Each becomes a sub-line under the
@@ -1419,6 +1440,17 @@ local function yellLinks(msg)
 	for link, kind, payload, name in
 			msg:gmatch("(|?c?%x*|H(%a+):([^|]*)|h%[(.-)%]|h)") do
 		local l = { kind = kind, name = name, link = link }
+		-- the row prints the capsule's DISPLAY string only — the raw
+		-- |c|H..|h..|h payload is invisible text that pushes the cell
+		-- over its render budget and truncates mid-name on longer
+		-- capsules. Keep color + brackets; trade links drop the
+		-- "Enchanting: " prefix (the prof column already says it)
+		local dname = name
+		if kind == "trade" then
+			dname = name:match("^.-: (.+)$") or name
+		end
+		l.disp = (link:match("(|c%x+)") or "")
+			.. "[" .. dname .. "]|r"
 		if kind == "item" then
 			l.id = tonumber(payload)
 			if not itemID then
@@ -1581,6 +1613,7 @@ yells:SetScript("OnEvent", function(_, ev, msg, sender, ...)
 		seen.n = (seen.n or 1) + 1
 		seen.itemID, seen.ref, seen.linkName = itemID, ref, lname
 		seen.links = links
+		seen.intent = yellIntent(msg)
 		if prof then seen.prof, seen.clsProf =
 			prof, YELL_CLASS[prof] or nil end
 		return
@@ -1589,7 +1622,7 @@ yells:SetScript("OnEvent", function(_, ev, msg, sender, ...)
 		text = msg:sub(1, 120), t = time(), prof = prof, n = 1,
 		clsProf = prof and YELL_CLASS[prof] or nil,
 		itemID = itemID, ref = ref, linkName = lname,
-		links = links }
+		intent = yellIntent(msg), links = links }
 	yellSeen[sender] = y
 	yellRing[#yellRing + 1] = y
 	if #yellRing > YELL_MAX then

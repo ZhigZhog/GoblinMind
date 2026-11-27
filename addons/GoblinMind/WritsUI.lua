@@ -118,11 +118,21 @@ local function marketRows(board, q, prof)
 			_yell = true },
 			roster = ros }
 		for si, lnk in ipairs(y.links or {}) do
+			-- bark intent tags the row: buying (WTB/lf) vs selling
+			-- (WTS/lfw) — read the tag before the capsule, the writ
+			-- direction depends on it
+			local itag = y.intent == "buy"
+					and (GM.CC("secondary") .. "buy|r ")
+				or y.intent == "sell"
+					and (GM.CC("good") .. "sell|r ")
+				or ""
 			out[#out + 1] = { yell = y, _gs = gs, _gi = si,
 				offer = {
-					-- the raw capsule renders bracketed + link-
-					-- colored; plain text version lives in _link.name
-					name = "| " .. (lnk.link or lnk.name),
+					-- disp = the printable capsule (color +
+					-- brackets, no |H payload); raw link stays in
+					-- _link for hover + click
+					name = "| " .. itag
+						.. (lnk.disp or lnk.link or lnk.name),
 					prof = (lnk.kind == "trade" and lnk.name)
 						or y.prof,
 					itemID = lnk.kind == "item" and lnk.id or nil,
@@ -891,6 +901,11 @@ local function ShopsPaint(vm)
 				r.price:SetText(GM.CC("textDim") .. "·yell "
 					.. GM.FmtAge(time() - (y.t or time()))
 					.. ((y.n or 1) > 1 and (" ×" .. y.n) or "")
+					.. (y.intent == "buy"
+							and (GM.CC("secondary") .. " ·buy")
+						or y.intent == "sell"
+							and (GM.CC("good") .. " ·sell")
+						or "")
 					.. "|r")
 				GM.Widgets.NameTag(r.who, y.char, "textDim")
 				r.act.text:SetText("WHISPER")
