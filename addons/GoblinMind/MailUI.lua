@@ -74,7 +74,9 @@ local function RecipientNames()
 		if not seen[k] then seen[k] = true names[#names + 1] = n end
 	end
 	for _, r in ipairs(GM.Model.Pref("mailRecent") or {}) do add(r) end
-	for _, v in pairs(GM.db and GM.db.fullNames or {}) do add(v) end
+	for _, v in pairs(GM.FullNames and GM.FullNames() or {}) do
+		add(v)
+	end
 	for _, ck in ipairs(GM.Ledger and GM.Ledger.Chars() or {}) do add(ck) end
 	local nf = C_FriendList and C_FriendList.GetNumFriends
 		and C_FriendList.GetNumFriends() or 0
@@ -107,7 +109,6 @@ end
 
 -- remember a recipient after a successful send (dedup, cap 10)
 local function PushRecent(to)
-	if not GM.db then return end
 	local rec = GM.Model.Pref("mailRecent", {})
 	for i, r in ipairs(rec) do
 		if r:lower() == to:lower() then tremove(rec, i) break end
@@ -652,14 +653,15 @@ end
 local function DeliverRows()
 	local out = {}
 	local WR = GM.Writs
-	if WR and WR.Writs then
-		for _, w in ipairs((WR.Writs() or {}).inb or {}) do
+	local v = WR and WR.Writs and WR.Writs()
+	if v then
+		for _, w in ipairs(v.inb or {}) do
 			-- 'quoted' counts as open too — the buyer's confirm is
 			-- still out, but the terms exist and shipping early is
 			-- harmless: the COD take closes the writ either way
 			if (w.state == "agreed" or w.state == "quoted")
 					and w.deliver == "cod" then
-				local unit = w.quote or w.price or w.offer or 0
+				local unit = WR.UnitPrice(w)
 				out[#out + 1] = { w = w, mail = false,
 					name = w.name or "order",
 					to = w.fromChar or w.from or "?",
@@ -668,17 +670,17 @@ local function DeliverRows()
 					pend = w.state == "quoted" }
 			end
 		end
-	end
-	for _, rec in pairs(GM.db and GM.db.writIn or {}) do
-		if (rec.state == "agreed" or rec.state == "quoted")
-				and (rec.deliver or "cod") == "cod" then
-			local unit = rec.price or rec.quote or rec.offer or 0
-			out[#out + 1] = { w = rec, mail = true,
-				name = rec.name or "order",
-				to = rec.fromChar or rec.sender or "?",
-				qty = rec.qty or 1, unit = unit,
-				total = unit * (rec.qty or 1),
-				pend = rec.state == "quoted" }
+		for _, rec in ipairs(v.mailIn or {}) do
+			if (rec.state == "agreed" or rec.state == "quoted")
+					and (rec.deliver or "cod") == "cod" then
+				local unit = WR.UnitPrice(rec)
+				out[#out + 1] = { w = rec, mail = true,
+					name = rec.name or "order",
+					to = rec.fromChar or rec.sender or "?",
+					qty = rec.qty or 1, unit = unit,
+					total = unit * (rec.qty or 1),
+					pend = rec.state == "quoted" }
+			end
 		end
 	end
 	return out
@@ -1273,9 +1275,7 @@ function MU.CodProbe()
 		GM.Print("probe error (partial dump follows): "
 			.. tostring(err))
 	end
-	if GM.db then
-		GM.Model.SetPref("dbgDump", table.concat(GM.dbgCap, "\n"))
-	end
+	GM.Model.SetPref("dbgDump", table.concat(GM.dbgCap, "\n"))
 	GM.dbgCap = nil
 	GM.Print("captured — /reload flushes to SavedVariables (dbgDump)")
 end

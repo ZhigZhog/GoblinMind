@@ -293,14 +293,8 @@ local function writRows()
 	local out = {}
 	for _, w in ipairs(v.inb) do out[#out + 1] = w end
 	for _, w in ipairs(v.out) do out[#out + 1] = w end
-	for _, w in ipairs(v.mailOut or {}) do
-		w._side, w._mail = "out", true
-		out[#out + 1] = w
-	end
-	for _, w in ipairs(v.mailIn or {}) do
-		w._side, w._mail = "inb", true
-		out[#out + 1] = w
-	end
+	for _, w in ipairs(v.mailOut or {}) do out[#out + 1] = w end
+	for _, w in ipairs(v.mailIn or {}) do out[#out + 1] = w end
 	table.sort(out, function(a, b)
 		return (a.updated or a.t or 0) > (b.updated or b.t or 0)
 	end)
@@ -1238,7 +1232,7 @@ local function detailRowPaint(r, w, me)
 	if w.quote and w.quote ~= w.offer then
 		bits[#bits + 1] = "quote " .. GoldText(w.quote) .. "/ea"
 	end
-	local unit = w.quote or w.price or w.offer or 0
+	local unit = W.UnitPrice(w)
 	if unit > 0 and (w.qty or 1) > 1 then
 		bits[#bits + 1] = "total " .. GoldText(unit * w.qty)
 	end
@@ -1281,7 +1275,8 @@ local function detailRowPaint(r, w, me)
 	r.cedit:SetShown(mode ~= nil)
 	r.ceditMode = mode
 	if showGold and r.cgold.ref ~= w.id then
-		r.cgold:SetCopper(w.quote or w.offer
+		local u = W.UnitPrice(w)
+		r.cgold:SetCopper(u > 0 and u
 			or (w.cod and math.floor(w.cod / (w.qty or 1))) or nil)
 		r.cgold.ref = w.id
 	end
@@ -1404,7 +1399,7 @@ function WU.Act(w, lbl)
 		msg(ok and "mats mailed — fingerprint staged on the writ"
 			or "mats send failed — attach items at a mailbox")
 	elseif lbl == "WITHDRAW" then
-		if GM.db.writMail then GM.db.writMail[w.id] = nil end
+		W.MailWithdraw(w)
 		msg("mailed writ withdrawn")
 	elseif lbl == "RENEW" then
 		W.Request(board, w.toUUID or w.to, w.toChar, {
@@ -1423,11 +1418,9 @@ local function WritsPaint(vm)
 	local me = W.MyUUID()
 	local rows = writRows()
 	do
-		local term = { done = true, declined = true,
-			cancelled = true, expired = true }
 		local any = false
 		for _, w in ipairs(rows) do
-			if term[w.state] then any = true break end
+			if W.Terminal(w.state) then any = true break end
 		end
 		ui.wClear:SetShown(any)
 	end

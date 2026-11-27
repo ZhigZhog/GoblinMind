@@ -1128,10 +1128,19 @@ function W.Writs()
 	end
 	-- local mail channel — never reaches the server: my mailed
 	-- requests ride out, parsed GMW1 letters ride in. MY WRITS
-	-- labels them unmistakably (mail, not wire).
+	-- labels them unmistakably (mail, not wire). The channel/side
+	-- stamps are view-model facts — consumers (W.UnitPrice's
+	-- per-channel price pick among them) must not depend on a
+	-- pane having stamped them first
 	view.mailOut = W.MailWrits()
+	for _, r in ipairs(view.mailOut) do
+		r._mail, r._side = true, "out"
+	end
 	local mi = {}
-	for _, r in pairs(GM.db.writIn or {}) do mi[#mi + 1] = r end
+	for _, r in pairs(GM.db.writIn or {}) do
+		r._mail, r._side = true, "inb"
+		mi[#mi + 1] = r
+	end
 	view.mailIn = mi
 	return view
 end
@@ -1166,6 +1175,23 @@ function W.ClearDone()
 		end
 	end
 	return n
+end
+
+-- THE terminal-state predicate — every "is this writ closed" check
+-- routes here; open-coded sets drift (views already built one)
+function W.Terminal(st) return WRIT_TERMINAL[st] == true end
+
+-- THE unit price the deal currently stands at — per-channel:
+-- inbound letter recs bank the AGREED figure in .price (the
+-- seller's counter stays .quote); writMail + mesh rows carry the
+-- freshest commitment in .quote. Totals are unit × qty computed
+-- at the money edges, never stored
+function W.UnitPrice(w)
+	if not w then return 0 end
+	if w._mail and w._side == "inb" then
+		return w.price or w.quote or w.offer or 0
+	end
+	return w.quote or w.price or w.offer or 0
 end
 
 -- find a writ's board when the caller only has the id — pulls
@@ -1298,6 +1324,12 @@ function W.MailWrits()
 	return out
 end
 
+-- WITHDRAW a mailed request — the rec is local-only truth, so the
+-- clear IS the delete (mesh writs hide instead — W.ClearDone)
+function W.MailWithdraw(w)
+	if w and w.id then mailDB("writMail")[w.id] = nil end
+end
+
 -- ============ 2b: inbound GMW1 (crafter side) ============
 -- mail↔mesh bridging is v2.1 — the loop here is parse → notify →
 -- reply-letter. A mail writ to a GM recipient becomes a local
@@ -1391,7 +1423,7 @@ end
 -- moves a negotiated order into 'agreed'
 function W.MailConfirmOut(w)
 	if not (w and w.toChar) then return nil end
-	local price = w.quote or w.offer or 0
+	local price = W.UnitPrice(w)
 	local ok = mailWire(w.toChar, string.format(
 		"Re: [GM Writ] %s x%d", w.name or "Work request",
 		w.qty or 1),
@@ -1420,7 +1452,7 @@ end
 -- shipped the moment the letter lands
 function W.MailShip(rec)
 	local to = rec and (rec.fromChar or rec.sender)
-	local unit = rec and (rec.price or rec.quote or rec.offer) or 0
+	local unit = W.UnitPrice(rec)
 	local total = unit * (rec and rec.qty or 1)
 	if not to then return nil end
 	local ok = GM.Ops.SendMail({ to = to,
@@ -1448,8 +1480,7 @@ end
 -- the buyer's take then fires wrecv and the writ closes
 function W.MeshShip(w, unitOverride, mailFrom)
 	local to = w and (w.fromChar or w.from)
-	local unit = tonumber(unitOverride)
-		or (w and (w.quote or w.price or w.offer)) or 0
+	local unit = tonumber(unitOverride) or W.UnitPrice(w)
 	local total = unit * (w and w.qty or 1)
 	if not to then return nil end
 	local ok = GM.Ops.SendMail({ to = to,
@@ -1656,8 +1687,8 @@ function W.ScanInbox(force)
 			if w then
 				-- expected COD is the total due — the sent wship
 				-- cod when known, else price-per-unit × qty
-				local price = w.cod or ((w.price or w.quote
-					or w.offer or 0) * (w.qty or 1))
+				local price = w.cod
+					or (W.UnitPrice(w) * (w.qty or 1))
 				if price <= 0 or math.abs(cod - price)
 						<= math.max(1, price * 0.02) then
 					inIdx[i] = { kind = "cod", w = w, cod = cod,

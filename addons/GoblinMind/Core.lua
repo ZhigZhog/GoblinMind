@@ -876,6 +876,13 @@ function GM.OwnName()
 	return (n and GM.FullName(n)) or n
 end
 
+-- the resolved-name cache itself, for surfaces that enumerate all
+-- known full names (mail autocomplete) — the only GM.db.fullNames
+-- read path outside this resolver
+function GM.FullNames()
+	return (GM.db and GM.db.fullNames) or {}
+end
+
 -- form-agnostic identity compare: "Zhig", "Zhig-Realm", and
 -- "Zhig Zhog" all test equal — first name is the key (Forever's
 -- rule: a first OR last name may repeat, never both).
