@@ -855,7 +855,7 @@ local function Build()
 	-- the same layer toggles the gather window's MINIMAP: dropdown
 	-- owns; both write GoblinMindGather.mm through
 	-- GatherMinimap.Set so they can't disagree
-	local gt = Panel(f, 10, -734, 600, 78, "GATHERING · MINIMAP LAYERS")
+	local gt = Panel(f, 10, -734, 600, 96, "GATHERING · MINIMAP LAYERS")
 	ui.mmLayers = {}
 	if GM.GatherMinimap then
 		for i, k in ipairs(GM.GatherMinimap.Layers()) do
@@ -1254,7 +1254,7 @@ local function Build()
 			{ height = "fill", minHeight = 256 }), frame = tt })
 	StackPanel(prof, 118, "profile")
 	StackPanel(src, 148, "profile", true)
-	StackPanel(gt, 78, "gather")
+	StackPanel(gt, 96, "gather")
 	StackPanel(ov, 142, "gather", true)
 	StackPanel(tk, 680, "ticker", true)
 	StackPanel(cp, cpH, "chars", true)
