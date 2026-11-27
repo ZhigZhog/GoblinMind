@@ -823,7 +823,15 @@ local function ShopsPaint(vm)
 			local ic = offerIcon(o)
 			if ic then r.icon:SetTexture(ic) r.icon:Show()
 			else r.icon:Hide() end
-			r.name:SetText(o.name or o.ref or "?")
+			-- terms ride the name cell: prepaid | ·buyer (you supply
+			-- mats) | ·crafter (provided, priced in). Unset policy
+			-- defaults to buyer — the writ contract's own default.
+			local nm = o.name or o.ref or "?"
+			if not o._yell then
+				nm = nm .. GM.CC("textDim") .. " ·"
+					.. (o.mats or "buyer") .. "|r"
+			end
+			r.name:SetText(nm)
 			r.name:SetTextColor(GM.RGB("text"))
 			r.prof:SetText(o.prof or "")
 			if o._yell then
