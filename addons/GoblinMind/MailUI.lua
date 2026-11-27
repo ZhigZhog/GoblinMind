@@ -668,6 +668,9 @@ function MU.Refresh(vm)
 			if r then
 				row:Show()
 				row.tipID = nil -- a mail row is a mail, not an item
+				-- writ surface: GMW1 request / writ COD / writ mats
+				local flag = GM.Writs and GM.Writs.RowFlag
+					and GM.Writs.RowFlag(r.index)
 				row.c1:SetText(r.sender)
 				row.c2:SetText(r.subject)
 				row.c3:SetText(r.items > 0 and ("×" .. r.items .. " item"
@@ -678,12 +681,33 @@ function MU.Refresh(vm)
 					row.c4:SetText(r.money > 0 and GM.Money(r.money) or "")
 				end
 				row.c5:SetText(r.days and format("%.0fd", r.days) or "")
-				row.act.text:SetText(r.cod > 0 and "COD"
-					or ((r.money > 0 or r.items > 0) and "OPEN" or "DEL"))
-				row.act.text:SetTextColor(GM.RGB(r.cod > 0 and "warn"
-					or (r.money > 0 or r.items > 0) and "accent" or "err"))
+				if flag == "RECV" then
+					row.act.text:SetText("RECV")
+					row.act.text:SetTextColor(GM.RGB("warn"))
+				elseif flag then
+					row.act.text:SetText(flag)
+					row.act.text:SetTextColor(GM.RGB("accent"))
+				else
+					row.act.text:SetText(r.cod > 0 and "COD"
+						or ((r.money > 0 or r.items > 0) and "OPEN" or "DEL"))
+					row.act.text:SetTextColor(GM.RGB(r.cod > 0 and "warn"
+						or (r.money > 0 or r.items > 0) and "accent" or "err"))
+				end
 				local mail = r
 				row.act:SetScript("OnClick", function(act)
+					if flag == "RECV" then
+						-- matched writ COD: the take pays + stages wrecv
+						GM.Writs.AcceptMail(GM.Writs.MailHit(mail.index))
+						MU.Refresh()
+						return
+					elseif flag == "WRIT" then
+						local hit = GM.Writs.MailHit(mail.index)
+						local rec = hit and hit.rec
+						GM.Print(GM.CC("accent") .. "writ request from "
+							.. mail.sender .. (rec and rec.qty
+								and (" — x" .. rec.qty) or "") .. "|r")
+						return
+					end
 					if mail.cod > 0 then return end
 					if mail.money > 0 or mail.items > 0 then
 						OpenMail(mail)

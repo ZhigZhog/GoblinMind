@@ -800,6 +800,13 @@ function W.Writs()
 		local def = WVERBS[ev.v]
 		if def and def.apply then def.apply(ev, view, byId, me) end
 	end
+	-- local mail channel — never reaches the server: my mailed
+	-- requests ride out, parsed GMW1 letters ride in. MY WRITS
+	-- labels them unmistakably (mail, not wire).
+	view.mailOut = W.MailWrits()
+	local mi = {}
+	for _, r in pairs(GM.db.writIn or {}) do mi[#mi + 1] = r end
+	view.mailIn = mi
 	return view
 end
 
@@ -868,6 +875,329 @@ function W.MailParse(subject, body)
 		fromChar = f[8] ~= "-" and f[8] or nil,
 		subject = subject,
 	}
+end
+
+W.MAIL_TAGLINE = "— sent via GoblinMind (CurseForge)"
+local MAIL_TTL = 7 * 86400
+
+local function mailDB(key)
+	GM.db[key] = GM.db[key] or {}
+	return GM.db[key]
+end
+
+-- ============ 2a: mail-channeled writs ============
+-- a writ to a non-GM crafter leaves as a REAL letter. Local-only:
+-- the server never sees it — MY WRITS shows state 'mailed' until
+-- the TTL ages it out. An intentional fork in the lifecycle.
+
+function W.MailRequest(toChar, fields)
+	if not (toChar and toChar ~= "") then return nil end
+	fields = fields or {}
+	fields.wid = fields.wid
+		or string.format("ml-%d-%d", time(), math.random(100, 999))
+	fields.toChar = toChar
+	local subject, body = W.MailBody(fields)
+	local ok = GM.Ops.SendMail({ to = toChar, subject = subject,
+		body = body .. "\n" .. W.MAIL_TAGLINE })
+	if ok then
+		mailDB("writMail")[fields.wid] = {
+			toChar = toChar, t = time(), state = "mailed",
+			name = fields.name, qty = fields.qty,
+			offer = fields.offer, mats = fields.mats,
+			deliver = fields.deliver, via = "mail",
+		}
+	end
+	return ok and fields.wid or nil
+end
+
+-- the local mailed writs, TTL-pruned on read
+function W.MailWrits()
+	local m, out, cut = mailDB("writMail"), {}, time() - MAIL_TTL
+	for wid, r in pairs(m) do
+		if (r.t or 0) < cut then m[wid] = nil
+		else r.id = wid; out[#out + 1] = r end
+	end
+	return out
+end
+
+-- ============ 2b: inbound GMW1 (crafter side) ============
+-- mail↔mesh bridging is v2.1 — the loop here is parse → notify →
+-- reply-letter. A mail writ to a GM recipient becomes a local
+-- 'received' record the reply flow quotes against.
+
+function W.FromMail(parsed, sender)
+	if not parsed then return nil end
+	local key = (sender or "?"):lower() .. "|" .. (parsed.subject or "")
+	local box = mailDB("writIn")
+	if box[key] then return box[key] end
+	local rec = { id = key, via = "mail", state = "received",
+		sender = sender, t = time(), subject = parsed.subject,
+		wid = parsed.wid, ref = parsed.ref, qty = parsed.qty,
+		offer = parsed.offer, mats = parsed.mats,
+		deliver = parsed.deliver,
+		fromChar = parsed.fromChar or sender }
+	box[key] = rec
+	GM.Print(GM.CC("accent") .. "writ mail from " .. (sender or "?")
+		.. (parsed.qty and (" — x" .. parsed.qty) or "") .. "|r")
+	return rec
+end
+
+-- quote reply to a mail-channel writ — plain letter + GMW1R wire so
+-- a GM customer can read the quote back mechanically too
+function W.MailReply(rec, price, note)
+	local to = rec and (rec.fromChar or rec.sender)
+	if not to then return nil end
+	local body = string.format("%s\n%s\n%s",
+		(note and note ~= "") and note or string.format(
+			"I can do that for %s.",
+			(GM.MoneyShort and GM.MoneyShort(price or 0))
+				or tostring(price or 0)),
+		table.concat({ "GMW1R", rec.wid or "-",
+			tostring(price or 0), CharName() }, ";"),
+		W.MAIL_TAGLINE)
+	return GM.Ops.SendMail({ to = to,
+		subject = "Re: " .. (rec.subject or "[GM Writ]"),
+		body = body })
+end
+
+-- ============ inbox wiring (2b/2c/2d) ============
+-- one scan feeds three matches: inbound GMW1 letters, mats
+-- shipments whose fingerprint rides the writ's mats_fp, and COD
+-- deliveries on shipped writs. GetInboxText is the costly read —
+-- subject-gated and capped per pass.
+
+local inIdx, inScanAt = {}, 0
+
+-- sorted "name:qty" across attachments — the mats fingerprint's
+-- item half, computable identically on send and receive sides
+local function mailItemCSV(index)
+	if not GetInboxItemLink then return "" end
+	local parts = {}
+	for slot = 1, 20 do
+		local link = GetInboxItemLink(index, slot)
+		if link then
+			local a, b, _, d = GetInboxItem(index, slot)
+			local qty = (type(a) == "number" and b)
+				or (type(b) == "number" and d) or 1
+			parts[#parts + 1] = (link:match("%[(.-)%]") or "?")
+				.. ":" .. qty
+		end
+	end
+	table.sort(parts)
+	return table.concat(parts, ",")
+end
+
+local function sendItemCSV()
+	local parts = {}
+	if GetSendMailItem then
+		for i = 1, 12 do
+			local ret = { GetSendMailItem(i) }
+			if ret[1] then
+				parts[#parts + 1] = tostring(ret[1]) .. ":"
+					.. (tonumber(ret[#ret]) or 1)
+			end
+		end
+	end
+	table.sort(parts)
+	return table.concat(parts, ",")
+end
+
+local function matsFp(sender, subject, csv)
+	return (sender or "?"):lower() .. "|" .. (subject or "")
+		.. "|" .. (csv or "")
+end
+
+function W.ScanInbox(force)
+	if not (GetInboxNumItems and GetInboxHeaderInfo) then
+		return inIdx
+	end
+	local now = GetTime()
+	if not force and now - inScanAt < 1.5 then return inIdx end
+	inScanAt = now
+	for k in pairs(inIdx) do inIdx[k] = nil end
+	local me, myName = W.MyUUID(), CharName():lower()
+	-- customer side: my shipped writs → the crafter's COD lands here
+	local codWants, matsWants = {}, nil
+	for _, w in ipairs(W.Writs().out) do
+		if w.state == "shipped" and w.toChar then
+			codWants[w.toChar:lower()] = w
+		end
+	end
+	-- crafter side: agreed writs with a mats fingerprint staged
+	for _, w in ipairs(W.Writs().inb) do
+		if w.mats_fp and w.to == me then
+			matsWants = matsWants or {}
+			matsWants[w.mats_fp] = w
+		end
+	end
+	local box, bodyReads = mailDB("writIn"), 0
+	for i = 1, GM.MailCount() do
+		local _, _, sender, subject, _, cod, _, items =
+			GetInboxHeaderInfo(i)
+		subject = subject or ""
+		local sLow = (sender or ""):lower()
+		if subject:match("^%[GM Writ%]") and sLow ~= myName then
+			inIdx[i] = { kind = "gmw1", sender = sender,
+				subject = subject }
+			local key = sLow .. "|" .. subject
+			if box[key] then
+				inIdx[i].rec = box[key]
+			elseif bodyReads < 2 and GetInboxText then
+				bodyReads = bodyReads + 1
+				local ok, body = pcall(GetInboxText, i)
+				local parsed = ok and W.MailParse(subject, body)
+				if parsed then
+					inIdx[i].rec = W.FromMail(parsed, sender)
+				end
+			end
+		elseif (cod or 0) > 0 then
+			local w = codWants[sLow]
+			if w then
+				local price = w.price or w.quote or w.offer or 0
+				if price <= 0 or math.abs(cod - price)
+						<= math.max(1, price * 0.02) then
+					inIdx[i] = { kind = "cod", w = w, cod = cod,
+						sender = sender, subject = subject }
+				end
+			end
+		elseif (items or 0) > 0 and matsWants then
+			local w = matsWants[matsFp(sender, subject, mailItemCSV(i))]
+			if w then
+				inIdx[i] = { kind = "mats", w = w, sender = sender,
+					subject = subject }
+			end
+		end
+	end
+	return inIdx
+end
+
+-- MailUI's per-row hook — "WRIT" | "RECV" | "MATS" | nil
+function W.RowFlag(index)
+	local m = W.ScanInbox()[index]
+	return m and ({ gmw1 = "WRIT", cod = "RECV", mats = "MATS" })
+		[m.kind] or nil
+end
+
+function W.MailHit(index)
+	return W.ScanInbox()[index]
+end
+
+-- ============ 2c: prepaid mats — attach-then-track ============
+-- MAIL MATS (customer, mats="prepaid"): whatever sits in the send
+-- slots ships to the crafter under a fixed subject; the send's
+-- fingerprint stages onto the writ so the crafter's inbox
+-- recognizes the shipment. quoted/open → waccept carries it;
+-- already-agreed → wmeet updates it.
+
+function W.MailMats(w)
+	local wid = type(w) == "table" and w.id or w
+	if not wid then return nil end
+	w = type(w) == "table" and w or nil
+	local to = w and w.toChar
+	if not (to and to ~= "" and to ~= "?") then
+		GM.Print(GM.CC("warn")
+			.. "no crafter char on that writ — can't mail mats|r")
+		return nil
+	end
+	local csv = sendItemCSV()
+	if csv == "" then
+		GM.Print(GM.CC("warn")
+			.. "attach the mats in the send slots first|r")
+		return nil
+	end
+	local subject = "[GM Writ] mats " .. (w.name or wid)
+	local fp = matsFp(CharName(), subject, csv)
+	local ok = GM.Ops.SendMail({ to = to, subject = subject,
+		body = "mats for your writ — " .. (w.name or wid)
+			.. "\n" .. W.MAIL_TAGLINE })
+	if ok then
+		mailDB("writMatsFp")[wid] = fp
+		W.Act((w and w.state == "agreed") and "wmeet" or "waccept",
+			w or wid, { matsFp = fp })
+	end
+	return ok and fp or nil
+end
+
+-- mats status for a crafter-side writ: sent | transit | arrived
+function W.MatsStatus(w)
+	if not (w and w.mats_fp) then return nil end
+	if mailDB("writMatsGot")[w.id] then return "arrived" end
+	for _, m in pairs(W.ScanInbox()) do
+		if m.kind == "mats" and m.w == w then return "transit" end
+	end
+	return "sent"
+end
+
+-- ============ 2d: COD-loot → wrecv ============
+-- the protected take IS the pay decision — same one-click semantics
+-- OR.AcceptCOD documents. Return = refused shipment → wdecline.
+
+function W.InboxWrits()
+	local out = {}
+	for i, m in pairs(W.ScanInbox()) do
+		if m.kind == "cod" then
+			out[#out + 1] = { index = i, sender = m.sender,
+				cod = m.cod, w = m.w }
+		end
+	end
+	table.sort(out, function(a, b) return a.index < b.index end)
+	return out
+end
+
+function W.AcceptMail(hit)
+	if not (hit and TakeInboxItem) then return false end
+	TakeInboxItem(hit.index)   -- the loot hook stages wrecv
+	return true
+end
+
+function W.RejectMail(hit)
+	if not (hit and ReturnInboxItem) then return false end
+	ReturnInboxItem(hit.index) -- the return hook stages wdecline
+	return true
+end
+
+-- indexes shift as collected mails delete — re-verify the mail at
+-- this index is still the one we matched before staging a verb
+local function stillMatch(index, m)
+	if not (m and not m.done) then return false end
+	local _, _, sender, subject = GetInboxHeaderInfo(index)
+	return (sender or "") == (m.sender or "")
+		and (subject or "") == (m.subject or "")
+end
+
+local function hookTake(index)
+	W.ScanInbox()  -- Blizzard's own mail UI can loot without us
+	local m = inIdx[index]
+	if not stillMatch(index, m) then return end
+	if m.kind == "cod" and m.w then
+		m.done = true  -- AutoLoot may route through TakeInboxItem too
+		W.Act("wrecv", m.w)
+	elseif m.kind == "mats" and m.w then
+		m.done = true
+		mailDB("writMatsGot")[m.w.id] = time()
+		GM.Print(GM.CC("accent") .. "writ mats arrived — "
+			.. (m.w.name or m.w.id or "?") .. "|r")
+	end
+end
+
+local function hookReturn(index)
+	local m = inIdx[index]
+	if stillMatch(index, m) and m.kind == "cod" and m.w then
+		m.done = true
+		W.Act("wdecline", m.w, { reason = "shipment-returned" })
+	end
+end
+
+if hooksecurefunc then
+	if AutoLootMailItem then
+		hooksecurefunc("AutoLootMailItem", hookTake)
+	end
+	if TakeInboxItem then
+		hooksecurefunc("TakeInboxItem", hookTake)
+	end
+	if ReturnInboxItem then
+		hooksecurefunc("ReturnInboxItem", hookReturn)
+	end
 end
 
 -- drop ops the watcher already consumed once the player is in-world —
