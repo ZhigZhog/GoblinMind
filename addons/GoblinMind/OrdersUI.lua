@@ -858,7 +858,7 @@ function OU.Refresh(vm)
 	for i, b in ipairs(boards) do
 		local lbl = OR.IsRemote(b) and (b .. "·") or b
 		local w = 10 + #lbl * 8
-		local btn = MkBtn(ui.frame, lbl, w)
+		local btn = MkBtn(ui.frame, lbl, w, nil, true)
 		if ui.headHost then
 			btn:SetPoint("TOPLEFT", ui.headHost, "TOPLEFT", bx - 10, -4)
 		else

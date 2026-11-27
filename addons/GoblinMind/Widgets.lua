@@ -418,7 +418,7 @@ end
 -- accent, centered). No handlers wired — callers SetScript their own
 -- OnClick; CraftingUI's secure OPEN overlay needs a bare button to
 -- cover. Was an identical Btn triple in CraftingUI/GroupsUI/OpsUI.
-function W.ActionBtn(parent, label, w, h)
+function W.ActionBtn(parent, label, w, h, raw)
 	local b = CreateFrame("Button", nil, parent)
 	b:SetSize(w, h or 20)
 	GM.Panel(b, "contHigh")
@@ -426,7 +426,9 @@ function W.ActionBtn(parent, label, w, h)
 	b.text:SetPoint("CENTER")
 	b.text:SetWidth(w - 8)
 	b.text:SetWordWrap(false)
-	b.text:SetText(LT(label))
+	-- raw: dynamic data (board names) — LT on those logs
+	-- "unregistered L key" for every user-created value
+	b.text:SetText(raw and label or LT(label))
 	return b
 end
 
