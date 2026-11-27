@@ -1593,6 +1593,31 @@ function W.YellOffers()
 	return yellRing
 end
 
+-- the shops pane repaints on every bark mutation — same poke the
+-- rest of the writs store uses (Orders.lua); Coalesced collapses
+-- an advertising burst into one paint, Refresh self-gates on shown
+local sweepArmed
+local pokeShops
+local function armSweep()
+	-- barks die on a TTL — without a timed poke an aged-out row
+	-- lingers on the board until some unrelated repaint. Re-arms
+	-- while any row lives, disarms when the ring drains
+	if sweepArmed or not GM.After then return end
+	sweepArmed = true
+	GM.After(yellTTL() * 60, function()
+		sweepArmed = false
+		pokeShops()
+		if (W.YellOffers() or {})[1] then armSweep() end
+	end)
+end
+function pokeShops()
+	if GM.View and GM.View.Coalesced then
+		GM.View.Coalesced("orders",
+			function() GM.View.Refresh("orders") end)
+	end
+	armSweep()
+end
+
 local yells = CreateFrame("Frame")
 yells:RegisterEvent("CHAT_MSG_CHANNEL")
 yells:RegisterEvent("CHAT_MSG_YELL")
@@ -1655,6 +1680,7 @@ yells:SetScript("OnEvent", function(_, ev, msg, sender, ...)
 		seen.intent = yellIntent(msg)
 		if prof then seen.prof, seen.clsProf =
 			prof, YELL_CLASS[prof] or nil end
+		pokeShops()
 		return
 	end
 	local y = { source = "yell", char = sender,
@@ -1668,6 +1694,7 @@ yells:SetScript("OnEvent", function(_, ev, msg, sender, ...)
 		local old = table.remove(yellRing, 1)
 		if yellSeen[old.char] == old then yellSeen[old.char] = nil end
 	end
+	pokeShops()
 end)
 
 -- drop ops the watcher already consumed once the player is in-world —
