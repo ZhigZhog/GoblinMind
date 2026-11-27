@@ -489,11 +489,43 @@ W.live = {}            -- [board] = {ev, ...}, session-only
 local LIVE_TTL = 600
 local _evSeq = 0
 
+-- writs I'm a party to — learned at wpost record (to==me → inb,
+-- actor==me → out) so later state verbs know they concern me even
+-- before a Writs() view build ever ran
+local myWids = {}
+
+-- attention chime when the other party moves a writ — the whisper
+-- sound if the client exposes it; pcall'd so a missing kit/file
+-- fails silent, not loud
+function W.Ping()
+	if PlaySoundFile then
+		pcall(PlaySoundFile,
+			"Sound\\Interface\\iTellMessage.wav", "Master")
+		pcall(PlaySoundFile,
+			"Sound\\Interface\\TellMessage.wav", "Master")
+	end
+	if PlaySound then pcall(PlaySound, 3081) end
+end
+
+-- verbs that mean "the other party moved" — a new order landed, a
+-- quote came back, a confirm, a ship, a decline, a delivery
+local PING_VERBS = { wpost = true, wquote = true, waccept = true,
+	wship = true, wdecline = true, wrecv = true, wcancel = true }
+
 function W.LiveEvent(board, ev)
 	if not board or board == "" then return end
 	ev.t = math.min(ev.t or time(), time())
 	_evSeq = _evSeq + 1
 	ev.seq = _evSeq
+	local me = W.MyUUID and W.MyUUID()
+	if me and ev.wid then
+		if ev.to == me then myWids[ev.wid] = "inb"
+		elseif ev.actor == me then myWids[ev.wid] = "out" end
+	end
+	if me and PING_VERBS[ev.v] and ev.actor ~= me
+			and (ev.to == me or myWids[ev.wid]) then
+		W.Ping()
+	end
 	local L = W.live[board]
 	if not L then L = {} W.live[board] = L end
 	L[#L + 1] = ev
@@ -1123,6 +1155,7 @@ function W.FromMail(parsed, sender)
 	box[key] = rec
 	GM.Print(GM.CC("accent") .. "writ mail from " .. (sender or "?")
 		.. (parsed.qty and (" — x" .. parsed.qty) or "") .. "|r")
+	if W.Ping then W.Ping() end
 	return rec
 end
 
@@ -1332,8 +1365,11 @@ local function routeReply(rep, sender)
 		end
 		m.updated = time()
 	end
-	if dirty and GM.View and GM.View.Refresh then
-		GM.View.Refresh("orders")
+	if dirty then
+		if W.Ping then W.Ping() end
+		if GM.View and GM.View.Refresh then
+			GM.View.Refresh("orders")
+		end
 	end
 end
 

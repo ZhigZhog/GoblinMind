@@ -290,7 +290,10 @@ local function writActions(w, me)
 		return {}
 	end
 	local st, side = w.state, w._side
-	if w._pendOp then return {} end
+	-- 'wpost' is the OTHER party's request still reconciling — the
+	-- writ is real and quotable/declinable right now; only OUR
+	-- staged ops should block re-acting
+	if w._pendOp and w._pendOp ~= "wpost" then return {} end
 	if st == "open" then
 		if side == "inb" then return { "QUOTE", "DECLINE" } end
 		return { "CANCEL" }
@@ -1138,7 +1141,9 @@ local function detailRowPaint(r, w, me)
 	elseif st == "agreed" and w._side == "inb"
 			and w.deliver == "cod" then
 		mode = "mailFrom"
-	elseif st == "open" or st == "quoted" or st == "agreed" then
+	elseif st == "agreed" then
+		-- meet terms are delivery logistics — they matter once the
+		-- deal is agreed, not during quote negotiation
 		mode = "meet"
 	end
 	r.cgold:SetShown(showGold)
