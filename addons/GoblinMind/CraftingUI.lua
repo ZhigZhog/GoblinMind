@@ -1492,6 +1492,17 @@ function CU.ParkDefault()
 	GM.FramePark.Park(DefaultFrame())
 end
 
+-- a foreign session opens on a chat-link click — the user is
+-- usually mid-read on the writs board, and both windows anchor
+-- screen-center. Tile beside it rather than painting over it.
+local function TileForeign()
+	local ou = _G["GoblinMindOrders"]
+	if ui and ui.foreign and ou and ou:IsShown() then
+		ui.frame:ClearAllPoints()
+		ui.frame:SetPoint("TOPLEFT", ou, "TOPRIGHT", 8, 0)
+	end
+end
+
 -- installed at load, not lazily on first tradeskill open: K's
 -- professions OVERVIEW fires no TRADE_SKILL_SHOW, so the event path
 -- never sees it — the native frame's own OnShow is the only signal.
@@ -1573,17 +1584,6 @@ end
 -- the user has switched to default (TSM's defaultUISwitchBtn)
 local function EnsureSwitchBtn()
 	W.EnsureSwitchBtn(ui, DefaultFrame(), CU.OnTradeSkillOpen, CU.ParkDefault)
-end
-
--- a foreign session opens on a chat-link click — the user is
--- usually mid-read on the writs board, and both windows anchor
--- screen-center. Tile beside it rather than painting over it.
-local function TileForeign()
-	local ou = _G["GoblinMindOrders"]
-	if ui and ui.foreign and ou and ou:IsShown() then
-		ui.frame:ClearAllPoints()
-		ui.frame:SetPoint("TOPLEFT", ou, "TOPRIGHT", 8, 0)
-	end
 end
 
 -- TRADE_SKILL_CLOSE entry — the session ended, so our window goes
