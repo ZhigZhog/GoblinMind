@@ -393,7 +393,15 @@ function WU.Build(f)
 			local lnk, id = s.offerLink, s.offerID
 			if not (lnk or id) then return end
 			GameTooltip:SetOwner(s, "ANCHOR_RIGHT")
-			if lnk then
+			if lnk and lnk:match("|Htrade:") then
+				-- SetHyperlink on a trade link OPENS the linked
+				-- session on this client — the window was popping
+				-- up on hover like a tooltip. Text-only here; the
+				-- row click still opens it properly
+				GameTooltip:AddLine(lnk)
+				GameTooltip:AddLine("click to open their professions",
+					0.6, 0.6, 0.6)
+			elseif lnk then
 				GameTooltip:SetHyperlink(lnk)
 			elseif GameTooltip.SetItemByID then
 				GameTooltip:SetItemByID(id)
