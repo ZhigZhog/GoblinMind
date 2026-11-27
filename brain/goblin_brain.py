@@ -452,16 +452,21 @@ def cmd_emit(path, out_path, realm=None):
 
 
 _IDENT = re.compile(r'[A-Za-z_][A-Za-z0-9_]*\Z')
+_LUA_KW = frozenset(
+    'and break do else elseif end false for function goto if in '
+    'local nil not or repeat return then true until while'.split())
 
 
 def _enc_key(k):
     # numeric keys index directly; identifier-safe names go bare;
     # anything else ("Realm-Faction" scopes, hyphens, spaces) must
     # be bracket-quoted — a bare CAMWOWUS1Realm5PvE-Alliance= breaks
-    # the whole generated file at load
+    # the whole generated file at load. Identifier-shaped Lua
+    # keywords ("in", "end") must bracket too — the writs inbox's
+    # 'in' key broke the emit exactly this way.
     if isinstance(k, int):
         return f'[{k}]'
-    if _IDENT.fullmatch(str(k)):
+    if _IDENT.fullmatch(str(k)) and str(k) not in _LUA_KW:
         return str(k)
     return '["%s"]' % str(k).replace('\\', '\\\\').replace('"', '\\"')
 
