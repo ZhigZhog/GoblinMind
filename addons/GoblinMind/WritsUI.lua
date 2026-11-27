@@ -569,6 +569,15 @@ function WU.Build(f)
 	ui.wMsg:SetWidth(500)
 	ui.wMsg:SetWordWrap(false)
 	ui.wMsg:SetJustifyH("LEFT")
+	ui.wClear = MkBtn(wp, "CLEAR", 58, 13)
+	ui.wClear:SetPoint("TOPRIGHT", -8, -14)
+	ui.wClear:SetScript("OnClick", function()
+		local n = W.ClearDone()
+		ui.wMsg:SetText(n > 0 and (n .. " cleared")
+			or "nothing to clear")
+		WU.Paint("writs")
+	end)
+	ui.wClear:Hide()
 
 	ui.wHeads = {}
 	for i, h in ipairs({ { 22, "WRIT" }, { 240, "PARTY" },
@@ -1413,6 +1422,15 @@ local function WritsPaint(vm)
 	local wp = ui.writsP
 	local me = W.MyUUID()
 	local rows = writRows()
+	do
+		local term = { done = true, declined = true,
+			cancelled = true, expired = true }
+		local any = false
+		for _, w in ipairs(rows) do
+			if term[w.state] then any = true break end
+		end
+		ui.wClear:SetShown(any)
+	end
 	-- flatten: expanded writs add a detail sub-row
 	local disp = {}
 	for _, w in ipairs(rows) do

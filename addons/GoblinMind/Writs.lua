@@ -693,7 +693,18 @@ WVERBS.wpost = {
 	apply = function(ev, view, byId, me)
 		-- not my writ, not my pane
 		if ev.to ~= me and ev.actor ~= me then return end
-		if not ev.wid or byId[ev.wid] then return end
+		if not ev.wid then return end
+		local w = byId[ev.wid]
+		if w then
+			-- a shadow pre-merged this same wpost — the live ev is
+			-- still authoritative for markers; upgrade in place
+			if w._shadow then
+				w._live, w._shadow = true, nil
+				w._pendOp, w._rid, w.updated =
+					"wpost", ev.rid, ev.t
+			end
+			return
+		end
 		local w = {
 			id = ev.wid, board = ev.board, state = "open",
 			_rid = ev.rid,
@@ -713,7 +724,11 @@ WVERBS.wpost = {
 			"new request from " .. (ev.fromChar or "?"))
 	end,
 	confirm = function(ev, byId)
-		return ev.wid and byId[ev.wid] ~= nil
+		-- a shadowed row is a copy of THIS ev, not independent
+		-- confirmation — letting it confirm drops the ev before
+		-- apply can stamp the live markers (_pendOp/_rid)
+		local w = ev.wid and byId[ev.wid]
+		return w ~= nil and not w._shadow
 	end,
 	replay = function(f, ctx)
 		return {
@@ -1085,6 +1100,21 @@ function W.Writs()
 		local def = WVERBS[ev.v]
 		if def and def.apply then def.apply(ev, view, byId, me) end
 	end
+	-- cleared writs (writHide) vanish from every consumer at once —
+	-- pane, codWants, deliver list — and, being filtered before
+	-- write-back, stop re-shadowing themselves
+	local hid = GM.db.writHide
+	if hid and next(hid) then
+		for _, side in ipairs({ "inb", "out" }) do
+			local L = view[side]
+			for i = #L, 1, -1 do
+				if hid[L[i].id] then
+					byId[L[i].id] = nil
+					table.remove(L, i)
+				end
+			end
+		end
+	end
 	-- write-back: every live-backed row re-shadows with its current
 	-- state so transitions made this session survive a reload
 	for _, side in ipairs({ "inb", "out" }) do
@@ -1104,6 +1134,38 @@ function W.Writs()
 	for _, r in pairs(GM.db.writIn or {}) do mi[#mi + 1] = r end
 	view.mailIn = mi
 	return view
+end
+
+-- CLEAR on MY WRITS: mail recs are local-only records — deleting
+-- them IS the clear. Mesh writs are server truth — they hide via
+-- writHide until pull expiry, and any shadow copies go with them.
+function W.ClearDone()
+	local n = 0
+	for _, db in ipairs({ GM.db.writIn, GM.db.writMail }) do
+		if db then
+			for k, r in pairs(db) do
+				if WRIT_TERMINAL[r.state] then
+					db[k], n = nil, n + 1
+				end
+			end
+		end
+	end
+	local hid = GM.db.writHide
+	if not hid then
+		hid = {}
+		GM.db.writHide = hid
+	end
+	local sh = GM.db.writShadow
+	local view = W.Writs()
+	for _, side in ipairs({ view.inb, view.out }) do
+		for _, w in ipairs(side) do
+			if WRIT_TERMINAL[w.state] then
+				hid[w.id], n = true, n + 1
+				if sh then sh[w.id] = nil end
+			end
+		end
+	end
+	return n
 end
 
 -- find a writ's board when the caller only has the id — pulls
