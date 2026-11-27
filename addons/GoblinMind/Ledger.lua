@@ -270,8 +270,25 @@ function GM.Ledger.Add(kind, itemID, qty, unit, extra)
 		depOut = GM.Ledger.Accounts().dep or 0
 	end
 	local je = Journal(kind, s or {}, qty, unit, extra, depOut)
-	tx[#tx + 1] = { t = t, ty = kind, i = itemID, q = qty, u = unit,
-		x = extra, je = je }
+	-- loot runs (a mining session is dozens of +1 events) update
+	-- the top line in place — same kind + same item + contiguous,
+	-- no backdating. Legs sum so a replay still reproduces
+	-- balances; the timestamp tracks the latest pickup.
+	local top = tx[#tx]
+	if kind == "loot" and top and top.ty == "loot"
+			and top.i == itemID and not (extra and extra.t) then
+		top.q = (top.q or 0) + qty
+		top.t = t
+		if je then
+			top.je = top.je or {}
+			for acct, d in pairs(je) do
+				top.je[acct] = (top.je[acct] or 0) + d
+			end
+		end
+	else
+		tx[#tx + 1] = { t = t, ty = kind, i = itemID, q = qty,
+			u = unit, x = extra, je = je }
+	end
 	-- spends register their cash leg as a pending outflow so the
 	-- PLAYER_MONEY delta doesn't journal it a second time — only
 	-- unattributed outflows belong to the gold stream. extra.noOut
