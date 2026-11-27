@@ -494,6 +494,26 @@ local _evSeq = 0
 -- before a Writs() view build ever ran
 local myWids = {}
 
+-- writ transitions announce once per ev — the same ev reapplies
+-- on every view build, so gate on rid (or wid|verb when a mesh
+-- packet carried none). Own staged ops never announce — you
+-- watched yourself click — and neither do writs that aren't mine
+local announcedEv = {}
+local function announce(ev, w, from, to)
+	if not (w and ev and to and from ~= to) then return end
+	local key = ev.rid
+		or ((ev.wid or "?") .. "|" .. (ev.v or "?"))
+	if announcedEv[key] then return end
+	local me = W.MyUUID()
+	if ev.actor == me then return end
+	if not (ev.to == me or myWids[ev.wid]) then return end
+	announcedEv[key] = true
+	GM.Print(GM.CC("accent") .. "writ update — "
+		.. (w.name or w.ref or "?") .. ": "
+		.. (from and (tostring(from) .. " → ") or "")
+		.. tostring(to) .. "|r")
+end
+
 -- live-hint writs are session-only — a remote wpost that never
 -- landed in pull evaporates on /reload and the party's follow-up
 -- verbs have no byId to land on. The wpost's own fields are the
@@ -584,7 +604,10 @@ end
 local function stateApply(state)
 	return function(ev, view, byId)
 		local w = widApply(ev, view, byId)
-		if w then w.state = state end
+		if w then
+			announce(ev, w, w.state, state)
+			w.state = state
+		end
 	end
 end
 -- a pull state AT or PAST the ev's state confirms it out — 'done'
@@ -616,11 +639,17 @@ local function fieldApply(state, ...)
 	return function(ev, view, byId)
 		local w = widApply(ev, view, byId)
 		if not w then return end
-		if state then w.state = state end
+		if state then
+			announce(ev, w, w.state, state)
+			w.state = state
+		end
 		for _, k in ipairs(keys) do
 			if ev[k] ~= nil then w[k] = ev[k] end
 		end
 		if ev.price then w.price = ev.price end
+		if ev.meet ~= nil then
+			announce(ev, w, nil, "meet: " .. tostring(ev.meet))
+		end
 	end
 end
 
@@ -680,6 +709,8 @@ WVERBS.wpost = {
 		byId[w.id] = w
 		w._side = (ev.to == me) and "inb" or "out"
 		view[w._side][#view[w._side] + 1] = w
+		announce(ev, w, nil,
+			"new request from " .. (ev.fromChar or "?"))
 	end,
 	confirm = function(ev, byId)
 		return ev.wid and byId[ev.wid] ~= nil
