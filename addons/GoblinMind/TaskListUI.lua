@@ -52,7 +52,8 @@ local function Tasks()
 				#ob == 1 and "" or "s",
 				ob[1].itemID and (" — " ..
 					(GM.QHex(ob[1].itemID) or "") ..
-					((GM.ItemName and GM.ItemName(ob[1].itemID))
+					((ob[1].ctx and ob[1].ctx.name)
+						or (GM.ItemName and GM.ItemName(ob[1].itemID))
 						or "item") .. "|r now " ..
 					(GM.Money and GM.Money(ob[1].curBid or 0) or "?"))
 					or ""),
@@ -88,7 +89,7 @@ local function Tasks()
 		}
 	end
 	-- mail waiting
-	local mail = GetInboxNumItems and GetInboxNumItems() or 0
+	local mail = GM.MailCount()
 	if mail > 0 then
 		t[#t + 1] = {
 			text = format("%d mail message%s waiting", mail,

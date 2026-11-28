@@ -73,6 +73,180 @@ function W.EditBox(parent, w, hint)
 	return eb
 end
 
+-- same bordered editbox, but the hint is an OVERLAY fontstring —
+-- it survives focus and reads as a label instead of pre-filled
+-- text (W.EditBox clears its hint on focus)
+function W.HintEdit(parent, w, hint)
+	local e = CreateFrame("EditBox", nil, parent)
+	e:SetSize(w, 18)
+	e:SetAutoFocus(false)
+	e:SetFont(GM.FONT, 10, "")
+	e:SetTextColor(GM.RGB("text"))
+	e:SetTextInsets(4, 4, 0, 0)
+	GM.Panel(e, "contLowest")
+	e.hint = GM.MakeFontString(e, GM.FONT, 9, "textDim")
+	e.hint:SetPoint("LEFT", 4, 0)
+	e.hint:SetText(LT(hint))
+	e:SetScript("OnTextChanged", function(s)
+		s.hint:SetShown(s:GetText() == "")
+	end)
+	e:SetScript("OnEscapePressed", function(s) s:ClearFocus() end)
+	return e
+end
+
+-- canonical display for money input: "10g", "5s", "1g 2s 30c"
+local function MoneyText(copper)
+	if not copper or copper <= 0 then return "0c" end
+	local g = floor(copper / 10000)
+	local s = floor((copper % 10000) / 100)
+	local c = copper % 100
+	local out = {}
+	if g > 0 then out[#out + 1] = g .. "g" end
+	if s > 0 then out[#out + 1] = s .. "s" end
+	if c > 0 then out[#out + 1] = c .. "c" end
+	return table.concat(out, " ")
+end
+
+-- money input: W.EditBox that understands "10g50s25c" / "1.5g" /
+-- bare numbers and validates on commit. bareUnit ("g"/"s"/"c",
+-- default "c") decides what a unit-less number means — B.ParseMoney
+-- treats it as copper, but a budget field reads "5" as 5g.
+--   eb.GetCopper()  copper or nil — nil while only the hint shows
+--   eb.SetCopper(n) writes canonical text
+--   eb._validate    optional fn(text) → bool for non-money content
+--                   (save accounts' % input) — keeps a valid non-
+--                   money value from being flagged
+-- Enter/focus-loss rewrites a valid value to canonical text; garbage
+-- turns red, same validate-on-blur semantics as EditableLabel.
+function W.MoneyEdit(parent, w, hint, bareUnit)
+	local eb = W.EditBox(parent, w, hint)
+	local lh = LT(hint)
+	local factor = bareUnit == "g" and 10000 or bareUnit == "s" and 100 or 1
+	function eb.GetCopper()
+		local t = eb:GetText()
+		if t == "" or (lh and t == lh) then return nil end
+		local bare = tonumber((t:lower():gsub("%s", "")))
+		if bare then return floor(bare * factor) end
+		return GM.Budget.ParseMoney(t)
+	end
+	function eb.SetCopper(n)
+		eb:SetText(n ~= nil and MoneyText(n) or "")
+		eb:SetTextColor(GM.RGB("text"))
+	end
+	eb:SetScript("OnEditFocusGained", function()
+		if lh and eb:GetText() == lh then
+			eb:SetText("")
+		end
+		-- refocusing clears the error state so retyping isn't red
+		eb:SetTextColor(GM.RGB("text"))
+		if eb._gmBg then eb._gmBg:SetColorTexture(GM.RGB("contMedium")) end
+	end)
+	eb:SetScript("OnEditFocusLost", function()
+		if eb._gmBg then eb._gmBg:SetColorTexture(GM.RGB("contLowest")) end
+		local t = eb:GetText()
+		if t == "" or (lh and t == lh) then return end
+		local v = eb.GetCopper()
+		if v then
+			eb:SetText(MoneyText(v))
+			eb:SetTextColor(GM.RGB("text"))
+		elseif not (eb._validate and eb._validate(t)) then
+			eb:SetTextColor(GM.RGB("err"))
+		end
+	end)
+	return eb
+end
+
+-- inline-editable label: a fontstring that swaps to an edit box on
+-- click — THE reusable "editable text" widget. The field's text
+-- lands pixel-on the label's painted text and the box's right edge
+-- ends where the label's did, so the edit reads as the same text
+-- under focus, not a shifted control.
+-- f.pad reserves leading width the field must not cover (crest
+-- icons) — callers measure it exactly, never guess a constant.
+-- One field open at a time, bank-form semantics: opening a second
+-- field or clicking anywhere outside validates+commits the first
+-- (the commit callback owns validation — reject = no write), Enter
+-- commits, Esc cancels. Native editbox focus exclusion covers
+-- clicks into other text fields; a screen-wide catcher covers the
+-- rest.
+local openField, editCatcher
+local function EditCatcher()
+	if editCatcher then return editCatcher end
+	editCatcher = CreateFrame("Button", nil, UIParent)
+	editCatcher:SetAllPoints(UIParent)
+	editCatcher:SetFrameStrata("FULLSCREEN_DIALOG")
+	editCatcher:SetScript("OnClick", function()
+		if openField then openField.Finish(true) end
+	end)
+	return editCatcher
+end
+local function CloseField(eb, save)
+	if openField ~= eb then return end
+	openField = nil
+	eb._finishing = true
+	eb:Hide()
+	eb:ClearFocus()
+	eb._finishing = nil
+	if editCatcher then editCatcher:Hide() end
+	local cb = eb._commit
+	eb._commit = nil
+	if save and cb then cb(eb:GetText()) end
+end
+function W.EditableLabel(parent, w)
+	local f = CreateFrame("Button", nil, parent)
+	f:SetSize(w, 18)
+	f.pad = 0
+	local label = GM.MakeFontString(f, GM.FONT, 10, "text")
+	label:SetPoint("LEFT", 0, 0)
+	label:SetWidth(w)
+	label:SetJustifyH("LEFT")
+	label:SetWordWrap(false)
+	f.label = label
+	-- the box is a sibling of the label button so its left edge can
+	-- overhang by the text inset without clipping. Top strata: it
+	-- must draw above the click-off catcher while it's open.
+	local eb = W.EditBox(parent, w)
+	eb:SetFrameStrata("FULLSCREEN_DIALOG")
+	eb:Hide()
+	f.eb = eb
+	-- pad shifts the field's TEXT origin — the box edge sits
+	-- inset-left of it so painted and edited text share one x
+	function f.Layout()
+		eb:ClearAllPoints()
+		eb:SetPoint("LEFT", f, "LEFT", f.pad - 6, 0)
+		eb:SetWidth(w - f.pad + 6)
+	end
+	f.Layout()
+	function eb.Finish(save) CloseField(eb, save) end
+	-- Open(plain, commit): show the field with the unadorned text;
+	-- Enter commits, Esc cancels — both drop back to the label
+	function f.Open(plain, commit)
+		if openField and openField ~= eb then
+			openField.Finish(true)
+		end
+		local c = EditCatcher()
+		eb:SetText(plain or "")
+		eb:SetTextColor(GM.RGB("text"))
+		eb._commit = commit
+		openField = eb
+		c:Show()
+		eb:SetFrameLevel(c:GetFrameLevel() + 1)
+		eb:Show()
+		eb:SetFocus()
+		eb:HighlightText()
+	end
+	eb:SetScript("OnEnterPressed", function() eb.Finish(true) end)
+	eb:SetScript("OnEscapePressed", function() eb.Finish(false) end)
+	eb:SetScript("OnEditFocusLost", function()
+		-- losing focus to anything but our own close path is a
+		-- click-off: validate + commit, don't silently cancel
+		if not eb._finishing and openField == eb then
+			eb.Finish(true)
+		end
+	end)
+	return f
+end
+
 -- hover tooltip: linesFn() returns {title, line, line…} or nil.
 -- Renders into an owned frame, NOT GameTooltip — SetText there runs
 -- the shared hook chain of every installed addon, and a foreign
@@ -104,7 +278,16 @@ function W.HintShow(f, lines)
 			fs:SetPoint("TOPLEFT", 8, -7 - (i - 1) * 13)
 			tip.lines[i] = fs
 		end
-		fs:SetText(tostring(lines[i]):sub(1, 96))
+		-- truncate on DISPLAY length: a byte-wise sub() can sever a
+		-- |cff…|r escape mid-code or a UTF-8 glyph mid-sequence, and
+		-- the remainder renders as literal "|cff…" text in the tip.
+		-- Escapes are free — they occupy bytes but no pixels
+		local s = tostring(lines[i])
+		if #s:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "") > 96 then
+			s = s:gsub("|c%x%x%x%x%x%x%x%x", "")
+				:gsub("|r", ""):sub(1, 96)
+		end
+		fs:SetText(s)
 		fs:SetTextColor(i == 1 and 1 or 0.8,
 			i == 1 and 1 or 0.8, i == 1 and 1 or 0.75)
 		fs:Show()
@@ -133,8 +316,15 @@ function W.Tip(f, linesFn)
 		linesFn = function() return t end
 	end
 	if type(linesFn) ~= "function" then return end
+	-- idempotent: the hooks bind ONCE per frame and read the fn at
+	-- hover. Re-calling swaps the data, never stacks — a Tip() left
+	-- inside a render loop piled a hook pair per refresh until the
+	-- hover chain blew the C stack mid-craft-run
+	f._gmTipFn = linesFn
+	if f._gmTipBound then return end
+	f._gmTipBound = true
 	f:HookScript("OnEnter", function()
-		W.HintShow(f, linesFn())
+		W.HintShow(f, f._gmTipFn and f._gmTipFn())
 	end)
 	f:HookScript("OnLeave", W.HintHide)
 end
@@ -145,18 +335,90 @@ end
 -- their handler instead. idFn may be an id or fn() -> id, resolved
 -- at click time.
 function W.ModifiedClick(f, idFn)
+	-- same idempotence as Tip — the fn is data, not a new hook
+	f._gmClickFn = idFn
+	if f._gmClickBound then return end
+	f._gmClickBound = true
 	f:HookScript("OnMouseDown", function(_, btn)
 		if btn ~= "LeftButton" or not IsModifiedClick() then return end
-		local id = type(idFn) == "function" and idFn() or idFn
-		if id then GM.ModifiedItemClick(id) end
+		local fn = f._gmClickFn
+		local id = type(fn) == "function" and fn() or fn
+		if id then GM.Ops.Click(id) end
 	end)
+end
+
+-- link capsule click resolution — THE path for turning a click on a
+-- |H..|h[..]|h capsule into Blizzard's own behavior, for EVERY kind:
+-- shift = chat-insert, ctrl = dress-up, otherwise the payload's
+-- default open (item tooltip, tradeskill session, spell book…).
+-- SetItemRef takes the BARE payload ("item:123"), not the capsule —
+-- feeding the whole |c|H..|h string parses for trade links by luck
+-- and silently fails on items.
+function W.LinkClick(link, text, button)
+	if type(link) ~= "string" then return end
+	text, button = text or link, button or "LeftButton"
+	if IsModifiedClick then
+		if IsModifiedClick("CHATLINK") then
+			if ChatEdit_InsertLink then ChatEdit_InsertLink(text) end
+			return
+		end
+		if IsModifiedClick("DRESSUP") and DressUpLink then
+			DressUpLink(text)
+			return
+		end
+	end
+	if not SetItemRef then return end
+	local id = GetItemRefFromLink and GetItemRefFromLink(link)
+		or link:match("|H(.-)|h") or link
+	pcall(SetItemRef, id, text, button)
+end
+
+-- a capsule as a widget: one Button + its FontString. SetCapsule
+-- (raw[, disp]) paints the printable text and binds the payload —
+-- every click type routes through LinkClick; hover tooltips via
+-- SetHyperlink EXCEPT |Htrade:, which OPENS the session on this
+-- client (text tooltip + click hint instead). _pre fires before
+-- LinkClick for provenance stamping (GM.LinkFrom).
+function W.LinkChip(parent, w, h)
+	local b = CreateFrame("Button", nil, parent)
+	b:SetSize(w or 200, h or 14)
+	b.fs = GM.MakeFontString(b, GM.FONT, 9, "text")
+	b.fs:SetPoint("LEFT")
+	b.fs:SetJustifyH("LEFT")
+	b.fs:SetWordWrap(false)
+	b.fs:SetWidth((w or 200) - 4)
+	b:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+	b:SetScript("OnClick", function(self, btn)
+		if self._pre then self._pre(self, btn) end
+		W.LinkClick(self._link, self._text, btn)
+	end)
+	b:SetScript("OnEnter", function(self)
+		local l = self._link
+		if not l then return end
+		GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+		if l:match("|Htrade:") then
+			GameTooltip:AddLine(l)
+			GameTooltip:AddLine("click to open their professions",
+				0.6, 0.6, 0.6)
+		else
+			GameTooltip:SetHyperlink(l)
+		end
+		GameTooltip:Show()
+	end)
+	b:SetScript("OnLeave", function() GameTooltip:Hide() end)
+	function b:SetCapsule(link, disp)
+		self._link, self._text = link, link
+		self.fs:SetText(disp or link or "")
+		self:SetShown(link ~= nil)
+	end
+	return b
 end
 
 -- paneled action button, larger variant (contHigh + FONT_BOLD 10
 -- accent, centered). No handlers wired — callers SetScript their own
 -- OnClick; CraftingUI's secure OPEN overlay needs a bare button to
 -- cover. Was an identical Btn triple in CraftingUI/GroupsUI/OpsUI.
-function W.ActionBtn(parent, label, w, h)
+function W.ActionBtn(parent, label, w, h, raw)
 	local b = CreateFrame("Button", nil, parent)
 	b:SetSize(w, h or 20)
 	GM.Panel(b, "contHigh")
@@ -164,8 +426,28 @@ function W.ActionBtn(parent, label, w, h)
 	b.text:SetPoint("CENTER")
 	b.text:SetWidth(w - 8)
 	b.text:SetWordWrap(false)
-	b.text:SetText(LT(label))
+	-- raw: dynamic data (board names) — LT on those logs
+	-- "unregistered L key" for every user-created value
+	b.text:SetText(raw and label or LT(label))
 	return b
+end
+
+-- small text-× dismiss/remove button — textDim glyph that flashes
+-- err on hover (was four hand-rolled copies with only one having
+-- the hover; now they all do)
+function W.XBtn(parent, s)
+	local x = CreateFrame("Button", nil, parent)
+	x:SetSize(s or 14, s or 14)
+	x.text = GM.MakeFontString(x, GM.FONT_BOLD, (s or 14) - 4, "textDim")
+	x.text:SetPoint("CENTER")
+	x.text:SetText("x")
+	x:SetScript("OnEnter", function()
+		x.text:SetTextColor(GM.RGB("err"))
+	end)
+	x:SetScript("OnLeave", function()
+		x.text:SetTextColor(GM.RGB("textDim"))
+	end)
+	return x
 end
 
 -- status line setter — the ui.footer pattern in the takeover windows
@@ -214,6 +496,22 @@ function W.SetMark(eb, state)
 	eb.mark:SetColorTexture(GM.RGB(
 		state == "err" and "err" or state == "ok" and "pos"
 			or state == "dirty" and "accent" or "outlineVar"))
+end
+
+-- scrollable multiline editbox — returns (scroll, eb). Callers
+-- keep their own esc/enter handling and geometry
+function W.ScrollEdit(parent, w)
+	local scroll = CreateFrame("ScrollFrame", nil, parent,
+		"UIPanelScrollFrameTemplate")
+	GM.Panel(scroll, "contLowest")
+	local eb = CreateFrame("EditBox", nil, scroll)
+	eb:SetMultiLine(true)
+	eb:SetAutoFocus(false)
+	eb:SetFont(GM.FONT, 10, "")
+	eb:SetTextColor(GM.RGB("text"))
+	eb:SetWidth(w or 500)
+	scroll:SetScrollChild(eb)
+	return scroll, eb
 end
 
 -- text segment button (toggle-strip member) + selected-state paint.
@@ -434,7 +732,9 @@ function W.MapLayer(host)
 		t:SetPoint("CENTER", self.host, "TOPLEFT",
 			(x1 + x2) / 2, -(y1 + y2) / 2)
 		if t.SetRotation then
-			pcall(t.SetRotation, t, atan2(-dy, dx))
+			-- WoW's atan2/math.atan return degrees — SetRotation
+			-- wants radians
+			pcall(t.SetRotation, t, math.rad(atan2(-dy, dx)))
 		end
 		t:SetVertexColor(r, g, b, a or 0.9)
 	end
@@ -541,10 +841,10 @@ end
 -- positions under the toolbar row — CraftingUI uses -52, OpsUI -34.
 -- Was two near-identical Panel()s; p.titleFs and p.count are both set
 -- so either consumer's field name resolves.
-function W.ColPanel(parent, x, w, title, topY)
+function W.ColPanel(parent, x, w, title, topY, botY)
 	local p = CreateFrame("Frame", nil, parent)
 	p:SetPoint("TOPLEFT", x, topY or -52)
-	p:SetPoint("BOTTOM", 0, 30)
+	p:SetPoint("BOTTOM", 0, botY or 30)
 	p:SetWidth(w)
 	GM.Panel(p, "contLowest")
 	p:SetClipsChildren(true)
@@ -564,15 +864,25 @@ end
 -- when the user wants OUR window back; onShow hooks the native
 -- frame's show so the caller can re-park it. Returns nil if the
 -- native frame doesn't exist yet.
--- a standalone framed box with a bold title — callers position it.
--- Returns (panel, titleFS) — the title fs lets callers recolor/wrap.
-function W.TitledPanel(f, title)
+-- a standalone framed box with a bold title — callers position it,
+-- or pass (x, y, w, h) to place it here. p.title/p.count name the
+-- header cells (count is the TOPRIGHT convention — Panel header
+-- collisions note in AGENTS.md). Returns (panel, titleFS) — the
+-- title fs lets callers recolor/wrap.
+function W.TitledPanel(f, title, x, y, w, h)
 	local p = CreateFrame("Frame", nil, f)
+	if x then
+		p:SetPoint("TOPLEFT", x, y or 0)
+		if w then p:SetSize(w, h or 20) end
+	end
 	GM.Panel(p, "contLowest")
 	local t = GM.MakeFontString(p, GM.FONT_BOLD, 9, "secondary")
 	t:SetPoint("TOPLEFT", 8, -6)
 	t:SetWordWrap(false)
 	t:SetText(LT(title))
+	p.title = t
+	p.count = GM.MakeFontString(p, GM.FONT, 9, "textDim")
+	p.count:SetPoint("TOPRIGHT", -8, -7)
 	return p, t
 end
 
@@ -621,6 +931,30 @@ function W.HoverTint(row)
 	row.hl:SetColorTexture(HL_R, HL_G, HL_B, 0.35)
 end
 
+-- zebra stripe background for list rows — odd contLowest, even
+-- contMedium. Creates row.bg once; later calls just recolor, so
+-- repaint paths can re-zebra in place (was ~10 hand-drawn copies)
+function W.Zebra(row, i)
+	if not row.bg then
+		row.bg = row:CreateTexture(nil, "BACKGROUND")
+		row.bg:SetAllPoints()
+	end
+	row.bg:SetColorTexture(GM.RGB(
+		i % 2 == 0 and "contMedium" or "contLowest"))
+	return row
+end
+
+-- resolved-name painter: writes the full "First Last" (surname
+-- whenever a source knows it) in Blizzard class colors; falls
+-- back to the theme colorKey when the class is unknowable. The
+-- color rides inside the string (|cff embed), so it also works
+-- inside comma-joined lists — no per-name fontstring needed.
+function W.NameTag(fs, name, colorKey)
+	fs:SetTextColor(GM.RGB(colorKey or "text"))
+	fs:SetText(GM.NameColored and GM.NameColored(name)
+		or name or "?")
+end
+
 -- page toggle strip: text tabs with an accent underline under the
 -- active one (reads as tabs, not action buttons). defs = {{key,label}}
 -- onPick(key) fires on click. Returns {btns={key=btn}, set=fn}.
@@ -658,6 +992,55 @@ function W.PageTabs(parent, defs, onPick)
 			b.active = (k == key) or nil
 			b.line:SetShown(k == key)
 			b.text:SetTextColor(GM.RGB(k == key and "accent" or "textDim"))
+		end
+	end
+	return strip
+end
+
+-- vertical variant of PageTabs — left-rail section tabs. Same
+-- contract: defs = {{key, label}...}, strip.set(key) marks active.
+-- Active paints an accent edge bar + accent text.
+function W.VTabs(parent, defs, onPick, opts)
+	opts = opts or {}
+	local w, h = opts.w or 108, opts.h or 22
+	local strip = { btns = {} }
+	local y = 0
+	for _, d in ipairs(defs) do
+		local key, label = d[1], d[2]
+		local b = CreateFrame("Button", nil, parent)
+		b:SetSize(w, h)
+		b:SetPoint("TOPLEFT", 0, -y)
+		b.bar = b:CreateTexture(nil, "ARTWORK")
+		b.bar:SetSize(3, h - 6)
+		b.bar:SetPoint("LEFT", 0, 0)
+		b.bar:SetColorTexture(GM.RGB("accent"))
+		b.bar:Hide()
+		b.text = GM.MakeFontString(b, GM.FONT_BOLD, 10, "textDim")
+		b.text:SetPoint("LEFT", 10, 0)
+		b.text:SetWidth(w - 14)
+		b.text:SetJustifyH("LEFT")
+		b.text:SetWordWrap(false)
+		b.text:SetText(LT(label))
+		b:SetScript("OnEnter", function()
+			if not b.active then
+				b.text:SetTextColor(GM.RGB("text"))
+			end
+		end)
+		b:SetScript("OnLeave", function()
+			if not b.active then
+				b.text:SetTextColor(GM.RGB("textDim"))
+			end
+		end)
+		b:SetScript("OnClick", function() onPick(key) end)
+		strip.btns[key] = b
+		y = y + h + 2
+	end
+	function strip.set(key)
+		for k, b in pairs(strip.btns) do
+			b.active = (k == key) or nil
+			b.bar:SetShown(k == key)
+			b.text:SetTextColor(GM.RGB(
+				k == key and "accent" or "textDim"))
 		end
 	end
 	return strip
@@ -705,7 +1088,24 @@ function W.PopupMenu(btn, entries, opts)
 		host._gmMenu = m
 	end
 	if not (entries and #entries > 0) then return end
-	local w = opts.w or 220
+	-- auto-size to the widest entry when no explicit width is given —
+	-- dynamic content (group paths) runs long; the cap stops a
+	-- monster entry from eating the screen
+	local w = opts.w
+	if not w then
+		local probe = m._probe
+		if not probe then
+			probe = GM.MakeFontString(m, GM.FONT, 10, "text")
+			m._probe = probe
+		end
+		w = 160
+		for _, e in ipairs(entries) do
+			probe:SetText((opts.raw or e.raw) and e.label
+				or LT(e.label))
+			w = math.max(w, math.ceil(probe:GetStringWidth()) + 24)
+		end
+		w = math.min(w, opts.maxW or 420)
+	end
 	local MAX = opts.maxRows or 14
 	local vis = math.min(#entries, MAX)
 	m.btns = m.btns or {}
@@ -734,7 +1134,10 @@ function W.PopupMenu(btn, entries, opts)
 			b:SetWidth(w)
 			b:SetPoint("TOPLEFT", 2, -2 - (i - 1) * 18)
 			b.text:SetJustifyH(opts.justify or "LEFT")
-			b.text:SetText(LT(e.label))
+			-- raw: dynamic data (group paths, zone names) — LT on
+			-- those logs "unregistered L key" against the strict
+			-- localizer for every entry, every open
+			b.text:SetText((opts.raw or e.raw) and e.label or LT(e.label))
 			b.text:SetTextColor(GM.RGB(e.checked and "accent" or "text"))
 			b:SetScript("OnClick", function()
 				m:Hide()
@@ -767,6 +1170,107 @@ function W.PopupMenu(btn, entries, opts)
 	m.catcher:Show()
 end
 
+-- forward decl: XferOpen/AcctRow/AcctAdd all repaint through it;
+-- defined below near AcctRow
+local AcctRefresh
+
+-- account-to-account transfer popover: amount + destination
+-- dropdown + SEND, bank-app style. One per host panel, re-anchored
+-- under the row that opened it; the PopupMenu catcher-dismiss
+-- pattern. B.Transfer owns validation — a rejected send flashes
+-- the amount red (bad input or insufficient funds).
+function W.XferOpen(row, fromIdx)
+	local p = row:GetParent()
+	local pop = p._gmXfer
+	if not pop then
+		local catcher = CreateFrame("Button", nil, p)
+		catcher:SetAllPoints(UIParent)
+		catcher:SetFrameLevel(p:GetFrameLevel() + 39)
+		pop = CreateFrame("Frame", nil, p)
+		pop:SetSize(256, 50)
+		pop:SetFrameLevel(p:GetFrameLevel() + 40)
+		GM.Panel(pop, "contLow", "outline")
+		pop.catcher = catcher
+		catcher:SetScript("OnClick", function()
+			pop:Hide() catcher:Hide()
+		end)
+		local title = GM.MakeFontString(pop, GM.FONT_MED, 9, "secondary")
+		title:SetPoint("TOPLEFT", 8, -6)
+		pop.title = title
+		local amt = W.MoneyEdit(pop, 80, "0g")
+		amt:SetPoint("TOPLEFT", 8, -26)
+		pop.amt = amt
+		local toLbl = GM.MakeFontString(pop, GM.FONT, 9, "textDim")
+		toLbl:SetPoint("LEFT", amt, "RIGHT", 6, 0)
+		toLbl:SetText(LT("to"))
+		local dest = CreateFrame("Button", nil, pop)
+		dest:SetSize(96, 20)
+		dest:SetPoint("LEFT", toLbl, "RIGHT", 4, 0)
+		GM.Panel(dest, "contMedium")
+		dest.text = GM.MakeFontString(dest, GM.FONT, 9, "text")
+		dest.text:SetPoint("LEFT", 5, 0)
+		dest.text:SetPoint("RIGHT", -4, 0)
+		dest.text:SetJustifyH("LEFT")
+		dest.text:SetWordWrap(false)
+		pop.dest = dest
+		local send = CreateFrame("Button", nil, pop)
+		send:SetSize(50, 18)
+		send:SetPoint("TOPRIGHT", -6, -5)
+		GM.Panel(send, "accent")
+		send.text = GM.MakeFontString(send, GM.FONT_BOLD, 9, "contLowest")
+		send.text:SetPoint("CENTER")
+		send.text:SetText(LT("SEND"))
+		send:SetScript("OnClick", function()
+			local v = pop.amt.GetCopper()
+			if v and GM.Budget.Transfer(pop._from, pop._dest, v) then
+				pop:Hide() pop.catcher:Hide()
+				AcctRefresh()
+			else
+				pop.amt:SetTextColor(GM.RGB("err"))
+			end
+		end)
+		W.Tip(send, function() return {
+			"Move the amount to the",
+			"destination account —",
+			"journaled like a bank transfer" } end)
+		p._gmXfer = pop
+	end
+	pop._from = fromIdx
+	local src = GM.Budget.List()[fromIdx]
+	pop.title:SetText(LT("TRANSFER") .. "   "
+		.. GM.CC("textDim") .. "from|r " .. (src and src.name or "?"))
+	local targets = GM.Budget.TransferTargets(fromIdx)
+	pop._dest = targets[1] and targets[1].i
+	local function PaintDest()
+		local name = "—"
+		for _, tg in ipairs(targets) do
+			if tg.i == pop._dest then
+				name = tg.a.name .. (tg.a.pool and " (pool)" or "")
+			end
+		end
+		pop.dest.text:SetText(name)
+	end
+	pop.dest:SetScript("OnClick", function()
+		local entries = {}
+		for _, tg in ipairs(targets) do
+			local ti = tg.i
+			entries[#entries + 1] = {
+				label = tg.a.name .. (tg.a.pool and " (pool)" or ""),
+				checked = pop._dest == ti,
+				cb = function() pop._dest = ti PaintDest() end,
+			}
+		end
+		W.PopupMenu(pop.dest, entries, { raw = true, w = 150 })
+	end)
+	PaintDest()
+	pop.amt:SetText("")
+	pop.amt:SetTextColor(GM.RGB("text"))
+	pop:ClearAllPoints()
+	pop:SetPoint("TOPRIGHT", row, "BOTTOMRIGHT", 0, -4)
+	pop:Show()
+	pop.catcher:Show()
+end
+
 -- standard frame furniture: title + close X, shared offsets so every
 -- window's chrome sits identically
 function W.Chrome(f, name, titleText)
@@ -790,7 +1294,7 @@ end
 -- W.AcctRow and paint through W.PaintAcctRow, so add/cycle/bind/
 -- reset/delete behave identically on either window.
 
-local function AcctRefresh()
+AcctRefresh = function()
 	-- repaint every surface that might show this account
 	GM.View.Refresh("planner")
 	GM.View.Refresh("overview")
@@ -804,46 +1308,40 @@ function W.AcctRow(parent, idx, compact)
 	local nameW = compact and 88 or 104
 	local grpW = compact and 100 or 120
 
-	-- name is clickable: swaps to an inline editbox, Enter commits
-	-- (B.Rename validates empty/dup), Esc cancels
-	local nameBtn = CreateFrame("Button", nil, row)
+	-- name is an editable label: click swaps to an aligned field,
+	-- Enter commits (B.Rename validates empty/dup), Esc cancels
+	local nameBtn = W.EditableLabel(row, nameW)
 	nameBtn:SetPoint("LEFT", 2, 0)
-	nameBtn:SetSize(nameW, 18)
-	row.name = GM.MakeFontString(nameBtn, GM.FONT, 10, "text")
-	row.name:SetPoint("LEFT", 0, 0)
-	row.name:SetWidth(nameW)
-	row.name:SetJustifyH("LEFT")
-	local eb = W.EditBox(row, nameW + 6)
-	eb:SetPoint("LEFT", 0, 0)
-	row.name:SetWordWrap(false)
-	eb:SetHeight(18)
-	eb:Hide()
-	row.nameEdit = eb
+	row.name = nameBtn.label
+	row.nameBtn = nameBtn
+	-- fold chevron: overview nests each char's named accounts under
+	-- their pool — the chevron rides the pool row's left gutter and
+	-- only paints when the row carries children. Blizzard's own
+	-- plus/minus textures: the ▸/▾ glyphs don't exist in Montserrat
+	local fold = CreateFrame("Button", nil, row)
+	fold:SetSize(14, 18)
+	fold:SetPoint("LEFT", 2, 0)
+	fold.tex = fold:CreateTexture(nil, "ARTWORK")
+	fold.tex:SetSize(14, 14)
+	fold.tex:SetPoint("CENTER")
+	fold:Hide()
+	row.fold = fold
 	nameBtn:SetScript("OnClick", function()
 		local a = GM.Budget.List()[row._idx or idx]
 		if not a then return end
-		eb:SetText(a.name)
-		eb:SetTextColor(GM.RGB("text"))
-		eb:Show()
-		eb:SetFocus()
-		eb:HighlightText()
+		nameBtn.Open(a.name, function(text)
+			GM.Budget.Rename(row._idx or idx, text)
+			AcctRefresh()
+		end)
 	end)
 	W.Tip(nameBtn, function() return {
 		"Rename account", "click to edit the name" } end)
-	eb:SetScript("OnEnterPressed", function(self)
-		GM.Budget.Rename(row._idx or idx, self:GetText())
-		self:Hide()
-		self:ClearFocus()
-		AcctRefresh()
-	end)
-	eb:SetScript("OnEscapePressed", function(self)
-		self:Hide()
-		self:ClearFocus()
-	end)
 
 	local kind = CreateFrame("Button", nil, row)
 	kind:SetSize(50, 20)
-	kind:SetPoint("LEFT", nameW + 6, 0)
+	-- ride the name button's right edge so ind/fold indents carry
+	-- the whole row, not just the name
+	kind:SetPoint("LEFT", nameBtn, "RIGHT", 4, 0)
 	GM.Panel(kind, "contHigh")
 	kind.text = GM.MakeFontString(kind, GM.FONT_MED, 9, "secondary")
 	kind.text:SetPoint("CENTER")
@@ -851,21 +1349,30 @@ function W.AcctRow(parent, idx, compact)
 	kind.text:SetWordWrap(false)
 	kind:SetScript("OnClick", function()
 		local a = GM.Budget.List()[row._idx or idx]
-		if not a then return end
+		if not a or a.pool then return end
+		-- pools can't rekind — the pool flag owns the row's function
+		-- regardless of the underlying kind field
 		local order = GM.Budget.KIND_ORDER
 		for j, k in ipairs(order) do
 			if k == a.kind then
-				GM.Budget.SetKind(idx, order[j % #order + 1])
+				GM.Budget.SetKind(row._idx or idx, order[j % #order + 1])
 				break
 			end
 		end
 		AcctRefresh()
 	end)
-	W.Tip(kind, function() return {
-		"Account function",
-		"craft: mat/craft spends · ah: auction spends",
-		"save: reserve that never leaves",
-		"click to cycle" } end)
+	W.Tip(kind, function()
+		local a = GM.Budget.List()[row._idx or idx]
+		if a and a.pool then return {
+			"The char's purse",
+			"every copper no other account claims —",
+			"it can't change function" } end
+		return {
+			"Account function",
+			"craft: mat/craft spends · ah: auction spends",
+			"save: reserve that never leaves",
+			"click to cycle" }
+	end)
 	row.kind = kind
 
 	local grp = CreateFrame("Button", nil, row)
@@ -880,23 +1387,35 @@ function W.AcctRow(parent, idx, compact)
 	grp:SetScript("OnClick", function()
 		local a = GM.Budget.List()[row._idx or idx]
 		if not a then return end
-		local paths = GM.Budget.GroupPaths()
-		local cur, nextPath = a.group, nil
-		if not cur then
-			nextPath = paths[1]
-		else
-			for j, p in ipairs(paths) do
-				if p == cur then nextPath = paths[j + 1] break end
-			end
+		local ri = row._idx or idx
+		-- real dropdown: blind cycling through a dozen group paths
+		-- read like a dead text box
+		local entries = { {
+			label = "— unbound",
+			checked = not a.group,
+			cb = function() GM.Budget.SetGroup(ri, nil) AcctRefresh() end,
+		} }
+		for _, p in ipairs(GM.Budget.GroupPaths()) do
+			local path = p
+			entries[#entries + 1] = {
+				label = path,
+				checked = a.group == path,
+				cb = function()
+					GM.Budget.SetGroup(ri, path)
+					AcctRefresh()
+				end,
+			}
 		end
-		GM.Budget.SetGroup(idx, nextPath)
-		AcctRefresh()
+		W.PopupMenu(grp, entries,
+			{ raw = true, maxW = 560 })
 	end)
 	W.Tip(grp, function() return {
 		"Group binding",
-		"items in this group route their",
-		"spends and sales to this account",
-		"click to cycle · wraps to unbound" } end)
+		"items in this group route flows",
+		"here — the account kind picks",
+		"which transactions land (ah=sales,",
+		"vendor=merchant buys/sells)",
+		"click for the group list" } end)
 	row.grp = grp
 
 	row.alloc = GM.MakeFontString(row, GM.FONT, 10, "text")
@@ -937,10 +1456,54 @@ function W.AcctRow(parent, idx, compact)
 	W.Tip(rst, function() return { "Reset spent to zero" } end)
 	row.rst = rst
 
+	-- transfer: move copper between this char's accounts — the
+	-- bank-app primitive, journaled as a transfer line
+	local xfr = CreateFrame("Button", nil, row)
+	xfr:SetSize(16, 16)
+	xfr:SetPoint("RIGHT", rst, "LEFT", -4, 0)
+	xfr.text = GM.MakeFontString(xfr, GM.FONT_BOLD, 10, "textDim")
+	xfr.text:SetPoint("CENTER")
+	xfr.text:SetText("→")
+	xfr:SetScript("OnClick", function()
+		W.XferOpen(row, row._idx or idx)
+	end)
+	W.Tip(xfr, function() return {
+		"Transfer gold",
+		"move copper to another of this",
+		"char's accounts — journaled",
+		"like a bank transfer" } end)
+	row.xfr = xfr
+
+	-- over-budget warning toggle: ! lit = a spend that overdraws
+	-- this account announces; dim = silent. Per-account, persists.
+	local warn = CreateFrame("Button", nil, row)
+	warn:SetSize(16, 16)
+	warn:SetPoint("RIGHT", xfr, "LEFT", -4, 0)
+	warn.text = GM.MakeFontString(warn, GM.FONT_BOLD, 10, "textDim")
+	warn.text:SetPoint("CENTER")
+	warn:SetScript("OnClick", function()
+		local a = GM.Budget.List()[row._idx or idx]
+		if not a then return end
+		a.warn = (a.warn == false)
+		AcctRefresh()
+	end)
+	W.Tip(warn, function()
+		local a = GM.Budget.List()[row._idx or idx]
+		return a and a.warn == false and {
+			"Over-budget warning: OFF",
+			"spends overdraw silently —",
+			"click to warn again" }
+			or { "Over-budget warning: ON",
+			"a spend that overdraws this",
+			"account prints a warning —",
+			"click to silence" }
+	end)
+	row.warn = warn
+
 	-- 7d income/spend column: fixed-width right-justified block before
 	-- the row buttons; `left` re-anchors to it so nothing overlaps
 	row.flow = GM.MakeFontString(row, GM.FONT, 9, "textDim")
-	row.flow:SetPoint("RIGHT", rst, "LEFT", -8, 0)
+	row.flow:SetPoint("RIGHT", warn, "LEFT", -8, 0)
 	row.flow:SetWidth(140)
 	row.flow:SetJustifyH("RIGHT")
 	row.flow:SetWordWrap(false)
@@ -952,23 +1515,77 @@ end
 
 -- unified paint: alloc text per kind, save accounts show "reserved",
 -- spend accounts show left + spent (red when overdrawn)
-function W.PaintAcctRow(row, a, idx)
+function W.PaintAcctRow(row, a, idx, opts)
+	opts = opts or {}
 	row._idx = idx
+	-- nest/fold: children indent past the chevron gutter; pool rows
+	-- with kids carry the fold glyph at the far left
+	row.nameBtn:ClearAllPoints()
+	row.nameBtn:SetPoint("LEFT",
+		2 + (opts.indent or 0) * 16 + (opts.fold and 14 or 0), 0)
+	if opts.fold then
+		row.fold:Show()
+		row.fold.tex:SetTexture(opts.fold == "closed"
+			and "Interface\\Buttons\\UI-PlusButton-Up"
+			or "Interface\\Buttons\\UI-MinusButton-Up")
+		row.fold:SetScript("OnClick", opts.onFold)
+	else
+		row.fold:Hide()
+	end
 	local ck = GM.Budget.OwnerKey and GM.Budget.OwnerKey(a)
+	-- an alt's row is read-only on this char: mutating controls
+	-- (rename/rekind/rebind/warn/transfer/reset/delete) go inert or
+	-- hide — the owner manages them on their own char. The fold
+	-- chevron stays live: collapsing a group is view-local, not a
+	-- write. Display controls keep showing state, just unclickable
+	local selfOwned = not ck or GM.IsSelfCharKey(ck)
+	row.nameBtn:EnableMouse(selfOwned)
+	row.kind:EnableMouse(selfOwned)
+	row.grp:EnableMouse(selfOwned)
+	row.warn:SetShown(selfOwned)
+	row.xfr:SetShown(selfOwned)
+	row.rst:SetShown(selfOwned)
+	row.flow:ClearAllPoints()
+	if selfOwned then
+		row.flow:SetPoint("RIGHT", row.warn, "LEFT", -8, 0)
+	else
+		row.flow:SetPoint("RIGHT", row, "RIGHT", -4, 0)
+	end
 	local label = a.name
 	if ck then
+		-- the pool's name IS the char's — show the resolved full
+		-- name; named accounts keep their user-chosen label
 		label = (GM.Budget.Crest(ck) or "")
-			.. GM.Budget.CharCC(ck) .. a.name .. "|r"
+			.. GM.Budget.CharCC(ck)
+			.. (a.pool and GM.Budget.CharDisp
+				and GM.Budget.CharDisp(ck) or a.name) .. "|r"
 		-- an alt's named account needs its owner spelled out — the
 		-- pool's name already IS the char's, so it skips the tag
 		if not GM.IsSelfCharKey(ck)
 			and a.name ~= GM.Budget.CharName(ck) then
 			label = label .. GM.CC("textDim") .. " · "
-				.. GM.Budget.CharName(ck) .. "|r"
+				.. (GM.Budget.CharDisp and GM.Budget.CharDisp(ck)
+					or GM.Budget.CharName(ck)) .. "|r"
 		end
 	end
 	row.name:SetText(label)
+	-- crest pad, exact: measure the crest escape itself — texture
+	-- escapes measure at display width, so this lands the field's
+	-- text on the name no matter what suffix the label carries
+	row._measure = row._measure
+		or GM.MakeFontString(row, GM.FONT, 10, "text")
+	row._measure:SetText(ck and GM.Budget.Crest(ck) or "")
+	row.nameBtn.pad = row._measure:GetStringWidth() or 0
+	row.nameBtn.Layout()
 	row.kind.text:SetText(a.pool and "POOL" or GM.Budget.KINDS[a.kind])
+	-- the pool IS every group — it can't be deleted or rebound, so
+	-- both controls hide on pool rows; a stale binding left by the
+	-- old cycler gets cleared for honesty
+	if a.pool and a.group then
+		a.group = nil
+	end
+	row.grp:SetShown(not a.pool)
+	row.del:SetShown(selfOwned and not a.pool)
 	row.grp.text:SetText(a.group or "—")
 	row.grp.text:SetTextColor(GM.RGB(a.group and "accent" or "textDim"))
 	row.alloc:SetText(GM.Budget.AllocText(a))
@@ -977,10 +1594,16 @@ function W.PaintAcctRow(row, a, idx)
 		row.left:SetText("reserved " .. GM.MoneyShort(rem))
 		row.left:SetTextColor(GM.RGB("accent"))
 	else
-		row.left:SetText("left " .. GM.MoneyShort(rem)
+		-- Balance is signed: an overdrawn envelope reads negative in
+		-- red instead of clamping silently at 0c
+		local bal = GM.Budget.Balance(a)
+		row.left:SetText("left " .. GM.MoneyShort(bal)
 			.. " · spent " .. GM.MoneyShort(a.spent or 0))
-		row.left:SetTextColor(GM.RGB(rem > 0 and "textDim" or "err"))
+		row.left:SetTextColor(GM.RGB(bal > 0 and "textDim" or "err"))
 	end
+	row.warn.text:SetText("!")
+	row.warn.text:SetTextColor(
+		GM.RGB(a.warn == false and "textDim" or "warn"))
 	local fin, fout = GM.Budget.Flow(a)
 	if fin then
 		row.flow:SetText(GM.CC("pos") .. "+" .. GM.MoneyShort(fin) .. "|r"
@@ -996,7 +1619,9 @@ end
 -- parse: bare number = gold for craft/ah budgets, % for saves.
 function W.AcctAdd(parent)
 	local f = CreateFrame("Frame", nil, parent)
-	f:SetHeight(22)
+	-- real width, not zero: a 0px-wide region computes a degenerate
+	-- rect on this client and every child anchored into it vanishes
+	f:SetSize(560, 22)
 
 	local name = W.EditBox(f, 130, "name")
 	name:SetPoint("LEFT", 0, 0)
@@ -1027,36 +1652,44 @@ function W.AcctAdd(parent)
 	W.Tip(kindBtn, function() return {
 		"New account's function", "click to cycle" } end)
 
-	local amt = W.EditBox(f, 80, "0g")
+	-- bare numbers read as gold here ("5" = 5g, per the hint); the
+	-- same box takes % when the kind flips to SAVE, so a percent is
+	-- valid input even though it isn't money
+	local amt = W.MoneyEdit(f, 80, "0g", "g")
 	amt:SetPoint("LEFT", kindBtn, "RIGHT", 6, 0)
+	amt._validate = function(t)
+		return addKind ~= "save"
+			or tonumber(((t or ""):gsub("%%", ""))) ~= nil
+	end
 
 	local btn = CreateFrame("Button", nil, f)
-	btn:SetSize(26, 20)
+	btn:SetSize(110, 20)
 	btn:SetPoint("LEFT", amt, "RIGHT", 6, 0)
 	GM.Panel(btn, "accent")
-	btn.text = GM.MakeFontString(btn, GM.FONT_BOLD, 11, "contLowest")
+	btn.text = GM.MakeFontString(btn, GM.FONT_BOLD, 9, "contLowest")
 	btn.text:SetPoint("CENTER")
-	btn.text:SetText("+")
+	btn.text:SetText(LT("+ NEW ACCOUNT"))
 
 	local hint = GM.MakeFontString(f, GM.FONT, 9, "textDim")
 	hint:SetPoint("LEFT", btn, "RIGHT", 8, 0)
 	hint:SetJustifyH("LEFT")
-	hint:SetText(LT("craft/ah: gold (500 or 10g50s) · save: %"))
+	hint:SetText(LT("craft/ah/vendor: gold · save: %"))
 
 	btn:SetScript("OnClick", function()
 		local n = name:GetText()
 		if n == LT("name") then n = "" end
-		local a = amt:GetText()
 		local alloc = addKind == "save"
-			and tonumber((a or ""):gsub("%%", ""))
-			or (tonumber(a) and floor(tonumber(a) * 10000)
-				or GM.Budget.ParseMoney(a))
-		local acct = alloc and GM.Budget.Add(n, addKind, alloc)
+			and tonumber(((amt:GetText() or ""):gsub("%%", "")))
+			or amt.GetCopper()
+		-- alloc may be 0 — an unfunded envelope is a valid account
+		local acct = alloc ~= nil
+			and GM.Budget.Add(n, addKind, alloc) or nil
 		AcctRefresh()
 		if acct then
 			name:SetText("")
 			amt:SetText(addKind == "save" and "30" or "0g")
-			hint:SetText(LT("craft/ah: gold (500 or 10g50s) · save: %"))
+			amt:SetTextColor(GM.RGB("textDim"))
+			hint:SetText(LT("craft/ah/vendor: gold · save: %"))
 		else
 			hint:SetText(GM.CC("err")
 				.. (addKind == "save" and "need a % (0-100)"
@@ -1144,16 +1777,23 @@ function W.GoldEdit(parent, w)
 	w = w or 118
 	h:SetSize(w, 18)
 	-- gold gets the extra room (the big number); silver/copper are
-	-- two-digit by construction like Blizzard's own coin fields
+	-- two-digit by construction like Blizzard's own coin fields.
+	-- sw floor 26: at 20px the 4px inset left ~14px of text — two
+	-- digits overflowed and this client right-anchors the clip, so
+	-- "44s 43c" painted as "4s 3c"
 	local gw = math.max(34, math.floor(w * 0.42))
-	local sw = math.max(20, math.floor((w - gw - 24) / 2))
+	local sw = math.max(26, math.floor((w - gw - 24) / 2))
+	-- painted width ≠ declared w: unit labels draw after each box
+	-- (label offset 2 + ~7px glyph + 4 gap per section). Callers
+	-- anchoring off this frame's right edge get effW instead.
+	h.effW = gw + 2 * sw + 30
 	local function mk(ww, maxc)
 		local e = CreateFrame("EditBox", nil, h)
 		e:SetSize(ww, 18)
 		e:SetAutoFocus(false)
 		e:SetFont(GM.FONT, 10, "")
 		e:SetTextColor(GM.RGB("text"))
-		e:SetTextInsets(4, 2, 0, 0)
+		e:SetTextInsets(2, 1, 0, 0)
 		e:SetMaxLetters(maxc)
 		GM.Panel(e, "contLowest")
 		e:SetScript("OnTextChanged", function(s)
@@ -1236,7 +1876,12 @@ function W.ItemSlot(parent, opts)
 	f.iconBtn:SetScript("OnEnter", function(s)
 		if not s.itemID then return end
 		GameTooltip:SetOwner(s, "ANCHOR_RIGHT")
-		if GameTooltip.SetItemByID then
+		-- the stored ctx.link carries the suffix — SetItemByID
+		-- would tip the base item
+		local link = f.ctx and f.ctx.link
+		if link then
+			GameTooltip:SetHyperlink(link)
+		elseif GameTooltip.SetItemByID then
 			GameTooltip:SetItemByID(s.itemID)
 		else
 			GameTooltip:SetHyperlink("item:" .. s.itemID)
@@ -1269,7 +1914,7 @@ function W.ItemSlot(parent, opts)
 	end
 	local function Click()
 		if IsModifiedClick() then
-			GM.ModifiedItemClick(f.iconBtn.itemID)
+			GM.Ops.Click(f.ctx or { id = f.itemID, link = f.itemLink })
 		elseif CursorHasItem() then
 			Drop()
 		end
@@ -1283,6 +1928,7 @@ function W.ItemSlot(parent, opts)
 
 	function f:SetItem(id, link)
 		f.itemID, f.itemLink = id, link
+		f.ctx = id and GM.Ctx(id, link) or nil
 		f.iconBtn.itemID = id
 		local name = (link and link:find("%[") and link)
 			or (id and GM.ItemName and GM.ItemName(id))
@@ -1291,16 +1937,13 @@ function W.ItemSlot(parent, opts)
 		if id and GM.NameColor then
 			f.name:SetTextColor(GM.NameColor(id))
 		end
-		local icon = id and ((C_Item and C_Item.GetItemIconByID
-			and C_Item.GetItemIconByID(id))
-			or (C_Item and C_Item.GetItemInfo
-				and select(10, C_Item.GetItemInfo(id))))
+		local icon = id and GM.ItemIcon and GM.ItemIcon(id)
 		if icon then f.icon:SetTexture(icon) f.icon:Show()
 		else f.icon:Hide() end
 		f.sub:SetText(id and ("id " .. id) or "")
 	end
 	function f:Clear()
-		f.itemID, f.itemLink = nil, nil
+		f.itemID, f.itemLink, f.ctx = nil, nil, nil
 		f.iconBtn.itemID = nil
 		f.icon:Hide()
 		f.name:SetText(GM.CC("textDim")
@@ -1361,7 +2004,12 @@ function W.ItemRow(parent, opts)
 	row:SetScript("OnEnter", function(self)
 		if not self.id then return end
 		GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-		if GameTooltip.SetItemByID then
+		-- ctx.link carries the variant suffix — SetItemByID
+		-- would tip the base item
+		local link = self.ctx and self.ctx.link
+		if link then
+			GameTooltip:SetHyperlink(link)
+		elseif GameTooltip.SetItemByID then
 			GameTooltip:SetItemByID(self.id)
 		else
 			GameTooltip:SetHyperlink("item:" .. self.id)
@@ -1375,18 +2023,20 @@ function W.ItemRow(parent, opts)
 			opts.onClick(self, self.id)
 		end)
 	end
-	W.ModifiedClick(row, function() return row.id end)
+	W.ModifiedClick(row, function() return row.ctx or row.id end)
 
 	function row:SetItem(d)
 		local id = type(d) == "table" and (d.id or d.itemID) or d
 		row.id = id
+		row.ctx = type(d) == "table" and (d.ctx or GM.Ctx(d))
+			or id and GM.Ctx(id)
 		if not id then row:Clear() return end
 		row:SetAlpha(1)
 		row.icon:SetTexture(GM.ItemIcon and GM.ItemIcon(id)
 			or "Interface\\Icons\\INV_Misc_QuestionMark")
 		local nm = type(d) == "table" and d.name or nil
 		row.name:SetText((nm and nm ~= "" and nm)
-			or GM.ItemNameOr(id))
+			or (row.ctx and row.ctx.name) or GM.ItemNameOr(id))
 		row.name:SetTextColor(GM.NameColor(id))
 		local price = type(d) == "table" and d.price or nil
 		local vel = type(d) == "table" and d.vel or nil
@@ -1410,7 +2060,7 @@ function W.ItemRow(parent, opts)
 		row.rate:SetText(rate and format("%.2g/k", rate) or "")
 	end
 	function row:Clear()
-		row.id = nil
+		row.id, row.ctx = nil, nil
 		row.icon:SetTexture(
 			"Interface\\Icons\\INV_Misc_QuestionMark")
 		row.name:SetText("")
@@ -1467,7 +2117,12 @@ function W.ColumnRow(parent, opts)
 	row:SetScript("OnEnter", function(self)
 		if not self.id then return end
 		GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-		if GameTooltip.SetItemByID then
+		-- ctx.link carries the variant suffix — SetItemByID
+		-- would tip the base item
+		local link = self.ctx and self.ctx.link
+		if link then
+			GameTooltip:SetHyperlink(link)
+		elseif GameTooltip.SetItemByID then
 			GameTooltip:SetItemByID(self.id)
 		else
 			GameTooltip:SetHyperlink("item:" .. self.id)
@@ -1481,16 +2136,19 @@ function W.ColumnRow(parent, opts)
 			opts.onClick(self, self.id)
 		end)
 	end
-	W.ModifiedClick(row, function() return row.id end)
+	W.ModifiedClick(row, function() return row.ctx or row.id end)
 
 	function row:SetItem(d)
 		local id = type(d) == "table" and (d.id or d.itemID) or d
 		row.id = id
+		row.ctx = type(d) == "table" and (d.ctx or GM.Ctx(d))
+			or id and GM.Ctx(id)
 		row.icon:SetTexture(
 			id and GM.ItemIcon and GM.ItemIcon(id)
 			or "Interface\\Icons\\INV_Misc_QuestionMark")
 		local nm = type(d) == "table" and d.name or nil
 		row.name:SetText((type(nm) == "string" and nm ~= "" and nm)
+			or (row.ctx and row.ctx.name)
 			or (id and GM.ItemNameOr(id)) or "")
 		-- `a and X or Y` truncates to one arg — SetTextColor needs
 		-- the full triple so pick the source, not the expression
@@ -1498,10 +2156,7 @@ function W.ColumnRow(parent, opts)
 		else row.name:SetTextColor(GM.RGB("text")) end
 	end
 	-- zebra parity lives on the row so reordered pools repaint right
-	function row:SetZebra(i)
-		row.bg:SetColorTexture(GM.RGB(
-			i % 2 == 0 and "contMedium" or "contLowest"))
-	end
+	function row:SetZebra(i) W.Zebra(row, i) end
 	return row
 end
 

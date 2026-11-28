@@ -480,12 +480,8 @@ local function BuildWindow()
 	title:SetPoint("TOPLEFT", 12, -10)
 	title:SetText("IMPORT FROM OTHER ADDONS")
 
-	local close = CreateFrame("Button", nil, f)
-	close:SetSize(16, 16)
+	local close = W.XBtn(f, 16)
 	close:SetPoint("TOPRIGHT", -6, -6)
-	close.text = GM.MakeFontString(close, GM.FONT_BOLD, 12, "textDim")
-	close.text:SetPoint("CENTER")
-	close.text:SetText("x")
 	close:SetScript("OnClick", function() f:Hide() end)
 
 	f.refresh = I.Mount(f)

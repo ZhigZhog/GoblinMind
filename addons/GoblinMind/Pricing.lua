@@ -43,6 +43,44 @@ function GM.Price(key, itemID)
 	return v
 end
 
+-- THE one vendor-sell-price read — GetItemInfo field 11, copper or
+-- nil when unreadable/unsellable. Every "what a merchant pays for
+-- this item" lookup routes here (tooltip lines, vendor floors,
+-- ledger sell provisionals); never open-code select(11, GetInfo).
+function GM.VendorSellPrice(id)
+	local v = GetInfo and select(11, GetInfo(id))
+	return v and v > 0 and v or nil
+end
+
+-- what one unit is worth to a farmer, the GoldScout way: grays are
+-- vendor trash — sell price only, never an auction quote. Everything
+-- else takes the LOWER of min-buyout and market floored at vendor
+-- sell — a fantasy listing can never beat the guaranteed price a
+-- vendor always pays. THE one farm-value policy — ctx.value, zone
+-- records, and farm-EV math all read this.
+function GM.FarmValue(id)
+	local quality, sell = GM.ItemQuality(id), GM.VendorSellPrice(id)
+	-- index 11 is sellPrice on standard clients — on Forever it
+	-- sometimes returns an unrelated field (appearance/spell ids
+	-- land in the millions). Nothing a farm mob drops legitimately
+	-- vendors above 5g, so the floor caps there — a garbage field
+	-- can never price a drop again
+	if sell and sell > 50000 then sell = nil end
+	if quality == 0 then return sell end
+	local a = GM.Price("dbminbuyout", id)
+	local b = GM.Price("dbmarket", id)
+	-- a lone min-buyout with NO market history is an asking price,
+	-- not a price — one dreamer listing a custom item at 3000g is
+	-- not a farm value. Corroborated quotes use the lower bound;
+	-- unvalidated mb caps at 50g
+	local best
+	if a and b then best = min(a, b)
+	elseif a then best = min(a, 500000)
+	else best = b end
+	if sell and sell > (best or 0) then return sell end
+	return best or sell
+end
+
 -- ============ sources: name -> fn(itemID) -> copper|nil ============
 
 local function ef(itemID, k)
@@ -65,7 +103,7 @@ local SRC = {
 	dbregionsalerate    = function(id) return ef(id, "vel") end,
 	dbregionsalepercent = function(id) return GM.Price("dbregionsalepercent", id) end,
 	numauctions         = function(id) return ef(id, "sup") end,
-	vendorsell          = function(id) return GetInfo and select(11, GetInfo(id)) or nil end,
+	vendorsell          = function(id) return GM.VendorSellPrice(id) end,
 	vendorbuy           = function(id)
 		-- emitted by the brain from TSM's VendorSell.Retail table —
 		-- the TSM4 custom-price API doesn't register 'vendorbuy'
@@ -97,7 +135,7 @@ local SRC = {
 			and GM.Destroying.DisenchantEV(id) or nil
 	end,
 	destroy             = function(id)
-		local best = GetInfo and select(11, GetInfo(id)) or nil
+		local best = GM.VendorSellPrice(id)
 		local de = GM.Destroying and GM.Destroying.DisenchantEV
 			and GM.Destroying.DisenchantEV(id)
 		if de and (not best or de > best) then best = de end

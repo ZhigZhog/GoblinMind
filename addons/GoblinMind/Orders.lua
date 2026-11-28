@@ -64,7 +64,8 @@ local function unjson(s)
 end
 
 local function CharName()
-	return UnitName("player") or "?"
+	return (GM.OwnName and GM.OwnName())
+		or (UnitName and UnitName("player")) or "?"
 end
 
 -- ============ identity ============
@@ -1003,6 +1004,19 @@ local RELAY_KEYS = {
 	ignore = { "uuid", "on" },
 	ban = { "uuid", "on" },
 	register = { "name" },
+	-- crafting writs v2 — same R envelope, writ routes on the host's
+	-- watcher (_ord_route falls through to _writ_route); 'roster' is
+	-- the shop publish, offers arrives as one packed JSON field
+	roster = { "chars", "offers" },
+	wpost = { "to", "toChar", "fromChar", "ref", "name", "itemID",
+		"qty", "offer", "mats", "deliver", "note" },
+	wquote = { "wid", "price" },
+	waccept = { "wid", "meet", "matsFp" },
+	wdecline = { "wid" },
+	wship = { "wid", "cod", "mailFrom" },
+	wrecv = { "wid" },
+	wcancel = { "wid" },
+	wmeet = { "wid", "meet", "matsFp" },
 }
 
 local STAT_FIELDS = { "commits_filled", "commits_expired",
@@ -1089,7 +1103,13 @@ function OR.RelayCredsSet(board, iid, uuid, rtoken)
 	local q = GM.db.relayPend and GM.db.relayPend[board]
 	GM.db.relayPend[board] = nil
 	for _, o in ipairs(q or {}) do
-		OR.Op(o.v, board, o.f)
+		-- writ verbs have their own op path (overlay + 'V' wire)
+		if GM.Writs and GM.Writs.Op
+				and (o.v == "roster" or tostring(o.v):sub(1, 1) == "w") then
+			GM.Writs.Op(o.v, board, o.f)
+		else
+			OR.Op(o.v, board, o.f)
+		end
 	end
 end
 
@@ -1210,7 +1230,7 @@ function OR.RelayPeer(body, sender)
 	-- never register ourselves: Mesh's echo filter can miss when it
 	-- captured "Unknown Entity" pre-login, and a self-whispered Q is
 	-- dropped by the client (REFRESH would dead-end asking ourselves)
-	if sender:match("^[^-]+") == UnitName("player") then return end
+	if GM.SameChar and GM.SameChar(sender) then return end
 	for entry in (body or ""):gmatch("[^,]+") do
 		-- "board[:tag]" — tag is the serving peer's tracker hash;
 		-- absent = legacy beacon (only trusted for remote boards).
@@ -1321,8 +1341,33 @@ function OR.StreamBoard(board, gen)
 				statCSV(c.crafterStats) }, ";")
 		end
 	end
+	-- roster rows (writs v2): one row per published shop — uuid,
+	-- '~'-joined chars, '+'-joined slim offer tuples
+	-- (ref~itemID~price~mats~numMade~name~toon — names only matter
+	-- for hand-entered offers; r:/s: refs resolve client-side), and
+	-- '~'-joined writ stats. ',' can't live inside a field — the
+	-- batch comma-join eats it (statCSV's fragmenting wart).
+	local ros = GoblinMindDB and GoblinMindDB.rosters
+		and GoblinMindDB.rosters[board]
+	local ys = {}
+	for _, r in ipairs(ros and ros.rosters or {}) do
+		local offers = {}
+		for _, o in ipairs(r.offers or {}) do
+			offers[#offers + 1] = table.concat({
+				o.ref or "-", o.itemID or 0, o.price or 0,
+				o.mats or "-", o.numMade or 1, o.name or "-",
+				o.toon or "-" }, "~")
+		end
+		local st = r.stats or {}
+		ys[#ys + 1] = table.concat({ board, gen, r.uuid or "-",
+			table.concat(r.chars or {}, "~"),
+			table.concat(offers, "+"),
+			(st.writs_done or 0) .. "~" .. (st.writs_declined or 0)
+				.. "~" .. (st.writs_expired or 0) }, ";")
+	end
 	GM.Mesh.Send("W", ws)
 	GM.Mesh.Send("w", cs)
+	GM.Mesh.Send("y", ys)
 	GM.Mesh.Send("Z", { board .. ";" .. gen })
 end
 
@@ -1357,7 +1402,7 @@ end
 -- poison the view); a remote board admits the first S answering
 -- our ask's gen.
 function OR.StreamStart(body, sender)
-	if not sender or sender:match("^[^-]+") == UnitName("player") then
+	if not sender or GM.SameChar and GM.SameChar(sender) then
 		return
 	end
 	local b, gen, tag = (body or ""):match("^([^;]+);(%d+);?(.*)$")
@@ -1396,6 +1441,11 @@ function OR.RelayIngest(kind, f, sender)
 		for i = #rb.orders, 1, -1 do
 			if rb.orders[i]._gen ~= gen then
 				table.remove(rb.orders, i)
+			end
+		end
+		for i = #(rb.rosters or {}), 1, -1 do
+			if rb.rosters[i]._gen ~= gen then
+				table.remove(rb.rosters, i)
 			end
 		end
 		-- the refresh button's whole point — the snapshot just
@@ -1450,6 +1500,44 @@ function OR.RelayIngest(kind, f, sender)
 			if x.id == c.id then o.commits[i] = c return end
 		end
 		o.commits[#o.commits + 1] = c
+	elseif kind == "y" then
+		-- roster row (writs v2): board;gen;uuid;chars~;offers+;stats~
+		rb.rosters = rb.rosters or {}
+		local chars = {}
+		for c in tostring(f[4] or ""):gmatch("[^~]+") do
+			chars[#chars + 1] = c
+		end
+		local offers = {}
+		for tup in tostring(f[5] or ""):gmatch("[^+]+") do
+			local p = {}
+			for x in tup:gmatch("[^~]+") do p[#p + 1] = x end
+			offers[#offers + 1] = {
+				ref = p[1] ~= "-" and p[1] or nil,
+				itemID = tonumber(p[2]),
+				price = tonumber(p[3]),
+				mats = p[4] ~= "-" and p[4] or nil,
+				numMade = tonumber(p[5]),
+				name = p[6] ~= "-" and p[6] or nil,
+				toon = p[7] ~= "-" and p[7] or nil,
+			}
+		end
+		local sp = {}
+		for x in tostring(f[6] or ""):gmatch("[^~]+") do
+			sp[#sp + 1] = tonumber(x) or 0
+		end
+		local ros = {
+			uuid = f[3] ~= "-" and f[3] or nil,
+			chars = chars, offers = offers, _gen = gen,
+			stats = sp[1] and { writs_done = sp[1],
+				writs_declined = sp[2] or 0,
+				writs_expired = sp[3] or 0 } or nil,
+		}
+		for i, x in ipairs(rb.rosters) do
+			if x.uuid == ros.uuid then
+				rb.rosters[i] = ros return
+			end
+		end
+		rb.rosters[#rb.rosters + 1] = ros
 	end
 end
 
@@ -1544,7 +1632,7 @@ end
 
 -- host side: 'I' record asks for open listings of one item
 function OR.MeshItemQuery(body, sender)
-	if not sender or sender:match("^[^-]+") == UnitName("player") then
+	if not sender or GM.SameChar and GM.SameChar(sender) then
 		return
 	end
 	local iid, gen, tag = (body or ""):match("^(%d+);(%d+);?(.*)$")
@@ -1635,7 +1723,7 @@ end
 -- then on jitter — re-check at fire time so answers that landed
 -- during the delay silence us (mDNS known-answer)
 function OR.MeshProbe(body, sender)
-	if not sender or sender:match("^[^-]+") == UnitName("player") then
+	if not sender or GM.SameChar and GM.SameChar(sender) then
 		return
 	end
 	OR.relay.lastD = time()
@@ -1653,7 +1741,7 @@ end
 -- stream. askT = the asker's known snapshot t — servers with
 -- nothing newer don't speak at all
 function OR.MeshQuery(body, sender)
-	if not sender or sender:match("^[^-]+") == UnitName("player") then
+	if not sender or GM.SameChar and GM.SameChar(sender) then
 		return
 	end
 	OR.relay.heard[sender] = time()
@@ -1694,7 +1782,7 @@ end
 -- an F offer heard: update dominance for pending offers, and feed
 -- the asker's selection when it's our nonce
 function OR.MeshOffer(body, sender)
-	if not sender or sender:match("^[^-]+") == UnitName("player") then
+	if not sender or GM.SameChar and GM.SameChar(sender) then
 		return
 	end
 	OR.relay.heard[sender] = time()
@@ -1717,7 +1805,7 @@ end
 -- the asker's pick: board;nonce;sender — the named server alone
 -- streams; everyone else drops whatever they queued for the nonce
 function OR.MeshPull(body, sender)
-	if not sender or sender:match("^[^-]+") == UnitName("player") then
+	if not sender or GM.SameChar and GM.SameChar(sender) then
 		return
 	end
 	OR.relay.heard[sender] = time()
@@ -1936,7 +2024,7 @@ end
 
 function OR.InboxCODs()
 	local out = {}
-	local n = GetInboxNumItems and GetInboxNumItems() or 0
+	local n = GM.MailCount()
 	local me = OR.MyUUID()
 	local want = {}  -- sender charname -> {order, commit}
 	for _, name in ipairs(OR.Boards()) do

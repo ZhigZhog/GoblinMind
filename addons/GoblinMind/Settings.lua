@@ -516,9 +516,41 @@ local function Build()
 	-- leaving UISpecialFrames pointing at a plain table (IsShown crash)
 	local f = GM.Widgets.Window({
 		name = "GoblinMindSettingsFrame", title = "SETTINGS",
-		w = 620, h = 1100, x = -60, y = 10, tab = "settings",
+		w = 748, h = 1124, x = -60, y = 10, tab = "settings",
 	})
 	ui.frame = f
+
+	-- left rail tabs + right options host: every section panel is a
+	-- leaf in the host's column root; a tab switch toggles leaf
+	-- visibility — the same mechanism the reload banner uses, so the
+	-- layout reflows itself
+	local rail = CreateFrame("Frame", nil, f)
+	rail:SetPoint("TOPLEFT", 10, -34)
+	rail:SetPoint("BOTTOMLEFT", 10, 10)
+	rail:SetWidth(112)
+	GM.Panel(rail, "contLowest")
+	local host = CreateFrame("Frame", nil, f)
+	host:SetPoint("TOPLEFT", 130, -34)
+	host:SetPoint("BOTTOMRIGHT", -10, 10)
+
+	ui.tabLeaves = {}
+	function ui.SetTab(key)
+		for _, l in ipairs(ui.tabLeaves) do
+			local on = l.key == key
+			l.leaf:SetVisible(on)
+			l.frame:SetShown(on)
+		end
+		ui.tabs.set(key)
+	end
+	ui.tabs = W.VTabs(rail, {
+		{ "general", "GENERAL" },
+		{ "tooltips", "TOOLTIPS" },
+		{ "profile", "PROFILE" },
+		{ "gather", "GATHERING" },
+		{ "ticker", "TICKER" },
+		{ "chars", "CHARS" },
+		{ "import", "IMPORT" },
+	}, ui.SetTab)
 
 	-- reload-required banner: appears when a flagged option changes
 	local bar = CreateFrame("Frame", nil, f)
@@ -545,7 +577,7 @@ local function Build()
 	if S.needReload then bar:Show() end
 
 	-- ===== GENERAL =====
-	local gen = Panel(f, 10, -34, 600, 128, "GENERAL")
+	local gen = Panel(f, 10, -34, 600, 232, "GENERAL")
 	ui.gen = gen
 	Row(gen, "Risk budget (% of gold)", 26)
 	ui.risk = EditBox(gen, 72)
@@ -583,6 +615,15 @@ local function Build()
 		self:ClearFocus()
 		S.Refresh()
 	end)
+	Row(gen, "Yell memory (min)", 122)
+	ui.yellTTL = EditBox(gen, 72)
+	ui.yellTTL:SetPoint("TOPLEFT", 240, -118)
+	ui.yellTTL:SetScript("OnEnterPressed", function(self)
+		local v = tonumber(self:GetText())
+		if v then GM.Model.SetPref("yellTTL", max(1, floor(v))) end
+		self:ClearFocus()
+		S.Refresh()
+	end)
 
 	RowAt(gen, "Minimap button", 320, 26)
 	ui.mmHide = BoolSeg(gen,
@@ -613,8 +654,48 @@ local function Build()
 		{ "text", "icon" }, { text = "text", icon = "coin icons" })
 	ui.fmt:SetPoint("TOPLEFT", 500, -96)
 
+	RowAt(gen, "Trade-yell listener", 320, 120)
+	ui.yellListen = BoolSeg(gen,
+		-- default ON; off stores explicit false, on clears the key
+		function() return GM.Model.Pref("yellListen") ~= false end,
+		function(v) GM.Model.SetPref("yellListen", v and nil or false) end)
+	ui.yellListen:SetPoint("TOPLEFT", 500, -118)
+	Row(gen, "Auto-scan while AH open", 146)
+	ui.autoscan = BoolSeg(gen,
+		function() return GM.AH.AutoScanOn() end,
+		function(v) GM.AH.SetAutoScan(v) end)
+	ui.autoscan:SetPoint("TOPLEFT", 240, -144)
+	Row(gen, "Market item autoscan", 170)
+	ui.mktScan = BoolSeg(gen,
+		function() return GM.Model.Pref("mktAutoscan") and true or false end,
+		function(v) GM.Model.SetPref("mktAutoscan", v and true or nil) end)
+	ui.mktScan:SetPoint("TOPLEFT", 240, -168)
+	Row(gen, "Hide unlearned recipes", 194)
+	ui.hideUnl = BoolSeg(gen,
+		function() return GM.Model.Pref("hideUnlearned") and true or false end,
+		function(v) GM.Model.SetPref("hideUnlearned", v and true or nil) end)
+	ui.hideUnl:SetPoint("TOPLEFT", 240, -192)
+
+	RowAt(gen, "Task list window", 320, 146)
+	ui.taskList = BoolSeg(gen,
+		function() return GM.View.IsShown("tasks") and true or false end,
+		function(v)
+			if v ~= (GM.View.IsShown("tasks") and true or false) then
+				GM.View.Toggle("tasks")
+			end
+		end)
+	ui.taskList:SetPoint("TOPLEFT", 500, -144)
+	RowAt(gen, "First-run guide", 320, 170)
+	ui.replay = W.ActionBtn(gen, "replay", 76, 18)
+	ui.replay:SetPoint("TOPLEFT", 500, -168)
+	ui.replay:SetScript("OnClick", function()
+		GM.Model.SetPref("obDone", nil)
+		GM.Model.SetPref("obDismissed", nil)
+		if GM.Onboard and GM.Onboard.MaybeShow then GM.Onboard.MaybeShow() end
+	end)
+
 	-- ===== TOOLTIP LINES =====
-	local tt = Panel(f, 10, -168, 600, 256, "TOOLTIP LINES")
+	local tt = Panel(f, 10, -192, 600, 256, "TOOLTIP LINES")
 	ui.ttPanel = tt
 	-- preset sits with the grid it presets; display is derived —
 	-- any hand-toggled row reads "Custom"
@@ -653,7 +734,7 @@ local function Build()
 	ui.ttHost = ui.ttInner
 
 	-- ===== PROFILE =====
-	local prof = Panel(f, 10, -432, 600, 118, "PROFILE · EXPORT / IMPORT")
+	local prof = Panel(f, 10, -456, 600, 118, "PROFILE · EXPORT / IMPORT")
 	local expBtn = CreateFrame("Button", nil, prof)
 	expBtn:SetSize(90, 22)
 	expBtn:SetPoint("TOPLEFT", 12, -24)
@@ -697,7 +778,7 @@ local function Build()
 	-- GUI for what used to be slash-only (/goblin price set/unset):
 	-- name + expression rows into GoblinMindPrices.customSources,
 	-- validated through the real parser on add
-	local src = Panel(f, 10, -556, 600, 148, "CUSTOM PRICE SOURCES")
+	local src = Panel(f, 10, -580, 600, 148, "CUSTOM PRICE SOURCES")
 	ui.srcName = EditBox(src, 110)
 	ui.srcName:SetPoint("TOPLEFT", 12, -26)
 	ui.srcExpr = EditBox(src, 300)
@@ -774,7 +855,7 @@ local function Build()
 	-- the same layer toggles the gather window's MINIMAP: dropdown
 	-- owns; both write GoblinMindGather.mm through
 	-- GatherMinimap.Set so they can't disagree
-	local gt = Panel(f, 10, -710, 600, 78, "GATHERING · MINIMAP LAYERS")
+	local gt = Panel(f, 10, -734, 600, 96, "GATHERING · MINIMAP LAYERS")
 	ui.mmLayers = {}
 	if GM.GatherMinimap then
 		for i, k in ipairs(GM.GatherMinimap.Layers()) do
@@ -793,7 +874,7 @@ local function Build()
 	-- colors. Same mm table the layer toggles write — colors flow
 	-- through G.KindCol so rows, labels, discs, and blobs all
 	-- honor a pick
-	local ov = Panel(f, 10, -794, 600, 142, "GATHERING · MAP OVERLAY")
+	local ov = Panel(f, 10, -818, 600, 142, "GATHERING · MAP OVERLAY")
 	if GM.GatherMinimap and GM.Gather then
 		-- three opacity channels: zone blobs/borders, farm icons
 		-- + labels, node spawn clusters — settings persist
@@ -911,7 +992,7 @@ local function Build()
 	-- row list the onboarding wizard shows). Panel itself only
 	-- reports what detection sees; the window does the work
 	-- ===== TICKER =====
-	local tk = Panel(f, 10, -942, 600, 88, "TICKER TAPE")
+	local tk = Panel(f, 10, -966, 600, 680, "TICKER TAPE")
 	local function tkStore() return GM.Ticker.Opts() end
 	Row(tk, "Width (px — blank = auto)", 22)
 	ui.tkW = EditBox(tk, 72)
@@ -953,6 +1034,68 @@ local function Build()
 			GM.Ticker.Apply()
 		end)
 	ui.tkClick:SetPoint("TOPLEFT", 500, -44)
+	RowAt(tk, "Show ticker", 320, 70)
+	ui.tkOn = BoolSeg(tk,
+		function() return tkStore().on and true or false end,
+		function(v)
+			tkStore().on = v
+			GM.Ticker.Apply()
+		end)
+	ui.tkOn:SetPoint("TOPLEFT", 500, -68)
+	Row(tk, "Dim idle %", 94)
+	ui.tkDimA = EditBox(tk, 60)
+	ui.tkDimA:SetPoint("TOPLEFT", 240, -92)
+	ui.tkDimA:SetScript("OnEnterPressed", function(self)
+		local v = tonumber(self:GetText())
+		if v then
+			tkStore().alpha = max(0, min(100, floor(v)))
+			GM.Ticker.Apply()
+		end
+		self:ClearFocus()
+		S.Refresh()
+	end)
+	Row(tk, "Dim hover %", 118)
+	ui.tkDimH = EditBox(tk, 60)
+	ui.tkDimH:SetPoint("TOPLEFT", 240, -116)
+	ui.tkDimH:SetScript("OnEnterPressed", function(self)
+		local v = tonumber(self:GetText())
+		if v then
+			tkStore().hover = max(0, min(100, floor(v)))
+			GM.Ticker.Apply()
+		end
+		self:ClearFocus()
+		S.Refresh()
+	end)
+
+	-- tape item manager: drop-add slot plus a removable row per
+	-- taped item — the window-side surface for /goblin ticker add/del
+	local itemsLbl = GM.MakeFontString(tk, GM.FONT, 10, "textDim")
+	itemsLbl:SetPoint("TOPLEFT", 12, -148)
+	itemsLbl:SetText("TAPE ITEMS — drop one on the slot, x removes")
+	ui.tkSlot = W.ItemSlot(tk, { w = 300, h = 24, hint = "drop item here",
+		onItem = function(id) GM.Ticker.Add(id) S.Refresh() end })
+	ui.tkSlot:SetPoint("TOPLEFT", 12, -168)
+	ui.tkItemRows = {}
+	for i = 1, 24 do
+		local r = CreateFrame("Frame", nil, tk)
+		r:SetSize(576, 20)
+		r:SetPoint("TOPLEFT", 12, -198 - (i - 1) * 20)
+		W.Zebra(r, i)
+		r.icon = r:CreateTexture(nil, "ARTWORK")
+		r.icon:SetSize(14, 14)
+		r.icon:SetPoint("LEFT", 4, 0)
+		r.name = GM.MakeFontString(r, GM.FONT, 10, "text")
+		r.name:SetPoint("LEFT", 26, 0)
+		r.name:SetWidth(530)
+		r.name:SetJustifyH("LEFT")
+		local x = W.XBtn(r, 14)
+		x:SetPoint("RIGHT", -4, 0)
+		x:SetScript("OnClick", function()
+			if r.id then GM.Ticker.Del(r.id) end
+			S.Refresh()
+		end)
+		ui.tkItemRows[i] = r
+	end
 
 	-- ===== CHARACTERS · LEDGER =====
 	-- one row per char the budget registry knows: crest + name in
@@ -963,15 +1106,18 @@ local function Build()
 	local cks = GM.Budget and GM.Budget.CharsOrdered
 		and GM.Budget.CharsOrdered() or {}
 	local cpH = 30 + math.max(1, #cks) * 22
-	local cp = Panel(f, 10, -1036, 600, cpH, "CHARACTERS · LEDGER")
+	local cp = Panel(f, 10, -1060, 600, cpH, "CHARACTERS · LEDGER")
 	local function paintCharRow(r)
 		r.name:SetText(GM.Budget.Crest(r.ck)
-			.. GM.Budget.CharCC(r.ck) .. GM.Budget.CharName(r.ck)
+			.. GM.Budget.CharCC(r.ck)
+			.. (GM.Budget.CharDisp and GM.Budget.CharDisp(r.ck)
+				or GM.Budget.CharName(r.ck))
 			.. "|r")
 		local cr, cg, cb = GM.Budget.CharRGB(r.ck)
 		r.sw._gmBg:SetColorTexture(cr, cg, cb)
-		r.mode:SetText(GM.Budget.CharColorMode(r.ck) == "custom"
-			and "CUSTOM" or "CLASS")
+		local cls = GM.Budget.CharColorMode(r.ck) ~= "custom"
+		r.chk._gmTick:SetShown(cls)
+		r.sw:SetAlpha(cls and 0.45 or 1)
 	end
 	local function pickCharColor(r)
 		local cr, cg, cb = GM.Budget.CharRGB(r.ck)
@@ -1024,18 +1170,44 @@ local function Build()
 			end
 		end)
 		W.Tip(r.sw, function() return {
-			"Ledger color for " .. GM.Budget.CharName(ck),
+			"Ledger color for " .. (GM.Budget.CharDisp
+				and GM.Budget.CharDisp(ck)
+				or GM.Budget.CharName(ck)),
 			"click = pick a custom color",
-			"right-click = class color" } end)
-		r.mode = GM.MakeFontString(cp, GM.FONT, 9, "textDim")
-		r.mode:SetPoint("LEFT", r.sw, "RIGHT", 8, 0)
-		r.mode:SetJustifyH("LEFT")
+			"class default box = Blizzard class color" } end)
+		-- class-default checkbox: checked = Blizzard class color
+		-- wins over the box; unchecking pins the current color as
+		-- custom so the box becomes editable in place
+		r.chk = CreateFrame("Button", nil, cp)
+		r.chk:SetSize(12, 12)
+		r.chk:SetPoint("LEFT", r.sw, "RIGHT", 8, 0)
+		GM.Panel(r.chk, "contHigh")
+		r.chk._gmTick = r.chk:CreateTexture(nil, "OVERLAY")
+		r.chk._gmTick:SetSize(6, 6)
+		r.chk._gmTick:SetPoint("CENTER")
+		r.chk._gmTick:SetColorTexture(GM.RGB("accent"))
+		r.chkLab = GM.MakeFontString(cp, GM.FONT, 9, "textDim")
+		r.chkLab:SetPoint("LEFT", r.chk, "RIGHT", 5, 0)
+		r.chkLab:SetJustifyH("LEFT")
+		r.chkLab:SetText("class default")
+		r.chk:SetScript("OnClick", function()
+			if GM.Budget.CharColorMode(r.ck) == "custom" then
+				GM.Budget.SetCharColor(r.ck)
+			else
+				local cr, cg, cb = GM.Budget.CharRGB(r.ck)
+				GM.Budget.SetCharColor(r.ck,
+					format("%02x%02x%02x", floor(cr * 255 + 0.5),
+						floor(cg * 255 + 0.5), floor(cb * 255 + 0.5)))
+			end
+			paintCharRow(r)
+			GM.View.Refresh("overview")
+		end)
 		ui.charRows[i] = r
 		paintCharRow(r)
 	end
 	ui.paintCharRow = paintCharRow
 
-	local imp = Panel(f, 10, -1036, 600, 60,
+	local imp = Panel(f, 10, -1060, 600, 60,
 		"IMPORT FROM OTHER ADDONS")
 	ui.impScan = CreateFrame("Button", nil, imp)
 	ui.impScan:SetSize(110, 22)
@@ -1058,30 +1230,36 @@ local function Build()
 		.. "· merges into your setup, never deletes")
 
 	-- ============ layout wiring ============
-	-- the window is a vertical stack of titled panels — one managed
+	-- the host is a vertical stack of titled panels — one managed
 	-- Column owns their slots; the reload banner is a toggleable
-	-- node and the tooltip panel fills whatever height remains
+	-- node, each panel carries a tab tag for rail visibility, and
+	-- the tooltip panel fills whatever height remains
 	local u = GM.ui
-	local root = u:AttachRoot(f, {
+	local root = u:AttachRoot(host, {
 		direction = "column", gap = 6,
-		pad = { top = 34, right = 10, bottom = 4, left = 10 },
 	})
 	ui.barLeaf = root:Add(u:Adopt(bar, { width = 600, height = 24 }),
 		{ height = 24 })
 	ui.barLeaf:SetVisible(S.needReload and true or false)
-	local function StackPanel(p, h)
-		root:Add(u:Adopt(p, { width = 600, height = h }), { height = h })
+	-- one leaf per tab absorbs the whole host so every tab's panel
+	-- runs top to bottom; the rest keep their natural height
+	local function StackPanel(p, h, tab, fill)
+		local leaf = root:Add(u:Adopt(p, { width = 600, height = h }),
+			fill and { height = "fill", minHeight = h } or { height = h })
+		tinsert(ui.tabLeaves, { key = tab, leaf = leaf, frame = p })
 	end
-	StackPanel(gen, 128)
-	root:Add(u:Adopt(tt, { width = 600, height = 256 }),
-		{ height = "fill", minHeight = 60 })
-	StackPanel(prof, 118)
-	StackPanel(src, 148)
-	StackPanel(gt, 78)
-	StackPanel(ov, 142)
-	StackPanel(tk, 88)
-	StackPanel(cp, cpH)
-	StackPanel(imp, 60)
+	StackPanel(gen, 232, "general", true)
+	tinsert(ui.tabLeaves, { key = "tooltips",
+		leaf = root:Add(u:Adopt(tt, { width = 600, height = 256 }),
+			{ height = "fill", minHeight = 256 }), frame = tt })
+	StackPanel(prof, 118, "profile")
+	StackPanel(src, 148, "profile", true)
+	StackPanel(gt, 96, "gather")
+	StackPanel(ov, 142, "gather", true)
+	StackPanel(tk, 680, "ticker", true)
+	StackPanel(cp, cpH, "chars", true)
+	StackPanel(imp, 60, "import", true)
+	ui.SetTab("general")
 	-- the tooltip panel's height is layout-owned now — keep the clip
 	-- viewport tracking it (Relayout used to resize it by hand)
 	tt:HookScript("OnSizeChanged", function(_, _, th)
@@ -1168,6 +1346,7 @@ local function Data()
 		margin = GM.Model.Pref("minProfitMargin"),
 		days = GM.Model.Pref("maxDaysToClear"),
 		age = GM.Model.Pref("dataMaxAge"),
+		yellTTL = GM.Model.Pref("yellTTL"),
 		tk = ui.tkW and GM.Ticker.Opts(),
 		srcNames = names, srcCs = cs,
 		impItems = impItems, impPending = impPending,
@@ -1181,6 +1360,9 @@ function S.Refresh(vm)
 	ui.margin:SetText(tostring(floor((vm.margin or 0) * 100 + 0.5)))
 	ui.days:SetText(tostring(vm.days or ""))
 	ui.age:SetText(tostring(vm.age or ""))
+	ui.yellTTL:SetText(tostring(vm.yellTTL
+		or (GM.Writs and GM.Writs.YellTTL and GM.Writs.YellTTL())
+		or 30))
 	ui.mmHide.paint()
 	ui.embed.paint()
 	ui.mod.paint()
@@ -1188,6 +1370,11 @@ function S.Refresh(vm)
 		for _, seg in ipairs(ui.mmLayers) do seg.paint() end
 	end
 	ui.fmt.paint()
+	ui.yellListen.paint()
+	ui.autoscan.paint()
+	ui.mktScan.paint()
+	ui.hideUnl.paint()
+	ui.taskList.paint()
 	if ui.detail then ui.detail.paint() end
 	if ui.tkW then
 		local st = vm.tk
@@ -1196,6 +1383,23 @@ function S.Refresh(vm)
 		ui.tkF:SetText(tostring(st.fs or GM.Ticker.DEF_FS))
 		ui.tkLock.paint()
 		ui.tkClick.paint()
+		ui.tkOn.paint()
+		ui.tkDimA:SetText(tostring(st.alpha or 70))
+		ui.tkDimH:SetText(tostring(st.hover or 100))
+		for i, r in ipairs(ui.tkItemRows or {}) do
+			local id = st.items and st.items[i]
+			if id then
+				r:Show()
+				r.id = id
+				local icon = GM.ItemIcon and GM.ItemIcon(id)
+				if icon then r.icon:SetTexture(icon) r.icon:Show()
+				else r.icon:Hide() end
+				r.name:SetText(GM.ItemNameOr(id))
+			else
+				r:Hide()
+				r.id = nil
+			end
+		end
 	end
 	for _, r in ipairs(ui.ttRows or {}) do
 		if r.ctl.paint then r.ctl.paint() end
@@ -1237,6 +1441,10 @@ end
 function S.Show()
 	Build()
 	BuildTooltipRows()
+	-- tooltips is the deepest tab — fit the window to its natural
+	-- height; each tab's fill leaf stretches into the same space
+	ui.frame:SetHeight(math.max(420,
+		math.min(ui.ttInnerH + 96, 940)))
 	S.Refresh()
 	ui.frame:Show()
 end

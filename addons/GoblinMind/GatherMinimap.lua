@@ -143,6 +143,9 @@ local function put(kind)
 		elseif kind == "stop" then
 			t:SetTexture(RING)
 			t:SetDrawLayer("OVERLAY", 5)
+		elseif kind == "pin" then
+			t:SetTexture(FLAT)
+			t:SetDrawLayer("OVERLAY", 5)
 		elseif kind == "icon" then
 			t:SetTexture(DISC)   -- real item art set per draw
 			t:SetDrawLayer("OVERLAY", 6)
@@ -181,6 +184,12 @@ end
 -- shared cluster merge runs in world-yard space here (the map
 -- surfaces run it in map-fraction space) — same routine either way
 local cluMap, cluN, cluSig, cluList
+
+-- per-record zone blob fits, in anchor-relative world yards.
+-- Keyed weakly by the SV record (zones persist for the session;
+-- the fit only changes when pockets/kills/radius do, so a
+-- signature check rebuilds it — movement alone can never reshape)
+local zoneFit = setmetatable({}, { __mode = "k" })
 
 
 
@@ -230,13 +239,248 @@ local function Player()
 	return n, w, c, mapID
 end
 
--- a stop's n/w may be absent (saved routes serialize x,y) —
--- project the map fraction back to world yards
-local function PosNW(st, mapID)
-	if st.n and st.w then return st.n, st.w end
-	if st.x and st.y then
-		return GM.WorldPos(mapID, st.x, st.y)
+
+-- ======================= per-frame view state =======================
+-- populated by Update() before each paint; the adapter + helpers
+-- below close over it so projections always read the current frame
+local V = {}
+
+-- world-yard offset -> normalized circle coords (u = east, v = north,
+-- range roughly -1..1 inside the radar disc)
+local function uv(nw, nn)
+	local dx, dy = V.w - nw, V.n - nn
+	if V.rotate then
+		dx, dy = dx * V.cs - dy * V.sn, dx * V.sn + dy * V.cs
 	end
+	return dx / V.radius, dy / V.radius
+end
+
+-- segment-disc intersection: return the chord inside the clip
+-- circle, nil when the segment misses it entirely. The old
+-- both-outside early-out culled chords that cross the radar
+-- edge-to-edge -- that's what chopped visible gaps into routes
+local function clip(u1, v1, u2, v2)
+	local du, dv = u2 - u1, v2 - v1
+	local aa = du * du + dv * dv
+	if aa == 0 then
+		if u1 * u1 + v1 * v1 <= CLIP2 then
+			return u1, v1, u2, v2
+		end
+		return nil
+	end
+	local bb = 2 * (u1 * du + v1 * dv)
+	local cc = u1 * u1 + v1 * v1 - CLIP2
+	local disc = bb * bb - 4 * aa * cc
+	if disc <= 0 then return nil end
+	local sq = sqrt(disc)
+	local lo = math.max(0, (-bb - sq) / (2 * aa))
+	local hi = math.min(1, (-bb + sq) / (2 * aa))
+	if lo >= hi then return nil end
+	return u1 + du * lo, v1 + dv * lo,
+		u1 + du * hi, v1 + dv * hi
+end
+
+-- one route chord in normalized coords, clipped to the radar disc
+local function seg(u1, v1, u2, v2, a)
+	local x1, y1, x2, y2 = clip(u1, v1, u2, v2)
+	if not x1 then return end
+	x1, y1, x2, y2 = x1 * V.hw, -y1 * V.hh, x2 * V.hw, -y2 * V.hh
+	local dx, dy = x2 - x1, y2 - y1
+	local len = sqrt(dx * dx + dy * dy)
+	if len < 2 then return end
+	local t = put("seg")
+	t:SetSize(len, 2)
+	t:SetPoint("CENTER", host, "CENTER",
+		(x1 + x2) / 2, (y1 + y2) / 2)
+	if t.SetRotation then
+		-- y is up-positive here (CENTER offsets), so no
+		-- sign flip like the TOPLEFT-space map pane uses.
+		-- WoW's atan2/math.atan return degrees — SetRotation
+		-- wants radians
+		pcall(t.SetRotation, t, math.rad(atan2(dy, dx)))
+	end
+	t:SetVertexColor(0.4, 0.85, 1.0, a)
+end
+
+-- ========================== view: minimap ==========================
+-- the manager's radar adapter: world yards -> normalized disc ->
+-- TOPLEFT px, circle clip/rim/fade where flat views pass through
+local mmView = {
+	id = "minimap",
+	feats = {},
+	fit = zoneFit,
+	L = {},
+}
+local mL = mmView.L
+
+function mmView:proj(rec)
+	local nn, ww = rec.n, rec.w
+	if not (nn and ww) and rec.x and rec.y and (rec.map or V.mapID) then
+		nn, ww = GM.WorldPos(rec.map or V.mapID, rec.x, rec.y)
+		-- memoize the projection onto the record -- an intermittent
+		-- WorldPos failure must not flap the fit's inputs between
+		-- frames (the blob visibly jumps when a pocket drops out
+		-- for one repaint)
+		if nn and ww then rec.n, rec.w = nn, ww end
+	end
+	if not (nn and ww) then return end
+	-- continent guard: foreign-continent records carry that
+	-- continent's yard space -- without this a Kalimdor camp
+	-- ghost-renders on the EK radar at whatever position the
+	-- overlapping ranges land, sliding with the player
+	if (rec.c or V.c) ~= V.c then return end
+	local u, v = uv(ww, nn)
+	return V.hw + u * V.hw, V.hh + v * V.hh
+end
+
+-- pocket pts for the shared fit, anchor-relative px: the vert's
+-- TOPLEFT delta from the anchor's TOPLEFT is just the yard delta
+-- negated into the same axes (u,v both flip sign relative to
+-- (west,north) deltas) times the px-per-yard scale
+function mmView:ptsRel(zn)
+	local pts = {}
+	local znN, znW = zn.n, zn.w
+	if not (znN and znW) and zn.x and zn.y and zn.map then
+		znN, znW = GM.WorldPos(zn.map, zn.x, zn.y)
+		if znN and znW then zn.n, zn.w = znN, znW end
+	end
+	if not (znN and znW) then return pts end
+	local kx, ky = V.hw / V.radius, V.hh / V.radius
+	for _, pk in ipairs(zn.pockets or {}) do
+		local pn, pw = pk.n, pk.w
+		if not (pn and pw) and pk.x and pk.y and pk.map then
+			pn, pw = GM.WorldPos(pk.map, pk.x, pk.y)
+			if pn and pw then pk.n, pk.w = pn, pw end
+		end
+		if pn and pw and (pk.c or V.c) == V.c then
+			pts[#pts + 1] = { x = (znW - pw) * kx,
+				y = (znN - pn) * ky }
+		end
+	end
+	return pts
+end
+
+function mmView:rPx(yd) return yd * V.hw / V.radius end
+
+-- beyond the radar disc + slack = undrawable (flat views use the
+-- frame rect; the circle is the radar's equivalent)
+function mmView:cull(x, y, slack)
+	local dx, dy = x - V.hw, y - V.hh
+	return dx * dx + dy * dy
+		> (V.hw * 0.9 + (slack or 0)) ^ 2
+end
+
+-- off-rim clusters pin to the radar edge so recorded spawns keep
+-- pointing at themselves (flat views pass through)
+function mmView:rim(x, y)
+	local dx, dy = x - V.hw, y - V.hh
+	local d2 = dx * dx + dy * dy
+	local lim = V.hw * 0.9
+	if d2 <= lim * lim then return x, y end
+	local s = lim * 0.96 / sqrt(d2)
+	return V.hw + dx * s, V.hh + dy * s, true
+end
+
+-- steep distance fade on the TRUE range: full at the center,
+-- ~24% at the rim, floor ~12% for far pins -- near spawns pop,
+-- distant ones are whispers. States only lower it (S3)
+function mmView:fade(x, y)
+	local dx, dy = x - V.hw, y - V.hh
+	return math.max(0.12, 1 - 0.85 * sqrt(dx * dx + dy * dy) / V.hw)
+end
+
+function mmView:iconSz(n)
+	return GM.Widgets.MapStyle.ClusterSize(n, true)
+end
+
+function mmView:routeSeg(x1, y1, x2, y2, a)
+	seg((x1 - V.hw) / V.hw, (y1 - V.hh) / V.hh,
+		(x2 - V.hw) / V.hw, (y2 - V.hh) / V.hh, a)
+end
+
+function mmView:routeStop(x, y, a)
+	local s = put("stop")
+	s:SetSize(7, 7)
+	s:SetPoint("CENTER", host, "TOPLEFT", x, -y)
+	s:SetVertexColor(0.4, 0.85, 1.0, a)
+end
+
+-- Gatherer-style merge in world-yard space (the flat views run it
+-- in map-fraction space -- same routine either way). Returns raw
+-- node records per cluster; past ~2.5 view radii a rim pin stops
+-- being radar and becomes border noise -- cull it outright
+function mmView:clusters(nodes)
+	local recs = WrapNodes(V.mapID, nodes, V.mmSet)
+	local out = {}
+	for _, c in ipairs(GM.GatherMap.Cluster(recs,
+			function(r) return r.w, r.n end, 70)) do
+		local u, v = uv(c.x, c.y)
+		if u * u + v * v <= 6.25 then
+			local raw = {}
+			for i, r in ipairs(c.nodes) do raw[i] = r.nd end
+			out[#out + 1] = { nodes = raw, n = c.n,
+				x = V.hw + u * V.hw, y = V.hh + v * V.hh }
+		end
+	end
+	return out
+end
+
+-- ======================= minimap primitives ========================
+-- MapLayer-compatible set in TOPLEFT px, backed by the radar's
+-- texture/fontstring pools
+function mL:clear() clear() end
+
+function mL:pin(x, y, sz, r, g, b, a)
+	local t = put("pin")
+	t:SetSize(sz, sz)
+	t:SetPoint("CENTER", host, "TOPLEFT", x, -y)
+	t:SetVertexColor(r, g, b, a or 1)
+end
+
+function mL:disc(x, y, rPx, r, g, b, a)
+	local t = put("zone")
+	t:SetSize(rPx * 2, rPx * 2)
+	t:SetPoint("CENTER", host, "TOPLEFT", x, -y)
+	t:SetVertexColor(r, g, b, a or 1)
+end
+
+-- same rule as MapLayer's icon: real item art stays natural, the
+-- kind tint is only for the fallback disc
+function mL:icon(x, y, sz, fid, r, g, b, a)
+	local t = put("icon")
+	if fid then
+		t:SetTexture(fid)
+		t:SetVertexColor(1, 1, 1, a or 1)
+	else
+		t:SetTexture(DISC)
+		t:SetVertexColor(r or 1, g or 1, b or 1, a or 1)
+	end
+	t:SetSize(sz, sz)
+	t:SetPoint("CENTER", host, "TOPLEFT", x, -y)
+end
+
+function mL:badge(x, y, text, r, g, b, a)
+	local t = putStr("badge")
+	t:SetPoint("CENTER", host, "TOPLEFT", x, -y)
+	t:SetText(text)
+	t:SetTextColor(r or 1, g or 1, b or 1, a or 1)
+end
+
+-- the canonical camp look everywhere: border band + dim interior,
+-- scanline fill clipped to the radar circle band-by-band
+function mL:blob(poly, cx, cy, r, g, b, fillA, ringA, ringPx, sel)
+	ringPx = ringPx or 3
+	local W = GM.Widgets
+	if sel then
+		W.PolyFill(host, W.PolyShrink(poly, cx, cy, ringPx + 3),
+			6, 1, 0.82, 0.1, 0.9,
+			function() return put("zring") end, V.clipC)
+	end
+	W.PolyFill(host, poly, 6, r, g, b, ringA,
+		function() return put("zring") end, V.clipC)
+	W.PolyFill(host, W.PolyShrink(poly, cx, cy, -ringPx),
+		6, r, g, b, fillA,
+		function() return put("zfill") end, V.clipC)
 end
 
 local function Update()
@@ -246,184 +490,49 @@ local function Update()
 	local n, w, c, mapID = Player()
 	if not n then clear() return end
 
-	-- view radius in yards: live API, else the zoom-level table.
-	-- The minimapZoom cvar pins the outdoor zoom — matching it
-	-- means we're outdoors
-	local radius = C_Minimap and C_Minimap.GetViewRadius
-		and C_Minimap.GetViewRadius()
+	-- view radius in yards: the zoom-level table is authoritative --
+	-- GetViewRadius misreports on Forever (returns 150 where the
+	-- outdoor zoom-0 scale is 233.33, shrinking our yard span ~36%
+	-- so every overlay element slides ~1.55x against the terrain =
+	-- the zone "parallax"). API is only the fallback for a zoom
+	-- the table doesn't know. The minimapZoom cvar pins the
+	-- outdoor zoom -- matching it means we're outdoors
 	local zoom = Minimap:GetZoom() or 0
-	if not radius or radius <= 0 then
-		-- the cvar pins the OUTDOOR zoom — matching it means
-		-- outdoors; a different zoom means an indoor minimap
-		local indoor = (GetCVar("minimapZoom") or 0) + 0 ~= zoom
-		radius = ((indoor and VIEW.indoor or VIEW.outdoor)[zoom]
-			or 0) / 2
+	local indoor = (GetCVar("minimapZoom") or 0) + 0 ~= zoom
+	local radius = ((indoor and VIEW.indoor or VIEW.outdoor)[zoom]
+		or 0) / 2
+	if radius <= 0 then
+		radius = C_Minimap and C_Minimap.GetViewRadius
+			and C_Minimap.GetViewRadius()
 	end
-	if radius <= 0 then clear() return end
+	if not radius or radius <= 0 then clear() return end
 
 	local rotate = GetCVar("rotateMinimap") == "1"
 	local facing = rotate and (GetPlayerFacing() or 0) or 0
-	local cs, sn = cos(facing), sin(facing)
-	local hw, hh = Minimap:GetWidth() / 2, Minimap:GetHeight() / 2
-	if hw <= 0 or hh <= 0 then clear() return end
+	V.rotate = rotate
+	V.cs, V.sn = cos(facing), sin(facing)
+	V.hw, V.hh = Minimap:GetWidth() / 2, Minimap:GetHeight() / 2
+	if V.hw <= 0 or V.hh <= 0 then clear() return end
+	V.n, V.w, V.c, V.mapID, V.radius = n, w, c, mapID, radius
+	V.mmSet = mm()
+	V.clipC = { x = V.hw, y = V.hh, r = V.hw * 0.9 }
+	mmView.fitScale = floor(V.hw / V.radius * 4096)
 
 	clear()
 
-	-- world-yard offset -> normalized circle coords + pixels
-	local function uv(nw, nn)
-		local dx, dy = w - nw, n - nn
-		if rotate then
-			dx, dy = dx * cs - dy * sn, dx * sn + dy * cs
-		end
-		local u, v = dx / radius, dy / radius
-		return u, v, u * hw, -v * hh
-	end
-
-	-- segment–disc intersection: return the chord inside the clip
-	-- circle, nil when the segment misses it entirely. The old
-	-- both-outside early-out culled chords that cross the radar
-	-- edge-to-edge — that's what chopped visible gaps into routes
-	local function clip(u1, v1, u2, v2)
-		local du, dv = u2 - u1, v2 - v1
-		local aa = du * du + dv * dv
-		if aa == 0 then
-			if u1 * u1 + v1 * v1 <= CLIP2 then
-				return u1, v1, u2, v2
-			end
-			return nil
-		end
-		local bb = 2 * (u1 * du + v1 * dv)
-		local cc = u1 * u1 + v1 * v1 - CLIP2
-		local disc = bb * bb - 4 * aa * cc
-		if disc <= 0 then return nil end
-		local sq = sqrt(disc)
-		local lo = math.max(0, (-bb - sq) / (2 * aa))
-		local hi = math.min(1, (-bb + sq) / (2 * aa))
-		if lo >= hi then return nil end
-		return u1 + du * lo, v1 + dv * lo,
-			u1 + du * hi, v1 + dv * hi
-	end
-
-	-- opacity channels hoist above the closures: the route is node
-	-- geometry, so it rides oaN (muting nodes must mute its loop)
+	-- opacity channels: the route is node geometry, so it rides
+	-- oaN (muting nodes must mute its loop)
 	local oaZ = M.AlphaZone()
 	local oaN = M.AlphaNode()
 	local oaI = M.AlphaIcon()
 	local SA = GM.Widgets.MapStyle.A
+	local mmSet = V.mmSet
 
-	local function seg(u1, v1, u2, v2)
-		local a, b, c2, d = clip(u1, v1, u2, v2)
-		if not a then return end
-		local x1, y1 = a * hw, -b * hh
-		local x2, y2 = c2 * hw, -d * hh
-		local dx, dy = x2 - x1, y2 - y1
-		local len = sqrt(dx * dx + dy * dy)
-		if len < 2 then return end
-		local t = put("seg")
-		t:SetSize(len, 2)
-		t:SetPoint("CENTER", host, "CENTER",
-			(x1 + x2) / 2, (y1 + y2) / 2)
-		if t.SetRotation then
-			-- y is up-positive here (CENTER offsets), so no
-			-- sign flip like the TOPLEFT-space map pane uses
-			pcall(t.SetRotation, t, atan2(dy, dx))
-		end
-		t:SetVertexColor(0.4, 0.85, 1.0, SA.route * oaN)
-	end
-
-	-- hunt-zone territory under everything: the same fitted
-	-- support-function blob the map surfaces draw — pockets in
-	-- world yards -> minimap px, scanline fill clipped to the
-	-- radar circle band-by-band. Iterating every record list is
-	-- free here: world-yard space has no map frames, the distance
-	-- cull does the filtering
-	local mmSet = mm()
-	local ZP = GM.GatherMap
-	local clipC = { x = hw, y = hh, r = hw * 0.9 }
+	-- every record list: world-yard space has no map frames, the
+	-- adapter's continent guard + distance cull do the filtering
+	local zones = {}
 	for _, zl in pairs(GoblinMindGather.zones or {}) do
-	for _, zn in ipairs(zl) do
-		local zc = G.ZoneCat(zn)
-		local znN, znW = zn.n, zn.w
-		if not (znN and znW) and zn.x and zn.y and zn.map then
-			znN, znW = GM.WorldPos(zn.map, zn.x, zn.y)
-		end
-		if znN and znW and mmSet[zc] ~= false
-			and ZP and ZP.ZonePoly and GM.Widgets then
-			local u0, v0, px0, py0 = uv(znW, znN)
-			if sqrt(u0 * u0 + v0 * v0)
-				- ZP.DispR(zn) / radius <= 0.9 then
-				local rPx = function(yd)
-					return yd / radius * hw
-				end
-				local col = G.KindCol(zc)
-				-- TOPLEFT-px pocket points for the shared fit —
-				-- own-frame x,y hops through WorldPos like the
-				-- map surfaces' MapXY does
-				local pts = {}
-				for _, pk in ipairs(zn.pockets or {}) do
-					local pn, pw = pk.n, pk.w
-					if not (pn and pw) and pk.x and pk.y
-						and pk.map then
-						pn, pw = GM.WorldPos(pk.map,
-							pk.x, pk.y)
-					end
-					if pn and pw then
-						local _, _, px, py = uv(pw, pn)
-						pts[#pts + 1] = { x = hw + px,
-							y = hh + py }
-					end
-				end
-				local zx, zy = hw + px0, hh + py0
-				if #pts < 3 then
-					local r0 = max(20, rPx(ZP.DispR(zn)
-						- ZP.POCKET_PAD_YD))
-					local skew = (zn.kills or 1) * 0.7
-					for i = 0, 5 do
-						local a = skew + i / 6 * 6.2831853
-						pts[#pts + 1] = { x = zx + cos(a) * r0,
-							y = zy + sin(a) * r0 }
-					end
-				end
-				local poly, cx, cy = ZP.ZonePoly(pts,
-					rPx(ZP.POCKET_PAD_YD), rPx(ZP.ZONE_MIN_YD),
-					rPx(ZP.ZONE_DRAW_MAX_YD))
-				if poly then
-					GM.Widgets.PolyFill(host, poly, 6,
-						col[1], col[2], col[3],
-						SA.zoneRing * oaZ,
-						function()
-							return put("zring")
-						end, clipC)
-					-- interior copy shrunk toward the centroid —
-					-- the same border-band trick L:blob runs
-					GM.Widgets.PolyFill(host,
-						GM.Widgets.PolyShrink(poly,
-							cx, cy, -2), 6,
-						col[1], col[2], col[3],
-						SA.zoneFill * oaZ,
-						function()
-							return put("zfill")
-						end, clipC)
-					-- farm icon at the centroid, like the
-					-- world map's camp widget
-					local it = GM.ItemIcon(G.ZoneIconID
-						and G.ZoneIconID(zn))
-					if it then
-						local ic = put("icon")
-						local zsz = GM.Widgets.MapStyle
-							.ZONE_ICON_MM
-						ic:SetSize(zsz, zsz)
-						ic:SetPoint("CENTER", host,
-							"CENTER",
-							cx - hw, cy - hh)
-						ic:SetTexture(it)
-						ic:SetVertexColor(1, 1, 1,
-							SA.full * oaI)
-					end
-				end
-			end
-		end
-	end
+		for _, zn in ipairs(zl) do zones[#zones + 1] = zn end
 	end
 
 	-- route loop (running route wins over the noted one)
@@ -431,95 +540,101 @@ local function Update()
 	local rt = (run and run.route and run.route.map == mapID
 			and run.route)
 		or (GM.GatherMap and GM.GatherMap.RouteFor(mapID))
-	if rt and rt.stops and #rt.stops > 1 and mmSet.route ~= false then
-		local pts = {}
-		for i, st in ipairs(rt.stops) do
-			local nn, ww = PosNW(st, rt.map or mapID)
-			if nn and ww then
-				local u, v, px, py = uv(ww, nn)
-				pts[i] = { u = u, v = v, px = px, py = py }
-			end
-		end
-		for i = 1, #pts do
-			local a, b = pts[i], pts[i % #pts + 1]
-			if a and b then seg(a.u, a.v, b.u, b.v) end
-			if a and a.u * a.u + a.v * a.v <= CLIP2 then
-				local s = put("stop")
-				s:SetSize(7, 7)
-				s:SetPoint("CENTER", host, "CENTER", a.px, a.py)
-				s:SetVertexColor(0.4, 0.85, 1.0, SA.full * oaN)
-			end
-		end
-	end
+	local route = rt and rt.stops and #rt.stops > 1
+		and mmSet.route ~= false
+		and { stops = rt.stops, a = SA.route * oaN }
 
-	-- node clusters on top: same Gatherer-style merge the world
-	-- map runs, in world-yard space. Off-view clusters pin to the
-	-- rim (the radar edge) so recorded spawns keep pointing at
-	-- themselves; empty = plain kind dot when no icon resolves
-	if oaN > 0 and GM.GatherMap and GM.GatherMap.Cluster then
-		local recs = WrapNodes(mapID, G.NodeList(mapID) or {}, mmSet)
-		for _, c in ipairs(GM.GatherMap.Cluster(recs,
-				function(r) return r.w, r.n end, 70)) do
-			local u, v, px, py = uv(c.x, c.y)
-			local rr = u * u + v * v
-			local dist = sqrt(rr)
-			-- past ~2.5 view radii a rim pin stops being radar
-			-- and becomes border noise — cull it outright
-			if dist <= 2.5 then
-			-- steep distance fade on the TRUE range: full at the
-			-- center, ~24% at the rim, floor ~12% for far pins —
-			-- near spawns pop, distant ones are whispers.
-			-- States only lower it — min() stacking (S3)
-			local fade = math.max(0.12, 1 - 0.85 * dist)
-			local pinned = rr > CLIP2
-			if pinned then
-				local s = sqrt(CLIP2 / rr) * 0.96
-				u, v = u * s, v * s
-				px, py = u * hw, -v * hh
-			end
-			local rep = c.nodes[1].nd
-			local col = G.KindCol(rep.kind)
-			-- same dim rule as the world map: every member inside
-			-- the learned respawn window → faded
-			local dimAll = true
-			for _, r in ipairs(c.nodes) do
-				if not G.NodeDepleted(r.nd, mapID) then
-					dimAll = false break
-				end
-			end
-			local a = oaN * min(
-				dimAll and SA.depleted or SA.full, fade)
-			-- Questie-icon scale, same as the world map — pinned
-			-- icons shrink another notch so the rim stays quiet
-			local sz = GM.Widgets.MapStyle.ClusterSize(c.n, true)
-				* (pinned and 0.7 or 1)
-			local ic = put("icon")
-			ic:SetSize(sz, sz)
-			ic:SetPoint("CENTER", host, "CENTER", px, py)
-			local tex = GM.ItemIcon(G.NodeIconID
-				and G.NodeIconID(rep))
-			-- same rule as MapLayer's icon: real item art stays
-			-- natural, the kind tint is only for the fallback disc
-			if tex then
-				ic:SetTexture(tex)
-				ic:SetVertexColor(1, 1, 1, a)
-			else
-				ic:SetTexture(DISC)
-				ic:SetVertexColor(col[1], col[2], col[3], a)
-			end
-			if c.n > 1 and not pinned then
-				local b = putStr("badge")
-				b:SetPoint("CENTER", host, "CENTER",
-					px, py - sz / 2 - 4)
-				b:SetText(tostring(c.n))
-				b:SetTextColor(col[1], col[2], col[3], a)
-			end
-			end
-		end
-	end
+	GM.MapMgr.Paint(mmView, {
+		mapID = mapID,
+		zones = zones,
+		nodes = oaN > 0 and G.NodeList(mapID) or nil,
+		route = route,
+		oa = { n = oaN },
+		zoneSt = function(zn)
+			local zc = G.ZoneCat(zn)
+			if mmSet[zc] == false then return nil end
+			local col = G.KindCol(zc)
+			return {
+				col = col,
+				fillA = SA.zoneFill * oaZ,
+				ringA = SA.zoneRing * oaZ,
+				ringPx = 2,
+				iconID = G.ZoneIconID and G.ZoneIconID(zn),
+				iconSz = GM.Widgets.MapStyle.ZONE_ICON_MM,
+				iconA = SA.full * oaI,
+			}
+		end,
+	})
 end
 
 M.Update = Update
+
+local mmDebugT0, mmDebugN, mmDebugW
+
+-- radius resolution diagnostic: the live API is trusted over the
+-- zoom table — if it misreports on this client the whole overlay
+-- parallaxes against the terrain (the camp-zone drift report).
+-- /goblin mmdebug prints both sources at the current zoom
+GM.Cmd("mmdebug", function()
+	local apiR = C_Minimap and C_Minimap.GetViewRadius
+		and C_Minimap.GetViewRadius()
+	local zoom = Minimap and Minimap:GetZoom() or 0
+	local indoor = (GetCVar("minimapZoom") or 0) + 0 ~= zoom
+	local tblR = ((indoor and VIEW.indoor or VIEW.outdoor)[zoom]
+		or 0) / 2
+	GM.Print(("minimap: zoom=%s indoor=%s api=%s table=%s rotate=%s facing=%s")
+		:format(tostring(zoom), tostring(indoor),
+			tostring(apiR), tostring(tblR),
+			GetCVar("rotateMinimap") or "?",
+			tostring(GetPlayerFacing and GetPlayerFacing())))
+	-- axis-swap probe: UnitPosition's (n,w) vs the world-space
+	-- re-projection of the same spot. If unitN tracks wpW instead
+	-- of wpN the client's returns are (east,north), not
+	-- (north,west) — the whole overlay is axis-swapped and a
+	-- world-fixed point drifts on one screen axis only
+	local n, w, z, c = UnitPosition("player")
+	local mapID = C_Map and C_Map.GetBestMapForUnit
+		and C_Map.GetBestMapForUnit("player")
+	local x, y
+	if mapID then x, y = GM.MapPos(c, n, w, mapID) end
+	local wpn, wpw, wpc
+	if x and y and GM.WorldPos then
+		wpn, wpw, wpc = GM.WorldPos(mapID, x, y)
+	end
+	GM.Print(("unit: n=%.1f w=%.1f c=%s | map=%s x=%.3f y=%.3f | wp: n=%s w=%s c=%s")
+		:format(n or -1, w or -1, tostring(c), tostring(mapID),
+			x or -1, y or -1,
+			tostring(wpn), tostring(wpw), tostring(wpc)))
+	-- axis-identity probe: field NAMES may not match field
+	-- MEANINGS. Run once, walk ~20yd in a known direction, run
+	-- again — the field that moved is that axis
+	local dt = mmDebugT0 and (GetTime() - mmDebugT0)
+	if mmDebugT0 then
+		GM.Print(("delta since last call (%.0fs): dn=%.1f dw=%.1f")
+			:format(dt or 0, n - mmDebugN, w - mmDebugW))
+	end
+	mmDebugT0, mmDebugN, mmDebugW = GetTime(), n, w
+	-- live projection dump for fish zones: what the renderer
+	-- computes for the anchor — if u0 barely moves while you
+	-- walk E-W, the horizontal displacement is dead at runtime
+	for _, zl in pairs(GoblinMindGather
+			and GoblinMindGather.zones or {}) do
+		for _, zn in ipairs(zl) do
+			if zn.kind == "fish" and zn.n and zn.w then
+				local dx, dy = w - zn.w, n - zn.n
+				GM.Print(("zone fish: dn=%.0f dw=%.0f -> u=%.2f v=%.2f (anchor n=%.0f w=%.0f | n=%.1f)")
+					:format(dy, dx, dx / tblR, dy / tblR,
+						zn.n, zn.w, n))
+			end
+		end
+	end
+	-- stability probe: if a second read of the same spot differs
+	-- microseconds later, UnitPosition returns unstable values —
+	-- that alone would parallax every world-fixed element
+	local n2, w2 = UnitPosition("player")
+	GM.Print(("recheck: n=%s w=%s (first read n=%.1f w=%.1f)")
+		:format(tostring(n2), tostring(w2), n or -1, w or -1))
+end, { prefix = true })
 
 local acc = 0
 local tick = CreateFrame("Frame")

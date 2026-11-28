@@ -158,3 +158,185 @@ function V.Execute(step)
 	if step.kind == "vendbuy" then return DoBuy(step) end
 	if step.kind == "vendsell" then return DoSell(step) end
 end
+
+-- ==== universal merchant movement detection ====
+-- Every vendor sale lands in the buyback list no matter who made it
+-- — our vendoring UI, destroy plans, or a bare Blizzard right-click.
+-- Diffing the slots is the single detector for sells: new qty = a
+-- sale (vendor leg), vanished qty = a buyback (vendorbuy). Buys get
+-- a hooksecurefunc on the global so manual purchases journal too;
+-- GM.MerchantBuy's own calls set _hookSkip so they don't double.
+local bbSnap = {}
+
+local function ReadBuyback()
+	local out = {}
+	local n = GetNumBuybackItems and GetNumBuybackItems() or 0
+	for i = 1, n do
+		local link = GetBuybackItemLink and GetBuybackItemLink(i)
+		local _, _, price, qty = GetBuybackItemInfo
+			and GetBuybackItemInfo(i)
+		local id = GM.LinkID(link)
+		if id then
+			out[i] = { id = id, qty = qty or 1, price = price or 0 }
+		end
+	end
+	return out
+end
+
+local function LastUnit(snap, id)
+	for _, e in pairs(snap) do
+		if e.id == id and e.qty > 0 and e.price > 0 then
+			return e.price / e.qty
+		end
+	end
+end
+
+-- the price authority — ONE place that knows which field answers
+-- "what did this cost" per vendor movement. Forever drops merchant
+-- and buyback price fields on some items, so every buy-side value
+-- is provisional: the real basis is the money outflow ExpectBuy
+-- pairs. Sells have no outflow — the sellPrice IS the truth.
+V.Price = {
+	-- sell: the item's own sellPrice — a merchant pays exactly that
+	sell = function(id) return GM.VendorSellPrice(id) end,
+	-- buy: the merchant slot's price per purchase unit
+	buy = function(idx)
+		local ok, price, q = pcall(function()
+			local _, _, p, qq = GetMerchantItemInfo(idx)
+			return p, qq end)
+		if ok and price and price > 0 then return price / (q or 1) end
+	end,
+	-- buyback: the row's own price, else the sellPrice it paid
+	buyback = function(e)
+		if e.price and e.price > 0 then return e.price / e.qty end
+		return V.Price.sell(e.id)
+	end,
+}
+
+local function BuybackDiff()
+	local now = ReadBuyback()
+	local before, after = {}, {}
+	for _, e in pairs(bbSnap) do
+		before[e.id] = (before[e.id] or 0) + e.qty
+	end
+	for _, e in pairs(now) do
+		after[e.id] = (after[e.id] or 0) + e.qty
+	end
+	-- buybacks the BuybackItem hook already journaled: the diff must
+	-- not count them again. Entries expire — a failed buyback leaves
+	-- the stamp around ~5s then it's ignored
+	local function Vanished(id, q)
+		local j = V._bbJourn and V._bbJourn[id]
+		if j and time() - j.t > 5 then
+			V._bbJourn[id] = nil j = nil
+		end
+		if j then
+			local c = math.min(j.qty, q)
+			j.qty = j.qty - c
+			if j.qty <= 0 then V._bbJourn[id] = nil end
+			q = q - c
+		end
+		if q <= 0 then return end
+		-- the money outflow is the real basis; the row/sell price
+		-- is only the fallback when no delta ever arrives
+		GM.Ledger.ExpectBuy(id, q,
+			LastUnit(bbSnap, id) or V.Price.sell(id))
+	end
+	for id, q in pairs(after) do
+		local d = q - (before[id] or 0)
+		if d > 0 then
+			GM.Ledger.Record("vendor", { itemID = id, qty = d,
+				unit = LastUnit(now, id) or V.Price.sell(id) })
+		elseif d < 0 then
+			Vanished(id, -d)
+		end
+	end
+	for id, q in pairs(before) do
+		if not after[id] then Vanished(id, q) end
+	end
+	bbSnap = now
+end
+
+local bbf = CreateFrame("Frame")
+pcall(bbf.RegisterEvent, bbf, "MERCHANT_SHOW")
+pcall(bbf.RegisterEvent, bbf, "MERCHANT_UPDATE")
+pcall(bbf.RegisterEvent, bbf, "BUYBACK_UPDATE")
+bbf:SetScript("OnEvent", function(_, e)
+	if e == "MERCHANT_SHOW" then
+		bbSnap = ReadBuyback()
+	else
+		BuybackDiff()
+	end
+end)
+
+if hooksecurefunc then
+	hooksecurefunc("BuyMerchantItem", function(idx, count)
+		if V._hookSkip then return end
+		-- inside a pcall'd BuyMerchantItem the post-hook's errors
+		-- would mark the purchase failed — journal defensively
+		pcall(function()
+			local link = GetMerchantItemLink
+				and GetMerchantItemLink(idx)
+			local id = link and GM.LinkID(link)
+			if not id then return end
+			-- always defer to the money outflow for the real cost;
+			-- the merchant price is only the no-delta fallback
+			GM.Ledger.ExpectBuy(id, count or 1, V.Price.buy(idx))
+		end)
+	end)
+	-- buyback purchases aren't BuyMerchantItem — BuybackItem is its
+	-- own call. The slot's already cleared post-hook, so read the
+	-- item out of OUR snapshot and stamp the qty journaled — the
+	-- diff subtracts the stamp instead of double-counting, and a
+	-- failed buyback just lets the stamp expire
+	if type(BuybackItem) == "function" then
+		hooksecurefunc("BuybackItem", function(slot)
+			if V._hookSkip then return end
+			local e = bbSnap and bbSnap[slot]
+			if not e then return end
+			pcall(function()
+				V._bbJourn = V._bbJourn or {}
+				local j = V._bbJourn[e.id]
+				if j then j.qty = j.qty + e.qty j.t = time()
+				else V._bbJourn[e.id] = { qty = e.qty, t = time() } end
+				GM.Ledger.ExpectBuy(e.id, e.qty, V.Price.buyback(e))
+			end)
+		end)
+	end
+	-- trainer services (learned schematics/recipes) are their own
+	-- purchase call — no merchant slot, usually no item. A service
+	-- that resolves to an item link journals as a vendorbuy (group
+	-- routing still works); a learned spell journals as a "trainer"
+	-- expense by name. Cost basis still rides the money outflow.
+	if type(BuyTrainerService) == "function" then
+		hooksecurefunc("BuyTrainerService", function(idx)
+			if V._hookSkip then return end
+			pcall(function()
+				local link = GetTrainerServiceItemLink
+					and GetTrainerServiceItemLink(idx)
+				local id = link and GM.LinkID(link)
+				local unit
+				if GetTrainerServiceCost then
+					local ok, c = pcall(GetTrainerServiceCost, idx)
+					if ok and type(c) == "number" and c > 0 then
+						unit = c
+					end
+				end
+				if id then
+					GM.Ledger.ExpectBuy(id, 1, unit)
+					return
+				end
+				local nm
+				if GetTrainerServiceInfo then
+					local ok, n = pcall(function()
+						return (GetTrainerServiceInfo(idx)) end)
+					if ok and type(n) == "string" and n ~= "" then
+						nm = n
+					end
+				end
+				GM.Ledger.ExpectBuy(nil, 1, unit,
+					{ kind = "trainer", nm = nm or "service" })
+			end)
+		end)
+	end
+end

@@ -10,8 +10,9 @@ local _, GM = ...
 GM.Budget = {}
 local B = GM.Budget
 
-B.KINDS = { craft = "CRAFT", ah = "AH", save = "SAVE" }
-B.KIND_ORDER = { "craft", "ah", "save" }
+B.KINDS = { craft = "CRAFT", ah = "AH", save = "SAVE",
+	vendor = "VENDOR" }
+B.KIND_ORDER = { "craft", "ah", "save", "vendor" }
 
 local function DB()
 	if not GM.db.budgets then GM.db.budgets = {} end
@@ -43,11 +44,29 @@ end
 
 -- snapshot the current char into the registry; runs on every Sample
 -- plus PLAYER_MONEY so the combined-gold strip stays live
+-- class token from whatever the client hands back: stock
+-- UnitClass returns (localized name, file token, id) but this
+-- one can come back name-only — then reverse Blizzard's
+-- localized-name tables ("Hunter" -> "HUNTER")
+local function PlayerClassToken()
+	local cname, cls = UnitClass and UnitClass("player")
+	if cls then return cls end
+	if not cname then return nil end
+	for _, src in ipairs{LOCALIZED_CLASS_NAMES_MALE,
+			LOCALIZED_CLASS_NAMES_FEMALE} do
+		for tag, nm in pairs(src or {}) do
+			if nm == cname then return tag end
+		end
+	end
+	return nil
+end
+
 local function StampChar()
 	if not GM.db then return end
 	local ck = GM.CharKey()
-	local name = UnitName and UnitName("player") or ck
-	local _, cls = UnitClass and UnitClass("player")
+	local name = (GM.OwnName and GM.OwnName())
+		or (UnitName and UnitName("player")) or ck
+	local cls = PlayerClassToken()
 	local fac = UnitFactionGroup and UnitFactionGroup("player")
 	local ch = Chars()[ck]
 	if not ch then ch = {} Chars()[ck] = ch end
@@ -89,13 +108,24 @@ function B.CharName(ck)
 	return n or "?"
 end
 
+-- display form: the full "First Last" whenever any source can
+-- resolve the surname (Core.lua's FullName); base name otherwise
+function B.CharDisp(ck)
+	local n = B.CharName(ck)
+	return (GM.FullName and GM.FullName(n)) or n
+end
+
 -- faction crest as a fontstring texture escape — renders inline in
 -- any SetText, no widget needed
 function B.Crest(ck)
 	local ch = B.CharInfo(ck)
 	local fac = ch and ch.fac
 	if fac ~= "Alliance" and fac ~= "Horde" then return "" end
-	return "|TInterface\\TargetingFrame\\UI-PVP-" .. fac .. ":13|t "
+	-- 18px, dropped 3 below baseline — the escape default sits the
+	-- texture's bottom ON the baseline, which reads low next to
+	-- x-height text; negative yofs centers it visually
+	return "|TInterface\\TargetingFrame\\UI-PVP-" .. fac
+		.. ":18:18:0:-3|t "
 end
 
 -- char colors: a per-char override (ch.col = "rrggbb"), else the
@@ -111,15 +141,30 @@ local function HexRGB(hex)
 		tonumber("0x" .. hex:sub(5, 6)) / 255
 end
 
+-- Blizzard's own class colors, carried for clients without
+-- RAID_CLASS_COLORS in FrameXML
+local CLASS_RGB = {
+	WARRIOR = {0.78, 0.61, 0.43}, PALADIN = {0.96, 0.55, 0.73},
+	HUNTER = {0.67, 0.83, 0.45}, ROGUE = {1.00, 0.96, 0.41},
+	PRIEST = {1.00, 1.00, 1.00}, SHAMAN = {0.00, 0.44, 0.87},
+	MAGE = {0.25, 0.78, 0.92}, WARLOCK = {0.53, 0.53, 0.93},
+	DRUID = {1.00, 0.49, 0.04},
+}
+
 function B.CharRGB(ck)
 	local ch = B.CharInfo(ck)
 	local col = ch and ch.col
 	if type(col) == "string" and col:match("^%x%x%x%x%x%x$") then
 		return HexRGB(col)
 	end
-	local cc = ch and ch.cls and RAID_CLASS_COLORS
-		and RAID_CLASS_COLORS[ch.cls]
-	if cc then return cc.r, cc.g, cc.b end
+	-- recorded class wins; a char the ledger never saw in-game
+	-- resolves through the social sources instead of palette-hash
+	local tok = ch and ch.cls
+		or (GM.ClassOf and GM.ClassOf(B.CharName(ck)))
+	local cc = tok and (RAID_CLASS_COLORS or CLASS_RGB)[tok]
+	if cc then
+		return cc.r or cc[1], cc.g or cc[2], cc.b or cc[3]
+	end
 	local h = 5381
 	for i = 1, #ck do h = (h * 33 + ck:byte(i)) % 16777216 end
 	return HexRGB(CHAR_PALETTE[h % #CHAR_PALETTE + 1])
@@ -221,7 +266,13 @@ function B.Add(name, kind, alloc)
 	return a
 end
 
-function B.Del(i) tremove(DB(), i) end
+-- the pool is the char's purse itself — undeletable, unbindable,
+-- un-rekindable. Data-level guards so no caller (row widgets
+-- included) can violate the invariants.
+function B.Del(i)
+	local a = DB()[i]
+	if a and not a.pool then tremove(DB(), i) end
+end
 
 -- rename keeps the account record (spent/income/group all survive) —
 -- rejects empty names and dupes
@@ -237,12 +288,53 @@ function B.Rename(i, name)
 end
 function B.ResetSpent(i)
 	local a = DB()[i]
-	if a then a.spent, a.income = 0, 0 B.Sample() end
+	if not a then return end
+	-- zeroing xfer without a journal leg orphans the acct:<name>
+	-- memo — the audit's xfer/journal check fails forever after.
+	-- Journal the balancing transfer against the "reset" account
+	-- so the envelope counter and the bank statement move together
+	local x = floor(a.xfer or 0)
+	if x ~= 0 and GM.Ledger and GM.Ledger.Record then
+		if x > 0 then
+			GM.Ledger.Record("transfer",
+				{ from = a.name, to = "reset", amt = x })
+		else
+			GM.Ledger.Record("transfer",
+				{ from = "reset", to = a.name, amt = -x })
+		end
+	end
+	a.spent, a.income, a.xfer = 0, 0, 0
+	B.Sample()
+end
+
+-- one-shot self-heal at init: envelopes whose xfer counter drifted
+-- from the journal's acct:<name> replay (a reset that predates the
+-- balancing leg above, a renamed envelope) get an opening-equity
+-- transfer — from/to "reconcile" — so the two agree again
+function B.ReconcileXfer()
+	if not (GM.Ledger and GM.Ledger.Record
+		and GM.Ledger.Accounts) then return end
+	local replay = GM.Ledger.Accounts()
+	for _, a in ipairs(DB()) do
+		if not a.pool and IsSelf(a) then
+			local rep = replay["acct:" .. (a.name or "?")] or 0
+			local delta = floor((a.xfer or 0) - rep)
+			if math.abs(delta) > 0 then
+				if delta > 0 then
+					GM.Ledger.Record("transfer", {
+						from = "reconcile", to = a.name, amt = delta })
+				else
+					GM.Ledger.Record("transfer", {
+						from = a.name, to = "reconcile", amt = -delta })
+				end
+			end
+		end
+	end
 end
 
 function B.SetKind(i, kind)
 	local a = DB()[i]
-	if not (a and B.KINDS[kind]) then return end
+	if not (a and B.KINDS[kind]) or a.pool then return end
 	a.kind = kind
 	-- kind swap reinterprets the allocation field
 	if kind == "save" and not a.pct then
@@ -259,7 +351,8 @@ end
 -- sales of items in that group route here regardless of step kind
 function B.SetGroup(i, path)
 	local a = DB()[i]
-	if a then a.group = (path ~= "" and path) or nil end
+	-- pools apply to every group by definition — no binding
+	if a and not a.pool then a.group = (path ~= "" and path) or nil end
 end
 
 -- sorted list of assignable group paths for the function picker
@@ -269,6 +362,45 @@ function B.GroupPaths()
 		for path in pairs(GM.Groups.db.groups) do tinsert(out, path) end
 	end
 	sort(out)
+	return out
+end
+
+-- bank-model transfer: move copper between two envelopes on the
+-- same char. xfer is a signed accumulator that shifts Remaining
+-- without touching spent/income — a transfer is a move, not a
+-- spend. The pool is the residual purse (gold minus every claimed
+-- envelope) so it never carries a counter: the other side's shift
+-- moves it automatically. The ledger journals the line — the
+-- journal IS the bank statement.
+function B.Transfer(fromI, toI, amt)
+	local l = DB()
+	local a, b = l[fromI], l[toI]
+	amt = floor(tonumber(amt) or 0)
+	if not (a and b) or a == b or amt <= 0 then return nil end
+	-- envelopes are per-char purses — char→char gold moves by
+	-- mail, which journals its own way (mailout/mailin)
+	if not SameKey(OwnerKey(a), OwnerKey(b)) then return nil end
+	if B.Remaining(a) < amt then return nil end  -- insufficient
+	if not a.pool then a.xfer = (a.xfer or 0) - amt end
+	if not b.pool then b.xfer = (b.xfer or 0) + amt end
+	GM.Ledger.Record("transfer",
+		{ from = a.name, to = b.name, amt = amt })
+	B.Sample()
+	return amt
+end
+
+-- transfer targets: every other account owned by the same char,
+-- the pool included (transfers in/out of it are the deposit and
+-- withdraw sides of the bank model)
+function B.TransferTargets(i)
+	local a = DB()[i]
+	local out = {}
+	if not a then return out end
+	for j, o in ipairs(DB()) do
+		if j ~= i and SameKey(OwnerKey(o), OwnerKey(a)) then
+			tinsert(out, { i = j, a = o })
+		end
+	end
 	return out
 end
 
@@ -293,11 +425,37 @@ function B.Alloc(a)
 	return a.alloc or 0
 end
 
+-- signed balance: an overdrawn account goes negative — the deficit
+-- is real data (spent exceeded alloc+income), not a display clamp.
+function B.Balance(a)
+	if a.pool or a.kind == "save" then
+		return B.Alloc(a) + (a.xfer or 0)
+	end
+	return B.Alloc(a) + (a.income or 0)
+		- (a.spent or 0) + (a.xfer or 0)
+end
+
 function B.Remaining(a)
-	-- pool/save balances are already live — spent/income would
-	-- double-count against a moving alloc (they stay as bookkeeping)
-	if a.pool or a.kind == "save" then return B.Alloc(a) end
-	return math.max(0, B.Alloc(a) + (a.income or 0) - (a.spent or 0))
+	-- spendable never goes below zero: the pool residual and Free()
+	-- math use the clamp, the row paints the signed Balance — an
+	-- overdrawn account is debt already taken from the purse, not
+	-- negative claim on it
+	return math.max(0, B.Balance(a))
+end
+
+-- overdraw notice: a spend that takes a warn-enabled account below
+-- zero announces each NEW low-water mark — repeat buys while
+-- overdrawn don't spam, only deeper holes do. Session-local mark:
+-- it resets on reload (Balance going back ≥0 clears it too).
+local warnLow = {}
+function B.WarnOverdrawn(a)
+	if a.warn == false then return end
+	local bal = B.Balance(a)
+	if bal >= 0 then warnLow[a] = nil return end
+	if warnLow[a] and bal >= warnLow[a] then return end
+	warnLow[a] = bal
+	GM.Print(GM.CC("warn") .. (a.name or "?") .. " over budget — "
+		.. GM.Money(-bal) .. " over|r")
 end
 
 -- gold with no claim on it: minus save reserves, minus everything
@@ -319,17 +477,40 @@ end
 
 -- the specific account a step/item draws on: a group-bound account
 -- takes precedence over kind matching (an "ammo" envelope pays for
--- ammo whether the buy is at the AH or a vendor)
-local function StepAccount(step)
-	if step.itemID and GM.Groups and GM.Groups.GroupForItem then
-		local path = GM.Groups.GroupForItem(step.itemID)
-		if path then
-			for _, a in ipairs(DB()) do
-				if a.group == path and IsSelf(a) then return a end
+-- ammo whether the buy is at the AH or a vendor). Bound-path match
+-- follows op-cascade semantics — an envelope bound to "Engineering"
+-- covers "Engineering/Schematics". When several envelopes bind the
+-- item's path, kind-matching wins first, then deepest path — so a
+-- group can split its flows: an "ah" envelope for sales, a "vendor"
+-- one for merchant moves, both bound to the same group.
+local function BoundAccount(itemID, kind)
+	if not (itemID and GM.Groups and GM.Groups.GroupForItem) then return end
+	local path = GM.Groups.GroupForItem(itemID)
+	if not path then return end
+	local best, bestScore
+	for _, a in ipairs(DB()) do
+		local g = a.group
+		if g and IsSelf(a)
+			and (path == g or path:sub(1, #g + 1) == g .. "/") then
+			-- kind match is worth more than any depth difference
+			local score = ((not kind or a.kind == kind) and 1 or 0)
+				* 100000 + #g
+			if not bestScore or score > bestScore then
+				best, bestScore = a, score
 			end
 		end
 	end
-	return nil
+	return best
+end
+
+local function StepAccount(step)
+	-- kind preference for bound matching: a vendbuy step prefers a
+	-- vendor envelope, a buy an AH one (the unbound tag maps both
+	-- to "ah" — bound matching wants the flow's real home)
+	local pref = (step.btag and B.KINDS[step.btag] and step.btag)
+		or (step.kind == "vendbuy" and "vendor")
+		or (step.kind == "buy" and "ah")
+	return BoundAccount(step.itemID, pref)
 end
 
 local function MatchingAccounts(step)
@@ -370,48 +551,21 @@ function B.Check(step, cost)
 	return false, spendable, 0
 end
 
--- draw the cost down against matching accounts in order
-function B.Record(step, cost)
-	if not cost or cost <= 0 then return end
-	local matching = MatchingAccounts(step)
-	if #matching == 0 then return end
-	local owed = cost
-	for _, a in ipairs(matching) do
-		if a.kind ~= "save" and owed > 0 then
-			local take = math.min(B.Remaining(a), owed)
-			a.spent = (a.spent or 0) + take
-			owed = owed - take
-		end
-	end
-	-- overspend lands on the first matching account so the row shows
-	-- the hole rather than silently dropping it
-	if owed > 0 then
-		for _, a in ipairs(matching) do
-			if a.kind ~= "save" then
-				a.spent = (a.spent or 0) + owed
-				break
-			end
-		end
-	end
-	B.Sample()
-end
+-- the journal is the sole envelope mutator: every purchase kind
+-- debits DebitTo, every proceeds kind credits CreditTo — plan buys
+-- and hand buys can never diverge because both end as journal
+-- entries. B.Check stays the pre-spend warning; there is no other
+-- spend writer.
 
--- sale proceeds top the envelope back up (trading float): bound
--- account for the item's group, else the first AH account
-function B.CreditSale(itemID, amount)
+-- proceeds top an envelope back up (trading float): the bound
+-- account for the item's group takes it, else the first
+-- kind-matched account
+function B.CreditTo(itemID, amount, kind)
 	if not amount or amount <= 0 then return end
-	local target
-	if itemID and GM.Groups and GM.Groups.GroupForItem then
-		local path = GM.Groups.GroupForItem(itemID)
-		if path then
-			for _, a in ipairs(DB()) do
-				if a.group == path and IsSelf(a) then target = a break end
-			end
-		end
-	end
+	local target = BoundAccount(itemID, kind)
 	if not target then
 		for _, a in ipairs(DB()) do
-			if a.kind == "ah" and IsSelf(a) then target = a break end
+			if a.kind == kind and IsSelf(a) then target = a break end
 		end
 	end
 	if target then
@@ -420,20 +574,79 @@ function B.CreditSale(itemID, amount)
 	end
 end
 
+-- spends draw an envelope down: a bound account is the designated
+-- purse for this item's spends — the hole lands there even when it
+-- can't cover (save accounts never pay spends). Unbound flows
+-- waterfall over kind-matched accounts; overspend lands on the
+-- first so the row shows the hole instead of dropping it
+function B.DebitTo(itemID, amount, kind)
+	if not amount or amount <= 0 then return end
+	local bound = BoundAccount(itemID, kind)
+	if bound and bound.kind ~= "save" then
+		bound.spent = (bound.spent or 0) + amount
+		B.WarnOverdrawn(bound)
+		B.Sample()
+		return
+	end
+	local owed = amount
+	for _, a in ipairs(DB()) do
+		if a.kind == kind and IsSelf(a) and owed > 0 then
+			local take = math.min(B.Remaining(a), owed)
+			a.spent = (a.spent or 0) + take
+			owed = owed - take
+		end
+	end
+	if owed > 0 then
+		for _, a in ipairs(DB()) do
+			if a.kind == kind and IsSelf(a) then
+				a.spent = (a.spent or 0) + owed
+				break
+			end
+		end
+	end
+	for _, a in ipairs(DB()) do
+		if a.kind == kind and IsSelf(a) then B.WarnOverdrawn(a) end
+	end
+	B.Sample()
+end
+
 -- trend sampling: remaining-balance history per account plus a
 -- free-gold series — capped rolling buffers in the SV
-local HIST_CAP = 200
+-- 60s sample buckets bound density at 1440/day regardless of burst
+-- rate (a buy-spree writes one mutation-sample per buy without it);
+-- the cap then guarantees >7d of coverage at maximum density so the
+-- chart's 7D window always has something to zoom into
+local MIN_SAMPLE_GAP = 60
+local HIST_CAP = 12000
 function B.Sample()
 	StampChar()
+	-- every budget mutation funnels here — coalesce a repaint of the
+	-- account surfaces so rows can't read stale between events (a
+	-- buy's debit once painted "spent 0c" for a full minute because
+	-- nothing re-ran the paint). Early returns below only gate the
+	-- wealth-series append; the mutation already happened.
+	if GM.View and GM.View.Coalesced then
+		GM.View.Coalesced("accts", function()
+			GM.View.Refresh("planner")
+			GM.View.Refresh("overview")
+		end)
+	end
 	local t = time()
 	for _, a in ipairs(DB()) do
 		a.hist = a.hist or {}
 		local h = a.hist
 		local n = #h
-		-- collapse same-value adjacent samples so a flat week doesn't
-		-- push real movement out of the window
-		if n == 0 or h[n].v ~= B.Remaining(a) or t - h[n].t > 3600 then
-			h[n + 1] = { t = t, v = B.Remaining(a),
+		-- signed Balance, not clamped Remaining — an overdrawn
+		-- envelope's hole is real history, not a flat zero. Collapse
+		-- same-value adjacent samples so a flat week doesn't push
+		-- real movement out of the window
+		if n > 0 and t - h[n].t <= MIN_SAMPLE_GAP then
+			local last = h[n]
+			last.v, last.inc, last.out = B.Balance(a),
+				a.income or 0, a.spent or 0
+		elseif n == 0 or h[n].v ~= B.Balance(a)
+			or t - h[n].t > 3600 then
+			h[n + 1] = { t = t, v = B.Balance(a),
 				inc = a.income or 0, out = a.spent or 0 }
 			if #h > HIST_CAP then tremove(h, 1) end
 		end
@@ -441,7 +654,9 @@ function B.Sample()
 	local f = GM.db.budgetFree
 	if not f then f = {} GM.db.budgetFree = f end
 	local free = B.Free()
-	if #f == 0 or f[#f].v ~= free or t - f[#f].t > 3600 then
+	if #f > 0 and t - f[#f].t <= MIN_SAMPLE_GAP then
+		f[#f].v = free
+	elseif #f == 0 or f[#f].v ~= free or t - f[#f].t > 3600 then
 		f[#f + 1] = { t = t, v = free }
 		if #f > HIST_CAP then tremove(f, 1) end
 	end
@@ -460,21 +675,35 @@ function B.Sample()
 	-- r: uncollected auction proceeds — at sale the posted term drops
 	-- but gold hasn't arrived; without the receivable the line dips
 	-- for the whole mail window then jumps back
-	local rcbl = GM.Ledger and GM.Ledger.Accounts
-		and (GM.Ledger.Accounts().rcbl or 0) or 0
+	-- d: listing deposits escrowed until the auction resolves —
+	-- posting drains g into dep, so every listing otherwise reads
+	-- as a wealth dip sized to its fee
+	local acct = GM.Ledger and GM.Ledger.Accounts
+		and GM.Ledger.Accounts() or {}
+	local rcbl, dep = acct.rcbl or 0, acct.dep or 0
 	-- an all-zero sample is never information — it's a penniless alt
 	-- writing into the shared SV or an init race where money and
 	-- inventory haven't populated yet, and either way it draws as a
 	-- giant fake dip on every char's wealth chart
-	if gold + posted + held + rcbl == 0 then return end
+	if gold + posted + held + rcbl + dep == 0 then return end
 	-- the init sample lands at ADDON_LOADED — before PLAYER_LOGIN's
 	-- LoadOwned rehydrates the owned-auction snapshot — so it would
 	-- write a=0/h=0 against real gold and dip every reload. "Not
 	-- loaded yet" is unknown, not zero: skip until the load ran.
 	if GM.Inventory.OwnedLoaded
 		and not GM.Inventory.OwnedLoaded() then return end
-	if #w == 0 or w[#w].g ~= gold or w[#w].a ~= posted
+	-- same rule for mailCache: returned stock counts in h via the
+	-- inbox — sampling before the first honest inbox read writes
+	-- h=0 and dips every login
+	if GM.Inventory.MailLoaded
+		and not GM.Inventory.MailLoaded() then return end
+	if #w > 0 and t - w[#w].t <= MIN_SAMPLE_GAP then
+		local last = w[#w]
+		last.g, last.a, last.h, last.r, last.d, last.c =
+			gold, posted, held, rcbl, dep, GM.CharKey()
+	elseif #w == 0 or w[#w].g ~= gold or w[#w].a ~= posted
 		or w[#w].h ~= held or (w[#w].r or 0) ~= rcbl
+		or (w[#w].d or 0) ~= dep
 		or t - w[#w].t > 3600 then
 		-- c: the sampler char — wealth is per-char by nature and
 		-- untagged mixing drew alt logins as giant fake dips.
@@ -482,7 +711,7 @@ function B.Sample()
 		-- client and a nil tag makes the chart filter toothless —
 		-- IsSelfCharKey matches a bare name fine
 		w[#w + 1] = { t = t, g = gold, a = posted, h = held,
-			r = rcbl, c = GM.CharKey() }
+			r = rcbl, d = dep, c = GM.CharKey() }
 		if #w > HIST_CAP then tremove(w, 1) end
 	end
 end
@@ -549,7 +778,9 @@ local function RepairWealthHist()
 			if (p.c or "") == (n1.c or "")
 				and (n1.c or "") == (n2.c or "")
 				and n1.g == n2.g and n1.a == n2.a and n1.h == n2.h
-				and (p.g ~= n1.g or p.a ~= n1.a or p.h ~= n1.h) then
+				and (n1.d or 0) == (n2.d or 0)
+				and (p.g ~= n1.g or p.a ~= n1.a or p.h ~= n1.h
+					or (p.d or 0) ~= (n1.d or 0)) then
 				tremove(w, i)
 				changed = true
 			else
@@ -564,7 +795,8 @@ function B.Init()
 	RepairWealthHist()
 	GM.db.acctColorMode = nil -- replaced by per-char ch.col
 	local me = GM.CharKey()
-	local myName = (UnitName and UnitName("player")) or me
+	local myName = (GM.OwnName and GM.OwnName())
+		or (UnitName and UnitName("player")) or me
 	-- legacy accounts carry no owner — whoever loads first after the
 	-- migration claims them; that char was the de-facto owner anyway
 	-- since the envelope math always used the live purse
@@ -589,6 +821,7 @@ function B.Init()
 		tinsert(DB(), { name = myName, kind = "ah", pool = true,
 			spent = 0, income = 0, c = me })
 	end
+	B.ReconcileXfer()
 	B.Sample()
 	-- PLAYER_MONEY keeps the registry's gold cell live between
 	-- samples — the combined strip reads it every repaint

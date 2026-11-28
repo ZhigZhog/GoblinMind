@@ -7,6 +7,8 @@ local _, GM = ...
 GM.Inventory = {}
 
 local mailCache = {}      -- [itemID] = qty, refreshed at the mailbox
+local mailScanned = false -- one honest inbox read happened this session
+local mailGraceOK = false -- an empty read is truth once streaming had its chance
 local guildCache = {}     -- [itemID] = qty, current gbank tab only
 -- Listings are keyed by fingerprint ("itemID:qty:buyout"), not
 -- auctionID: Forever's GetOwnedAuctionInfo hands the same listing
@@ -15,6 +17,7 @@ local guildCache = {}     -- [itemID] = qty, current gbank tab only
 -- post phantoms every refresh. The fingerprint is stable for the
 -- life of a listing; `n` tracks how many identical listings share it.
 local auctionCache = {}   -- [fp] = {fp, aid, idx, itemID, qty, buyout, tLeft, at, n}
+local soldRows = {}       -- status~=0 enum rows — sold, proceeds inbound
 local aidIndex = {}       -- [raw auctionID or enum index] = fp — resolves
                           -- cancel callers' raw ids back to their entry
 local recentCancels = {}  -- [fp or raw id] = time()
@@ -30,6 +33,7 @@ local emptyArmed = nil  -- timestamp of the first zero report; an
 local partialSince = nil -- first incomplete-read timestamp — the same
                          -- sustained-state gate shape as emptyArmed
 local rearmQueued = false -- dedupe the incomplete-read retry arm
+local postedDep = {}      -- fp -> {dep, t}: execute-time deposit truth
 local postUntil = 0       -- posts are only ledgered inside this window —
                           -- enumeration ghost rows (sold/history rows the
                           -- status filter can't catch) otherwise ratchet
@@ -45,6 +49,15 @@ function GM.Inventory.ArmPost(sec)
 	postUntil = math.max(postUntil, time() + (sec or 15))
 end
 
+-- an execute-time post hands its real deposit forward: the enum
+-- can't recompute CalculateItemDeposit for an item already listed
+-- (it's out of bags), so the number rides here keyed by fingerprint
+function GM.Inventory.NotePostedDep(fp, dep)
+	if fp and dep and dep > 0 then
+		postedDep[fp] = { dep = dep, t = time() }
+	end
+end
+
 -- ============ mailbox ============
 
 local function scanInbox()
@@ -53,7 +66,7 @@ local function scanInbox()
 	-- mid-load event keeps the last good cache instead of zeroing it
 	if not (GetInboxNumItems and GetInboxItem) then return end
 	local t = {}
-	local n = GetInboxNumItems() or 0
+	local n = GM.MailCount()
 	for i = 1, n do
 		for slot = 1, 20 do
 			local ok, a, b, _, d = pcall(GetInboxItem, i, slot)
@@ -66,6 +79,7 @@ local function scanInbox()
 		end
 	end
 	mailCache = t
+	mailScanned = true
 end
 
 -- ============ auction-mail records (TSM's invoice model) ============
@@ -159,8 +173,8 @@ local function scanAuctionMail()
 	if now - mailScanAt < 2 then return end
 	mailScanAt = now
 	local L = GM.Ledger.db
-	if not (L and GM.Ledger.Add) then return end
-	for i = 1, (GetInboxNumItems() or 0) do
+	if not (L and GM.Ledger.Record) then return end
+	for i = 1, GM.MailCount() do
 		local invoiceType, itemName, playerName, bid, buyout,
 			deposit, consignment, _, _, _, count, invAid
 		if GetInboxInvoiceInfo then
@@ -185,12 +199,11 @@ local function scanAuctionMail()
 							and math.floor(net / qty + 0.5) or nil
 						local _, _, _, _, _, _, daysLeft =
 							GetInboxHeaderInfo(i)
-						GM.Ledger.Add("sell", id, qty, unit, {
-							dep = deposit or 0, nm = itemName,
-							auctionID = invAid,
+						GM.Ledger.Record("sell", { itemID = id, qty = qty,
+							unit = unit, dep = deposit or 0,
+							nm = itemName, auctionID = invAid,
 							t = daysLeft and math.floor(
-								time() + (daysLeft - 30) * 86400),
-						})
+								time() + (daysLeft - 30) * 86400) })
 						MailMark(fp)
 					end
 				end
@@ -212,11 +225,20 @@ local function scanAuctionMail()
 							and math.floor((bid or 0) / qty + 0.5) or nil
 						local _, _, _, _, _, _, daysLeft =
 							GetInboxHeaderInfo(i)
-						GM.Ledger.Add("buy", id, qty, unit, {
-							nm = itemName,
-							t = daysLeft and math.floor(
-								time() + (daysLeft - 30) * 86400),
-						})
+						local bt = daysLeft and math.floor(
+							time() + (daysLeft - 30) * 86400)
+						if TxnSeen("bid", id, qty) then
+							-- a journaled bid placed the escrow — the
+							-- win pairs it (stock in, ext settles)
+							-- instead of double-debiting cash
+							GM.Ledger.Record("bidwon", {
+								itemID = id, qty = qty, unit = unit,
+								cost = bid or 0, nm = itemName, t = bt })
+						else
+							GM.Ledger.Record("buy", { itemID = id,
+								qty = qty, unit = unit,
+								nm = itemName, t = bt })
+						end
 						MailMark(fp)
 					end
 				end
@@ -238,11 +260,10 @@ local function scanAuctionMail()
 						if TxnSeen(kind, id, qty) then
 							MailMark(fp)
 						else
-							GM.Ledger.Add(kind, id, qty, nil, {
+							GM.Ledger.Record(kind, { itemID = id, qty = qty,
 								nm = subject,
 								t = daysLeft and math.floor(
-									time() + (daysLeft - 30) * 86400),
-							})
+									time() + (daysLeft - 30) * 86400) })
 							MailMark(fp)
 						end
 					end
@@ -310,7 +331,9 @@ function GM.Inventory.OwnedPrimed() return ownedPrimed end
 -- covers base-name vs variant-name pairs.
 local function NameMatches(e, name)
 	local en = e.name or (GM.ItemName and GM.ItemName(e.itemID))
-	return en ~= nil and name ~= nil and (en == name
+	-- notifications can carry a numeric auctionID instead of a
+	-- name — a non-string key is an aid compare, never a name
+	return type(en) == "string" and type(name) == "string" and (en == name
 		or en:sub(1, #name) == name
 		or name:sub(1, #en) == en)
 end
@@ -389,8 +412,15 @@ end
 -- already values those at buyout in `a`, so the posted share comes
 -- back out. Without this term a buy reads as a wealth collapse
 -- until the item sells — the giant Xs on the wealth chart.
--- (Vendored/destroyed stock never leaves paidQ; BagCount bounds it.
--- Bank-only stock isn't reachable — bags are the trading boundary.)
+-- (Outflow legs drain paidQ at the running average — Consume runs on
+-- sell/vendor/mailout/destroy/craftout — so only unjournaled stock
+-- moves (loots, trades) leave residue; BagCount bounds it.
+-- Mail counts with bags: posting never consumed paidQ, so stock
+-- that comes back expired/cancelled sits in the mailbox still
+-- ledger-carried — without it every login re-evicts dead rows and
+-- the wealth chart dips until the return is looted.
+-- Bank-only stock isn't reachable — bags+mail are the trading
+-- boundary.)
 function GM.Inventory.HeldValue()
 	local st = GM.Ledger and GM.Ledger.db and GM.Ledger.db.itemStats
 	if not st then return 0 end
@@ -399,11 +429,21 @@ function GM.Inventory.HeldValue()
 		local pq, pt = s.paidQ or 0, s.paidT or 0
 		if pq > 0 and pt > 0 then
 			local inBags = math.max(0, pq - GM.Inventory.PostedQty(id))
-			held = held + math.min(inBags, GM.BagCount(id) or 0)
-				* (pt / pq)
+			local seen = (GM.BagCount(id) or 0)
+				+ (mailCache[id] or 0)
+			held = held + math.min(inBags, seen) * (pt / pq)
 		end
 	end
 	return held
+end
+
+-- mailCache honesty for the wealth gate — true once scanInbox ran
+-- this session. An empty read is only honest after the grace window:
+-- GetInboxNumItems can't tell "no mail" from "inbox not streamed
+-- yet", so a zero count is accepted once streaming has had its time
+function GM.Inventory.MailLoaded()
+	return mailScanned
+		or (mailGraceOK and GM.MailCount() == 0)
 end
 
 -- persist the owned snapshot so the MINE surfaces are a real log: the
@@ -419,7 +459,8 @@ local function SaveOwned()
 		if a.itemID then
 			rows[fp] = { itemID = a.itemID, qty = a.qty,
 				buyout = a.buyout, tLeft = a.tLeft, at = a.at,
-				n = a.n, dep = a.dep, aid = a.aid, name = a.name }
+				n = a.n, dep = a.dep, aid = a.aid, name = a.name,
+				itemKey = a.itemKey, itemLink = a.itemLink }
 		end
 	end
 	local bs = {}
@@ -450,7 +491,11 @@ local function LoadOwned()
 	for fp, a in pairs(snap.rows or {}) do
 		local e = { fp = fp, itemID = a.itemID, qty = a.qty,
 			buyout = a.buyout, tLeft = a.tLeft, at = a.at, n = a.n,
-			dep = a.dep, aid = a.aid, name = a.name }
+			dep = a.dep, aid = a.aid, name = a.name,
+			-- suffix data must survive hydration: MergeOwnAsks
+			-- matches owned lots to the scan under their exact
+			-- itemKey, and the merged ask's link feeds step labels
+			itemKey = a.itemKey, itemLink = a.itemLink }
 		-- a snapshot row whose listing deadline elapsed while offline
 		-- is dead on arrival — hydrating it counts an expired auction
 		-- as live wealth until the first enum corrects it (a flat
@@ -471,13 +516,13 @@ local function LoadOwned()
 		-- defer: the ledger isn't guaranteed primed at PLAYER_LOGIN
 		GM.Time.After(2, function()
 			for _, e in ipairs(dead) do
-				if GM.Ledger and GM.Ledger.Add then
+				if GM.Ledger and GM.Ledger.Record then
 					local dep = e.dep or (GM.AH.DepositCost
 						and GM.AH.DepositCost(e.itemID, e.qty or 1)) or 0
 					for _ = 1, (e.n or 1) do
-						GM.Ledger.Add("expire", e.itemID, e.qty, nil,
-							{ auctionID = e.aid or e.fp,
-								dep = dep, nm = e.name })
+						GM.Ledger.Record("expire", { itemID = e.itemID,
+							qty = e.qty, auctionID = e.aid or e.fp,
+							dep = dep, nm = e.name })
 					end
 				end
 			end
@@ -539,7 +584,61 @@ function GM.Inventory.RefreshOwned()
 	end
 	partialSince = nil
 	local now = {}
+	local soldNow = {}
 	local seenAid = {}
+	-- receivable truth = "sold AND proceeds not yet collected".
+	-- Forever keeps status~=0 rows flagged AFTER the proceeds mail
+	-- is taken — a wholesale snap then resurrects collected
+	-- receivables on every reconcile (the recurring phantom
+	-- incoming). The mailbox is the resolution authority: a flagged
+	-- row whose invoice aid is present still owes; one whose
+	-- journaled sell has no invoice left in a live inbox already
+	-- paid — the journal's own rcbl carries it until Gold(+)
+	-- settles. Rows with no aid join stay status-quo.
+	local pending = 0  -- sold rows awaiting collection = true rcbl
+	local invAidNet, invOrphan = {}, 0
+	if GetInboxInvoiceInfo then
+		for i = 1, GM.MailCount() do
+			local it, _, _, bid, _, dep, con,
+				_, _, _, _, ia = GetInboxInvoiceInfo(i)
+			if it == "seller" or it == "seller_temp_invoice" then
+				local net = (bid or 0) - (con or 0) + (dep or 0)
+				if ia then invAidNet[ia] = net
+				else invOrphan = invOrphan + net end
+			end
+		end
+	end
+	local journaledSell = {}
+	local txns = GM.Ledger and GM.Ledger.TxFor
+		and GM.Ledger.TxFor() or {}
+	for _, tx in ipairs(txns) do
+		if tx.ty == "sell" and tx.x and tx.x.auctionID then
+			journaledSell[tx.x.auctionID] = true
+		end
+	end
+	-- invoice-absence is only evidence once the inbox has actually
+	-- been live this session — before that it's "not fetched", not
+	-- "collected"
+	local inboxLive = (GM.Inventory._inboxScans or 0) > 0
+		or GM.MailCount() > 0
+	local rowAids = {}
+	-- deposit truth for enum rows: a journaled post (or an
+	-- execute-time note) carries the real CalculateItemDeposit the
+	-- estimator can't reproduce for an already-listed item. Without
+	-- this every tracked resolution releases an estimate against a
+	-- real deposit and the dep account drifts negative
+	local postDep = {}
+	for _, tx in ipairs(GM.Ledger and GM.Ledger.TxFor
+		and GM.Ledger.TxFor() or {}) do
+		if tx.ty == "post" and tx.x and tx.x.dep then
+			postDep[tx.i .. ":" .. (tx.q or 1) .. ":"
+				.. (tx.u or 0)] = tx.x.dep
+		end
+	end
+	for fp, d in pairs(postedDep) do
+		if time() - d.t > 600 then postedDep[fp] = nil
+		else postDep[fp] = d.dep end
+	end
 	wipe(aidIndex)
 	for _, r in ipairs(infos) do
 		local i, info = r.i, r.info
@@ -548,6 +647,35 @@ function GM.Inventory.RefreshOwned()
 		if type(aid) ~= "number" and type(aid) ~= "string" then aid = nil end
 		local dupAid = aid and seenAid[aid]  -- same id twice = ghost row
 		local inactive = info.status ~= nil and info.status ~= 0
+		if inactive then
+			if aid then rowAids[aid] = true end
+			-- carry the sold row for display: the MINE pane shows it
+			-- like Blizzard's Sold: prefix — proceeds amount + the
+			-- timeLeftSeconds countdown until the mail lands
+			if id then
+				soldNow[#soldNow + 1] = {
+					itemID = id, qty = info.quantity or 1,
+					proceeds = info.buyoutAmount or info.buyout
+						or info.bidAmount or 0,
+					aid = aid, idx = i,
+					tLeft = info.timeLeftSeconds, at = time(),
+					name = info.itemLink
+						and info.itemLink:match("%[(.-)%]") or nil,
+					itemKey = info.itemKey or (GM.AH.ItemKeyFromLink
+						and GM.AH.ItemKeyFromLink(info.itemLink)),
+					itemLink = info.itemLink,
+				}
+			end
+			if aid and invAidNet[aid] then
+				-- sold, invoice still uncollected — its net is the
+				-- exact receivable
+				pending = pending + invAidNet[aid]
+			elseif not (aid and inboxLive and journaledSell[aid]) then
+				pending = pending + (info.buyoutAmount or info.buyout
+					or info.bidAmount or 0)
+			end
+			-- else: journaled + invoice gone + live inbox = collected
+		end
 		if id and not dupAid and not inactive then
 			if aid then seenAid[aid] = true end
 			local e = {
@@ -565,14 +693,20 @@ function GM.Inventory.RefreshOwned()
 					or nil,
 				qty = info.quantity or 1,
 				-- per-ITEM buyout (Forever convention — not lot total)
-				buyout = info.buyoutAmount or info.bidAmount,
+				buyout = info.buyoutAmount or info.buyout
+					or info.bidAmount,
 				tLeft = info.timeLeftSeconds,
 				at = time(),
-				-- listing deposit estimate, captured once: the post,
-				-- sale, and cancel legs must move the SAME number or
-				-- the ledger's dep account never closes
-				dep = GM.AH and GM.AH.DepositCost
-					and GM.AH.DepositCost(id, info.quantity or 1) or 0,
+				-- listing deposit, captured once: the post, sale, and
+				-- cancel legs must move the SAME number or the ledger's
+				-- dep account never closes. Prefer the journaled post's
+				-- real fee (or the execute-time note) — the estimate
+				-- only fills in when neither saw this lot
+				dep = postDep[id .. ":" .. (info.quantity or 1) .. ":"
+					.. (info.buyoutAmount or info.buyout
+						or info.bidAmount or 0)]
+					or (GM.AH and GM.AH.DepositCost
+						and GM.AH.DepositCost(id, info.quantity or 1)) or 0,
 				aid = aid, idx = i, n = 1,
 			}
 			e.fp = EntryFp(e)
@@ -620,6 +754,26 @@ function GM.Inventory.RefreshOwned()
 		end
 	end
 	emptyArmed = nil
+	-- sold rows still listed are proceeds awaiting collection — the
+	-- AH's own receivable truth. Snap rcbl to it: the pre-feed drift
+	-- (sells that journaled but never settled) dies here. dep's truth
+	-- is the same enum: deposits outstanding = Σ live rows' fees —
+	-- resolutions that released unjournaled deposits (pre-feed posts)
+	-- converge back to the live count
+	-- seller invoices with no flagged row still owe proceeds — the
+	-- row can drop from the enum while its mail lives
+	pending = pending + invOrphan
+	for a, net in pairs(invAidNet) do
+		if not rowAids[a] then pending = pending + net end
+	end
+	if GM.Ledger and GM.Ledger.Adjust then
+		GM.Ledger.Adjust("rcbl", pending, "reconcile")
+		local depLive = 0
+		for _, e in pairs(now) do
+			depLive = depLive + (e.dep or 0) * (e.n or 1)
+		end
+		GM.Ledger.Adjust("dep", depLive, "reconcile")
+	end
 	-- sold marks ride the cache: the buyer-found message lands before
 	-- the enum drops the row, so the mark has to survive refreshes —
 	-- and die with the row (or on a stale-mark timeout)
@@ -642,9 +796,9 @@ function GM.Inventory.RefreshOwned()
 		if ownedPrimed and extra > 0 and not recentCancels[fp]
 			and t <= postUntil then
 			for _ = 1, extra do
-				GM.Ledger.Add("post", e.itemID, e.qty, e.buyout,
-					{ dep = e.dep, aid = e.aid, dur = e.tLeft,
-						nm = e.name })
+				GM.Ledger.Record("post", { itemID = e.itemID, qty = e.qty,
+					unit = e.buyout, dep = e.dep, aid = e.aid,
+					dur = e.tLeft, nm = e.name })
 			end
 		end
 	end
@@ -690,29 +844,33 @@ function GM.Inventory.RefreshOwned()
 					if removedMarks[fp] then
 						-- the AuctionRemoved notification already said
 						-- cancel — no heuristic needed
-						GM.Ledger.Add("cancel", pl.e.itemID, pl.e.qty,
-							pl.e.buyout, { auctionID = pl.e.aid or fp,
-								dep = pl.e.dep, nm = pl.e.name })
+						GM.Ledger.Record("cancel", { itemID = pl.e.itemID,
+							qty = pl.e.qty, unit = pl.e.buyout,
+							auctionID = pl.e.aid or fp,
+							dep = pl.e.dep, nm = pl.e.name })
 					elseif soldMarks[fp] then
 						-- buyer-found beat the enum drop
 						local unit = pl.e.buyout and pl.e.qty > 0
 							and math.floor(pl.e.buyout * 0.95) or nil
-						GM.Ledger.Add("sell", pl.e.itemID, pl.e.qty,
-							unit, { auctionID = pl.e.aid or fp,
-								dep = pl.e.dep, nm = pl.e.name })
+						GM.Ledger.Record("sell", { itemID = pl.e.itemID,
+							qty = pl.e.qty, unit = unit,
+							auctionID = pl.e.aid or fp,
+							dep = pl.e.dep, nm = pl.e.name })
 					elseif couldExpire or expireMarks[fp] then
 						-- vanished on schedule without a cancel → expiry
-						GM.Ledger.Add("expire", pl.e.itemID, pl.e.qty,
-							nil, { auctionID = pl.e.aid or fp,
-								dep = pl.e.dep, nm = pl.e.name })
+						GM.Ledger.Record("expire", { itemID = pl.e.itemID,
+							qty = pl.e.qty,
+							auctionID = pl.e.aid or fp,
+							dep = pl.e.dep, nm = pl.e.name })
 					else
 						-- buyout is per-item on Forever — sale proceeds
 						-- per unit are buyout minus the 5% AH cut
 						local unit = pl.e.buyout and pl.e.qty > 0
 							and math.floor(pl.e.buyout * 0.95) or nil
-						GM.Ledger.Add("sell", pl.e.itemID, pl.e.qty,
-							unit, { auctionID = pl.e.aid or fp,
-								dep = pl.e.dep, nm = pl.e.name })
+						GM.Ledger.Record("sell", { itemID = pl.e.itemID,
+							qty = pl.e.qty, unit = unit,
+							auctionID = pl.e.aid or fp,
+							dep = pl.e.dep, nm = pl.e.name })
 					end
 				end
 			end
@@ -721,6 +879,7 @@ function GM.Inventory.RefreshOwned()
 	end
 	auctionCache = now
 	GM.Inventory.auctions = now
+	soldRows = soldNow
 	ownedPrimed = true
 	lastOwnedAt = t
 	SaveOwned()
@@ -956,6 +1115,7 @@ function GM.Inventory.Outbids()
 			t[#t + 1] = {
 				aid = aid, itemID = b.itemID, qty = b.qty,
 				ourBid = b.ourBid, curBid = b.curBid,
+				ctx = GM.Ctx(b.itemID, b.itemLink, b.itemKey),
 				remain = b.tl and b.at and (b.at + b.tl - time()) or nil,
 			}
 		end
@@ -969,6 +1129,24 @@ end
 -- they're the ones to cancel.
 function GM.Inventory.MineRows()
 	local rows = {}
+	-- sold rows first (Blizzard's Sold: block): enum carries them
+	-- while proceeds are inbound — buyoutAmount on a sold row is the
+	-- lot's incoming amount, timeLeftSeconds the mail countdown
+	for _, s in ipairs(soldRows) do
+		local ctx = GM.Ctx(s.itemID, s.itemLink, s.itemKey)
+		rows[#rows + 1] = {
+			aid = s.aid or s.idx, id = s.itemID, key = s.itemKey,
+			link = s.itemLink, ctx = ctx,
+			qty = s.qty or 1,
+			unit = s.proceeds and s.qty
+				and math.floor(s.proceeds / s.qty + 0.5) or nil,
+			proceeds = s.proceeds,
+			tLeft = s.tLeft and s.at
+				and (s.at + s.tLeft - time()) or s.tLeft,
+			sold = true, paidOut = true,
+			name = ctx.name or s.name or ("item " .. s.itemID),
+		}
+	end
 	for fp, a in pairs(auctionCache) do
 		if a.itemID then
 			local mkt = GM.Price("dbmarket", a.itemID)
@@ -976,9 +1154,11 @@ function GM.Inventory.MineRows()
 			if a.itemKey and (a.itemKey.itemSuffix or 0) ~= 0 then
 				-- variants are separate markets: the itemID-wide mbx
 				-- mixes every "of X" into one min that says nothing
-				-- about THIS suffix. Only a same-variant ladder (the
-				-- last targeted scan under the matching key) can prove
-				-- undercut — anything else is a false alarm
+				-- about THIS suffix. A same-variant ladder (the last
+				-- targeted scan under the matching key) is the
+				-- freshest proof; the variant's OWN book row (mbx
+				-- under "v<id>:<sfx>:<lvl>") is the standing source —
+				-- the base item's row stays a false alarm
 				local sk = GM.AH.scanItemKey
 				if sk and sk.itemID == a.itemID
 					and (sk.itemSuffix or 0) == a.itemKey.itemSuffix
@@ -989,6 +1169,12 @@ function GM.Inventory.MineRows()
 						end
 					end
 					live = true -- a scan result is live by definition
+				end
+				if not cheap then
+					local e0 = GM.ItemEntry(a.itemID, a.itemKey)
+					cheap = e0 and e0.mbx ~= math.huge and e0.mbx
+					live = e0 and (e0._src == "mesh" or (e0._src == "book"
+						and GM.AH.BookLive and GM.AH.BookLive()))
 				end
 			else
 				-- mbx through the resolver: live book when it's
@@ -1009,21 +1195,24 @@ function GM.Inventory.MineRows()
 			-- column freezes at whatever the last refresh saw
 			local remain = a.tLeft and a.at
 				and (a.at + a.tLeft - time()) or a.tLeft
+			local ctx = GM.Ctx(a.itemID, a.itemLink, a.itemKey)
 			rows[#rows + 1] = {
 				-- fp-keyed cache: hand cancel the real auctionID when
 				-- the snapshot had one, else the enumeration index
 				aid = a.aid or a.idx or fp,
 				id = a.itemID, key = a.itemKey, link = a.itemLink,
+				ctx = ctx,
 				qty = (a.qty or 1) * (a.n or 1),
 				unit = a.buyout, tLeft = remain,
 				mkt = mkt, cheap = cheap, undercut = undercut,
 				sold = a.sold,
-				name = a.name or GM.ItemName(a.itemID)
+				name = ctx.name or a.name
 					or ("item " .. a.itemID),
 			}
 		end
 	end
 	table.sort(rows, function(a, b)
+		if (a.paidOut or false) ~= (b.paidOut or false) then return a.paidOut end
 		if a.undercut ~= b.undercut then return a.undercut and true or false end
 		return (a.name or "") < (b.name or "")
 	end)
@@ -1038,13 +1227,14 @@ function GM.Inventory.BidRows()
 		if b.itemID and b.status ~= "gone" then
 			local remain = b.tl and b.at
 				and (b.at + b.tl - time()) or b.tl
+			local ctx = GM.Ctx(b.itemID, b.itemLink, b.itemKey)
 			rows[#rows + 1] = {
 				aid = aid, id = b.itemID, key = b.itemKey,
-				link = b.itemLink, qty = b.qty or 1,
+				link = b.itemLink, qty = b.qty or 1, ctx = ctx,
 				ourBid = b.ourBid, curBid = b.curBid or b.ourBid,
 				buyout = b.buyout, status = b.status or "winning",
 				remain = remain,
-				name = GM.ItemName(b.itemID) or ("item " .. b.itemID),
+				name = ctx.name or ("item " .. b.itemID),
 			}
 		end
 	end
@@ -1147,10 +1337,14 @@ local function Snapshot(where)
 	GoblinMindSettings.inv[me] = snap
 end
 
--- this char's bank: live while the frame is open, snapshot otherwise
+-- this char's bank: live while the bank is open (0 counts — an open
+-- bank is authoritative), snapshot only while it's closed
 function GM.Inventory.BankStored(itemID)
 	local live = GM.BankCount(itemID)
-	if live > 0 then return live end
+	if live > 0 or GM.bankOpen
+		or (BankFrame and BankFrame:IsShown()) then
+		return live
+	end
 	local inv = GoblinMindSettings and GoblinMindSettings.inv
 	if not inv then return 0 end
 	-- newest snapshot keyed to THIS char — bare and realm-qualified
@@ -1233,7 +1427,7 @@ GM.Inventory.Owned = GM.BucketCache(function()
 	for _, a in pairs(auctionCache) do
 		if a.itemID then set[a.itemID] = true end
 	end
-	if BankFrame and BankFrame:IsShown() then
+	if GM.bankOpen or (BankFrame and BankFrame:IsShown()) then
 		GM.EachBagSlot(BankBags(), function(_, _, id)
 			set[id] = true
 		end)
@@ -1251,6 +1445,7 @@ for _, evt in ipairs({
 	"BIDS_UPDATED", "AUCTION_HOUSE_SHOW_FORMATTED_NOTIFICATION",
 	"GUILDBANKBAGSLOTS_CHANGED", "BANKFRAME_OPENED",
 	"BAG_UPDATE", "PLAYER_LOGOUT", "PLAYER_LOGIN",
+	"TRADE_SHOW", "TRADE_CLOSED",
 }) do
 	pcall(f.RegisterEvent, f, evt)
 end
@@ -1269,17 +1464,57 @@ f:SetScript("OnEvent", function(_, event, ...)
 	elseif event == "AUCTION_HOUSE_SHOW_FORMATTED_NOTIFICATION" then
 		OnNotification(...)
 	elseif event == "AUCTION_HOUSE_SHOW" or event == "PLAYER_LOGIN" then
-		if event == "PLAYER_LOGIN" then LoadOwned() end
+		if event == "PLAYER_LOGIN" then
+			LoadOwned()
+			-- the inbox streams in async; CheckInbox pulls it on
+			-- clients that don't push, MAIL_INBOX_UPDATE covers the
+			-- rest. The grace flag marks when an empty read may
+			-- stand as truth (MailLoaded gate)
+			GM.Time.After(15, function() mailGraceOK = true end)
+			if CheckInbox then pcall(CheckInbox) end
+			GM.Time.After(10, scanInbox)
+		end
 		GM.Inventory.QueryOwned()
 		GM.Inventory.QueryBids()
 	elseif event == "GUILDBANKBAGSLOTS_CHANGED" then
 		scanGuildBank()
 	elseif event == "BANKFRAME_OPENED" then
 		-- bank contents resolve async after the frame opens — the
-		-- instant read can be empty, so snapshot on a beat
+		-- instant read can be empty, so snapshot on a beat. The event
+		-- flag is authoritative — the native frame never shows on
+		-- this client (custom bank), so gating on it never fired
 		GM.Time.After(0.5, function()
-			if BankFrame and BankFrame:IsShown() then
+			if GM.bankOpen or (BankFrame and BankFrame:IsShown()) then
 				Snapshot("bank")
+			end
+		end)
+	elseif event == "TRADE_SHOW" then
+		-- the trade mirror: bag state before the window — slot reads
+		-- inside the trade UI lie about provenance and empty on
+		-- close, so the honest detector is the bag diff itself
+		f._tradeBags = ScanContainers(CarriedBags())
+	elseif event == "TRADE_CLOSED" then
+		local before = f._tradeBags
+		f._tradeBags = nil
+		if not before then return end
+		-- bag events settle a beat after the window drops; a
+		-- cancelled trade diffs to zero and journals nothing
+		GM.Time.After(0.4, function()
+			if not (GM.Ledger and GM.Ledger.Record) then return end
+			local now = ScanContainers(CarriedBags())
+			for id in pairs(before) do
+				local d = (now[id] or 0) - before[id]
+				if d < 0 then
+					GM.Ledger.Record("tradeout",
+						{ itemID = id, qty = -d })
+				elseif d > 0 then
+					GM.Ledger.Record("tradein",
+						{ itemID = id, qty = d })
+				end
+				now[id] = nil
+			end
+			for id, n in pairs(now) do
+				GM.Ledger.Record("tradein", { itemID = id, qty = n })
 			end
 		end)
 	elseif event == "BAG_UPDATE" or event == "PLAYER_LOGOUT" then
@@ -1289,7 +1524,9 @@ f:SetScript("OnEvent", function(_, event, ...)
 		GM.Time.After(0.5, function()
 			f._snapPending = nil
 			Snapshot("bags")
-			if BankFrame and BankFrame:IsShown() then Snapshot("bank") end
+			if GM.bankOpen or (BankFrame and BankFrame:IsShown()) then
+				Snapshot("bank")
+			end
 		end)
 	end
 end)

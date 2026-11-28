@@ -47,9 +47,11 @@ for _, evt in ipairs({
 	"AUCTION_ITEM_LIST_UPDATE",
 	-- browse-all is the fallback book source when replicate is silent
 	"AUCTION_HOUSE_BROWSE_RESULTS_UPDATED", "AUCTION_HOUSE_BROWSE_RESULTS_ADDED",
+	-- the shop driver parks sends on these
+	"AUCTION_HOUSE_THROTTLED_SYSTEM_READY",
+	"AUCTION_HOUSE_THROTTLED_MESSAGE_DROPPED",
 	-- buy-result signals: silent rejections surface here
 	"BIDS_UPDATED", "AUCTION_CANCELED", "UI_ERROR_MESSAGE", "CHAT_MSG_SYSTEM",
-	"CHAT_MSG_MONEY",
 }) do
 	pcall(f.RegisterEvent, f, evt)
 end
@@ -149,6 +151,15 @@ f:SetScript("OnEvent", function(_, event, ...)
 		-- these fire for every browse — ours and TSM's; only consume
 		-- while a browse book build is active
 		if GM.AH.browse then GM.AH.OnBrowseResults() end
+		-- the shop driver consumes the same events for its own query
+		if event == "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED" then
+			GM.AH.ShopDelivered()
+		else
+			GM.AH.ShopMore()
+		end
+	elseif event == "AUCTION_HOUSE_THROTTLED_SYSTEM_READY"
+		or event == "AUCTION_HOUSE_THROTTLED_MESSAGE_DROPPED" then
+		GM.AH.ShopRetry()
 	elseif event == "COMMODITY_SEARCH_RESULTS_UPDATED" then
 		local itemID = ...
 		-- flags are per-scan: foreign searches (TSM's scans run
@@ -181,13 +192,16 @@ f:SetScript("OnEvent", function(_, event, ...)
 			-- bargain, not a trap
 			local unit = math.ceil((totalPrice or 0) / math.max(pc.qty or 1, 1))
 			if pc.unit and unit > pc.unit then
-				GM.AH.pendingConfirm = nil
+				-- the quote IS the freshest ask in the game — the
+				-- scan ladder that set pc.unit lags it, so aborting
+				-- and re-solving just re-arms the same dead expected
+				-- price (the drift loop). Keep the stage, update the
+				-- expectation to the quote, and let CONFIRM commit at
+				-- the price the user is looking at right now
+				pc.unit, pc.quote = unit, totalPrice
 				GM.Print(GM.CC("warn") .. format(
-					"quote moved — expected %s ea, quoted %s ea — rescan before buying|r",
-					GM.Money(pc.unit), GM.Money(unit)))
-				if GM.Shopping and GM.Shopping.QuoteDied then
-					GM.Shopping.QuoteDied(pc.itemID, true)
-				end
+					"quote moved — now %s ea — CONFIRM buys at the new price|r",
+					GM.Money(unit)))
 			else
 				pc.quote = totalPrice
 				GM.Print("quote ready — total " .. GM.Money(totalPrice or 0) .. " — click CONFIRM")
@@ -197,6 +211,8 @@ f:SetScript("OnEvent", function(_, event, ...)
 	elseif event == "COMMODITY_PRICE_UNAVAILABLE" then
 		local pc = GM.AH.pendingConfirm
 		GM.AH.pendingConfirm = nil
+		if pc and GM.Ledger and GM.Ledger.Unexpect then
+			GM.Ledger.Unexpect(pc.itemID, "buy") end
 		GM.Print(GM.CC("warn") .. "no commodity quote — falling back to per-lot buyouts|r")
 		if GM.PlanQueue.CommodityFallback then GM.PlanQueue.CommodityFallback() end
 		if GM.Shopping and GM.Shopping.QuoteDied then
@@ -206,6 +222,8 @@ f:SetScript("OnEvent", function(_, event, ...)
 	elseif event == "COMMODITY_PURCHASE_FAILED" then
 		local pc = GM.AH.pendingConfirm
 		GM.AH.pendingConfirm = nil
+		if pc and GM.Ledger and GM.Ledger.Unexpect then
+			GM.Ledger.Unexpect(pc.itemID, "buy") end
 		GM.Print(GM.CC("err") .. "commodity purchase failed|r")
 		if GM.Shopping and GM.Shopping.QuoteDied then
 			GM.Shopping.QuoteDied(pc and pc.itemID)
@@ -214,8 +232,8 @@ f:SetScript("OnEvent", function(_, event, ...)
 	elseif event == "COMMODITY_PURCHASE_SUCCEEDED" then
 		local pc = GM.AH.pendingConfirm
 		if pc then
-			GM.Ledger.Add("buy", pc.itemID, pc.qty,
-				pc.quote and math.floor(pc.quote / pc.qty) or nil)
+			GM.Ledger.Record("buy", { itemID = pc.itemID, qty = pc.qty,
+				unit = pc.quote and math.floor(pc.quote / pc.qty) or nil })
 		end
 		GM.AH.pendingConfirm = nil
 		GM.Print("purchase complete")
@@ -224,7 +242,8 @@ f:SetScript("OnEvent", function(_, event, ...)
 		local pb = GM.AH.pendingBuy
 		if pb then
 			GM.AH.pendingBuy = nil
-			GM.Ledger.Add("buy", pb.itemID, pb.qty, math.floor(pb.total / pb.qty))
+			GM.Ledger.Record("buy", { itemID = pb.itemID, qty = pb.qty,
+				unit = math.floor(pb.total / pb.qty) })
 			GM.Print(GM.CC("pos") .. "buyout confirmed|r")
 		end
 	elseif event == "AUCTION_CANCELED" then
@@ -262,14 +281,6 @@ f:SetScript("OnEvent", function(_, event, ...)
 				GM.Print(GM.CC("textDim") .. tostring(msg) .. "|r")
 			end
 		end
-	elseif event == "CHAT_MSG_MONEY" then
-		-- loose parse: sum g/s/c quantities anywhere in the message
-		local msg = ...
-		local copper = 0
-		for v, u in tostring(msg or ""):gmatch("(%d+)%s*([gsc])") do
-			copper = copper + v * ({ g = 10000, s = 100, c = 1 })[u]
-		end
-		if copper > 0 then GM.Ledger.Gold(copper, "chat") end
 	elseif event == "AUCTION_HOUSE_POST_ERROR" or event == "AUCTION_MULTISELL_FAILURE" then
 		GM.Print(GM.CC("err") .. "post failed — check the item/stack and try again|r")
 		RefreshUIs()
@@ -420,9 +431,56 @@ function GM.AH.ItemKeyFromLink(link)
 		-- the itemString carries no itemLevel, but Forever keys do
 		-- (owndump: Banded Girdle of Spirit = lvl 31) — a level-0 key
 		-- can miss a strict server-side match where the real key hits
-		local ilvl = GetInfo and (select(4, GetInfo(id))) or 0
+		local ilvl = GM.ItemILevel and GM.ItemILevel(id) or 0
 		return C_AuctionHouse.MakeItemKey(id, ilvl or 0, suffix, nil)
 	end
+end
+
+-- Forever's owned-row links can carry the display name but a bare
+-- itemString — pasting one renders the base item. Splice the
+-- itemKey's suffix into itemString field 7 (after "item"): links
+-- that already carry it pass through unchanged
+function GM.AH.LinkWithKey(link, key, name)
+	if name and link then
+		-- the bracket text is what a paste renders — a caller that
+		-- resolved the variant name elsewhere (owned rows carry it
+		-- outside the link) can correct a base-name bracket
+		link = link:gsub("%[.-%]|h", "[" .. name .. "]|h", 1)
+	end
+	if not (link and type(key) == "table"
+			and (key.itemSuffix or 0) ~= 0) then
+		return link
+	end
+	local s = link:match("item:([^|h]+)")
+	if not s then return link end
+	if tonumber(select(7, strsplit(":", s)) or 0) ~= 0 then
+		return link -- already carries a suffix
+	end
+	local f = { strsplit(":", s) }
+	for i = 2, 6 do f[i] = f[i] or "0" end
+	f[7] = key.itemSuffix
+	return link:gsub("item:[^|h]+",
+		"item:" .. table.concat(f, ":"), 1)
+end
+
+-- variant book key: a suffixed item gets a composite
+-- "v<id>:<sfx>:<lvl>" string so its market stops conflating into
+-- the base item's mb/mbx/sup/n (another variant's cheap ask
+-- produced false undercuts). Base and commodity items keep the
+-- plain numeric id — string keys never collide with them and the
+-- SV/brain merge passes both through transparently
+function GM.AH.BookKey(itemID, key)
+	if key and (key.itemSuffix or 0) ~= 0 then
+		return "v" .. key.itemID .. ":" .. key.itemSuffix
+			.. ":" .. (key.itemLevel or 0)
+	end
+	return itemID
+end
+
+-- bookKey -> base itemID, for consumers that need item-level data
+-- (names, ilvls, recipes) regardless of which variant priced it
+function GM.AH.BookID(bookKey)
+	return tonumber(tostring(bookKey):match("^v?(%d+)"))
 end
 
 -- Time-left arrives in two shapes on Forever: real seconds on
@@ -467,15 +525,15 @@ function GM.AH.CollectCommodityAsks(itemID)
 				own = (r.containsOwnerItem or r.isOwned) or nil })
 		end
 	end
-	GM.AH.MergeOwnAsks(asks, GM.AH.scanItemKey)
+	local apiOwn, cand, merged =
+		GM.AH.MergeOwnAsks(asks, GM.AH.scanItemKey)
 	table.sort(asks, function(a, b) return a.unit < b.unit end)
 	-- flag rows before delivery — solver/sniper consumers price off
-	-- bait/step marks; unflagged rows feed the drag. Suffixed scans
-	-- describe one variant's market — flagging them would mint
-	-- item-level marks off a subset (same rule MarketUI applies)
-	local sfx = GM.AH.scanItemKey and (GM.AH.scanItemKey.itemSuffix or 0) or 0
-	if sfx == 0 and GM.Intel and GM.Intel.AnalyzeItem then
-		GM.Intel.AnalyzeItem(itemID, asks, time())
+	-- bait/step marks; unflagged rows feed the drag. Variant scans
+	-- mint marks under their own bookKey — the suffix-0 gate died
+	-- with per-variant marks (the itemID-wide mark stays intact)
+	if GM.Intel and GM.Intel.AnalyzeItem then
+		GM.Intel.AnalyzeItem(itemID, asks, time(), GM.AH.scanItemKey)
 	end
 	GM.AH.asks = asks
 	GM.AH.scanConsumed = true
@@ -483,7 +541,10 @@ function GM.AH.CollectCommodityAsks(itemID)
 	-- did (throttle drop reads as both counts zero + no events)
 	GM.AH.lastScanDiag = { id = itemID, n = #asks, src = "comm",
 		itemEvt = GM.AH.itemEvtSeen or false,
-		commEvt = GM.AH.commEvtSeen or false, t = time() }
+		commEvt = GM.AH.commEvtSeen or false, t = time(),
+		-- own-merge trail: apiOwn rows flagged by the API, cand
+		-- owned-cache lots matching the scan, merged appended
+		apiOwn = apiOwn, ownCand = cand, ownMerged = merged }
 	GM.AH.scanT[itemID], GM.AH.scanN[itemID] = time(), #asks
 	if GM.AH.onScanDone then GM.AH.onScanDone(asks) end
 end
@@ -491,7 +552,8 @@ end
 function GM.AH.CollectItemAsks()
 	local key = GM.AH.scanItemKey
 	local asks = {}
-	local me, meGUID = UnitName("player"),
+	local me, meGUID = (GM.OwnName and GM.OwnName())
+		or UnitName("player"),
 		UnitGUID and UnitGUID("player")
 	for i = 1, C_AuctionHouse.GetNumItemSearchResults(key) do
 		local r = C_AuctionHouse.GetItemSearchResultInfo(key, i)
@@ -531,17 +593,18 @@ function GM.AH.CollectItemAsks()
 			end
 		end
 	end
-	GM.AH.MergeOwnAsks(asks, key)
+	local apiOwn, cand, merged = GM.AH.MergeOwnAsks(asks, key)
 	table.sort(asks, function(a, b) return a.unit < b.unit end)
-	local sfx = GM.AH.scanItemKey and (GM.AH.scanItemKey.itemSuffix or 0) or 0
-	if sfx == 0 and GM.Intel and GM.Intel.AnalyzeItem then
-		GM.Intel.AnalyzeItem(GM.AH.scanItemID, asks, time())
+	if GM.Intel and GM.Intel.AnalyzeItem then
+		GM.Intel.AnalyzeItem(GM.AH.scanItemID, asks, time(),
+			GM.AH.scanItemKey)
 	end
 	GM.AH.asks = asks
 	GM.AH.scanConsumed = true
 	GM.AH.lastScanDiag = { id = GM.AH.scanItemID, n = #asks, src = "item",
 		itemEvt = GM.AH.itemEvtSeen or false,
-		commEvt = GM.AH.commEvtSeen or false, t = time() }
+		commEvt = GM.AH.commEvtSeen or false, t = time(),
+		apiOwn = apiOwn, ownCand = cand, ownMerged = merged }
 	if GM.AH.scanItemID then
 		GM.AH.scanT[GM.AH.scanItemID], GM.AH.scanN[GM.AH.scanItemID] =
 			time(), #asks
@@ -558,23 +621,49 @@ end
 function GM.AH.MergeOwnAsks(asks, key)
 	if not (key and key.itemID and GM.Inventory
 		and GM.Inventory.auctions) then return end
-	local have = {}
+	local have, priced, apiOwn = {}, {}, 0
 	for _, a in ipairs(asks) do
 		if a.id then have[a.id] = true end
-		if a.own then return end -- API already answers own rows
+		-- an API-flagged own row already occupies its price/qty
+		-- slot — the owned cache's matching lot must not duplicate
+		-- it. The old any-own early return skipped the REST of our
+		-- listings whenever one row was flagged, so a client that
+		-- flags only the containing tier leaked our other lots in
+		-- as foreign asks — the buy-your-own-listing plan
+		if a.own then
+			apiOwn = apiOwn + 1
+			if a.qty and a.unit then
+				priced[(a.qty or 1) .. ":" .. a.unit] = true
+			end
+		end
 	end
 	local suffix = key.itemSuffix or 0
+	local cand, merged = 0, 0
 	for _, a in pairs(GM.Inventory.auctions) do
 		local k = a.itemKey
 		if a.itemID == key.itemID and a.buyout
-			and (k and (k.itemSuffix or 0) or 0) == suffix
-			and not (a.aid and have[a.aid]) then
-			tinsert(asks, { id = a.aid, qty = a.qty or 1,
-				unit = a.buyout, total = a.buyout * (a.qty or 1),
-				own = true, seller = UnitName("player"),
-				link = a.itemLink })
+			and (k and (k.itemSuffix or 0) or 0) == suffix then
+			cand = cand + 1
+			if not (a.aid and have[a.aid])
+				and not priced[(a.qty or 1) .. ":" .. a.buyout] then
+				-- identical listings fold into one cache entry with n
+				-- count + a keys list — emit a row per lot so each
+				-- keeps its own cancel target
+				for j = 1, math.max(1, a.n or 1) do
+					merged = merged + 1
+					tinsert(asks, {
+						id = (a.keys and a.keys[j]) or a.aid,
+						qty = a.qty or 1,
+						unit = a.buyout,
+						total = a.buyout * (a.qty or 1),
+						own = true, seller = (GM.OwnName
+							and GM.OwnName()) or UnitName("player"),
+						link = a.itemLink })
+				end
+			end
 		end
 	end
+	return apiOwn, cand, merged
 end
 -- book[itemID] = { mb = cheapest unit incl. ours, mbx = cheapest unit
 -- excluding ours, sup = units listed, n = auctions }. Subscribers get
@@ -593,14 +682,16 @@ GM.AH.bookLots = nil -- iid:qty:unit lot fingerprints (others' listings)
 -- count: a genuinely cleared market should show empty, not ghosts.
 -- Rows carry no seller/auctionID — fromBook marks them so
 -- consumers can downgrade buy/intel
-function GM.AH.BookAsks(itemID)
-	if not (itemID and GM.AH.bookLots and GM.AH.bookLotsT) then return end
+function GM.AH.BookAsks(bookKey)
+	if not (bookKey and GM.AH.bookLots and GM.AH.bookLotsT) then return end
 	if time() - GM.AH.bookLotsT > 900 then return end
 	local asks = {}
-	local prefix = itemID .. ":"
+	-- variant fps are "v<id>:<sfx>:<lvl>:qty:unit:tlb" — matching by
+	-- prefix and splitting the remainder keeps both key shapes right
+	local prefix = bookKey .. ":"
 	for fp, n in pairs(GM.AH.bookLots) do
 		if fp:sub(1, #prefix) == prefix then
-			local _, qty, unit, tlb = strsplit(":", fp)
+			local qty, unit, tlb = strsplit(":", fp:sub(#prefix + 1))
 			qty, unit = tonumber(qty), tonumber(unit)
 			if qty and unit then
 				for _ = 1, n do
@@ -614,6 +705,149 @@ function GM.AH.BookAsks(itemID)
 	if #asks == 0 then return end
 	table.sort(asks, function(a, b) return a.unit < b.unit end)
 	return asks
+end
+
+-- ============ shop browse driver ============
+-- One name/class browse query in flight at a time — the SHOP pane's
+-- search and class-tree clicks, plus the shopping scan's hit rows.
+-- SendBrowseQuery is silently DROPPED when the throttled message
+-- pipe is busy (a book scan, TSM, rapid re-search): park on
+-- IsThrottledMessageSystemReady, resend on SYSTEM_READY/DROPPED, a
+-- per-send watchdog clears hopeless queries. Views read ShopState()
+-- and repaint on shopSubs — they never touch the query array.
+GM.AH.shop = GM.AH.shop or {}
+GM.AH.shopSubs = GM.AH.shopSubs or {}
+
+local function NotifyShop()
+	for _, cb in ipairs(GM.AH.shopSubs) do pcall(cb) end
+end
+
+local SEARCH_SORTS = Enum and Enum.AuctionHouseSortOrder and {
+	{ sortOrder = Enum.AuctionHouseSortOrder.Price, reverseSort = false },
+	{ sortOrder = Enum.AuctionHouseSortOrder.Name, reverseSort = false },
+} or nil
+
+function GM.AH.ShopPump()
+	local p = GM.AH.shop.pending
+	if not p then return end
+	if (p.sends or 0) >= 5 then
+		GM.AH.shop.pending = nil
+		GM.AH.shop.status = "server is busy — try again"
+		NotifyShop()
+		return
+	end
+	if C_AuctionHouse.IsThrottledMessageSystemReady
+		and not C_AuctionHouse.IsThrottledMessageSystemReady() then
+		GM.AH.shop.status = "waiting for the server…"
+		NotifyShop()
+		return
+	end
+	p.sends = (p.sends or 0) + 1
+	p.gen = (p.gen or 0) + 1
+	local gen = p.gen
+	GM.AH.shop.status = "searching…"
+	-- the send rides the shared query queue — it can't land inside
+	-- a burst with the book/market scans and get dropped
+	GM.AH.Dispatch("browse", function()
+		local ok, err = pcall(C_AuctionHouse.SendBrowseQuery, {
+			searchString = p.str, sorts = SEARCH_SORTS,
+			filters = {}, itemClassFilters = p.classFilters or {},
+		})
+		if not ok then
+			GM.AH.shop.pending = nil
+			GM.AH.shop.status = "query error: " .. tostring(err)
+		else
+			GM.AH.shop.status = "waiting for results…"
+			GM.Time.After(8, function()
+				if GM.AH.shop.pending == p and p.gen == gen then
+					GM.AH.shop.pending = nil
+					GM.AH.shop.status = "query went unanswered — try again"
+					NotifyShop()
+				end
+			end)
+		end
+		NotifyShop()
+	end)
+	NotifyShop()
+end
+
+function GM.AH.ShopSearch(str, classFilters, label)
+	GM.AH.shop.searchedAt = time()
+	GM.AH.shop.label = label
+	GM.AH.shop.paging = nil
+	GM.AH.shop.pending = { str = str, classFilters = classFilters }
+	GM.AH.ShopPump()
+end
+
+-- a finished shopping scan posts its hits to the results pane —
+-- same precedence rules as browse results: a newer name search or
+-- book scan wins
+function GM.AH.PostShopRows(rows)
+	GM.AH.shop.rows = rows
+	GM.AH.shop.rowsT = time()
+	GM.AH.shop.label = "shopping scan"
+	NotifyShop()
+end
+
+-- result events: UPDATED = OUR query answered (paging begins),
+-- ADDED pulls the next page like the native UI does — gated on
+-- !Busy so a book build's own pagination isn't double-driven
+function GM.AH.ShopDelivered()
+	if not GM.AH.shop.pending then return end
+	GM.AH.shop.pending = nil
+	GM.AH.shop.paging = true
+	GM.AH.shop.status = nil
+	NotifyShop()
+end
+
+function GM.AH.ShopMore()
+	if not GM.AH.shop.paging or GM.AH.Busy() then return end
+	if C_AuctionHouse.HasFullBrowseResults
+		and C_AuctionHouse.HasFullBrowseResults() then
+		GM.AH.shop.paging = nil
+	else
+		pcall(C_AuctionHouse.RequestMoreBrowseResults)
+	end
+end
+
+-- a dropped query never produces a results event — resend once the
+-- pipe reports ready
+function GM.AH.ShopRetry()
+	if GM.AH.shop.pending then GM.AH.ShopPump() end
+end
+
+-- the pane's whole query lifecycle in one read. kind:
+--   "busy"    a book pass owns the array — show the scan line
+--   "shop"    posted shopping-scan rows outrank everything stale
+--   "none"    no query outstanding — pane empty-state
+--   "stale"   a book scan clobbered our results — search again
+--   "results" raw aggregate rows are ours to paint (cap applies)
+local RESULT_CAP = 2000
+function GM.AH.ShopState()
+	local s = GM.AH.shop
+	if GM.AH.wantBook or GM.AH.collecting or GM.AH.browse then
+		return { kind = "busy" }
+	end
+	if s.rows then
+		if (s.searchedAt or 0) > s.rowsT
+			or (GM.AH.bookT or 0) > s.rowsT then
+			s.rows = nil
+		else
+			return { kind = "shop", rows = s.rows }
+		end
+	end
+	if not s.searchedAt then
+		return { kind = "none", status = s.status }
+	end
+	if (GM.AH.bookT or 0) > s.searchedAt then
+		s.searchedAt = nil
+		return { kind = "stale",
+			status = "results cleared by a book scan — search again" }
+	end
+	local rs = C_AuctionHouse and C_AuctionHouse.GetBrowseResults
+		and C_AuctionHouse.GetBrowseResults() or {}
+	return { kind = "results", rows = rs, cap = RESULT_CAP,
+		truncated = #rs > RESULT_CAP, status = s.status }
 end
 
 -- The aggregate book persists in SavedVariables across sessions so a
@@ -786,17 +1020,28 @@ end
 
 -- a full scan of either kind is in flight — used to disable the button
 function GM.AH.Busy()
+	-- an in-flight targeted search counts too: its job leaves queryQ
+	-- at dispatch but the single-slot scan state stays live until
+	-- results land — the 10s ceiling writes off a silent scan so a
+	-- dead query can't latch the busy flag forever
+	local searching = GM.AH.scanItemID and not GM.AH.scanConsumed
+		and GetTime() - (GM.AH.scanItemT or 0) < 10
 	return GM.AH.wantBook or GM.AH.collecting or GM.AH.browse
-		or (#queryQ > 0 and true) or nil
+		or (#queryQ > 0 and true) or searching or nil
 end
 
 -- cheapest unit excluding our own listings (decisions use this). A
 -- bait-flagged drag lot isn't the market — when intel marks the
 -- cheapest ask, answer the price behind it instead
-function GM.AH.BookCheapest(itemID)
-	local e = GM.AH.book and GM.AH.book[itemID]
+-- the id-or-bookKey params below take a BOOK KEY: plain itemID for
+-- base items, "v<id>:<sfx>:<lvl>" for variants (GM.AH.BookKey).
+-- intel marks key per variant too — I.Mark falls back to the
+-- itemID-wide row for ladders that never minted their own
+function GM.AH.BookCheapest(bookKey)
+	local e = GM.AH.book and GM.AH.book[bookKey]
 	if not e or e.mbx == math.huge then return nil end
-	local m = GM.Intel and GM.Intel.marks and GM.Intel.marks[itemID]
+	local m = GM.Intel and GM.Intel.Mark
+		and GM.Intel.Mark(bookKey)
 	if m and m.bait and (e.mbx2 or math.huge) < math.huge then
 		return e.mbx2
 	end
@@ -804,14 +1049,44 @@ function GM.AH.BookCheapest(itemID)
 end
 
 -- cheapest unit including ours (display)
-function GM.AH.BookMin(itemID)
-	local e = GM.AH.book and GM.AH.book[itemID]
+function GM.AH.BookMin(bookKey)
+	local e = GM.AH.book and GM.AH.book[bookKey]
 	return e and e.mb
 end
 
-function GM.AH.BookSupply(itemID)
-	local e = GM.AH.book and GM.AH.book[itemID]
+function GM.AH.BookSupply(bookKey)
+	local e = GM.AH.book and GM.AH.book[bookKey]
 	return e and e.sup
+end
+
+-- ladder → obs fields for ONE bookKey — the same derivation
+-- CollectBook/FinishBrowse run incrementally over a whole scan:
+-- mb = lowest ask incl own, mbx/mbx2 = two cheapest non-own units
+-- (a flagged bait lot poisons mbx; mbx2 is the price behind the
+-- drag), sup = summed quantities, n = lots. Page-scoped ask scans
+-- call this so the chips/NUMBERS row stays live between full scans;
+-- the key is the caller's — a variant ladder writes its own bookKey
+-- row and never touches the itemID-wide one.
+function GM.AH.FreshenBook(bookKey, asks)
+	if not (bookKey and asks and asks[1]) then return end
+	GM.AH.book = GM.AH.book or {}
+	local e = { mb = math.huge, mbx = math.huge, mbx2 = math.huge,
+		sup = 0, n = #asks }
+	for _, a in ipairs(asks) do
+		e.sup = e.sup + (a.qty or 1)
+		if a.unit then
+			if a.unit < e.mb then e.mb = a.unit end
+			if not a.own then
+				if a.unit < e.mbx then
+					e.mbx2, e.mbx = e.mbx, a.unit
+				elseif a.unit < e.mbx2 then
+					e.mbx2 = a.unit
+				end
+			end
+		end
+	end
+	GM.AH.book[bookKey] = e
+	return e
 end
 
 local collectGen = 0
@@ -938,12 +1213,20 @@ function GM.AH.DumpRows(itemID, maxRows)
 		GM.Print(format("last scan: id=%s n=%d src=%s itemEvt=%s commEvt=%s · %ds ago",
 			tostring(d.id), d.n, d.src, tostring(d.itemEvt),
 			tostring(d.commEvt), time() - d.t))
+		if d.apiOwn or d.ownCand or d.ownMerged then
+			GM.Print(format("own merge: apiFlagged=%s cacheCand=%s merged=%s",
+				tostring(d.apiOwn), tostring(d.ownCand),
+				tostring(d.ownMerged)))
+		end
 	end
 	if itemID and GM.AH.bookLots and GM.AH.bookLotsT then
 		local n = 0
-		local prefix = itemID .. ":"
+		-- base lots prefix "id:"; variant lots "vid:sfx:lvl:" —
+		-- the item's id still leads the key body
+		local prefix, vprefix = itemID .. ":", "v" .. itemID .. ":"
 		for fp in pairs(GM.AH.bookLots) do
-			if fp:sub(1, #prefix) == prefix then n = n + 1 end
+			if fp:sub(1, #prefix) == prefix
+				or fp:sub(1, #vprefix) == vprefix then n = n + 1 end
 		end
 		GM.Print(format("bookLots[%d]: %d fingerprints · %ds old",
 			itemID, n, time() - GM.AH.bookLotsT))
@@ -965,7 +1248,10 @@ function GM.AH.CollectBook()
 	local ownSet = {}
 	for _, a in pairs(GM.Inventory.auctions or {}) do
 		if a.itemID and a.qty and a.buyout then
-			ownSet[a.itemID .. ":" .. a.qty .. ":" .. a.buyout] = true
+			-- variant-keyed like the book: an own listing only
+			-- excludes from its own variant's mb/mbx
+			ownSet[GM.AH.BookKey(a.itemID, a.itemKey) .. ":"
+				.. a.qty .. ":" .. a.buyout] = true
 		end
 	end
 	local rows, book, lots = {}, {}, {}
@@ -1029,7 +1315,11 @@ function GM.AH.CollectBook()
 			-- replicate follows the same server store — do NOT
 			-- divide by stackSize or multi-stack items underprice
 			local unit = buyout
-			local own = id and ownSet[id .. ":" .. stackSize .. ":" .. buyout] or false
+			-- suffixed links aggregate under their variant key —
+			-- the base item's book row never sees them
+			local bk = id and GM.AH.BookKey(id,
+				GM.AH.ItemKeyFromLink(link)) or id
+			local own = id and ownSet[bk .. ":" .. stackSize .. ":" .. buyout] or false
 			-- seller name for intel marks: scan ONLY the window
 			-- between buyout and itemID — that's bidder/owner
 			-- territory in both known layouts (retail owner =
@@ -1089,14 +1379,14 @@ function GM.AH.CollectBook()
 					est.lastB, est.seen = tlb, gen
 				end
 			end
-			rows[#rows + 1] = { id = id, link = link, qty = stackSize, unit = unit,
+			rows[#rows + 1] = { id = id, bk = bk, link = link, qty = stackSize, unit = unit,
 				buyout = buyout, bid = bid, tl = tl,
 				tlex = est and (est.exp or est.est) or nil,
 				key = key, own = own, seller = seller }
 			if id then
-				local e = book[id]
+				local e = book[bk]
 				if not e then
-					book[id] = { mb = unit, mbx = own and math.huge or unit,
+					book[bk] = { mb = unit, mbx = own and math.huge or unit,
 						mbx2 = math.huge, sup = stackSize, n = 1 }
 				else
 					if unit < e.mb then e.mb = unit end
@@ -1119,7 +1409,7 @@ function GM.AH.CollectBook()
 				-- bucket to classify disappearances — gone with time
 				-- provably left = confident sale; else inconclusive.
 				if not own then
-					local fp = id .. ":" .. stackSize .. ":" .. unit
+					local fp = bk .. ":" .. stackSize .. ":" .. unit
 						.. ":" .. (tlb or "x")
 					lots[fp] = (lots[fp] or 0) + 1
 				end
@@ -1264,9 +1554,10 @@ function GM.AH.OnBrowseResults()
 		local r = results[i]
 		local id = r.itemKey and r.itemKey.itemID
 		if id and r.minPrice and r.minPrice > 0 then
-			local e = b.book[id]
+			local bk = GM.AH.BookKey(id, r.itemKey)
+			local e = b.book[bk]
 			if not e then
-				b.book[id] = { mb = r.minPrice, mbx = r.minPrice,
+				b.book[bk] = { mb = r.minPrice, mbx = r.minPrice,
 					mbx2 = math.huge, sup = r.totalQuantity or 0, n = 1 }
 			else
 				if r.minPrice < e.mb then
@@ -1279,9 +1570,10 @@ function GM.AH.OnBrowseResults()
 			end
 			-- key carries the price so a later min-price drop re-flags
 			-- for the sniper diff
-			b.rows[#b.rows + 1] = { id = id, qty = r.totalQuantity or 1,
+			b.rows[#b.rows + 1] = { id = id, bk = bk,
+				qty = r.totalQuantity or 1,
 				unit = r.minPrice, buyout = r.minPrice,
-				key = "b:" .. id .. ":" .. r.minPrice }
+				key = "b:" .. tostring(bk) .. ":" .. r.minPrice }
 		end
 		b.seen = i
 	end
@@ -1340,8 +1632,8 @@ function GM.AH.DepositCost(itemID, qty)
 		local ok, cost = pcall(C_AuctionHouse.CalculateItemDeposit, loc, 2, qty)
 		if ok and cost then return cost end
 	end
-	local vendor = GetInfo and select(11, GetInfo(itemID))
-	if vendor and vendor > 0 then
+	local vendor = GM.VendorSellPrice(itemID)
+	if vendor then
 		return floor(vendor * qty * 0.30) -- ~15% MSV per 12h; verify against client
 	end
 	return 0
@@ -1366,6 +1658,8 @@ function GM.AH.Execute(step)
 		GM.Time.After(4, function()
 			if GM.AH.pendingConfirm == pc and not pc.quote then
 				GM.AH.pendingConfirm = nil
+				if GM.Ledger and GM.Ledger.Unexpect then
+					GM.Ledger.Unexpect(pc.itemID, "buy") end
 				GM.Print(GM.CC("warn") .. "no commodity quote — falling back to per-lot buyouts|r")
 				if GM.PlanQueue.CommodityFallback then GM.PlanQueue.CommodityFallback() end
 				if GM.Shopping and GM.Shopping.QuoteDied then
@@ -1393,6 +1687,11 @@ function GM.AH.Execute(step)
 			return false
 		end
 		GM.Print(format("bidding %s…", GM.Money(step.total)))
+		-- escrow leaves cash now; the win pairs it via bidwon when
+		-- the buyer mail lands, a loss refunds through chat gold
+		GM.Ledger.Record("bid", { itemID = step.itemID, qty = step.qty,
+			unit = step.qty > 0 and math.floor(step.total / step.qty) or nil,
+			auctionID = step.auctionID })
 		C_AuctionHouse.PlaceBid(step.auctionID, step.total)
 		return true
 	elseif step.kind == "confirm" then
@@ -1425,15 +1724,26 @@ function GM.AH.Execute(step)
 			or (not ok and GM.AH.IsCommodity(step.itemID))
 		-- bid below buyout only — a bid equal to buyout is rejected
 		local bid = step.bid and step.bid < step.unit and step.bid or nil
+		-- PostItem's qty is this auction's stack size — can't exceed
+		-- the stack (commodities post the whole qty)
+		local postQty = isComm and qty or math.min(qty, stackCount or qty)
+		-- the client's real listing fee while the stack is still in
+		-- bags: once listed, CalculateItemDeposit can't run and the
+		-- enum would journal an estimate — hand the true number
+		-- forward by fingerprint so post/sell/cancel legs close
+		local dep = GM.AH.DepositCost
+			and GM.AH.DepositCost(step.itemID, postQty) or 0
+		if dep > 0 and GM.Inventory.NotePostedDep then
+			GM.Inventory.NotePostedDep(step.itemID .. ":" .. postQty
+				.. ":" .. (step.unit or 0), dep)
+		end
 		if GM.Inventory.ArmPost then GM.Inventory.ArmPost(15) end
 		if isComm then
 			C_AuctionHouse.PostCommodity(loc, step.duration or 2, qty, step.unit)
 		else
-			-- PostItem's qty is this auction's stack size — can't exceed the stack.
 			-- bid/buyout are LOT prices (TSM: itemBid*stackSize — verified in
 			-- LibTSMWoW AuctionHouseWrapper) — step.unit/bid are per-item, so
 			-- scale by the posted stack or a multi-stack lists at 1 item's price
-			local postQty = math.min(qty, stackCount or qty)
 			C_AuctionHouse.PostItem(loc, step.duration or 2, postQty,
 				bid and bid * postQty or nil, step.unit * postQty)
 		end
@@ -1481,9 +1791,9 @@ function GM.AH.Execute(step)
 			-- suppress by fingerprint too — the owned list can rekey
 			-- the listing on the next snapshot
 			if a.fp then GM.Inventory.recentCancels[a.fp] = now end
-			GM.Ledger.Add("cancel", a.itemID, a.qty, a.buyout,
-				{ dep = a.dep, auctionID = step.auctionID,
-					nm = a.name })
+			GM.Ledger.Record("cancel", { itemID = a.itemID, qty = a.qty,
+				unit = a.buyout, dep = a.dep,
+				auctionID = step.auctionID, nm = a.name })
 		end
 		-- CancelAuction is PROTECTED on Forever — the call throws the
 		-- client-side "Interface action failed" block, never reaches

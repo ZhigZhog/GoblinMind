@@ -15,46 +15,9 @@ local ROWS = 14
 local BROWSEROWS = 12
 local BROWSE_MAX = 600
 
-local function Panel(parent, x, y, w, h, title)
-	local p = CreateFrame("Frame", nil, parent)
-	p:SetPoint("TOPLEFT", x, y)
-	p:SetSize(w, h)
-	GM.Panel(p, "contLowest")
-	local t = GM.MakeFontString(p, GM.FONT_BOLD, 9, "secondary")
-	t:SetPoint("TOPLEFT", 8, -5)
-	t:SetText(title)
-	p.title = t
-	p.count = GM.MakeFontString(p, GM.FONT, 9, "textDim")
-	p.count:SetPoint("TOPRIGHT", -8, -5)
-	return p
-end
-
-local function MkBtn(parent, label, w, h)
-	local b = CreateFrame("Button", nil, parent)
-	b:SetSize(w or 60, h or 18)
-	GM.Panel(b, "contHigh")
-	b.text = GM.MakeFontString(b, GM.FONT_BOLD, 9, "accent")
-	b.text:SetPoint("CENTER")
-	b.text:SetText(label)
-	return b
-end
-
-local function MkEdit(parent, w, hint, numeric)
-	local e = CreateFrame("EditBox", nil, parent)
-	e:SetSize(w, 18)
-	e:SetAutoFocus(false)
-	e:SetFont(GM.FONT, 10, "")
-	GM.Panel(e, "contLowest")
-	e.hint = GM.MakeFontString(e, GM.FONT, 9, "textDim")
-	e.hint:SetPoint("LEFT", 4, 0)
-	e.hint:SetText(hint)
-	e:SetScript("OnTextChanged", function(s)
-		s.hint:SetShown(s:GetText() == "")
-	end)
-	e:SetScript("OnEscapePressed", function(s) s:ClearFocus() end)
-	e:SetTextInsets(4, 4, 0, 0)
-	return e
-end
+local TitledPanel = GM.Widgets.TitledPanel
+local MkBtn = GM.Widgets.ActionBtn
+local MkEdit = GM.Widgets.HintEdit
 
 local GoldText = GM.MoneyShort
 
@@ -98,8 +61,20 @@ local function Build()
 	ui.hint = GM.MakeFontString(f, GM.FONT, 9, "textDim")
 	ui.hint:SetPoint("RIGHT", ui.refreshBtn, "LEFT", -8, 0)
 
+	-- craft tabs: SHOPS / MY WRITS are WritsUI panes covering the
+	-- orders content rect; ORDERS is this window's original content
+	ui.tabHost = CreateFrame("Frame", nil, f)
+	ui.tabHost:SetSize(3 * 62, 20)
+	ui.craftTabs = GM.Widgets.PageTabs(ui.tabHost, {
+		{ "shops", "SHOPS" }, { "writs", "MY WRITS" },
+		{ "orders", "ORDERS" } }, function(key)
+		OU.SetTab(key)
+	end)
+	ui.tab = GM.db.craftTab or "auto"
+	ui.ordNodes = {}
+
 	-- ===== POST bar: item strip on top, inputs below =====
-	local post = Panel(f, 10, -54, 700, 84, "POST BUY ORDER")
+	local post = TitledPanel(f, "POST BUY ORDER", 10, -76, 700, 84)
 	ui.post = post
 
 	-- shared slot widget — drop retargets the shared item channel
@@ -139,7 +114,7 @@ local function Build()
 	-- column grid: [fold 0-16][icon 18][item 36][qty 190][price 258]
 	-- [poster 348][status 452][action right] — headers label the
 	-- same x's so the eye learns the grid once
-	local list = Panel(f, 10, -144, 700, 240, "BOARD")
+	local list = TitledPanel(f, "BOARD", 10, -166, 700, 216)
 	ui.listP = list
 	list:EnableMouseWheel(true)
 	list:SetScript("OnMouseWheel", function(_, d)
@@ -253,7 +228,7 @@ local function Build()
 		r:SetScript("OnClick", function(s)
 			if not s.itemID then return end
 			if IsModifiedClick() then
-				GM.ModifiedItemClick(s.itemID)
+				GM.Ops.Click(s.itemID)
 				return
 			end
 			if ui.view == "search" then
@@ -328,7 +303,7 @@ local function Build()
 	end
 
 	-- ===== my commits + inbound COD =====
-	local mine = Panel(f, 10, -390, 342, 146, "MY COMMITS")
+	local mine = TitledPanel(f, "MY COMMITS", 10, -388, 342, 146)
 	ui.mineP = mine
 	mine.hint = GM.MakeFontString(mine, GM.FONT, 9, "textDim")
 	mine.hint:SetPoint("LEFT", mine.title, "RIGHT", 6, 0)
@@ -351,7 +326,7 @@ local function Build()
 		ui.mineRows[i] = r
 	end
 
-	local inc = Panel(f, 362, -390, 348, 146, "INBOUND CODs")
+	local inc = TitledPanel(f, "INBOUND CODs", 362, -388, 348, 146)
 	ui.incP = inc
 	inc.hint = GM.MakeFontString(inc, GM.FONT, 9, "textDim")
 	inc.hint:SetPoint("LEFT", inc.title, "RIGHT", 6, 0)
@@ -376,13 +351,23 @@ local function Build()
 		ui.incRows[i] = r
 	end
 
+	-- WritsUI builds its two panes into the same content rect —
+	-- hand anchors below cover the post+list+pair union; under the
+	-- managed layout they're sibling fill nodes shown instead of
+	-- the orders nodes
+	if GM.WritsUI then
+		ui.shopsP, ui.writsP = GM.WritsUI.Build(f)
+	end
+
 	-- ============ GoblinUI managed layout ============
 	-- the window was a hand-laid column: header strip (board label +
 	-- dynamic board btns + REFRESH), POST panel, BOARD list, then a
 	-- bottom pair. The header strip moves into a managed host frame
 	-- (its pieces re-anchor to the host, dynamic btns anchor off it),
 	-- the panels adopt as column leaves — the BOARD list fills slack,
-	-- the bottom pair rows COMMITS fixed / INBOUND fill.
+	-- the bottom pair rows COMMITS fixed / INBOUND fill. Craft tabs
+	-- add a strip row under the header and toggle node visibility:
+	-- orders nodes collapse, the active writs pane fills the slack.
 	local u = GM.ui
 	if u then
 		local head = CreateFrame("Frame", nil, f)
@@ -396,13 +381,55 @@ local function Build()
 		local root = u:AttachRoot(f, { direction = "column", gap = 6,
 			pad = { top = 26, left = 10, right = 10, bottom = 8 } })
 		root:Add(u:Adopt(head), { width = "fill", height = 20 })
-		root:Add(u:Adopt(post), { width = 700, height = 84 })
-		root:Add(u:Adopt(list), { width = "fill", height = "fill" })
+		root:Add(u:Adopt(ui.tabHost), { width = "fill", height = 18 })
+		local postN = u:Adopt(post)
+		root:Add(postN, { width = 700, height = 84 })
+		local listN = u:Adopt(list)
+		root:Add(listN, { width = "fill", height = "fill" })
 		local pair = u:Row(root, { gap = 6 })
 		root:Add(pair, { width = "fill", height = 146 })
 		pair:Add(u:Adopt(mine), { width = 342, height = "fill" })
 		pair:Add(u:Adopt(inc), { width = "fill", height = "fill" })
+		ui.ordNodes = { postN, listN, pair }
+		if ui.shopsP then
+			local sp = u:Adopt(ui.shopsP)
+			root:Add(sp, { width = "fill", height = "fill" })
+			ui.shopsN = sp
+		end
+		if ui.writsP then
+			local wp = u:Adopt(ui.writsP)
+			root:Add(wp, { width = "fill", height = "fill" })
+			ui.writsN = wp
+		end
+	else
+		-- hand-laid fallback: tab strip under the header, writs
+		-- panes sit on the same rect the panels already occupy
+		ui.tabHost:SetPoint("TOPLEFT", 12, -50)
+		ui.ordPanels = { post, list, mine, inc }
 	end
+	-- panes adopt into the managed tree as hidden siblings; SetTab
+	-- resolves which one shows
+	ui.tab = ui.tab or "auto"
+	if GM.WritsUI and GM.WritsUI.Bind then
+		GM.WritsUI.Bind(ui)
+	end
+end
+
+-- tab switch: user picks persist, "auto" resolves at refresh —
+-- shops when the board has rosters, orders otherwise
+function OU.SetTab(key)
+	ui.tab = key
+	GM.db.craftTab = key
+	OU.Refresh()
+end
+
+local function ResolvedTab(vm)
+	if ui.tab ~= "auto" then return ui.tab end
+	if GM.Writs and vm and vm.board then
+		local ok, ros = pcall(GM.Writs.Rosters, vm.board)
+		if ok and ros and next(ros) then return "shops" end
+	end
+	return "orders"
 end
 
 function OU.SetItem(itemID)
@@ -563,7 +590,8 @@ local function CommitRow(r, o, c, me)
 	rating = GM.CC(rkey) .. rating .. "|r"
 	local left = (c.expires or 0) - time()
 	r.ctxt:SetText(string.format("» %s%s  x%d/%d  %s  %s  %s%s",
-		c.crafter or "?",
+		(GM.NameColored and GM.NameColored(c.crafter))
+			or c.crafter or "?",
 		c.crafterUUID == me and " |cff5fd35f(you)|r" or "",
 		c.unitsFilled or 0, c.units or 0,
 		rating,
@@ -830,7 +858,7 @@ function OU.Refresh(vm)
 	for i, b in ipairs(boards) do
 		local lbl = OR.IsRemote(b) and (b .. "·") or b
 		local w = 10 + #lbl * 8
-		local btn = MkBtn(ui.frame, lbl, w)
+		local btn = MkBtn(ui.frame, lbl, w, nil, true)
 		if ui.headHost then
 			btn:SetPoint("TOPLEFT", ui.headHost, "TOPLEFT", bx - 10, -4)
 		else
@@ -857,6 +885,33 @@ function OU.Refresh(vm)
 		h = GM.CC("warn") .. "UNDERFUNDED RESERVES — " .. h .. "|r"
 	end
 	ui.hint:SetText(h)
+
+	-- craft tabs: orders nodes vs the WritsUI panes — visibility
+	-- only moves on tab change (SetVisible re-lays the tree out)
+	ui.shownTab = ResolvedTab(vm)
+	if ui.craftTabs then ui.craftTabs.set(ui.shownTab) end
+	if ui.shownTab ~= ui.lastShownTab then
+		ui.lastShownTab = ui.shownTab
+		local isOrd = ui.shownTab == "orders"
+		if ui.ordNodes and next(ui.ordNodes) then
+			for _, n in ipairs(ui.ordNodes) do
+				n:SetVisible(isOrd)
+			end
+		elseif ui.ordPanels then
+			for _, p in ipairs(ui.ordPanels) do
+				p:SetShown(isOrd)
+			end
+		end
+		if GM.WritsUI and GM.WritsUI.SetTab then
+			GM.WritsUI.SetTab(ui.shownTab)
+		end
+	end
+	if ui.shownTab ~= "orders" then
+		if GM.WritsUI and GM.WritsUI.Paint then
+			GM.WritsUI.Paint(ui.shownTab, vm)
+		end
+		return
+	end
 
 	-- orders list / item browser / mesh search
 	ui.modeBtn.text:SetText(VIEW_LBL[ui.view] or "BOARD")

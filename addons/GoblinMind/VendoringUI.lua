@@ -80,8 +80,8 @@ local function BuyData()
 				and GM.MerchantAltCost
 				and GM.MerchantAltCost(i) or nil
 			rows[#rows + 1] = {
-				index = i, id = id, cls = ItemClass(id),
-				name = (id and GM.ItemName(id)) or (link and link:match("%[(.-)%]"))
+				index = i, id = id, link = link, cls = ItemClass(id),
+				name = GM.ItemDisplayName(id, link)
 					or ("slot " .. i),
 				qty = qty, cost = info.price, mkt = mkt and mkt * qty,
 				flip = flip or nil, ext = info.hasExtendedCost or nil,
@@ -108,11 +108,12 @@ local function SellData()
 			local _, _, q, _, _, _, _, _, _, _, sell = info(s.itemID)
 			if q == 0 and sell and sell > 0
 				and not GM.Vendoring.IsBlacklisted(s.itemID) then
+				local ctx = GM.Ctx(s)
 				rows[#rows + 1] = {
 					bag = s.bag, slot = s.slot, id = s.itemID,
-					cls = ItemClass(s.itemID),
+					cls = ItemClass(s.itemID), ctx = ctx,
 					qty = s.count, val = sell * s.count,
-					name = GM.ItemName(s.itemID),
+					name = ctx.name,
 				}
 			end
 		end
@@ -130,9 +131,9 @@ local function BackData()
 			and GetBuybackItemInfo(i)
 		local id = GM.LinkID(link)
 		rows[#rows + 1] = {
-			index = i, id = id, cls = ItemClass(id), qty = qty or 1,
+			index = i, id = id, link = link, cls = ItemClass(id), qty = qty or 1,
 			price = price,
-			name = (id and GM.ItemName(id)) or (link and link:match("%[(.-)%]"))
+			name = GM.ItemDisplayName(id, link)
 				or ("slot " .. i),
 		}
 	end
@@ -333,9 +334,7 @@ local function Build()
 		row:RegisterForClicks("AnyUp")
 		row:SetSize(528, ROW_H - 2)
 		row:SetPoint("TOPLEFT", 0, -((i - 1) * ROW_H))
-		row.bg = row:CreateTexture(nil, "BACKGROUND")
-		row.bg:SetAllPoints()
-		row.bg:SetColorTexture(GM.RGB(i % 2 == 0 and "contMedium" or "contLowest"))
+		W.Zebra(row, i)
 		W.HoverTint(row)
 		row.icon = row:CreateTexture(nil, "ARTWORK")
 		row.icon:SetSize(18, 18)
@@ -536,8 +535,7 @@ function VU.Refresh(vm)
 			row.tip, row.tipIdx, row.tipID = nil, nil, nil
 			row.act:Show()
 			row.qtyBox:Hide()
-			row.bg:SetColorTexture(GM.RGB(
-				i % 2 == 0 and "contMedium" or "contLowest"))
+			W.Zebra(row, i)
 			row.icon:SetTexture(r.id and GM.ItemIcon(r.id) or 134400)
 			for k = 1, 2 do
 				row.alt[k].tex:Hide() row.alt[k].fs:Hide()
@@ -603,7 +601,7 @@ function VU.Refresh(vm)
 						return
 					end
 					if IsModifiedClick() and r.id then
-						GM.ModifiedItemClick(r.id)
+						GM.Ops.Click(r)
 						return
 					end
 					GM.MerchantBuy(idx, r.qty or 1)
@@ -611,7 +609,7 @@ function VU.Refresh(vm)
 				end)
 				row:SetScript("OnClick", function()
 					if IsModifiedClick() and r.id then
-						GM.ModifiedItemClick(r.id)
+						GM.Ops.Click(r)
 					end
 				end)
 			elseif ui.page == "sell" then
@@ -624,11 +622,16 @@ function VU.Refresh(vm)
 				local bag, slot = r.bag, r.slot
 				row.act:SetScript("OnClick", function()
 					if IsModifiedClick() and r.id then
-						GM.ModifiedItemClick(r.id)
+						GM.Ops.Click(r)
 						return
 					end
 					if MerchantOpen() and UseItem then
-						pcall(UseItem, bag, slot)
+						if pcall(UseItem, bag, slot) then
+							GM.Ledger.Record("vendor", { itemID = r.id,
+								qty = r.qty,
+								unit = r.qty and r.qty > 0
+									and math.floor(r.val / r.qty) or nil })
+						end
 						VU.Refresh()
 					end
 				end)
@@ -637,7 +640,7 @@ function VU.Refresh(vm)
 						GM.Vendoring.BlacklistToggle(r.id)
 						VU.Refresh()
 					elseif IsModifiedClick() and r.id then
-						GM.ModifiedItemClick(r.id)
+						GM.Ops.Click(r)
 					end
 				end)
 			else
@@ -650,7 +653,7 @@ function VU.Refresh(vm)
 				local idx = r.index
 				row.act:SetScript("OnClick", function()
 					if IsModifiedClick() and r.id then
-						GM.ModifiedItemClick(r.id)
+						GM.Ops.Click(r)
 						return
 					end
 					pcall(BuybackItem, idx)
@@ -658,7 +661,7 @@ function VU.Refresh(vm)
 				end)
 				row:SetScript("OnClick", function()
 					if IsModifiedClick() and r.id then
-						GM.ModifiedItemClick(r.id)
+						GM.Ops.Click(r)
 					end
 				end)
 			end

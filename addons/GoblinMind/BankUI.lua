@@ -56,10 +56,11 @@ local function StackRows(slots)
 	local rows = {}
 	for _, s in ipairs(slots) do
 		if s.itemID then
+			local ctx = GM.Ctx(s)
 			rows[#rows + 1] = {
 				bag = s.bag, slot = s.slot, id = s.itemID,
-				qty = s.count,
-				name = GM.ItemName(s.itemID) or ("item " .. s.itemID),
+				qty = s.count, ctx = ctx,
+				name = ctx.name or ("item " .. s.itemID),
 				wh = WhHint(s.itemID),
 			}
 		end
@@ -72,9 +73,7 @@ local function MakeRow(parent, i, arrow)
 	local row = CreateFrame("Button", nil, parent)
 	row:SetSize(304, ROW_H - 2)
 	row:SetPoint("TOPLEFT", 8, -22 - ((i - 1) * ROW_H))
-	row.bg = row:CreateTexture(nil, "BACKGROUND")
-	row.bg:SetAllPoints()
-	row.bg:SetColorTexture(GM.RGB(i % 2 == 0 and "contMedium" or "contLowest"))
+	W.Zebra(row, i)
 	W.HoverTint(row)
 	W.ModifiedClick(row, function() return row.tipID end)
 	row.icon = row:CreateTexture(nil, "ARTWORK")
@@ -112,14 +111,9 @@ local function MakeRow(parent, i, arrow)
 end
 
 local function MakePane(f, w, title)
-	local p = CreateFrame("Frame", nil, f)
+	local p = W.TitledPanel(f, title)
 	p:SetSize(w, VISIBLE * ROW_H + 30)
-	GM.Panel(p, "contLowest")
-	p.head = GM.MakeFontString(p, GM.FONT_BOLD, 9, "secondary")
-	p.head:SetPoint("TOPLEFT", 8, -6)
-	p.head:SetText(title)
-	p.count = GM.MakeFontString(p, GM.FONT, 9, "textDim")
-	p.count:SetPoint("TOPRIGHT", -8, -7)
+	p.head = p.title
 	p:EnableMouseWheel(true)
 	p.empty = GM.MakeFontString(p, GM.FONT, 10, "textDim")
 	p.empty:SetPoint("CENTER", 0, -10)
@@ -137,7 +131,10 @@ local function Build()
 	-- Contextual takeover (bank session only) — no tab strip.
 	local f = GM.Widgets.Window({
 		name = "GoblinMindBank", title = "BANK",
-		w = 680, h = 430, x = -60, y = -20,
+		-- 460: pads (34+30) + toolbar (22+gap) + pane natural height
+		-- (VISIBLE*ROW_H + 30 = 366) — 430 left the pane ~26px short
+		-- so the last row painted over the frame's bottom edge
+		w = 680, h = 460, x = -60, y = -20,
 		onHide = function()
 			GM.FramePark.Restore(BankFrame)
 			if not ui.wantDefault and CloseBankFrame then

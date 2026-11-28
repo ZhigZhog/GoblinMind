@@ -43,6 +43,22 @@ if (db.nodeV or 0) < NODE_V then
 	db.nodeV = NODE_V
 end
 
+-- fish nodes recorded before the school/open-water split can't be
+-- trusted as pools — a lone moat spot would classify every future
+-- open-water catch as a "school hit" forever via the proximity
+-- test. Imported pool spawns (src="gl") keep; recorded fish nodes
+-- reset once so live catches re-decide under the new classifier
+if not db.fishSplitV then
+	for _, list in pairs(db.nodes or {}) do
+		for i = #list, 1, -1 do
+			if list[i].kind == "fish" and list[i].src ~= "gl" then
+				tremove(list, i)
+			end
+		end
+	end
+	db.fishSplitV = true
+end
+
 -- ======================== constants ========================
 
 -- ======================== kind registry ========================
@@ -65,6 +81,8 @@ end
 --   keepArm   -- armed cast survives a dead-source window
 --               (skin + fish: the gather isn't corpse loot even
 --               when a corpse is standing there)
+--   armWins   -- the cast names the object type; the item verdict
+--               can't override it (a chest of ore is still a chest)
 --   castIds   -- UNIT_SPELLCAST_SUCCEEDED spellIDs that arm it
 --   castNames -- spell-name substrings when spellID is missing
 --   glCats    -- GatherLite SV categories that import as it
@@ -106,6 +124,15 @@ G.RegisterKind{ id = "mine", label = "MINE",
 G.RegisterKind{ id = "fish", label = "FISH",
 	color = { 0.35, 0.65, 0.95 }, node = true,
 	cats = { "fish" }, corpse = true, keepArm = true,
+	-- fishing is a channel, not a tap: the catch lands ~21s past
+	-- cast-succeed — WINDOW_SEC's 3s arm expired before every
+	-- splash. armSec covers the channel as a SUCCEEDED fallback;
+	-- CHANNEL_START arms to the channel's own endTime instead
+	armSec = 24,
+	-- a fishing farm IS the one spot: no loop exists to solve.
+	-- cycleSec is the cast+loot cadence — the ~21s channel plus
+	-- recast latency — so a lone spot still gets an honest gpm
+	spot = true, cycleSec = 22,
 	castIds = { 7620 }, castNames = { "fishing" },
 	glCats = { "fishing" } }
 G.RegisterKind{ id = "skin", label = "SKIN",
@@ -120,6 +147,20 @@ G.RegisterKind{ id = "cloth", label = "CLOTH",
 G.RegisterKind{ id = "cook", label = "COOK",
 	color = { 0.95, 0.55, 0.55 },
 	cats = { "flesh" }, corpse = true }
+G.RegisterKind{ id = "chest", label = "CHEST",
+	color = { 0.85, 0.75, 0.45 }, node = true,
+	-- object taps: Forever loots most chests instantly with no
+	-- SUCCEEDED, so recording rides the no-corpse catch-all below;
+	-- the cast IDs arm it when the client reports one. keepArm
+	-- because the cast IS the evidence — a dead target standing
+	-- beside the chest must not drop it to a hunt kill
+	keepArm = true,
+	-- the open cast names the object type — a chest holding
+	-- ore-family items is still a chest, so the item verdict
+	-- can't re-classify the window
+	armWins = true,
+	castIds = { 3365, 5108, 22810, 22811 },
+	castNames = { "opening" } }
 
 
 -- hunt = the mob-farm kind — no cast; every non-gather loot window
@@ -159,6 +200,12 @@ local NODE_MERGE_YD = 14    -- one record ≈ one spawn point: routes
 local ZONE_MERGE_YD = 150   -- kills this close join one farm zone
 local LINK_YD = 250         -- route-solver component link distance
 local DEFAULT_YPU = 1500    -- yards per normalized map unit (fallback)
+local SOLVE_PTS_MAX = 350   -- past this the O(n^2) solver passes
+                            -- chunk frames; collapse to POIs first
+local POI_YD = 45           -- sparsify cell: spawns this close act
+                            -- as one route stop anyway
+local PUMP_MS = 60          -- background solve budget/tick (BUILD
+                            -- gets the full 200ms)
 local GATHER_SEC = 2.5      -- gather cast + loot time per stop
 local RESPAWN_PRIOR = 900   -- node respawn prior (learned bound wins)
 local ARRIVE_YD = 20        -- waypoint advance radius
@@ -299,6 +346,10 @@ local function MergeNode(p, kind, name, opt)
 			end
 		end
 	end
+	-- mergeOnly = hit-test only: a miss means no KNOWN spawn here
+	-- (fishing uses it to split school catches from open water —
+	-- open water is an area, not a point)
+	if opt and opt.mergeOnly then return nil end
 	local nd = {
 		map = p.map, x = p.x, y = p.y,
 		n = p.n, w = p.w, z = p.z, c = p.c,
@@ -637,37 +688,11 @@ end
 -- can never be more optimistic than the most pessimistic source.
 -- what one unit of an item is worth to a farmer, the GoldScout
 -- way: grays are vendor trash — sell price only, never an auction
--- quote. Everything else takes the LOWER of min-buyout and market
--- floored at vendor sell — a fantasy listing can never beat the
--- guaranteed price a vendor always pays.
-ItemVal = function(id)
-	local quality, sell
-	if GetInfo then
-		local ok, q, sp = pcall(function()
-			return select(3, GetInfo(id)), select(11, GetInfo(id))
-		end)
-		if ok then quality, sell = q, sp end
-	end
-	-- index 11 is sellPrice on standard clients — on Forever it
-	-- sometimes returns an unrelated field (appearance/spell ids
-	-- land in the millions). Nothing a farm mob drops legitimately
-	-- vendors above 5g, so the floor caps there — a garbage field
-	-- can never price a drop again
-	if sell and sell > 50000 then sell = nil end
-	if quality == 0 then return sell end
-	local a = GM.Price and GM.Price("dbminbuyout", id)
-	local b = GM.Price and GM.Price("dbmarket", id)
-	-- a lone min-buyout with NO market history is an asking price,
-	-- not a price — one dreamer listing a custom item at 3000g is
-	-- not a farm value. Corroborated quotes use the lower bound;
-	-- unvalidated mb caps at 50g
-	local best
-	if a and b then best = min(a, b)
-	elseif a then best = min(a, 500000)
-	else best = b end
-	if sell and sell > (best or 0) then return sell end
-	return best or sell
-end
+-- quote. The policy itself lives on the pricing spine
+-- (GM.FarmValue in Pricing.lua) — ctx.value, zone records, and
+-- farm-EV math all read the same number.
+ItemVal = function(id) return GM.FarmValue and GM.FarmValue(id) end
+G.ItemVal = ItemVal -- Drops.FarmCost prices windows identically
 
 -- copper value of one loot window at record time — empty corpses
 -- and money-only corpses correctly price at zero
@@ -771,6 +796,16 @@ G.NodeEV = NodeEV
 -- formula can't drift across surfaces
 function G.ZoneGPM(zn)
 	return ZoneEV(zn) * ZoneRate(zn)
+end
+
+-- worth farming TODAY: the recorded loot mix repriced at current
+-- values (ItemVal = GM.FarmValue = ctx.value), quoted through the
+-- cautious estimators -- Wilson-bound EV/kill (one-off lottery
+-- drops don't inflate it) x the sustained rate (spawn-capped,
+-- competition-derated). ZoneGPM stays as the optimistic number;
+-- ZoneWall/vTot stay frozen at loot time -- the actualized record.
+function G.ZoneValueNow(zn)
+	return G.ZoneSusEV(zn) * G.ZoneSusRate(zn)
 end
 
 -- wall-clock truth: total looted value over the session gaps.
@@ -1250,6 +1285,12 @@ local function BuildLoop(set, pts, evs, ctx)
 	local used = { [set[1]] = true }
 	local cur = set[1]
 	for _ = 2, #set do
+		-- the O(k^2) scan has no other bound — a sparsified field
+		-- still costs tens of ms; past the deadline this candidate
+		-- just doesn't score
+		if ctx.deadline and PerfNow() > ctx.deadline then
+			return nil
+		end
 		local best, bd
 		for _, i in ipairs(set) do
 			if not used[i] then
@@ -1267,6 +1308,36 @@ local function BuildLoop(set, pts, evs, ctx)
 		order = order, gpm = gpm, lapSec = lapSec,
 		yards = yards, evLoop = evEff,
 	}
+end
+
+-- collapse huge imported fields into points-of-interest: the
+-- component/NN passes below are O(n^2) and GatherLite imports run
+-- to thousands of records (6k spawns = 40M pair loops — seconds
+-- in one frame). A route only needs WHERE to go: cells sum their
+-- EV and keep the first record as rep so solved stops stay real
+-- node refs
+local function Sparsify(pts, evs, yd)
+	local cell = {}
+	local spts, sevs = {}, {}
+	for i, nd in ipairs(pts) do
+		local gx, gy, tag
+		if nd.n then
+			gx, gy, tag = nd.n, nd.w, "w" .. (nd.c or 0)
+		else
+			gx, gy, tag = (nd.x or 0) * DEFAULT_YPU,
+				(nd.y or 0) * DEFAULT_YPU, "m" .. (nd.map or 0)
+		end
+		local k = tag .. ":" .. floor(gx / yd) .. ":" .. floor(gy / yd)
+		local rep = cell[k]
+		if rep then
+			sevs[rep] = sevs[rep] + evs[i]
+		else
+			tinsert(spts, nd)
+			tinsert(sevs, evs[i])
+			cell[k] = #spts
+		end
+	end
+	return spts, sevs
 end
 
 -- union-find components under LINK_YD so detached spawn pockets
@@ -1339,7 +1410,7 @@ solvePump:SetScript("OnUpdate", function()
 	local job = tremove(solveQ)
 	if not job then solvePump:Hide() return end
 	solveSeen[job.key] = nil
-	G.SolveRoute(job.map, job.kind) -- writes through the cache
+	G.SolveRoute(job.map, job.kind, PUMP_MS) -- writes through the cache
 	local now = GetTime()
 	-- stream the repaint: at most 4/s while draining, always on
 	-- the last job so the final set lands promptly
@@ -1361,15 +1432,26 @@ local function SolveCached(map, kind)
 	return e and e.r
 end
 
+-- drop pending work when the last consumer goes away (gather
+-- window closed) — results are cache-only, a miss just re-enqueues
+-- on the next Leaderboard
+function G.CancelSolves()
+	for i = #solveQ, 1, -1 do solveQ[i] = nil end
+	for k in pairs(solveSeen) do solveSeen[k] = nil end
+	solvePump:Hide()
+end
+
 -- the synchronous entry point (BUILD button, pump, tests): serve
--- a fresh cache hit, else solve now and write through
-function G.SolveRoute(map, kind)
+-- a fresh cache hit, else solve now and write through. ms bounds
+-- the solve's internal passes — pump jobs run tighter than a
+-- button press so the background drain can't hitch frames
+function G.SolveRoute(map, kind, ms)
 	local key = SolveKey(map, kind)
 	local e = solveCache[key]
 	if e and GetTime() - e.t < SOLVE_TTL then
 		return e.r
 	end
-	local r = SolveNow(map, kind)
+	local r = SolveNow(map, kind, ms)
 	solveCache[key] = { t = GetTime(), r = r }
 	return r
 end
@@ -1378,7 +1460,7 @@ end
 -- steady-state GPM under the given transport speed + learned
 -- respawn. Stops in the result are node record refs — they survive
 -- a later Solve without index remapping.
-function SolveNow(map, kind)
+function SolveNow(map, kind, ms)
 	local list = NodeList(map)
 	if not list then return nil end
 	local pts, evs = {}, {}
@@ -1400,14 +1482,44 @@ function SolveNow(map, kind)
 			end
 		end
 	end
-	if #pts < 3 then return nil end
+	if #pts < 3 then
+		local def = G.KindDefs[kind]
+		-- standstill kinds (fishing): the farm IS one spot —
+		-- no loop to solve; the best single record is the row,
+		-- gpm = spot EV over the cast cadence
+		if not (def and def.spot) or #pts == 0 then return nil end
+		local bi
+		for i = 1, #pts do
+			if not bi or evs[i] > evs[bi] then bi = i end
+		end
+		local cyc = def.cycleSec or GATHER_SEC
+		return {
+			stops = { pts[bi] },
+			kind = kind, map = map,
+			speed = G.SPEEDS[db.speedIx or 2].yps,
+			respawn = G.RespawnSec(map, kind),
+			gpm = evs[bi] * 60 / cyc * G.ContF(),
+			lapSec = cyc, yards = 0, evLoop = evs[bi],
+			spot = true,
+		}
+	end
+
+	-- thousands of imported spawns make every O(n^2) pass below
+	-- frame-killing — collapse to POIs first (EVs sum, stops stay
+	-- real node refs)
+	local py = POI_YD
+	for _ = 1, 6 do
+		if #pts <= SOLVE_PTS_MAX then break end
+		pts, evs = Sparsify(pts, evs, py)
+		py = py * 2
+	end
 
 	local ctx = {
 		speed = G.SPEEDS[db.speedIx or 2].yps,
 		respawn = G.RespawnSec(map, kind),
-		-- 200ms cap per solve: candidate loops share the budget, so
+		-- ms cap per solve: candidate loops share the budget, so
 		-- 30 scattered pockets can't each burn their own
-		deadline = PerfNow() + 200,
+		deadline = PerfNow() + (ms or 200),
 	}
 
 	-- candidate sets: every component alone, greedy merges while
@@ -1417,6 +1529,7 @@ function SolveNow(map, kind)
 	table.sort(comps, function(a, b) return #a > #b end)
 	local best, merged
 	for _, c in ipairs(comps) do
+		if PerfNow() > ctx.deadline then break end
 		local r = BuildLoop(c, pts, evs, ctx)
 		if r and (not best or r.gpm > best.gpm) then
 			best, merged = r, c
@@ -1438,10 +1551,12 @@ function SolveNow(map, kind)
 			end
 		end
 	end
-	local all = {}
-	for i = 1, #pts do tinsert(all, i) end
-	local r = BuildLoop(all, pts, evs, ctx)
-	if r and (not best or r.gpm > best.gpm) then best = r end
+	if PerfNow() <= ctx.deadline then
+		local all = {}
+		for i = 1, #pts do tinsert(all, i) end
+		local r = BuildLoop(all, pts, evs, ctx)
+		if r and (not best or r.gpm > best.gpm) then best = r end
+	end
 	if not best then return nil end
 
 	-- translate order indices into node refs — the route keeps
@@ -2273,38 +2388,35 @@ end)
 -- ======================== loot capture ========================
 
 local arm -- { kind, pos, until_ }
+local Journal -- forward decl: ArmWindow runs before its definition
 
-local function ArmWindow(kind)
+local function ArmWindow(kind, until_)
+	local prev = arm
 	arm = {
 		kind = kind, pos = PosNow(),
-		until_ = GetTime() + WINDOW_SEC,
+		until_ = until_ or (GetTime() + (G.KindDefs[kind]
+			and G.KindDefs[kind].armSec or WINDOW_SEC)),
 	}
-end
-
-local function ItemOfLink(link)
-	if type(link) ~= "string" then return nil end
-	local id = link:match("|Hitem:(%d+)")
-	return id and tonumber(id) or nil
-end
-
--- loot window -> itemID->qty. Same client shape Drops.lua uses:
--- slot 2 is the item NAME, GetLootSlotLink gives the link.
-local function LootItems()
-	if not (GetNumLootItems and GetLootSlotInfo) then return nil end
-	local n = GetNumLootItems()
-	if not n or n < 1 then return nil end
-	local items, first
-	for i = 1, n do
-		local _, lName, lQty, _, _, _, isQuest = GetLootSlotInfo(i)
-		local link = GetLootSlotLink and GetLootSlotLink(i) or lName
-		local id = ItemOfLink(link) or ItemOfLink(lName)
-		if id and not isQuest then
-			items = items or {}
-			items[id] = (items[id] or 0) + (tonumber(lQty) or 1)
-			first = first or id
-		end
+	-- a second source may arm the same cast (SUCCEEDED's fixed
+	-- fallback lands after CHANNEL_START's channel-derived end —
+	-- the shorter window must not clobber the longer one
+	if prev and prev.kind == kind and prev.until_ > arm.until_ then
+		arm = prev
+		return
 	end
-	return items, first
+	Journal("arm", { mob = kind,
+		items = format("%.1fs", arm.until_ - GetTime()) })
+end
+
+-- loot window -> itemID->qty. Drops.lua owns THE decode — every
+-- loot consumer derives from GM.Drops.ReadWindow so the yield
+-- records and the drop-rate store can never disagree on what a
+-- window contained
+local function LootItems()
+	local w = GM.Drops and GM.Drops.ReadWindow
+		and GM.Drops.ReadWindow()
+	if not w then return nil end
+	return w.items, w.firstID
 end
 
 local lastLootSig, lastLootT
@@ -2314,7 +2426,7 @@ local lastLootSig, lastLootT
 -- with it — the "where did that number come from" surface.
 -- Bounded + persisted; /goblin gatherlog prints it.
 local JOURNAL_MAX = 60
-local function Journal(what, e)
+function Journal(what, e)
 	db.journal = db.journal or {}
 	local j = db.journal
 	e = e or {}
@@ -2440,6 +2552,15 @@ local function OnLoot()
 	end
 	lastLootSig, lastLootT = sig, t
 
+	-- ledger: everything that enters bags passes through — loot rows
+	-- carry provenance with zero cost basis (a later sale reads as
+	-- pure profit, which is what found value IS)
+	if GM.Ledger and GM.Ledger.Record then
+		for id, q in pairs(items) do
+			GM.Ledger.Record("loot", { itemID = id, qty = q })
+		end
+	end
+
 	-- the window's own target — node objects can report names on
 	-- some clients; the corpse scan below may reassign srcName to
 	-- the dead unit's name instead
@@ -2501,7 +2622,13 @@ local function OnLoot()
 	local gKind
 	if armValid then
 		gKind = arm.kind
-		if wkind and wkind ~= gKind then
+		-- item verdict overrides the cast (instant gather arrives
+		-- unarmed on Forever — a vein beside a corpse is a NODE,
+		-- not a kill) — except where the cast names the object:
+		-- a chest holding ore-family loot is still a chest
+		if wkind and wkind ~= gKind
+			and not (G.KindDefs[gKind]
+				and G.KindDefs[gKind].armWins) then
 			gKind = wkind
 		elseif not wkind and srcDead and next(items)
 			and not (G.KindDefs[gKind]
@@ -2510,6 +2637,10 @@ local function OnLoot()
 		end
 	else
 		gKind = wkind
+	end
+	if arm and not armValid then
+		Journal("expired", { mob = arm.kind,
+			items = format("%.1fs", t - arm.until_) })
 	end
 	local gPos = arm and arm.pos or nil
 	arm = nil
@@ -2522,9 +2653,35 @@ local function OnLoot()
 			-- vein type), then the window target — trusted when a
 			-- cast armed this loot or no corpse could be
 			-- impersonating the node
-			local nm = NodeNameFor(items)
+			local nm = (gKind == "chest" and "Chest")
+				or NodeNameFor(items)
 				or ((armValid or not srcDead) and winName)
-			local nd = MergeNode(pos, gKind, nm)
+			local nd
+			if gKind == "fish" then
+				-- school vs open water: a catch near a KNOWN pool
+				-- (imported spawn or recorded node) is that pool's
+				-- hit — 36yd because the record stores the player's
+				-- spot, not the pool's. Anything else is open-water
+				-- fishing: a fishable AREA zoned like a hunt camp —
+				-- catches are the camp's "kills", pockets are the
+				-- spots fished inside it
+				nd = MergeNode(pos, gKind, nm,
+					{ mergeOnly = true, mergeYd = 36 })
+				if not nd then
+					local zn, tail = MergeZone(pos, "fish", items)
+					UpdateYield(YieldRec("fish"), items, tail)
+					Journal(tail and "tail" or "zone",
+						{ kind = "fish", mob = zn and zn.area,
+							items = ItemStr(items),
+							k = zn and zn.kills })
+					if GM.GatherMap then
+						GM.GatherMap.Refresh()
+					end
+					return
+				end
+			else
+				nd = MergeNode(pos, gKind, nm)
+			end
 			UpdateYield(YieldRec(
 				nd and nd.name or gKind), items)
 			Journal("node", { kind = gKind, mob = nm or winName,
@@ -2586,8 +2743,34 @@ local function OnLoot()
 		end
 		if GM.GatherMap then GM.GatherMap.Refresh() end
 	else
-		Journal("skip", { mob = srcName,
-			items = ItemStr(items), why = "no-corpse" })
+		-- no gather verdict, no corpse: what's left is object loot —
+		-- chests, barrels, crates (quest items are filtered
+		-- upstream by LootItems). A fish-bearing window is never a
+		-- chest: catches whose arm didn't survive stay unclaimed
+		-- rather than planting treasure where you stood fishing
+		local fishy
+		local IC = GM.Gathering and GM.Gathering.ItemCat
+		if IC then
+			for id in pairs(items) do
+				if IC(id) == "fish" then fishy = true break end
+			end
+		end
+		if next(items) and not fishy then
+			local pos = PosNow()
+			if pos then
+				MergeNode(pos, "chest", "Chest")
+				UpdateYield(YieldRec("chest"), items)
+				Journal("chest", { mob = winName,
+					items = ItemStr(items) })
+				if GM.GatherMap then GM.GatherMap.Refresh() end
+			else
+				Journal("skip", { mob = winName,
+					items = ItemStr(items), why = "no-pos" })
+			end
+		else
+			Journal("skip", { mob = srcName,
+				items = ItemStr(items), why = "no-corpse" })
+		end
 	end
 	return
 end
@@ -2596,8 +2779,8 @@ end
 
 local evf = CreateFrame("Frame")
 for _, e in ipairs({
-	"UNIT_SPELLCAST_SUCCEEDED", "UNIT_SPELLCAST_FAILED",
-	"UNIT_SPELLCAST_INTERRUPTED",
+	"UNIT_SPELLCAST_SUCCEEDED", "UNIT_SPELLCAST_CHANNEL_START",
+	"UNIT_SPELLCAST_FAILED", "UNIT_SPELLCAST_INTERRUPTED",
 	"LOOT_OPENED", "LOOT_READY",
 	"PLAYER_LOGIN", "ZONE_CHANGED_NEW_AREA",
 }) do pcall(evf.RegisterEvent, evf, e) end
@@ -2621,10 +2804,62 @@ evf:SetScript("OnEvent", function(_, e, ...)
 		if kind then ArmWindow(kind) end
 		return
 	end
+	if e == "UNIT_SPELLCAST_CHANNEL_START" then
+		local unit, _, spellID = ...
+		if unit ~= "player" then return end
+		-- a channel tells us its own end: arm until endTime +
+		-- loot latency rather than a fixed window. endTime comes
+		-- back in ms on this API — a value orders of magnitude
+		-- past GetTime() can't be seconds
+		local kind = spellID and CAST_KIND[spellID]
+		local endS
+		local cnm
+		if UnitChannelInfo then
+			local ok, nm, a4, a5, a6, a7, a8, a9, a10 =
+				pcall(UnitChannelInfo, "player")
+			if ok and nm then
+				cnm = nm
+				local l = nm:lower()
+				for k, pat in pairs(CAST_NAME) do
+					if l:find(pat, 1, true) then
+						kind = kind or k
+						break
+					end
+				end
+				-- endTime is the largest time field — field order
+				-- differs across client generations (vanilla puts
+				-- it 6th, retail 5th), and units differ too: a
+				-- value orders of magnitude past GetTime() is ms
+				local et
+				for _, v in ipairs({ a4, a5, a6, a7, a8, a9, a10 }) do
+					if type(v) == "number"
+						and (not et or v > et) then
+						et = v
+					end
+				end
+				if et and et > GetTime() * 10 then
+					et = et / 1000
+				end
+				endS = et
+			end
+		end
+		if kind then
+			ArmWindow(kind, endS and endS + 1.5)
+		else
+			Journal("chan", { mob = tostring(spellID or "?"),
+				items = tostring(cnm or "no-info") })
+		end
+		return
+	end
 	if e == "UNIT_SPELLCAST_FAILED"
 		or e == "UNIT_SPELLCAST_INTERRUPTED" then
 		local unit = ...
-		if unit == "player" then arm = nil end
+		if unit == "player" then
+			if arm then
+				Journal("disarm", { mob = arm.kind })
+				arm = nil
+			end
+		end
 		return
 	end
 	if e == "LOOT_OPENED" or e == "LOOT_READY" then

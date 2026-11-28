@@ -70,83 +70,6 @@ local function ScanBusy()
 			and GM.Auctioning.Busy()) or nil
 end
 
-local SEARCH_SORTS = Enum and Enum.AuctionHouseSortOrder and {
-	{ sortOrder = Enum.AuctionHouseSortOrder.Price, reverseSort = false },
-	{ sortOrder = Enum.AuctionHouseSortOrder.Name, reverseSort = false },
-} or nil
-
--- One browse query in flight at a time: ui.pendingBrowse holds it
--- until the server answers. SendBrowseQuery is silently DROPPED when
--- the throttled message pipe is busy (a book scan, TSM, rapid
--- re-search) — no results event ever comes, so a bare send leaves the
--- pane on "waiting for results…" forever. Park on
--- IsThrottledMessageSystemReady and let SYSTEM_READY drive the send;
--- a per-send watchdog clears hopeless queries.
-local function SendPendingBrowse()
-	local p = ui.pendingBrowse
-	if not p then return end
-	if (p.sends or 0) >= 5 then
-		ui.pendingBrowse = nil
-		ui.status = "server is busy — try again"
-		AU.Refresh()
-		return
-	end
-	if C_AuctionHouse.IsThrottledMessageSystemReady
-		and not C_AuctionHouse.IsThrottledMessageSystemReady() then
-		ui.status = "waiting for the server…"
-		AU.Refresh()
-		return
-	end
-	p.sends = (p.sends or 0) + 1
-	p.gen = (p.gen or 0) + 1
-	local gen = p.gen
-	ui.status = "searching…"
-	-- the send rides the shared query queue — it can't land inside
-	-- a burst with the book/market scans and get dropped
-	GM.AH.Dispatch("browse", function()
-		local ok, err = pcall(C_AuctionHouse.SendBrowseQuery, {
-			searchString = p.str, sorts = SEARCH_SORTS,
-			filters = {}, itemClassFilters = p.classFilters or {},
-		})
-		if not ok then
-			ui.pendingBrowse = nil
-			ui.status = "query error: " .. tostring(err)
-		else
-			ui.status = "waiting for results…"
-			GM.Time.After(8, function()
-				if ui.pendingBrowse == p and p.gen == gen then
-					ui.pendingBrowse = nil
-					ui.status = "query went unanswered — try again"
-					AU.Refresh()
-				end
-			end)
-		end
-		AU.Refresh()
-	end)
-	AU.Refresh()
-end
-
-local function QueueBrowse(str, classFilters, label)
-	ui.searchedAt = time()
-	ui.lastBrowseLabel = label
-	ui.browsePaging = nil
-	ui.pendingBrowse = { str = str, classFilters = classFilters }
-	SendPendingBrowse()
-end
-
--- a finished shopping scan hands its hit rows to the results pane so
--- the player can pick items out of the list (not only the plan's
--- one-BUY-at-a-time flow). Rows carry cached asks for instant
--- drill-down; a name search or book scan takes the pane back.
-function AU.PostShopRows(rows)
-	if not ui then return end
-	ui.shopRows = rows
-	ui.shopRowsT = time()
-	ui.lastBrowseLabel = "shopping scan"
-	ui.scroll = 0
-	AU.Refresh()
-end
-
 -- name search → per-itemKey aggregates {itemKey, minPrice, totalQuantity}
 local function DoSearch()
 	local q = strtrim(ui.search:GetText() or "")
@@ -156,65 +79,44 @@ local function DoSearch()
 		AU.Refresh()
 		return
 	end
-	QueueBrowse(q)
+	GM.AH.ShopSearch(q)
 end
 
--- read the shared browse array — but ONLY for our own query. A book
--- build (replicate or the BrowseBook fallback's empty search) floods
--- this same array with every auction on the house; iterating it per
--- repaint was the scroll-storm lag. Suppress during a book pass and
--- after one lands (it clobbered our results), and cap what we build.
-local RESULT_CAP = 2000
+-- the SHOP pane's row source: GM.AH.ShopState() owns the whole query
+-- lifecycle (pending send → paging → stale-clear → shop-rows
+-- precedence); this function is the painter — view filters, ctx
+-- identity, market flag, sort.
 local function Results()
+	local st = GM.AH.ShopState()
 	local rows = {}
-	if GM.AH.wantBook or GM.AH.collecting or GM.AH.browse then
-		-- live progress line — the same message the planner shows
+	if st.kind == "busy" then
 		ui.status = ui.scanMsg or "book scan in progress…"
 		return rows
-	end
-	-- a finished shopping scan posts its hits here — same precedence
-	-- rules as browse results: a newer name search or book scan wins
-	if ui.shopRows then
-		if (ui.searchedAt or 0) > ui.shopRowsT
-			or (GM.AH.bookT or 0) > ui.shopRowsT then
-			ui.shopRows = nil
-		else
-			ui.status = nil
-			return ui.shopRows
-		end
-	end
-	if not ui.searchedAt then
+	elseif st.kind == "shop" then
+		ui.status = nil
+		return st.rows
+	elseif st.kind == "none" then
 		-- a scan just finished shows its completion line briefly;
 		-- anything older falls back to the pane's empty-state text
 		ui.status = (ui.scanAt and time() - ui.scanAt < 15)
-			and ui.scanMsg or nil
+			and ui.scanMsg or st.status
+		return rows
+	elseif st.kind == "stale" then
+		ui.status = st.status
 		return rows
 	end
-	if (GM.AH.bookT or 0) > ui.searchedAt then
-		ui.searchedAt = nil
-		ui.status = "results cleared by a book scan — search again"
-		return rows
-	end
-	local rs = C_AuctionHouse and C_AuctionHouse.GetBrowseResults
-		and C_AuctionHouse.GetBrowseResults() or {}
-	local truncated = #rs > RESULT_CAP
-	for i = 1, math.min(#rs, RESULT_CAP) do
-		local r = rs[i]
+	for i = 1, math.min(#st.rows, st.cap) do
+		local r = st.rows[i]
 		local id = r.itemKey and r.itemKey.itemID
 		if id and PassFilters(id, r.minPrice) then
-			local e = GM.ItemEntry(id)
+			local e = GM.ItemEntry(id, r.itemKey)
 			local mkt = GM.Price("dbmarket", id)
-			-- itemKey pins the suffix variant — GetItemKeyInfo resolves
-			-- "of the Bear" names where the bare id only gives the base
-			-- name (fallback while the key info is still uncached)
-			local name
-			if C_AuctionHouse.GetItemKeyInfo then
-				local ok, ki = pcall(C_AuctionHouse.GetItemKeyInfo, r.itemKey, true)
-				name = ok and ki and ki.itemName or nil
-			end
+			-- itemKey pins the suffix variant — the shared resolver
+			-- gives "of the Bear" names where the bare id gives base
+			local ctx = GM.Ctx(id, nil, r.itemKey)
 			rows[#rows + 1] = {
-				id = id, key = r.itemKey,
-				name = name or GM.ItemName(id) or ("item " .. id),
+				id = id, key = r.itemKey, ctx = ctx,
+				name = ctx.name or ("item " .. id),
 				qty = r.totalQuantity or 1, unit = r.minPrice,
 				mkt = mkt,
 				low = mkt and r.minPrice and r.minPrice < mkt * 0.9 or nil,
@@ -225,9 +127,11 @@ local function Results()
 		if a.low ~= b.low then return a.low and true or false end
 		return (a.name or "") < (b.name or "")
 	end)
-	if truncated then
+	if st.truncated then
 		ui.status = format("%d results — first %d shown, refine the search",
-			#rs, RESULT_CAP)
+			#st.rows, st.cap)
+	else
+		ui.status = st.status
 	end
 	return rows
 end
@@ -263,8 +167,8 @@ function AU.BuyN()
 		end
 	end
 	if not cap then return end
-	local r = GM.AH.Execute({ kind = "buy", commodity = true,
-		itemID = ui.sel.id, qty = n, unit = cap })
+	local r = GM.Ops.Buy(ui.sel.ctx or ui.sel.id,
+		{ commodity = true, qty = n, unit = cap })
 	if r == "confirm" then ui.stagedBuy = true end
 	AU.Refresh()
 end
@@ -273,18 +177,6 @@ end
 -- it and rescans while the AH is open). A live chat editbox keeps
 -- the native insert-link priority; other modifiers keep Blizzard's
 -- chain (ctrl=dressup etc.) via ModifiedItemClick.
-local function RowModClick(id, link, key)
-	if IsShiftKeyDown() then
-		local chat = ChatEdit_GetActiveWindow
-			and ChatEdit_GetActiveWindow()
-		if not (chat and chat:IsShown()) then
-			GM.TargetItem(id, link, key)
-			return
-		end
-	end
-	GM.ModifiedItemClick(id)
-end
-
 -- drill into a result: per-listing asks land in the right pane
 local function ScanAsks(r)
 	ui.sel = r
@@ -313,16 +205,9 @@ end
 
 local function BuyAsk(a)
 	if a.own then return end
-	if a.id then
-		-- item auction: PlaceBid with the lot total
-		GM.AH.Execute({ kind = "buy", itemID = ui.sel.id, auctionID = a.id,
-			qty = a.qty, unit = a.unit, total = a.total })
-	else
-		-- commodity aggregate: stage the quote, CONFIRM on the next click
-		local r = GM.AH.Execute({ kind = "buy", commodity = true,
-			itemID = ui.sel.id, qty = a.qty, unit = a.unit })
-		if r == "confirm" then ui.confirmAsk = a end
-	end
+	-- a.id is the lot's auctionID — Ops normalizes commodity vs item
+	local r = GM.Ops.Buy(ui.sel.ctx or ui.sel.id, a)
+	if r == "confirm" and not a.id then ui.confirmAsk = a end
 	AU.Refresh()
 end
 
@@ -346,42 +231,24 @@ local function Build()
 		end,
 	})
 	ui.frame = f
-	-- browse results + owned-auction changes → repaint; throttle events
-	-- drive the pending-query pump
-	pcall(f.RegisterEvent, f, "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED")
-	pcall(f.RegisterEvent, f, "AUCTION_HOUSE_BROWSE_RESULTS_ADDED")
-	pcall(f.RegisterEvent, f, "AUCTION_HOUSE_THROTTLED_SYSTEM_READY")
-	pcall(f.RegisterEvent, f, "AUCTION_HOUSE_THROTTLED_MESSAGE_DROPPED")
+	-- the browse driver lives in AH.lua now (ShopState/ShopPump own
+	-- query state + events) — the pane repaints when the shop state
+	-- changes via shopSubs, same pattern as bookSubs
 	pcall(f.RegisterEvent, f, "BAG_UPDATE")
 	f:SetScript("OnEvent", function(_, event)
-		if event == "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED" then
-			-- OUR query answered — results now own the pane; flag it so
-			-- ADDED pages keep arriving until the array is complete
-			if ui.pendingBrowse then
-				ui.pendingBrowse = nil
-				ui.browsePaging = true
-				ui.status = nil
-			end
-		elseif event == "AUCTION_HOUSE_BROWSE_RESULTS_ADDED" then
-			-- results arrive paged for broad queries — pull the next
-			-- page like the native UI does. Book builds run their own
-			-- pagination; don't double-drive the same array
-			if ui.browsePaging and not GM.AH.Busy() then
-				if C_AuctionHouse.HasFullBrowseResults
-					and C_AuctionHouse.HasFullBrowseResults() then
-					ui.browsePaging = nil
-				else
-					pcall(C_AuctionHouse.RequestMoreBrowseResults)
-				end
-			end
-		elseif event == "AUCTION_HOUSE_THROTTLED_SYSTEM_READY"
-			or event == "AUCTION_HOUSE_THROTTLED_MESSAGE_DROPPED" then
-			-- a dropped query never produces a results event — resend
-			-- once the pipe reports ready (send-side gates + cap)
-			if ui.pendingBrowse then SendPendingBrowse() return end
-		end
 		if f:IsShown() then GM.View.Coalesced("ah", AU.Refresh) end
 	end)
+	GM.AH.shopSubs[#GM.AH.shopSubs + 1] = function()
+		if ui and ui.frame and ui.frame:IsShown() then
+			-- new posted rows land the user at the top of the list
+			local s = GM.AH.shop
+			if s.rowsT and s.rowsT ~= ui.seenShopT then
+				ui.seenShopT = s.rowsT
+				ui.scroll = 0
+			end
+			GM.View.Coalesced("ah", AU.Refresh)
+		end
+	end
 
 	-- toolbar: search + page toggles + scan shortcuts — positions are
 	-- owned by the layout row wired up at the end of Build
@@ -507,9 +374,7 @@ local function Build()
 		local row = CreateFrame("Button", nil, lp)
 		row:SetSize(396, ROW_H - 2)
 		row:SetPoint("TOPLEFT", 8, -22 - ((i - 1) * ROW_H))
-		row.bg = row:CreateTexture(nil, "BACKGROUND")
-		row.bg:SetAllPoints()
-		row.bg:SetColorTexture(GM.RGB(i % 2 == 0 and "contMedium" or "contLowest"))
+		W.Zebra(row, i)
 		W.HoverTint(row)
 		row.icon = row:CreateTexture(nil, "ARTWORK")
 		row.icon:SetSize(16, 16)
@@ -584,9 +449,7 @@ local function Build()
 		row:SetHeight(ROW_H - 2)
 		row:SetPoint("TOPLEFT", 8, -34 - ((i - 1) * ROW_H))
 		row:SetPoint("TOPRIGHT", -8, -34 - ((i - 1) * ROW_H))
-		row.bg = row:CreateTexture(nil, "BACKGROUND")
-		row.bg:SetAllPoints()
-		row.bg:SetColorTexture(GM.RGB(i % 2 == 0 and "contMedium" or "contLowest"))
+		W.Zebra(row, i)
 		W.HoverTint(row)
 		row.c1 = GM.MakeFontString(row, GM.FONT, 10, "text")
 		row.c1:SetPoint("LEFT", 8, 0)
@@ -665,9 +528,7 @@ local function Build()
 		row:SetHeight(ROW_H - 2)
 		row:SetPoint("TOPLEFT", 8, -22 - ((i - 1) * ROW_H))
 		row:SetPoint("TOPRIGHT", -8, -22 - ((i - 1) * ROW_H))
-		row.bg = row:CreateTexture(nil, "BACKGROUND")
-		row.bg:SetAllPoints()
-		row.bg:SetColorTexture(GM.RGB(i % 2 == 0 and "contMedium" or "contLowest"))
+		W.Zebra(row, i)
 		W.HoverTint(row)
 		row.icon = row:CreateTexture(nil, "ARTWORK")
 		row.icon:SetSize(16, 16)
@@ -750,9 +611,7 @@ local function Build()
 		row:SetHeight(ROW_H - 2)
 		row:SetPoint("TOPLEFT", 8, -22 - ((i - 1) * ROW_H))
 		row:SetPoint("TOPRIGHT", -8, -22 - ((i - 1) * ROW_H))
-		row.bg = row:CreateTexture(nil, "BACKGROUND")
-		row.bg:SetAllPoints()
-		row.bg:SetColorTexture(GM.RGB(i % 2 == 0 and "contMedium" or "contLowest"))
+		W.Zebra(row, i)
 		W.HoverTint(row)
 		row.icon = row:CreateTexture(nil, "ARTWORK")
 		row.icon:SetSize(16, 16)
@@ -999,10 +858,12 @@ local function Build()
 	ui.maxIlvl = EditBox(fb, 36, "")
 	ui.maxIlvl:SetPoint("LEFT", ui.minIlvl, "RIGHT", 6, 0)
 	Lab("min price", -92)
-	ui.minC = W.GoldEdit(fb, 168)
+	-- 216px panel: GoldEdit paints ~10px past its declared width —
+	-- 160 keeps the trailing "c" label inside the box edge
+	ui.minC = W.GoldEdit(fb, 160)
 	ui.minC:SetPoint("TOPLEFT", 42, -90)
 	Lab("max price", -114)
-	ui.maxC = W.GoldEdit(fb, 168)
+	ui.maxC = W.GoldEdit(fb, 160)
 	ui.maxC:SetPoint("TOPLEFT", 42, -112)
 	local function ApplyTextFilters()
 		ui.filters.minIlvl = tonumber(ui.minIlvl:GetText())
@@ -1139,7 +1000,7 @@ local function Build()
 		local b = Btn(bb, 156, c[1], function()
 			ui.browseSel = i
 			ui.search:SetText("")
-			QueueBrowse("",
+			GM.AH.ShopSearch("",
 				c[2] and { { classID = c[2] } } or nil, c[1])
 			AU.BuildBrowseSubs()
 			AU.Refresh()
@@ -1168,7 +1029,7 @@ local function Build()
 					root[2], s[2], root[1] .. " / " .. s[1]
 				b:SetScript("OnClick", function()
 					ui.search:SetText("")
-					QueueBrowse("",
+					GM.AH.ShopSearch("",
 						{ { classID = cls, subClassID = sub } }, label)
 					bb:Hide()
 				end)
@@ -1186,7 +1047,9 @@ local function Build()
 
 	-- ============ post dialog ============
 	local pd = CreateFrame("Frame", nil, f)
-	pd:SetSize(250, 176)
+	-- 290: the price GoldEdit paints ~26px past its declared width —
+	-- at 250 the trailing "c" label spilled off the dialog edge
+	pd:SetSize(290, 176)
 	pd:SetPoint("CENTER", 0, 30)
 	pd:SetFrameStrata("FULLSCREEN_DIALOG")
 	GM.Panel(pd, "contHigh", "outlineVar")
@@ -1241,11 +1104,13 @@ local function Build()
 			pd.msg:SetText(GM.CC("warn") .. "need a valid price|r")
 			return
 		end
-		GM.AH.Execute({ kind = "post", itemID = id, qty = qty,
-			unit = unit, duration = pd.durIx })
+		GM.Ops.Post(pd.ctx or id, { qty = qty,
+			unit = unit, dur = pd.durIx })
 		GM.Time.After(0.3, function()
-			pd.have:SetText(format("%d in bags", GM.BagCount(id) or 0))
-			if (GM.BagCount(id) or 0) < 1 then pd:Hide() end
+			local bags = pd.ctx and pd.ctx.bags
+				or GM.BagCount(id) or 0
+			pd.have:SetText(format("%d in bags", bags))
+			if bags < 1 then pd:Hide() end
 		end)
 	end)
 	pd.post:SetSize(70, 20)
@@ -1259,12 +1124,20 @@ end
 -- suggested unit; qty defaults to the first stack in bags
 function AU.OpenPost(id)
 	Build()
+	-- accepts a bare id or a ctx — variant rows post their variant.
+	-- bare ids get one built: the dialog answers every count through
+	-- the same spine the row that opened it used
+	local ctx = type(id) == "table" and id.id and id
+		or GM.Ctx and GM.Ctx(id) or nil
+	id = ctx and ctx.id or id
 	local pd = ui.postD
-	pd.itemID = id
-	pd.name:SetText((GM.ItemName and GM.ItemName(id)) or ("item " .. id))
+	pd.itemID, pd.ctx = id, ctx
+	pd.name:SetText((ctx and ctx.name)
+		or (GM.ItemName and GM.ItemName(id)) or ("item " .. id))
 	pd.name:SetTextColor(GM.NameColor(id))
 	local loc, stack = GM.AH.FindInBags(id)
-	pd.have:SetText(format("%d in bags%s", GM.BagCount(id) or 0,
+	pd.have:SetText(format("%d in bags%s",
+		(ctx and ctx.bags) or GM.BagCount(id) or 0,
 		not loc and " (none unlocked)" or ""))
 	pd.qty:SetText(tostring(stack or 1))
 	local unit = GM.Auctioning and GM.Auctioning.PreviewPost
@@ -1289,12 +1162,8 @@ function BuildSavedBox()
 			b:SetPoint("TOPLEFT", 6, -6 - (i - 1) * 18)
 			b.text:SetJustifyH("LEFT")
 			b.text:SetWidth(160)
-			local x = CreateFrame("Button", nil, sb)
-			x:SetSize(14, 15)
+			local x = W.XBtn(sb, 15)
 			x:SetPoint("LEFT", b, "RIGHT", 4, 0)
-			x.text = GM.MakeFontString(x, GM.FONT_BOLD, 10, "textDim")
-			x.text:SetPoint("CENTER")
-			x.text:SetText("x")
 			sb.rows[i] = { b = b, x = x }
 		end
 		local add = Btn(sb, 120, "+ SAVE CURRENT", function()
@@ -1467,12 +1336,12 @@ function AU.Refresh(vm)
 	if ui.mpLeaf then ui.mpLeaf:SetVisible(ui.page == "market") end
 
 	if ui.page == "shop" then
-		ui.lHead:SetText(ui.lastBrowseLabel
-			and strupper(ui.lastBrowseLabel) or "RESULTS")
+		ui.lHead:SetText(GM.AH.shop.label
+			and strupper(GM.AH.shop.label) or "RESULTS")
 		local rows = vm.rows
 		ui.lEmpty:SetText(not open and "open the auction house"
 			or ui.status
-			or (#rows == 0 and (ui.searchedAt
+			or (#rows == 0 and (GM.AH.shop.searchedAt
 				and "no matches" or "search for an item") or ""))
 		ui.lEmpty:SetShown(#rows == 0)
 		local maxScroll = math.max(0, #rows - VISIBLE)
@@ -1490,15 +1359,17 @@ function AU.Refresh(vm)
 				row.c1:SetText(r.unit and GM.Money(r.unit) or "—")
 				row.c2:SetText("×" .. (r.qty or 1)
 					.. (r.mkt and " · mkt " .. GM.Money(r.mkt) or ""))
-				-- POST appears when bags hold the item — opens the
-				-- post dialog (qty/price/duration, one call per click)
-				if r.id and (GM.BagCount(r.id) or 0) > 0 then
+				-- POST appears when the op could commit — Ops.Can
+				-- runs CHECKS.post (bags + AH open), the same rule
+				-- the dialog's click re-validates
+				if r.id and GM.Ops.Can(r.ctx or r.id,
+						"post", { unit = 1 }) then
 					row.act:Show()
 					row.act.text:SetText("POST")
 					row.act.text:SetTextColor(GM.RGB("accent"))
-					local pid = r.id
+					local pctx = r.ctx or r.id
 					row.act:SetScript("OnClick", function()
-						AU.OpenPost(pid)
+						AU.OpenPost(pctx)
 					end)
 				else
 					row.act:Hide()
@@ -1506,7 +1377,7 @@ function AU.Refresh(vm)
 				local sel = r
 				row:SetScript("OnClick", function()
 					if IsModifiedClick() then
-						if sel.id then RowModClick(sel.id, nil, sel.key) end
+						if sel.id then GM.Ops.Click(sel) end
 						return
 					end
 					ui.askScroll = 0
@@ -1560,7 +1431,8 @@ function AU.Refresh(vm)
 				local lot = a.total or (a.unit or 0) * (a.qty or 1)
 				row.c3:SetText((a.id and "lot " or "tot ") .. GM.Money(lot)
 					.. (a.own and " · yours"
-						or a.seller and (" · " .. a.seller)
+						or a.seller and (" · " .. (GM.NameColored
+							and GM.NameColored(a.seller) or a.seller))
 						or (a.id and "" or " · comm")))
 				row.act:Show()
 				local confirming = ui.confirmAsk == a
@@ -1610,8 +1482,10 @@ function AU.Refresh(vm)
 				row.name:SetTextColor(GM.NameColor(r.id))
 				row.qty:SetText("×" .. (r.qty or 1))
 				row.unit:SetText(r.unit and GM.Money(r.unit) .. "/ea" or "—")
-				row.lot:SetText(r.unit and GM.Money(r.unit * (r.qty or 1)) or "—")
-				row.mkt:SetText(r.mkt and (GM.Money(r.mkt) .. "/ea") or "no market")
+				row.lot:SetText(r.proceeds and GM.Money(r.proceeds)
+					or (r.unit and GM.Money(r.unit * (r.qty or 1)) or "—"))
+				row.mkt:SetText(r.proceeds and "incoming"
+					or (r.mkt and (GM.Money(r.mkt) .. "/ea") or "no market"))
 				if r.sold then
 					row.stat:SetText(GM.CC("pos") .. "SOLD|r")
 				elseif r.undercut then
@@ -1627,14 +1501,16 @@ function AU.Refresh(vm)
 					and format("%dh%02dm", floor(tl / 3600), floor(tl % 3600 / 60))
 					or tl >= 60 and format("%dm", floor(tl / 60))
 					or "<1m") or "—")
+				row.act:SetShown(not r.paidOut) -- sold can't be canceled
 				local aid = r.aid
 				row.act:SetScript("OnClick", function()
-					GM.AH.Execute({ kind = "cancel", auctionID = aid })
+					GM.Ops.Cancel(r.ctx or r.id,
+						{ aid = aid, qty = r.qty })
 					AU.Refresh()
 				end)
 				row:SetScript("OnClick", function()
 					if not r.id then return end
-					if IsModifiedClick() then RowModClick(r.id, r.link, r.key)
+					if IsModifiedClick() then GM.Ops.Click(r)
 					else GM.TargetItem(r.id, r.link, r.key) end
 				end)
 			else
@@ -1675,8 +1551,8 @@ function AU.Refresh(vm)
 				if st == "outbid" and cur then
 					row.act:Show()
 					row.act:SetScript("OnClick", function()
-						GM.AH.Execute({ kind = "bid", itemID = id,
-							auctionID = aid, total = cur + 1 })
+						GM.Ops.Bid(r.ctx or id,
+							{ aid = aid, qty = r.qty, total = cur + 1 })
 						GM.Time.After(0.5, AU.Refresh)
 					end)
 				else
@@ -1684,7 +1560,7 @@ function AU.Refresh(vm)
 				end
 				row:SetScript("OnClick", function()
 					if not r.id then return end
-					if IsModifiedClick() then RowModClick(r.id, r.link, r.key)
+					if IsModifiedClick() then GM.Ops.Click(r)
 					else GM.TargetItem(r.id, r.link, r.key) end
 				end)
 			else
@@ -1813,7 +1689,7 @@ local function LinkHook(link)
 	if not IsShiftKeyDown() then return false end
 	local id = GM.LinkID(link)
 	if not id then return false end
-	local name = GM.ItemName(id) or link:match("%[(.-)%]")
+	local name = GM.ItemDisplayName(id, link)
 	if not name then return false end
 	ui.page = "shop"
 	ui.search:SetText(name)

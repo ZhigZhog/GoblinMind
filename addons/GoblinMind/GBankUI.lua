@@ -4,12 +4,12 @@ local _, GM = ...
 -- GUILDBANKFRAME_OPENED the native frame parks offscreen (kept alive —
 -- gbank reads and moves need the session) and this window opens.
 --
--- Left pane BAGS → deposits a stack into the current gbank tab
--- (pickup + PickupGuildBankItem on a merge/empty slot — the same
--- swap mechanic as Banking.MoveStack). Right pane = the current gbank
--- tab, ← withdraws a stack into bags. Tab buttons run along the top of
--- the gbank pane; tab permissions (view/deposit/withdraw + remaining
--- withdrawals) gate the arrows.
+-- Left pane BAGS → deposits a stack into the current gbank tab;
+-- right pane = the current gbank tab, ← withdraws a stack into bags.
+-- Both arrows ride Ops.Move — the spine owns the slot search, perms,
+-- and the pickup-swap (Banking.DoGMove); this file paints and asks.
+-- Tab buttons run along the top of the gbank pane; tab permissions
+-- (view/deposit/withdraw + remaining withdrawals) gate the arrows.
 --
 -- BLIZZARD UI hands the frame back; GOBLINMIND round-trips. ESC/X
 -- close the session — close means close.
@@ -20,8 +20,6 @@ local ui
 
 local ROW_H = 24
 local VISIBLE = 14
-local PickupItem = C_Container and C_Container.PickupContainerItem
-	or PickupContainerItem
 local tinsert, sort = tinsert, table.sort
 local format = format
 
@@ -50,10 +48,11 @@ local function BagRows()
 	local rows = {}
 	for _, s in ipairs(GM.Banking.BagSlots()) do
 		if s.itemID then
+			local ctx = GM.Ctx(s)
 			rows[#rows + 1] = {
 				bag = s.bag, slot = s.slot, id = s.itemID,
-				qty = s.count,
-				name = GM.ItemName(s.itemID) or ("item " .. s.itemID),
+				qty = s.count, ctx = ctx,
+				name = ctx.name or ("item " .. s.itemID),
 			}
 		end
 	end
@@ -70,9 +69,11 @@ local function GBankRows(tab)
 			local id = GM.LinkID(link)
 			local _, count = GetGuildBankItemInfo(tab, slot)
 			if id then
+				local ctx = GM.Ctx(id, link)
 				rows[#rows + 1] = {
 					slot = slot, id = id, qty = count or 1,
-					name = GM.ItemName(id) or ("item " .. id),
+					ctx = ctx,
+					name = ctx.name or ("item " .. id),
 				}
 			end
 		end
@@ -80,57 +81,18 @@ local function GBankRows(tab)
 	return rows
 end
 
--- find the drop slot in the gbank tab for an item — merge onto a
--- partial first, then the first empty slot
-local function GDstSlot(tab, itemID)
-	local n = GetNumGuildBankSlots and GetNumGuildBankSlots(tab) or 98
-	local max = itemID and select(8,
-		(C_Item and C_Item.GetItemInfo or GetItemInfo)(itemID))
-	for slot = 1, n do
-		local link = GetGuildBankItemLink(tab, slot)
-		local id = GM.LinkID(link)
-		if id == itemID then
-			local _, count = GetGuildBankItemInfo(tab, slot)
-			if max and (count or 0) < max then return slot end
-		end
-	end
-	for slot = 1, n do
-		if not GetGuildBankItemLink(tab, slot) then return slot end
-	end
-end
-
--- deposit one bag stack into the current tab
+-- arrow clicks request the move through the spine — the verb owns
+-- dst search, perms, and room checks (the pane's gray state comes
+-- from the same rules via TabPerms); the refresh just repaints
 local function Deposit(r, tab)
-	local dst = GDstSlot(tab, r.id)
-	if not dst then
-		GM.Print(GM.CC("warn") .. "[gbank] tab full|r")
-		return
-	end
-	PickupItem(r.bag, r.slot)
-	PickupGuildBankItem(tab, dst)
-	if GetCursorInfo and GetCursorInfo() then ClearCursor() end
+	GM.Ops.Move(r.ctx or r.id, { from = "bags", to = "gbank",
+		tab = tab, srcBag = r.bag, srcSlot = r.slot, qty = r.qty })
 	GM.Time.After(0.3, GU.Refresh)
 end
 
--- withdraw one gbank stack into bags — merge onto a bag partial first
 local function Withdraw(r, tab)
-	local max = select(8, (C_Item and C_Item.GetItemInfo or GetItemInfo)(r.id))
-	local dst
-	for _, s in ipairs(GM.Banking.BagSlots()) do
-		if s.itemID == r.id and max and s.count < max then dst = s break end
-	end
-	if not dst then
-		for _, s in ipairs(GM.Banking.BagSlots()) do
-			if not s.itemID then dst = s break end
-		end
-	end
-	if not dst then
-		GM.Print(GM.CC("warn") .. "[gbank] bags full|r")
-		return
-	end
-	PickupGuildBankItem(tab, r.slot)
-	PickupItem(dst.bag, dst.slot)
-	if GetCursorInfo and GetCursorInfo() then ClearCursor() end
+	GM.Ops.Move(r.ctx or r.id, { from = "gbank", to = "bags",
+		tab = tab, gslot = r.slot, qty = r.qty })
 	GM.Time.After(0.3, GU.Refresh)
 end
 
@@ -138,9 +100,7 @@ local function MakeRow(parent, i, arrow)
 	local row = CreateFrame("Button", nil, parent)
 	row:SetSize(304, ROW_H - 2)
 	row:SetPoint("TOPLEFT", 8, -22 - ((i - 1) * ROW_H))
-	row.bg = row:CreateTexture(nil, "BACKGROUND")
-	row.bg:SetAllPoints()
-	row.bg:SetColorTexture(GM.RGB(i % 2 == 0 and "contMedium" or "contLowest"))
+	W.Zebra(row, i)
 	W.HoverTint(row)
 	W.ModifiedClick(row, function() return row.tipID end)
 	row.icon = row:CreateTexture(nil, "ARTWORK")

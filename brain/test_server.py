@@ -635,6 +635,137 @@ def main():
                 'poster': 'Poster', 'op': 'bad2'}, tok_p)
     check('price over cap -> 400', c == 400, c)
 
+    # ---------- crafting writs v2: rosters + point-to-point ----------
+    print('== writs v2: roster publish/browse ==')
+    c, r = req(base, '/v1/register',
+               {'name': 'smith', 'uuid': 'uu-smith', 'key': 'sekrit'})
+    tok_s = r['token']
+    c, r = req(base, '/v1/register',
+               {'name': 'buyer', 'uuid': 'uu-buyer', 'key': 'sekrit'})
+    tok_u = r['token']
+    offers = json.dumps([
+        {'ref': 'r:111', 'name': 'Enchant Cloak - Minor Protection',
+         'prof': 'Enchanting', 'kind': 'service', 'price': 5500,
+         'mats': 'buyer', 'note': 'meet at the fountain'},
+        {'ref': 'r:222', 'name': 'Ironplate Shield', 'prof':
+         'Blacksmithing', 'kind': 'craft', 'itemID': 2299,
+         'numMade': 1},
+        {'ref': 'junk'}])
+    c, r = req(base, '/v1/boards/%s/roster' % B,
+               {'chars': ['Smithy', 'SmithAlt'], 'offers': offers,
+                'op': 'rst1'}, tok_s)
+    check('roster publish -> 200, bad offer dropped',
+          c == 200 and r.get('offers') == 2, r)
+    c, r = req(base, '/v1/boards/%s/rosters' % B)
+    check('roster browse lists smith',
+          c == 200 and r['rosters'][0]['uuid'] == 'uu-smith'
+          and len(r['rosters'][0]['offers']) == 2, r)
+    check('roster carries chars + stats',
+          r['rosters'][0]['chars'][0] == 'Smithy'
+          and 'writs_done' in r['rosters'][0]['stats'], r['rosters'][0])
+    # replace semantics: second publish overwrites, not appends
+    c, r = req(base, '/v1/boards/%s/roster' % B,
+               {'chars': ['Smithy'], 'offers': json.dumps(
+                   [{'ref': 'r:333', 'name': 'Pick Lock',
+                     'kind': 'service'}]), 'op': 'rst2'}, tok_s)
+    c, r = req(base, '/v1/boards/%s/rosters' % B)
+    check('republish replaces roster',
+          r['rosters'][0]['offers'][0]['ref'] == 'r:333', r['rosters'])
+
+    print('== writs v2: request lifecycle ==')
+    c, r = req(base, '/v1/writs',
+               {'b': B, 'to': 'uu-smith', 'toChar': 'Smithy',
+                'fromChar': 'Buylin', 'ref': 'r:333', 'name': 'Pick Lock',
+                'qty': 2, 'offer': 1200, 'mats': 'prepaid',
+                'deliver': 'mail', 'note': 'two lockboxes',
+                'op': 'w1'}, tok_u)
+    check('writ post -> open', c == 200 and r['writ']['state'] == 'open',
+          r)
+    wid = r['writ']['id']
+    check('writ addressed to crafter uuid',
+          r['writ']['toUUID'] == 'uu-smith'
+          and r['writ']['price'] == 1200, r['writ'])
+    c, r = req(base, '/v1/writs', {'b': B, 'to': 'uu-nobody',
+                                   'qty': 1, 'offer': 1, 'op': 'w2'},
+               tok_u)
+    check('writ to unknown install -> 404 crafter', c == 404, c)
+    c, r = req(base, '/v1/writs', {'b': B, 'to': 'uu-smith', 'qty': 1,
+                                   'offer': 1, 'op': 'w3'}, tok_s)
+    check('writ to self -> 400', c == 400, c)
+    # private inbox: the buyer sees out, smith sees in, neither sees
+    # the other direction's writs
+    c, r = req(base, '/v1/writs', tok=tok_u)
+    check('buyer outbox holds the writ',
+          any(w['id'] == wid for w in r['out']) and not r['in'], r)
+    c, r = req(base, '/v1/writs', tok=tok_s)
+    check('smith inbox holds the writ',
+          any(w['id'] == wid for w in r['in']) and not r['out'], r)
+    c, _ = req(base, '/v1/writs')
+    check('unauthed inbox -> 401', c == 401, c)
+    # negotiation: only the crafter quotes; price lands on the table
+    c, _ = req(base, '/v1/writs/%s/wquote' % wid,
+               {'price': 1500, 'op': 'q0'}, tok_u)
+    check('customer cannot quote -> 403 crafter', c == 403, c)
+    c, r = req(base, '/v1/writs/%s/wquote' % wid,
+               {'price': 1500, 'op': 'q1'}, tok_s)
+    check('crafter quotes -> quoted',
+          c == 200 and r['writ']['state'] == 'quoted'
+          and r['writ']['price'] == 1500, r)
+    c, _ = req(base, '/v1/writs/%s/wship' % wid,
+               {'op': 's0'}, tok_s)
+    check('ship before agreement -> 409 state', c == 409, _)
+    # arrangement handshake: crafter proposes the meet-place, buyer
+    # attaches the prepaid-mats fingerprint — both inside wmeet, and
+    # the accept can confirm the meet in the same op
+    c, r = req(base, '/v1/writs/%s/wmeet' % wid,
+               {'meet': 'SW trade square', 'op': 'm1'}, tok_s)
+    check('crafter proposes meet', c == 200
+          and r['writ']['meet'] == 'SW trade square', r)
+    c, r = req(base, '/v1/writs/%s/wmeet' % wid,
+               {'matsFp': 'fp:buylin:mats1', 'op': 'm2'}, tok_u)
+    check('customer links mats fingerprint', c == 200
+          and r['writ']['matsFp'] == 'fp:buylin:mats1', r)
+    c, _ = req(base, '/v1/writs/%s/wmeet' % wid,
+               {'meet': 'gatecrash', 'op': 'm3'}, tok_p)
+    check('non-party wmeet -> 403 party', c == 403, c)
+    c, _ = req(base, '/v1/writs/%s/wmeet' % wid,
+               {'op': 'm4'}, tok_u)
+    check('empty wmeet -> 400 payload', c == 400, c)
+    c, r = req(base, '/v1/writs/%s/waccept' % wid,
+               {'op': 'a1', 'meet': 'SW bank steps'}, tok_u)
+    check('customer accepts quote -> agreed (meet confirmed)',
+          c == 200 and r['writ']['state'] == 'agreed'
+          and r['writ']['meet'] == 'SW bank steps'
+          and r['writ']['matsFp'] == 'fp:buylin:mats1', r)
+    c, r = req(base, '/v1/writs/%s/wship' % wid,
+               {'cod': 1500, 'mailFrom': 'SmithAlt', 'op': 's1'}, tok_s)
+    check('crafter ships COD -> shipped',
+          c == 200 and r['writ']['state'] == 'shipped'
+          and r['writ']['cod'] == 1500, r)
+    c, _ = req(base, '/v1/writs/%s/wrecv' % wid, {'op': 'rc0'}, tok_s)
+    check('crafter cannot confirm receipt -> 403', c == 403, c)
+    c, r = req(base, '/v1/writs/%s/wrecv' % wid, {'op': 'rc1'}, tok_u)
+    check('buyer confirms -> done + crafter stat',
+          c == 200 and r['writ']['state'] == 'done', r)
+    c, r = req(base, '/v1/boards/%s/rosters' % B)
+    check('done writ raises writs_done',
+          r['rosters'][0]['stats']['writs_done'] == 1,
+          r['rosters'][0]['stats'])
+    # decline path books the crafter's public decline counter
+    c, r = req(base, '/v1/writs', {'b': B, 'to': 'uu-smith', 'qty': 1,
+                                   'offer': 10, 'op': 'w4'}, tok_u)
+    wid2 = r['writ']['id']
+    c, r = req(base, '/v1/writs/%s/wdecline' % wid2, {'op': 'd1'}, tok_s)
+    check('decline -> declined',
+          c == 200 and r['writ']['state'] == 'declined', r)
+    c, r = req(base, '/v1/boards/%s/rosters' % B)
+    check('crafter decline counted',
+          r['rosters'][0]['stats']['writs_declined'] == 1,
+          r['rosters'][0]['stats'])
+    c, _ = req(base, '/v1/writs/%s/wquote' % wid,
+               {'price': 1, 'op': 'q9'}, tok_s)
+    check('terminal writ rejects verbs -> 409', c == 409, c)
+
     srv.shutdown()
     print()
     if FAILURES:

@@ -47,6 +47,8 @@ local function CommandPending()
 	return C_Mail and C_Mail.IsCommandPending and C_Mail.IsCommandPending()
 end
 
+local GateSend -- assigned next to MU.Send; Build's hooks capture it
+
 -- ============ recipient autocomplete ============
 -- TSM-style inline complete: the first prefix-match fills the box
 -- with the remainder highlighted — keep typing to refine or move on.
@@ -66,11 +68,15 @@ local function RecipientNames()
 	local me = UnitName and UnitName("player") or ""
 	local function add(n)
 		n = n and strtrim(ShortName(n) or "")
-		if not n or n == "" or n == me then return end
+		if not n or n == "" then return end
+		if GM.SameChar and GM.SameChar(n, me) then return end
 		local k = n:lower()
 		if not seen[k] then seen[k] = true names[#names + 1] = n end
 	end
 	for _, r in ipairs(GM.Model.Pref("mailRecent") or {}) do add(r) end
+	for _, v in pairs(GM.FullNames and GM.FullNames() or {}) do
+		add(v)
+	end
 	for _, ck in ipairs(GM.Ledger and GM.Ledger.Chars() or {}) do add(ck) end
 	local nf = C_FriendList and C_FriendList.GetNumFriends
 		and C_FriendList.GetNumFriends() or 0
@@ -103,7 +109,6 @@ end
 
 -- remember a recipient after a successful send (dedup, cap 10)
 local function PushRecent(to)
-	if not GM.db then return end
 	local rec = GM.Model.Pref("mailRecent", {})
 	for i, r in ipairs(rec) do
 		if r:lower() == to:lower() then tremove(rec, i) break end
@@ -118,7 +123,7 @@ end
 -- Inbox.GetHeaderInfo (sender/subject/money/cod/daysLeft/numItems)
 local function InboxRows()
 	local rows = {}
-	local n = GetInboxNumItems and GetInboxNumItems() or 0
+	local n = GM.MailCount()
 	for i = 1, n do
 		local _, tex, sender, subject, money, cod, daysLeft, numItems =
 			GetInboxHeaderInfo(i)
@@ -171,11 +176,13 @@ local function SendRows()
 	local rows, lockedByName = {}, {}
 	for _, s in ipairs(GM.Banking.BagSlots()) do
 		if s.itemID then
-			local name = GM.ItemName(s.itemID) or ("item " .. s.itemID)
+			local ctx = GM.Ctx(s)
+			local name = ctx.name or ("item " .. s.itemID)
 			if s.locked then lockedByName[name] = (lockedByName[name] or 0) + 1 end
 			rows[#rows + 1] = {
 				bag = s.bag, slot = s.slot, id = s.itemID,
 				qty = s.count, name = name, locked = s.locked,
+				ctx = ctx,
 			}
 		end
 	end
@@ -266,32 +273,90 @@ local function Build()
 	ui.sendBar = CreateFrame("Frame", nil, f)
 	ui.sendBar:SetSize(300, 20)
 	ui.sendBar:SetPoint("LEFT", scan, "RIGHT", 8, 0)
-	ui.to = EditBox(ui.sendBar, 110, "recipient")
+	ui.to = EditBox(ui.sendBar, 170, "recipient")
 	ui.to:SetPoint("LEFT")
-	ui.to:SetScript("OnChar", ACOnChar)
-	ui.to:HookScript("OnEditFocusGained", function()
+	-- Forever surnames live only in Blizzard's completion layer —
+	-- borrow its config + handlers (the dropdown knows "Unstable
+	-- Haberdasher" where our own candidate pool only sees "Unstable").
+	-- Falls back to the inline typeahead when the machinery is absent.
+	-- Forever rejects HookScript on some EditBox script types
+	-- ("script type not supported") — and a mid-Build error here
+	-- left the compose strip unbuilt (ui.compose nil, mail dead).
+	-- Attach falls back to a SetScript chain that preserves any
+	-- existing handler (W.EditBox installs its own focus scripts).
+	local function Attach(obj, h, fn)
+		local wrapped = function(...) pcall(fn, ...) end
+		if pcall(obj.HookScript, obj, h, wrapped) then return end
+		local prev = obj.GetScript and obj:GetScript(h)
+		if prev then
+			obj:SetScript(h, function(...) prev(...) wrapped(...) end)
+		else
+			obj:SetScript(h, wrapped)
+		end
+	end
+	local acs = SendMailNameEditBox
+	if acs and (acs.autoCompleteSource or acs.autoCompleteParams) then
+		ui.to.autoCompleteParams = acs.autoCompleteParams
+		ui.to.autoCompleteSource = acs.autoCompleteSource
+		if ui.to.SetAutoCompleteSource then
+			pcall(ui.to.SetAutoCompleteSource, ui.to,
+				acs.autoCompleteSource, acs.GetAutoCompleteParams
+				and acs:GetAutoCompleteParams())
+		end
+		for _, h in ipairs({ "OnChar", "OnTextChanged",
+				"OnArrowPressed", "OnEscapePressed",
+				"OnEditFocusLost", "OnEditFocusGained",
+				"OnEnterPressed" }) do
+			local fn
+			pcall(function() fn = acs:GetScript(h) end)
+			if fn then Attach(ui.to, h, fn) end
+		end
+	else
+		ui.to:SetScript("OnChar", ACOnChar)
+	end
+	Attach(ui.to, "OnTextChanged", GateSend)
+	Attach(ui.to, "OnEditFocusGained", function()
 		acList = RecipientNames()
 	end)
 	ui.money = W.GoldEdit(ui.sendBar, 108)
 	ui.money:SetPoint("LEFT", ui.to, "RIGHT", 6, 0)
+	-- GoldEdit is a wrapper frame — the coin EditBoxes live on it
+	for _, e in ipairs({ ui.money.g, ui.money.s, ui.money.c }) do
+		Attach(e, "OnTextChanged", GateSend)
+	end
 	-- COD toggle: when set the copper box feeds SetSendMailCOD
 	-- (payment on delivery) instead of SetSendMailMoney — the writ
 	-- board's escrow mechanism
 	ui.cod = CreateFrame("CheckButton", nil, ui.sendBar,
 		"UICheckButtonTemplate")
 	ui.cod:SetSize(18, 18)
-	ui.cod:SetPoint("LEFT", ui.money, "RIGHT", 4, 0)
+	-- GoldEdit paints ~19px past its declared width (the trailing
+	-- "c" label) — anchor off the painted edge, not the frame
+	ui.cod:SetPoint("LEFT", ui.money, "LEFT",
+		(ui.money.effW or 108) + 8, 0)
 	ui.cod.text = GM.MakeFontString(ui.cod, GM.FONT, 9, "textDim")
 	ui.cod.text:SetPoint("LEFT", ui.cod, "RIGHT", 0, 0)
 	ui.cod.text:SetText("COD")
+	ui.cod:HookScript("OnClick", GateSend)
 	ui.send = Btn(ui.sendBar, 52, "SEND", function() MU.Send() end)
 	ui.send:SetPoint("LEFT", ui.cod.text, "RIGHT", 6, 0)
 	ui.send.text:SetTextColor(GM.RGB("accent"))
 	local clear = Btn(ui.sendBar, 52, "CLEAR", function()
 		pcall(ClearSendMail)
+		ui._shipWrit = nil
 		MU.Refresh()
 	end)
 	clear:SetPoint("LEFT", ui.send, "RIGHT", 6, 0)
+	local writsBtn = Btn(ui.sendBar, 56, "WRITS", function()
+		ui.writOpen = not ui.writOpen
+		MU.Refresh()
+	end)
+	writsBtn:SetPoint("LEFT", clear, "RIGHT", 6, 0)
+	Tip(writsBtn, function()
+		return { "Writ deliveries",
+			"Agreed orders waiting on shipment — COMPOSE writes",
+			"the letter, sets COD, and pulls the goods in." }
+	end)
 
 	local blizz = Btn(f, 84, "BLIZZARD UI", function()
 		ui.wantDefault = true
@@ -337,9 +402,7 @@ local function Build()
 		local row = CreateFrame("Button", nil, host)
 		row:SetSize(528, ROW_H - 2)
 		row:SetPoint("TOPLEFT", 0, -((i - 1) * ROW_H))
-		row.bg = row:CreateTexture(nil, "BACKGROUND")
-		row.bg:SetAllPoints()
-		row.bg:SetColorTexture(GM.RGB(i % 2 == 0 and "contMedium" or "contLowest"))
+		W.Zebra(row, i)
 		W.HoverTint(row)
 		row.c1 = GM.MakeFontString(row, GM.FONT, 10, "text")
 		row.c1:SetPoint("LEFT", 8, 0)
@@ -402,6 +465,44 @@ local function Build()
 	ui.to:SetScript("OnTabPressed", function() ui.subject:SetFocus() end)
 	ui.subject:SetScript("OnTabPressed", function() ui.body:SetFocus() end)
 	ui.body:SetScript("OnTabPressed", function() ui.body:ClearFocus() end)
+
+	-- DELIVER side pane: agreed writs waiting on the mail — one row
+	-- per order; COMPOSE writes the letter, sets the COD, and pulls
+	-- the goods into the send slots. SEND + the take-hook close the
+	-- loop (wship on send, wrecv when the buyer loots it)
+	local wp = CreateFrame("Frame", nil, f)
+	wp:SetSize(240, 396)
+	wp:SetPoint("TOPLEFT", f, "TOPRIGHT", 4, 0)
+	GM.Panel(wp, "contHigh")
+	wp.title = GM.MakeFontString(wp, GM.FONT_BOLD, 9, "secondary")
+	wp.title:SetPoint("TOPLEFT", 8, -6)
+	wp.title:SetText("DELIVER — open writs")
+	wp.rows = {}
+	for i = 1, 10 do
+		local r = CreateFrame("Frame", nil, wp)
+		r:SetSize(224, 32)
+		r:SetPoint("TOPLEFT", 8, -22 - (i - 1) * 34)
+		r.l1 = GM.MakeFontString(r, GM.FONT, 9, "text")
+		r.l1:SetPoint("TOPLEFT", 0, 0)
+		r.l1:SetWidth(156)
+		r.l1:SetWordWrap(false)
+		r.l1:SetJustifyH("LEFT")
+		r.l2 = GM.MakeFontString(r, GM.FONT, 9, "textDim")
+		r.l2:SetPoint("TOPLEFT", r.l1, "BOTTOMLEFT", 0, -1)
+		r.l2:SetWidth(156)
+		r.l2:SetWordWrap(false)
+		r.l2:SetJustifyH("LEFT")
+		r.act = Btn(r, 62, "COMPOSE", function() end)
+		r.act:SetPoint("TOPRIGHT", 0, -4)
+		r:Hide()
+		wp.rows[i] = r
+	end
+	wp.empty = GM.MakeFontString(wp, GM.FONT, 9, "textDim")
+	wp.empty:SetPoint("TOPLEFT", 8, -24)
+	wp.foot = GM.MakeFontString(wp, GM.FONT, 9, "textDim")
+	wp.foot:SetPoint("BOTTOMLEFT", 8, 8)
+	wp:Hide()
+	ui.writPane = wp
 
 	ui.foot = GM.MakeFontString(f, GM.FONT, 9, "textDim")
 	ui.foot:SetPoint("BOTTOMLEFT", 14, 10)
@@ -543,24 +644,151 @@ local function Detach(r)
 	MU.Refresh()
 end
 
+-- ============ writ deliveries ============
+-- seller-side open orders: mesh writs I owe goods (agreed + COD
+-- delivery) and letter-channel writIn recs at agreed. Prices are
+-- per-unit — the row shows unit/ea, the COD is unit × qty
+local function DeliverRows()
+	local out = {}
+	local WR = GM.Writs
+	local v = WR and WR.Writs and WR.Writs()
+	if v then
+		for _, w in ipairs(v.inb or {}) do
+			-- 'quoted' counts as open too — the buyer's confirm is
+			-- still out, but the terms exist and shipping early is
+			-- harmless: the COD take closes the writ either way
+			if (w.state == "agreed" or w.state == "quoted")
+					and w.deliver == "cod" then
+				local unit = WR.UnitPrice(w)
+				out[#out + 1] = { w = w, mail = false,
+					name = w.name or "order",
+					to = w.fromChar or w.from or "?",
+					qty = w.qty or 1, unit = unit,
+					total = unit * (w.qty or 1),
+					pend = w.state == "quoted" }
+			end
+		end
+		for _, rec in ipairs(v.mailIn or {}) do
+			if (rec.state == "agreed" or rec.state == "quoted")
+					and (rec.deliver or "cod") == "cod" then
+				local unit = WR.UnitPrice(rec)
+				out[#out + 1] = { w = rec, mail = true,
+					name = rec.name or "order",
+					to = rec.fromChar or rec.sender or "?",
+					qty = rec.qty or 1, unit = unit,
+					total = unit * (rec.qty or 1),
+					pend = rec.state == "quoted" }
+			end
+		end
+	end
+	return out
+end
+
+local function PaintDeliver()
+	local wp = ui.writPane
+	if not (wp and wp:IsShown()) then return end
+	local rows, grand = DeliverRows(), 0
+	for i, r in ipairs(wp.rows) do
+		local e = rows[i]
+		if e then
+			grand = grand + e.total
+			r:Show()
+			r.l1:SetText((e.name or "?") .. " ×" .. e.qty
+				.. " → " .. (e.to or "?"))
+			r.l2:SetText((e.pend and (GM.CC("warn") .. "quoted|r ")
+					or "")
+				.. ((GM.MoneyShort and GM.MoneyShort(e.unit))
+					or tostring(e.unit)) .. "/ea · "
+				.. ((GM.MoneyShort and GM.MoneyShort(e.total))
+					or tostring(e.total)) .. " due")
+			local ee = e
+			r.act:SetScript("OnClick", function()
+				MU.ComposeWrit(ee)
+			end)
+		else r:Hide() end
+	end
+	wp.empty:SetShown(#rows == 0)
+	wp.empty:SetText(#rows == 0 and "no orders to deliver" or "")
+	wp.foot:SetText(#rows > 0 and string.format(
+		"%d deliveries · %s total due", #rows,
+		(GM.MoneyShort and GM.MoneyShort(grand)) or tostring(grand))
+		or "")
+end
+
+-- one click writes the whole shipment: recipient, [GM Ship]
+-- subject, COD = unit × qty, GMW1S wire in the body, goods pulled
+-- into the send slots. _shipWrit tags the compose so MU.Send can
+-- advance the writ to 'shipped' when the letter actually goes
+function MU.ComposeWrit(e)
+	if not (e and e.w and MailOpen()) then return end
+	local w = e.w
+	pcall(ClearSendMail)
+	ui.to:SetText((GM.FullName and GM.FullName(e.to)) or e.to or "")
+	ui.subject:SetText("[GM Ship] " .. (e.name or "order"))
+	ui.cod:SetChecked(e.total > 0)
+	ui.money:SetCopper(e.total)
+	local WR = GM.Writs
+	ui.body:SetText(string.format(
+		"Your order ships COD — %s due on pickup (%s each).\n\n— %s\n%s\n%s",
+		(GM.MoneyShort and GM.MoneyShort(e.total)) or tostring(e.total),
+		(GM.MoneyShort and GM.MoneyShort(e.unit)) or tostring(e.unit),
+		CharName(),
+		table.concat({ "GMW1S", w.wid or w.id or "-",
+			tostring(e.unit), CharName() }, ";"),
+		(WR and WR.MAIL_TAGLINE) or ""))
+	-- pull the goods: stacks matching the writ's item, capped at
+	-- the order qty and the client's send slots; a stack that
+	-- overshoots stays attached (DETACH pulls it back)
+	local want, slots = e.qty, ATTACHMENTS_MAX_SEND or 12
+	local pickup = C_Container and C_Container.PickupContainerItem
+	if pickup and ClickSendMailItemButton then
+		for _, s in ipairs(GM.Banking.BagSlots()) do
+			if want <= 0 or slots <= 0 then break end
+			local hit = s.itemID and not s.locked
+				and ((w.itemID and s.itemID == w.itemID)
+					or (not w.itemID and w.name
+						and (GM.Ctx(s) or {}).name == w.name))
+			if hit then
+				pickup(s.bag, s.slot)
+				ClickSendMailItemButton()
+				slots = slots - 1
+				want = want - (s.count or 1)
+			end
+		end
+		if GetCursorInfo and GetCursorInfo() then ClearCursor() end
+	end
+	ui._shipWrit = e
+	GateSend()
+	MU.Refresh()
+end
+
+-- SEND grays on the same rule O.SendMail's commit runs — the
+-- recipient box and attachment slots both feed it, so the button
+-- can never light up on a send the spine would refuse
+function GateSend()
+	if not (ui and ui.send) then return end
+	ui.send:SetEnabled(GM.Ops.Can(nil, "sendmail", {
+		to = strtrim(ui.to:GetText() or ""),
+		cod = ui.cod:GetChecked()
+			and (ui.money:GetCopper() or 0) or nil,
+		money = not ui.cod:GetChecked()
+			and (ui.money:GetCopper() or 0) or nil }))
+end
+
 function MU.Send()
 	local to = strtrim(ui.to:GetText() or "")
 	if to == "" or to == "recipient" then
 		GM.Print(GM.CC("warn") .. "recipient first|r")
 		return
 	end
+	-- Forever delivery needs the surname — resolve before send and
+	-- echo what actually went out back into the box
+	to = (GM.FullName and GM.FullName(to)) or to
+	ui.to:SetText(to)
 	local copper = ui.money:GetCopper() or 0
 	if copper < 0 then copper = 0 end
+	local isCod = ui.cod and ui.cod:GetChecked()
 	local name = GetSendMailItem and GetSendMailItem(1)
-	if copper > 0 then
-		-- COD checked -> payment-on-delivery; unchecked -> money send.
-		-- SetSendMailCOD is live-verified on Forever (codprobe)
-		if ui.cod and ui.cod:GetChecked() then
-			pcall(SetSendMailCOD, copper)
-		else
-			pcall(SetSendMailMoney, copper)
-		end
-	end
 	-- hint strings survive unfocused boxes — treat them as empty
 	local subj = strtrim(ui.subject and ui.subject:GetText() or "")
 	if subj == "" or subj == SUBJ_HINT then
@@ -568,11 +796,27 @@ function MU.Send()
 	end
 	local body = strtrim(ui.body and ui.body:GetText() or "")
 	if body == BODY_HINT then body = "" end
-	local ok, err = pcall(SendMail, to, subj, body)
+	-- the spine owns the send: COD/money hooks, per-item mailout /
+	-- codout journal legs, bag-diff verification
+	local ok = GM.Ops.SendMail({ to = to, subject = subj, body = body,
+		cod = isCod and copper > 0 and copper or nil,
+		money = not isCod and copper > 0 and copper or nil })
 	if ok then
+		-- a composed writ shipment: the letter going out IS the
+		-- ship event — advance the order so 'shipped' always
+		-- means a real letter is in transit
+		local sw = ui._shipWrit
+		if sw then
+			ui._shipWrit = nil
+			if sw.mail then
+				sw.w.state, sw.w.updated = "shipped", time()
+			elseif GM.Writs then
+				GM.Writs.Act("wship", sw.w, {
+					cod = isCod and copper or 0,
+					mailFrom = CharName() })
+			end
+		end
 		PushRecent(to)
-	else
-		GM.Print(GM.CC("err") .. "SendMail: " .. tostring(err) .. "|r")
 	end
 	MU.Refresh()
 end
@@ -602,6 +846,7 @@ function MU.Refresh(vm)
 	vm = vm or Data()
 	local open = vm.open
 	ui.pageTabs.set(ui.page)
+	GateSend()
 	if ui.sendBarNode then
 		ui.sendBarNode:SetVisible(ui.page == "send")
 	else
@@ -616,6 +861,10 @@ function MU.Refresh(vm)
 	else
 		ui.compose:SetShown(ui.page == "send")
 	end
+	-- DELIVER pane lives only on SEND — the writ list repaints
+	-- with every refresh (sends clear their own row via wship)
+	ui.writPane:SetShown(ui.page == "send" and ui.writOpen or false)
+	PaintDeliver()
 	local vis = VISIBLE
 	if not ui.hostNode then
 		ui.hdr:ClearAllPoints()
@@ -652,7 +901,10 @@ function MU.Refresh(vm)
 			if r then
 				row:Show()
 				row.tipID = nil -- a mail row is a mail, not an item
-				row.c1:SetText(r.sender)
+				-- writ surface: GMW1 request / writ COD / writ mats
+				local flag = GM.Writs and GM.Writs.RowFlag
+					and GM.Writs.RowFlag(r.index)
+				GM.Widgets.NameTag(row.c1, r.sender)
 				row.c2:SetText(r.subject)
 				row.c3:SetText(r.items > 0 and ("×" .. r.items .. " item"
 					.. (r.items == 1 and "" or "s")) or "")
@@ -662,12 +914,33 @@ function MU.Refresh(vm)
 					row.c4:SetText(r.money > 0 and GM.Money(r.money) or "")
 				end
 				row.c5:SetText(r.days and format("%.0fd", r.days) or "")
-				row.act.text:SetText(r.cod > 0 and "COD"
-					or ((r.money > 0 or r.items > 0) and "OPEN" or "DEL"))
-				row.act.text:SetTextColor(GM.RGB(r.cod > 0 and "warn"
-					or (r.money > 0 or r.items > 0) and "accent" or "err"))
+				if flag == "RECV" then
+					row.act.text:SetText("RECV")
+					row.act.text:SetTextColor(GM.RGB("warn"))
+				elseif flag then
+					row.act.text:SetText(flag)
+					row.act.text:SetTextColor(GM.RGB("accent"))
+				else
+					row.act.text:SetText(r.cod > 0 and "COD"
+						or ((r.money > 0 or r.items > 0) and "OPEN" or "DEL"))
+					row.act.text:SetTextColor(GM.RGB(r.cod > 0 and "warn"
+						or (r.money > 0 or r.items > 0) and "accent" or "err"))
+				end
 				local mail = r
 				row.act:SetScript("OnClick", function(act)
+					if flag == "RECV" then
+						-- matched writ COD: the take pays + stages wrecv
+						GM.Writs.AcceptMail(GM.Writs.MailHit(mail.index))
+						MU.Refresh()
+						return
+					elseif flag == "WRIT" then
+						local hit = GM.Writs.MailHit(mail.index)
+						local rec = hit and hit.rec
+						GM.Print(GM.CC("accent") .. "writ request from "
+							.. mail.sender .. (rec and rec.qty
+								and (" — x" .. rec.qty) or "") .. "|r")
+						return
+					end
 					if mail.cod > 0 then return end
 					if mail.money > 0 or mail.items > 0 then
 						OpenMail(mail)
@@ -967,7 +1240,7 @@ function MU.CodProbe()
 			if ClearSendMail then pcall(ClearSendMail) end
 		end
 		if GetInboxNumItems and GetInboxHeaderInfo then
-			local n = tonumber((GetInboxNumItems())) or 0
+			local n = GM.MailCount()
 			GM.Print("inbox items: " .. n)
 			if n > 0 then
 				local ok3, t = pcall(function()
@@ -1000,9 +1273,7 @@ function MU.CodProbe()
 		GM.Print("probe error (partial dump follows): "
 			.. tostring(err))
 	end
-	if GM.db then
-		GM.Model.SetPref("dbgDump", table.concat(GM.dbgCap, "\n"))
-	end
+	GM.Model.SetPref("dbgDump", table.concat(GM.dbgCap, "\n"))
 	GM.dbgCap = nil
 	GM.Print("captured — /reload flushes to SavedVariables (dbgDump)")
 end

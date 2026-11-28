@@ -519,7 +519,9 @@ local function BuildFieldRow(fldP, fd, idx)
 	elseif w == "expr" then
 		row.eb = EditBox(host, VAL_W - 22, ROW_H)
 		row.eb:SetPoint("TOPLEFT", VAL_X, 0)
-		row.aux = Segment(host, "v", 18)
+		-- glyph, not a letter: "v" hits LT()'s unregistered-key
+		-- diagnostic; the triangle reads as a dropdown chevron
+		row.aux = Segment(host, "▼", 18)
 		row.aux:SetPoint("TOPLEFT", VAL_X + VAL_W - 20, 0)
 		row.aux:SetScript("OnClick", function(self)
 			local entries = {}

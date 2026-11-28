@@ -23,6 +23,11 @@ Writ board (bearer-authed writes, open reads):
   POST /v1/boards/{b}/orders/{id}/cancel         {units?, op?} (poster)
   POST /v1/boards/{b}/commits/{id}/release       {op?} (crafter)
   POST /v1/boards/{b}/ban                        {uuid, on} (board owner)
+  POST /v1/boards/{b}/roster                     publish my shop roster
+  GET  /v1/boards/{b}/rosters                    browse live rosters
+  POST /v1/writs                                 address a work request
+  GET  /v1/writs                                 private inbox/outbox (auth)
+  POST /v1/writs/{id}/{verb}                     quote|accept|decline|ship|recv|cancel
   POST /v1/ignore                                {uuid, on}
   GET  /v1/boards                                board names + open counts
 
@@ -216,6 +221,49 @@ def init_db():
                 'PRAGMA table_info(install_stats)')}:
         conn.execute('ALTER TABLE install_stats ADD COLUMN '
                      'commits_forced INTEGER DEFAULT 0')
+    for col in ('writs_done', 'writs_declined', 'writs_expired'):
+        if col not in {
+                r[1] for r in conn.execute(
+                    'PRAGMA table_info(install_stats)')}:
+            conn.execute('ALTER TABLE install_stats ADD COLUMN '
+                         '%s INTEGER DEFAULT 0' % col)
+    # ---- crafting writs v2 (open shop) ----
+    # A crafter's published shop — one row per (board, install),
+    # replaced wholesale on each publish. chars = json toon list so a
+    # customer can mail the right name; offers = json [{ref, name,
+    # prof, itemID?, kind, price?, mats?, note?, numMade?}]. kind is
+    # 'craft' (makes an item) or 'service' (enchant/lockpick — the
+    # work is the item-less transaction classic players yell about).
+    conn.execute('''CREATE TABLE IF NOT EXISTS rosters(
+        board TEXT, install_id INTEGER, uuid TEXT,
+        chars TEXT DEFAULT '[]', offers TEXT DEFAULT '[]',
+        t REAL, PRIMARY KEY(board, install_id))''')
+    # Point-to-point work request — customer->crafter by install
+    # uuid (the same anchor that keys orders). Lifecycle:
+    # open -> quoted -> agreed -> shipped -> done
+    #   \\-> declined (either)  \\-> cancelled (customer)  \\-> expired
+    conn.execute('''CREATE TABLE IF NOT EXISTS writs(
+        id TEXT PRIMARY KEY, board TEXT,
+        from_install INTEGER, from_uuid TEXT, from_char TEXT,
+        to_install INTEGER, to_uuid TEXT, to_char TEXT,
+        ref TEXT, name TEXT, item_id INTEGER, qty INTEGER,
+        offer INTEGER, mats TEXT, deliver TEXT, note TEXT,
+        quote INTEGER, cod INTEGER, mail_from TEXT,
+        created REAL, updated REAL, expires REAL,
+        state TEXT DEFAULT 'open',
+        meet TEXT, mats_fp TEXT)''')
+    conn.execute('''CREATE INDEX IF NOT EXISTS wri_to
+        ON writs(to_install, state)''')
+    conn.execute('''CREATE INDEX IF NOT EXISTS wri_from
+        ON writs(from_install, state)''')
+    # v2.1 columns — meet = the arranged meet-place (trade-settle
+    # handshake), mats_fp = the prepaid-mats shipment fingerprint
+    # the crafter's client matches inbound mail against
+    wcols = {r[1] for r in conn.execute('PRAGMA table_info(writs)')}
+    for col in ('meet', 'mats_fp'):
+        if col not in wcols:
+            conn.execute(
+                'ALTER TABLE writs ADD COLUMN %s TEXT' % col)
     # staged-op dedup — SV replays POST the same op id; first result
     # is replayed verbatim instead of re-applying the mutation
     conn.execute('''CREATE TABLE IF NOT EXISTS order_ops(
@@ -417,6 +465,22 @@ def _gc(conn, force=False):
         "expires<?-86400", (now,))
     conn.execute('DELETE FROM order_ops WHERE t<?',
                  (now - MERGE_MAX_AGE,))
+    # crafting-writ GC: live requests past expires die (agreed-expired
+    # counts against the crafter); terminal rows keep a day of inbox
+    # history; silent rosters leave the shop after ROSTER_MAX_AGE
+    wexp = conn.execute(
+        "SELECT id,to_install,state FROM writs WHERE state IN "
+        "('open','quoted','agreed') AND expires<?", (now,)).fetchall()
+    for wid, ti, wstate in wexp:
+        conn.execute("UPDATE writs SET state='expired',updated=? "
+                     "WHERE id=?", (now, wid))
+        if wstate == 'agreed':
+            _stat(conn, ti, 'writs_expired')
+    conn.execute(
+        "DELETE FROM writs WHERE state IN ('done','declined',"
+        "'cancelled','expired') AND updated<?-86400", (now,))
+    conn.execute('DELETE FROM rosters WHERE t<?',
+                 (now - ROSTER_MAX_AGE,))
     conn.commit()
     if purged:
         _book_invalidate()
@@ -509,7 +573,21 @@ ORDER_MAX_AGE = 7 * 86400    # same window as book merges
 ORDER_RATE = 60              # board ops per 600s bucket per install
 STAT_COLS = ('commits_filled', 'commits_expired', 'fills_rejected',
              'orders_posted', 'orders_filled', 'orders_cancelled',
-             'commits_forced')
+             'commits_forced', 'writs_done', 'writs_declined',
+             'writs_expired')
+
+# ---- crafting writs v2: open shops + point-to-point requests ----
+# Roster = a crafter's published skill list on a board. Writ = a
+# customer's request addressed to that roster's install uuid.
+ROSTER_OFFER_CAP = 80
+ROSTER_MAX_AGE = 7 * 86400     # silent crafters drop out of the shops
+WRIT_MAX_QTY = 9999
+WRIT_OPEN_CAP = 24             # per direction (in and out) per install
+WRIT_TTL_MIN = 3600
+WRIT_TTL_DEF = 259200          # 72h — requests stay while parties sleep
+WRIT_TTL_MAX = 7 * 86400
+MATS_KINDS = ('buyer', 'crafter', 'prepaid')
+DELIVER_KINDS = ('cod', 'mail', 'trade')
 
 
 def _pool_refresh(conn, oid):
@@ -1359,6 +1437,373 @@ def o_release(conn, ctx):
     _pool_refresh(conn, r[0])
     conn.commit()
     return {'ok': True}
+
+
+# ---- crafting writs v2: rosters + point-to-point requests ----
+#
+# Where buy orders are pools, writs are contracts between two install
+# uuids: a customer addresses a roster owner on a shared board and the
+# two negotiate inside the row itself (offer -> quote -> agreed). The
+# server never moves gold or items; it is the shared source of truth
+# for who promised what, with the same idempotent staged-op pipeline.
+
+def _writ_row(conn, wid):
+    return conn.execute(
+        'SELECT id,board,from_install,from_uuid,from_char,'
+        'to_install,to_uuid,to_char,ref,name,item_id,qty,offer,mats,'
+        'deliver,note,quote,cod,mail_from,created,updated,expires,state,'
+        'meet,mats_fp '
+        'FROM writs WHERE id=?', (wid,)).fetchone()
+
+
+def _writ_dict(r):
+    (wid, board, fi, fu, fc, ti, tu, tc, ref, name, iid, qty, offer,
+     mats, deliver, note, quote, cod, mail_from, created, updated,
+     expires, state, meet, mats_fp) = r
+    return {'id': wid, 'board': board,
+            'fromUUID': fu, 'fromChar': fc,
+            'toUUID': tu, 'toChar': tc,
+            'ref': ref, 'name': name, 'itemID': iid, 'qty': qty,
+            'offer': offer, 'mats': mats, 'deliver': deliver,
+            'note': note, 'quote': quote, 'cod': cod,
+            'mailFrom': mail_from, 'meet': meet, 'matsFp': mats_fp,
+            'created': int(created), 'updated': int(updated),
+            'expires': int(expires), 'state': state,
+            # price currently on the table: the latest quote, else the
+            # customer's opening offer — the UI shows ONE number
+            'price': quote if quote is not None else offer}
+
+
+def _expire_writ(conn, r, now):
+    """Lazy expiry for live requests. An 'agreed' writ dying means the
+    crafter took the job and never shipped — that lands on their
+    public stats; open/quoted requests simply lapse."""
+    if r[22] not in ('open', 'quoted', 'agreed') or now < r[21]:
+        return r
+    conn.execute("UPDATE writs SET state='expired',updated=? WHERE "
+                 "id=?", (now, r[0]))
+    if r[22] == 'agreed':
+        _stat(conn, r[5], 'writs_expired')
+    return _writ_row(conn, r[0])
+
+
+def _clean_offers(raw):
+    """Whitelist the packed roster payload — it arrives as a JSON
+    string inside the flat staged op (the addon's OpJSON is flat)."""
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (ValueError, TypeError):
+            return []
+    if not isinstance(raw, list):
+        return []
+    out = []
+    for o in raw[:ROSTER_OFFER_CAP]:
+        if not isinstance(o, dict) or not o.get('name'):
+            continue
+        price = o.get('price')
+        row = {
+            'ref': str(o.get('ref') or '')[:40],
+            'name': str(o['name'])[:72],
+            'prof': str(o.get('prof') or '')[:24],
+            'kind': 'service' if o.get('kind') == 'service' else 'craft',
+            'price': min(max(int(price), 0), MAX_PRICE)
+                     if isinstance(price, (int, float)) else None,
+            'mats': str(o.get('mats'))[:12]
+                    if o.get('mats') in MATS_KINDS else None,
+            'note': str(o.get('note') or '')[:96],
+            # which toon owns the recipe — requests route to it.
+            # Surnames make 24 too small ("Firstname Surname").
+            'toon': str(o.get('toon') or '')[:48],
+        }
+        if o.get('itemID'):
+            try:
+                row['itemID'] = int(o['itemID'])
+            except (TypeError, ValueError):
+                pass
+        try:
+            row['numMade'] = max(1, min(int(o.get('numMade') or 1), 60))
+        except (TypeError, ValueError):
+            pass
+        out.append(row)
+    return out
+
+
+def _clean_chars(raw):
+    if isinstance(raw, str):
+        raw = raw.split(',')
+    if not isinstance(raw, list):
+        return []
+    return [str(c)[:40] for c in raw[:8] if str(c).strip()]
+
+
+@_route('POST', '/v1/boards/{b}/roster', ORDOP)
+def o_roster(conn, ctx):
+    """Publish/replace this install's roster on a board — newest wins,
+    idempotent like every staged op (same rid = same publish)."""
+    gate = _board_write_ok(conn, ctx['b'], ctx['uid'])
+    if gate:
+        ctx['send'](403, {'error': gate})
+        return None
+    chars = _clean_chars(ctx['body'].get('chars'))
+    offers = _clean_offers(ctx['body'].get('offers'))
+    if not chars and not offers:
+        ctx['send'](400, {'error': 'empty'})
+        return None
+    conn.execute(
+        'INSERT INTO rosters(board,install_id,uuid,chars,offers,t) '
+        'VALUES(?,?,?,?,?,?) ON CONFLICT(board,install_id) DO UPDATE '
+        'SET chars=excluded.chars,offers=excluded.offers,t=excluded.t',
+        (ctx['b'], ctx['install'], ctx['uid'],
+         json.dumps(chars), json.dumps(offers), ctx['now']))
+    conn.commit()
+    return {'ok': True, 'offers': len(offers)}
+
+
+@_route('GET', '/v1/boards/{b}/rosters', 0)
+def h_rosters(conn, ctx):
+    board = ctx['b']
+    if not SCOPE_RE.match(board):
+        ctx['send'](400, {'error': 'bad board'})
+        return
+    now = ctx['now']
+    rows = conn.execute(
+        'SELECT install_id,uuid,chars,offers,t FROM rosters WHERE '
+        'board=? AND t>? ORDER BY t DESC LIMIT 64',
+        (board, now - ROSTER_MAX_AGE)).fetchall()
+    stats = _stats_bulk(conn, [r[0] for r in rows])
+    ctx['send'](200, {'rosters': [
+        {'uuid': r[1], 'chars': json.loads(r[2] or '[]'),
+         'offers': json.loads(r[3] or '[]'), 't': int(r[4]),
+         'stats': stats[r[0]]} for r in rows]})
+
+
+def _writ_open_count(conn, install, col):
+    return conn.execute(
+        "SELECT COUNT(*) FROM writs WHERE %s=? AND state IN "
+        "('open','quoted','agreed','shipped')" % col,
+        (install,)).fetchone()[0]
+
+
+@_route('POST', '/v1/writs', ORDOP)
+def o_wpost(conn, ctx):
+    """Address a work request to a roster owner's install uuid."""
+    body, board = ctx['body'], str(ctx['body'].get('b') or '')[:48]
+    if not SCOPE_RE.match(board):
+        ctx['send'](400, {'error': 'bad board'})
+        return None
+    gate = _board_write_ok(conn, board, ctx['uid'])
+    if gate:
+        ctx['send'](403, {'error': gate})
+        return None
+    to_uuid = str(body.get('to') or '')[:64]
+    if not to_uuid:
+        ctx['send'](400, {'error': 'to'})
+        return None
+    if to_uuid == ctx['uid']:
+        ctx['send'](400, {'error': 'self'})
+        return None
+    trow = conn.execute(
+        'SELECT id FROM installs WHERE uuid=? AND COALESCE(banned,0)=0',
+        (to_uuid,)).fetchone()
+    if not trow:
+        ctx['send'](404, {'error': 'crafter'})
+        return None
+    to_install = trow[0]
+    if conn.execute('SELECT 1 FROM ignores WHERE install_id=? AND '
+                    'target_uuid=?', (to_install, ctx['uid'])).fetchone():
+        ctx['send'](403, {'error': 'ignored'})
+        return None
+    try:
+        qty = int(body.get('qty'))
+        offer = int(body.get('offer'))
+    except (TypeError, ValueError):
+        ctx['send'](400, {'error': 'payload'})
+        return None
+    if not (1 <= qty <= WRIT_MAX_QTY and 0 <= offer <= MAX_PRICE):
+        ctx['send'](400, {'error': 'payload'})
+        return None
+    if (_writ_open_count(conn, ctx['install'], 'from_install')
+            >= WRIT_OPEN_CAP or
+            _writ_open_count(conn, to_install, 'to_install')
+            >= WRIT_OPEN_CAP):
+        ctx['send'](429, {'error': 'cap'})
+        return None
+    now, op = ctx['now'], ctx['body'].get('op')
+    exp = body.get('expires')
+    exp = min(max(float(exp), now + WRIT_TTL_MIN), now + WRIT_TTL_MAX) \
+        if isinstance(exp, (int, float)) else now + WRIT_TTL_DEF
+    try:
+        iid = int(body.get('itemID')) if body.get('itemID') else None
+    except (TypeError, ValueError):
+        iid = None
+    wid = '%s:%s' % (ctx['install'], op or secrets.token_hex(6))
+    mats = str(body.get('mats') or 'buyer')
+    mats = mats if mats in MATS_KINDS else 'buyer'
+    deliver = str(body.get('deliver') or 'cod')
+    deliver = deliver if deliver in DELIVER_KINDS else 'cod'
+    conn.execute(
+        'INSERT OR IGNORE INTO writs(id,board,from_install,from_uuid,'
+        'from_char,to_install,to_uuid,to_char,ref,name,item_id,qty,'
+        'offer,mats,deliver,note,created,updated,expires,state,'
+        'meet,mats_fp) '
+        'VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,"open",?,?)',
+        (wid, board, ctx['install'], ctx['uid'],
+         str(body.get('fromChar') or '')[:24], to_install, to_uuid,
+         str(body.get('toChar') or '')[:24],
+         str(body.get('ref') or '')[:40],
+         str(body.get('name') or 'Work request')[:72], iid, qty,
+         offer, mats, deliver, str(body.get('note') or '')[:200],
+         now, now, exp,
+         str(body.get('meet') or '')[:80] or None,
+         str(body.get('matsFp') or '')[:80] or None))
+    conn.commit()
+    return {'ok': True, 'writ': _writ_dict(_writ_row(conn, wid))}
+
+
+@_route('GET', '/v1/writs', AUTH)
+def h_writs(conn, ctx):
+    """Private inbox/outbox — AUTH keeps point-to-point writs from
+    being public read data like the open boards."""
+    now = ctx['now']
+    def fetch(col):
+        rows = conn.execute(
+            'SELECT * FROM writs WHERE %s=? AND (state NOT IN '
+            "('done','declined','cancelled','expired') OR updated>?-86400)"
+            ' ORDER BY updated DESC LIMIT 48' % col,
+            (ctx['install'], now)).fetchall()
+        return [_writ_dict(_expire_writ(conn, r, now)) for r in rows]
+    out = {'in': fetch('to_install'), 'out': fetch('from_install')}
+    conn.commit()
+    ctx['send'](200, out)
+
+
+@_route('POST', '/v1/writs/{wid}/{verb}', ORDOP)
+def o_wverb(conn, ctx):
+    spec = WRIT_VERBS.get(ctx['verb'])
+    if not spec:
+        ctx['send'](404, {'error': 'verb'})
+        return None
+    row = _writ_row(conn, ctx['wid'])
+    if not row:
+        ctx['send'](404, {'error': 'writ'})
+        return None
+    row = _expire_writ(conn, row, ctx['now'])
+    if row[22] not in spec[1]:
+        ctx['send'](409, {'error': 'state', 'state': row[22]})
+        return None
+    role = spec[0]
+    inst = ctx['install']
+    if role == 'from' and inst != row[2]:
+        ctx['send'](403, {'error': 'customer'})
+        return None
+    if role == 'to' and inst != row[5]:
+        ctx['send'](403, {'error': 'crafter'})
+        return None
+    if role == 'either' and inst not in (row[2], row[5]):
+        ctx['send'](403, {'error': 'party'})
+        return None
+    res = spec[2](conn, ctx, row)
+    conn.commit()
+    return res
+
+
+def _w_set(conn, ctx, row, state):
+    conn.execute('UPDATE writs SET state=?,updated=? WHERE id=?',
+                 (state, ctx['now'], row[0]))
+    return {'ok': True, 'writ': _writ_dict(_writ_row(conn, row[0]))}
+
+
+def _w_quote(conn, ctx, row):
+    try:
+        price = int(ctx['body'].get('price'))
+    except (TypeError, ValueError):
+        ctx['send'](400, {'error': 'price'})
+        return None
+    if not 0 <= price <= MAX_PRICE:
+        ctx['send'](400, {'error': 'price'})
+        return None
+    conn.execute("UPDATE writs SET quote=?,state='quoted',updated=? "
+                 'WHERE id=?', (price, ctx['now'], row[0]))
+    return {'ok': True, 'writ': _writ_dict(_writ_row(conn, row[0]))}
+
+
+def _w_accept(conn, ctx, row):
+    # the confirming party can lock the meet-place in the same op —
+    # the propose->confirm handshake then completes in ONE round
+    # trip instead of two
+    body = ctx['body']
+    meet, mfp = body.get('meet'), body.get('matsFp')
+    if meet is not None or mfp is not None:
+        conn.execute(
+            'UPDATE writs SET meet=COALESCE(?,meet),'
+            'mats_fp=COALESCE(?,mats_fp) WHERE id=?',
+            (str(meet)[:80] if meet else None,
+             str(mfp)[:80] if mfp else None, row[0]))
+    return _w_set(conn, ctx, row, 'agreed')
+
+
+def _w_meet(conn, ctx, row):
+    # arrangement updates during negotiation — propose a meet-place
+    # and/or link the prepaid-mats mail fingerprint. Either field may
+    # ride alone; the other party's next inbox pull IS the reply
+    body = ctx['body']
+    meet, mfp = body.get('meet'), body.get('matsFp')
+    if meet is None and mfp is None:
+        ctx['send'](400, {'error': 'payload'})
+        return None
+    conn.execute(
+        'UPDATE writs SET meet=COALESCE(?,meet),'
+        'mats_fp=COALESCE(?,mats_fp),updated=? WHERE id=?',
+        (str(meet)[:80] if meet is not None else None,
+         str(mfp)[:80] if mfp is not None else None,
+         ctx['now'], row[0]))
+    return {'ok': True, 'writ': _writ_dict(_writ_row(conn, row[0]))}
+
+
+def _w_decline(conn, ctx, row):
+    # a crafter declining is the only public penalty — refusing work
+    # at the door is the honest negative signal for browsers
+    if ctx['install'] == row[5]:
+        _stat(conn, row[5], 'writs_declined')
+    return _w_set(conn, ctx, row, 'declined')
+
+
+def _w_ship(conn, ctx, row):
+    cod = ctx['body'].get('cod')
+    try:
+        cod = int(cod) if cod is not None else None
+        if cod is not None and not 0 <= cod <= MAX_PRICE:
+            cod = None
+    except (TypeError, ValueError):
+        cod = None
+    conn.execute(
+        'UPDATE writs SET state=\'shipped\',updated=?,cod=?,'
+        'mail_from=? WHERE id=?',
+        (ctx['now'], cod, str(ctx['body'].get('mailFrom') or '')[:24],
+         row[0]))
+    return {'ok': True, 'writ': _writ_dict(_writ_row(conn, row[0]))}
+
+
+def _w_recv(conn, ctx, row):
+    _stat(conn, row[5], 'writs_done')
+    return _w_set(conn, ctx, row, 'done')
+
+
+def _w_cancel(conn, ctx, row):
+    return _w_set(conn, ctx, row, 'cancelled')
+
+
+# (required role, allowed source states, handler)
+WRIT_VERBS = {
+    'wquote':   ('to',     ('open', 'quoted'), _w_quote),
+    'waccept':  ('either', ('open', 'quoted'), _w_accept),
+    'wdecline': ('either', ('open', 'quoted', 'agreed'), _w_decline),
+    'wship':    ('to',     ('agreed',), _w_ship),
+    'wrecv':    ('from',   ('shipped',), _w_recv),
+    'wcancel':  ('from',   ('open', 'quoted'), _w_cancel),
+    'wmeet':    ('either', ('open', 'quoted', 'agreed'), _w_meet),
+}
 
 
 # ---- host admin (loopback + X-Admin-Key) ----

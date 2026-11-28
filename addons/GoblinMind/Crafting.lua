@@ -437,6 +437,7 @@ local function ForeignTradeskill()
 	end
 	return false
 end
+C.Foreign = ForeignTradeskill
 
 -- required skill isn't in GetRecipeInfo — it lives on the recipe
 -- LINK's tooltip as "Requires Cooking (125)". One hidden probe,
@@ -486,9 +487,30 @@ local function SourceTextFor(recipeID)
 	if ok and type(s) == "string" and s ~= "" then return s end
 end
 
+-- a char's own GetProfessions list is the ONLY source that can't
+-- lie about who knows what — recipe toon-stamps can (foreign-
+-- session scans wrote them). Recorded per char for attribution.
+local function RecordMyProfs()
+	if not (GetProfessions and GetProfessionInfo and GM.db) then return end
+	local me = GM.OwnName and GM.OwnName()
+	local key = me and GM.FirstName and GM.FirstName(me)
+	if not (key and key ~= "") then return end
+	local set = {}
+	for _, idx in ipairs({ GetProfessions() }) do
+		local name = GetProfessionInfo(idx)
+		if type(name) == "string" and name ~= "" then
+			set[name:lower()] = true
+		end
+	end
+	if not next(set) then return end
+	GM.db.charProfs = GM.db.charProfs or {}
+	GM.db.charProfs[key:lower()] = set
+end
+
 local function Scan()
 	C._scans = (C._scans or 0) + 1
 	if not C_TradeSkillUI then return end
+	RecordMyProfs()
 	if ForeignTradeskill() then return end
 	-- GetAllRecipeIDs first: the full line regardless of the Blizzard
 	-- filter — filtered enum can hide unlearned rows from capture
@@ -524,7 +546,41 @@ local function Scan()
 		if info and info.learned then
 			local sc = C_TradeSkillUI.GetRecipeSchematic
 				and C_TradeSkillUI.GetRecipeSchematic(recipeID, false)
-			if sc and sc.outputItemID then
+			-- service recipes (enchants, lock work) craft nothing —
+			-- they still belong in the recipe DB and drive the shop
+			-- roster; without this branch the scan silently skipped
+			-- every craft that produces no output item. Kept in a
+			-- separate table: every recipes[] consumer assumes an
+			-- itemID exists.
+			if sc and not sc.outputItemID then
+				local prev = GoblinMindCrafting.services[recipeID] or {}
+				local mats = prev.mats or {}
+				if sc.reagentSlotSchematics then
+					mats = {}
+					for _, slot in ipairs(sc.reagentSlotSchematics) do
+						local r = slot.reagents and slot.reagents[1]
+						if r and r.itemID and slot.quantityRequired then
+							tinsert(mats, { id = r.itemID,
+								qty = slot.quantityRequired })
+						end
+					end
+				end
+				GoblinMindCrafting.services[recipeID] = {
+					name = info.name or prev.name,
+					svc = true,
+					-- which toon knows it — the shop roster routes
+					-- requests to the crafter, not the install
+					toon = (GM.OwnName and GM.OwnName()) or prev.toon,
+					prof = ProfForRecipe(recipeID) or prof
+						or (type(prev.prof) == "string"
+							and prev.prof ~= "" and prev.prof or nil),
+					mats = mats,
+					cat = info.categoryID or prev.cat,
+					diff = info.relativeDifficulty
+						or info.difficulty or prev.diff,
+				}
+				n = n + 1
+			elseif sc and sc.outputItemID then
 				local mats = {}
 				for _, slot in ipairs(sc.reagentSlotSchematics or {}) do
 					-- regular reagent slots only: reagents[1].itemID +
@@ -538,6 +594,7 @@ local function Scan()
 				GoblinMindCrafting.recipes[recipeID] = {
 					name = info.name or prev.name,
 					itemID = sc.outputItemID,
+					toon = (GM.OwnName and GM.OwnName()) or prev.toon,
 					prof = ProfForRecipe(recipeID) or prof
 						or (type(prev.prof) == "string"
 							and prev.prof ~= "" and prev.prof or nil),
@@ -577,6 +634,7 @@ local function Scan()
 				name = info.name or prev.name,
 				itemID = sc and sc.outputItemID or prev.itemID,
 				unlearned = true,
+				toon = (GM.OwnName and GM.OwnName()) or prev.toon,
 				prof = ProfForRecipe(recipeID) or prof
 					or (type(prev.prof) == "string"
 						and prev.prof ~= "" and prev.prof or nil),
@@ -599,11 +657,14 @@ end
 function C.PurgeProf(name)
 	if not name or name == "" then return 0 end
 	local n = 0
-	for id, r in pairs(GoblinMindCrafting.recipes or {}) do
-		if type(r.prof) == "string"
-			and r.prof:lower() == name:lower() then
-			GoblinMindCrafting.recipes[id] = nil
-			n = n + 1
+	for _, tbl in ipairs({ GoblinMindCrafting.recipes,
+							GoblinMindCrafting.services }) do
+		for id, r in pairs(tbl or {}) do
+			if type(r.prof) == "string"
+				and r.prof:lower() == name:lower() then
+				tbl[id] = nil
+				n = n + 1
+			end
 		end
 	end
 	if n > 0 then C.dirty = true end
@@ -614,6 +675,27 @@ end
 -- completed craft cast (spellID == recipeID) decrements the queue by
 -- one and ticks the active plan step — so queue counts always match
 -- what actually got made, whether the call batched or not.
+-- journal one craft: mats out at paid basis (craftout), product in
+-- at the consumed-mat total (craftin) — wip holds the basis between
+-- the pair so a later sale of the product reports real profit
+local function JournalCraft(spellID, n)
+	n = n or 1
+	local r = GoblinMindCrafting.recipes
+		and GoblinMindCrafting.recipes[spellID]
+	if not (r and r.mats and GM.Ledger and GM.Ledger.Record) then return end
+	-- basis BEFORE the craftout consumes paidQ — the product's cost
+	-- must equal what the mats carried, not the post-consume avg
+	local matCost = 0
+	for _, m in ipairs(r.mats) do
+		matCost = matCost + (GM.Ledger.Basis(m.id) or 0) * m.qty
+	end
+	for _, m in ipairs(r.mats) do
+		GM.Ledger.Record("craftout", { itemID = m.id, qty = m.qty * n })
+	end
+	GM.Ledger.Record("craftin", { itemID = r.itemID,
+		qty = (r.numMade or 1) * n, cost = matCost * n })
+end
+
 local function OnCastComplete(unit, castGUID, spellID)
 	if unit ~= "player" or not spellID then return end
 	-- some paths re-fire completion for one cast — same castGUID
@@ -625,6 +707,7 @@ local function OnCastComplete(unit, castGUID, spellID)
 	end
 	if GoblinMindCrafting.queue and GoblinMindCrafting.queue[spellID] then
 		C.QueueAdd(spellID, -1)
+		JournalCraft(spellID)
 		GM.View.Refresh("crafting")
 	end
 	local step = GM.PlanQueue and GM.PlanQueue.ActiveStep
@@ -671,6 +754,7 @@ local function OnCastComplete(unit, castGUID, spellID)
 				if GoblinMindCrafting.queue
 					and GoblinMindCrafting.queue[spellID] then
 					C.QueueAdd(spellID, -extra)
+					JournalCraft(spellID, extra)
 					GM.View.Refresh("crafting")
 				end
 				local st = GM.PlanQueue and GM.PlanQueue.ActiveStep
@@ -696,6 +780,7 @@ end
 -- the UI takeover so the window doesn't flash once per line.
 local function ProfPump()
 	if not (GetProfessions and GetProfessionInfo) then return end
+	RecordMyProfs()
 	local seen = {}
 	for id in pairs(GoblinMindCrafting.recipes) do
 		local p = C.Prof(id)
@@ -724,6 +809,7 @@ end
 function C.Init()
 	GoblinMindCrafting = GoblinMindCrafting or {}
 	GoblinMindCrafting.recipes = GoblinMindCrafting.recipes or {}
+	GoblinMindCrafting.services = GoblinMindCrafting.services or {}
 	GoblinMindCrafting.queue = GoblinMindCrafting.queue or {}
 	-- K opens the professions OVERVIEW — no TRADE_SKILL_SHOW fires —
 	-- so the takeover hook on the native frame has to exist at load
@@ -781,6 +867,10 @@ function C.Init()
 		end
 		if e == "TRADE_SKILL_SHOW" then
 			Tr("TRADE_SKILL_SHOW")
+			-- pf:OnShow uses this to tell a fresh session open (link
+			-- click — the show lands in the same beat) from a stale
+			-- linked session a K-overview inherited
+			C._lastShowT = GetTime()
 			-- name the open line NOW from the live enum — waiting for
 			-- the debounced recipe scan leaves lastProf stale/nil
 			-- through the settle window, and stale session state can
@@ -796,13 +886,12 @@ function C.Init()
 				end
 			end
 			-- TSM parity: opening a tradeskill IS opening our crafting
-			-- window (linked/NPC sessions excluded — not ours to drive)
-			local linked = C_TradeSkillUI
-				and C_TradeSkillUI.IsTradeSkillLinked
-				and C_TradeSkillUI.IsTradeSkillLinked()
-			local npc = C_TradeSkillUI and C_TradeSkillUI.IsNPCCrafting
-				and C_TradeSkillUI.IsNPCCrafting()
-			if not (linked or npc or C._pumping)
+			-- window — linked/NPC sessions included: they take over in
+			-- foreign mode (their recipes + suggested prices, REQUEST
+			-- instead of CRAFT). The frame may already be shown+parked,
+			-- so the OnShow hook won't refire — this is the entry that
+			-- actually puts our window up for a chat-link click.
+			if not C._pumping
 				and GM.CraftingUI and GM.CraftingUI.OnTradeSkillOpen then
 				GM.CraftingUI.OnTradeSkillOpen()
 			end
@@ -838,6 +927,19 @@ function C.Init()
 			end
 		elseif e == "TRADE_SKILL_CLOSE" then
 			Tr("TRADE_SKILL_CLOSE")
+			-- Forever swap order: the OLD line's CLOSE can land
+			-- AFTER the NEW line's SHOW (linked-link hops do this).
+			-- A live session means this close is stale bookkeeping —
+			-- honoring it would hide our window under the new one.
+			local live
+			if C_TradeSkillUI and C_TradeSkillUI.GetAllRecipeIDs then
+				local ok, ids = pcall(C_TradeSkillUI.GetAllRecipeIDs)
+				live = ok and type(ids) == "table" and ids[1] ~= nil
+			end
+			if live then
+				Tr("stale close — session still live")
+				return
+			end
 			C.lastProf = nil -- session ended; a stale prof would
 			-- read as "line open" in LineOpenFor's fallback
 			C.batchQty = nil -- a dead line can't finish its batch
@@ -883,6 +985,11 @@ function C.Init()
 				if C.lastProf and GM.CraftingUI.SelectProf then
 					GM.CraftingUI.SelectProf(C.lastProf)
 				else GM.View.Refresh("crafting") end
+				-- a foreign swap reuses the same profession name —
+				-- SelectProf early-returns and the new owner's list
+				-- never paints; a settled repaint is the whole
+				-- point of this debounce (no-op when not shown)
+				GM.View.Refresh("crafting")
 			end
 		end)
 	end)
@@ -890,16 +997,21 @@ end
 
 -- ============ cost model ============
 
--- per-unit mat price: market first, vendor-sell as the floor (matches
--- TSM's default matPrice fallback chain minus sources we lack)
+-- per-unit mat price: cheapest acquisition route wins — market,
+-- vendor-buy, and the farm-derived cost all compete (TSM's matPrice
+-- chain minus sources we lack, plus the one TSM can't have). A mat
+-- farmable for less than market prices at the farm; vendor-sell
+-- stays the floor when no route has a price.
 function C.MatPrice(itemID)
-	local GetInfo = C_Item and C_Item.GetItemInfo or GetItemInfo
 	local ah = GM.Price("dbmarket", itemID)
 	local vb = GM.Price("vendorbuy", itemID)
-	-- vendor mats (flux, stock, thread) price at the vendor when it's
-	-- the cheaper source — crafting math stays honest either way
-	if vb and vb > 0 and (not ah or vb < ah) then return vb end
-	return ah or (GetInfo and select(11, GetInfo(itemID)))
+	local fc = GM.Drops and GM.Drops.FarmCost
+		and GM.Drops.FarmCost(itemID)
+	local best
+	for _, p in ipairs({ ah, vb, fc }) do
+		if p and p > 0 and (not best or p < best) then best = p end
+	end
+	return best or GM.VendorSellPrice(itemID)
 end
 
 -- SINGLE execution path for craft economics — every surface that

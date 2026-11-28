@@ -205,6 +205,32 @@ Primary data = the in-house book feed below.
   lines, PlanQueue stats, Inventory undercut checks) already route
   through `ItemEntry` — do not bypass it with direct `GM.AH.book`
   reads for item values.
+- **Mirror-state + projection rule** (2026-11-26, the
+  "mismatch keeps recurring" fix): mirror Blizzard's STATE
+  faithfully, name each semantic ONCE in a guarded accessor,
+  and make every consumer a projection — consumers never call a
+  raw API for meaning. In practice: (a) ONE function per semantic
+  (`GM.VendorSellPrice` is THE field-11 read — nine open-coded
+  `select(11, GetInfo)` sites each guessed separately and each
+  failed separately; `V.Price` names each vendor movement's truth
+  source); (b) raw stays next to derived — carry the API's
+  provisional value alongside the pending truth and let the real
+  value overwrite it (`ExpectBuy`: merchant price is provisional,
+  the `PLAYER_MONEY` delta is the actual cost basis); (c) prefer
+  STATE mirrors over text parsing — `PLAYER_MONEY` deltas catch
+  every copper movement where `CHAT_MSG_MONEY` parsing silently
+  matched nothing, and the buyback-list diff catches every sale
+  where hooking our own sell functions missed Blizzard-UI paths;
+  (d) never filter API rows at capture — `status ~= 0` rows we
+  discarded turned out to be the receivable truth; (e) RECONCILE
+  to whatever truth exists — `cash` snaps to `GetMoney()`,
+  `rcbl` snaps to the owned enum's sold rows; a projection that
+  can't re-snap to ground truth drifts until a user screenshots
+  it. Boundary: Blizzard state can be ephemeral (buyback caps
+  ~12 slots, merchant frame exists only while open — snapshot it)
+  and purely-ours concepts (envelopes, paidQ, op prices) legitimately
+  live in the overlay. When a mismatch DOES surface, the fix is
+  an accessor/reconcile change, never a patch at the consumer.
 - **Feed registry (`brain\feeds.json`)**: named feeds replace raw
   paths — `{"forever": {appdata, root, out[]}}`. Any command arg
   that resolves a feed name (`watch forever`, `book forever`,

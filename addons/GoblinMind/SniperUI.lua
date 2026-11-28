@@ -161,14 +161,8 @@ local function Build()
 		row:SetPoint("TOPLEFT", 0, -((i - 1) * ROW_H))
 		row:SetZebra(i)
 		-- dismiss: drop the hit without buying
-		local x = CreateFrame("Button", nil, row)
-		x:SetSize(14, 14)
+		local x = W.XBtn(row)
 		x:SetPoint("RIGHT", -3, 0)
-		x.text = GM.MakeFontString(x, GM.FONT_BOLD, 10, "textDim")
-		x.text:SetPoint("CENTER")
-		x.text:SetText("x")
-		x:SetScript("OnEnter", function() x.text:SetTextColor(GM.RGB("err")) end)
-		x:SetScript("OnLeave", function() x.text:SetTextColor(GM.RGB("textDim")) end)
 		row.x = x
 		ui.rows[i] = row
 	end
@@ -268,7 +262,7 @@ function SU.Refresh()
 		row:Show()
 			row:SetItem({ itemID = h.itemID, name = h.name })
 			local flags = GM.Intel and GM.Intel.FlagsFor(h)
-			local nm = GM.ItemName(h.itemID)
+			local nm = GM.Ctx(h).name
 				or (type(h.name) == "string" and h.name ~= ""
 					and h.name)
 				or ("item " .. (h.itemID or "?"))

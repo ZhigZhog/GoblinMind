@@ -58,7 +58,8 @@ STYLE_WORDS = {
 HELPER_RE = re.compile(
     r'(?:^|[^\w_])'
     r'(?:Btn|ActionBtn|MkBtn|Segment|ColPanel|TitledPanel|ListPanel|'
-    r'Panel|FilterToggle|EditBox)\s*\('
+    r'Panel|FilterToggle|EditBox|HintEdit|MkEdit|PageTabs|VTabs|'
+    r'MoneyEdit|Chrome)\s*\('
 )
 
 

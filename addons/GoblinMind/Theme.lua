@@ -53,7 +53,8 @@ GM.COIN_G, GM.COIN_S, GM.COIN_C =
 -- full money: "12g 34s 56c" with each unit in its coin color
 function GM.Money(copper)
 	if not copper then return GM.CC("textDim") .. "—|r" end
-	copper = floor(copper + 0.5)
+	local neg = copper < 0
+	copper = floor((neg and -copper or copper) + 0.5)
 	local g = floor(copper / 10000)
 	local s = floor(copper % 10000 / 100)
 	local c = copper % 100
@@ -61,26 +62,29 @@ function GM.Money(copper)
 	if g > 0 then tinsert(parts, GM.COIN_G .. g .. "g|r") end
 	if s > 0 or g > 0 then tinsert(parts, GM.COIN_S .. s .. "s|r") end
 	tinsert(parts, GM.COIN_C .. c .. "c|r")
-	return table.concat(parts, " ")
+	return (neg and "-" or "") .. table.concat(parts, " ")
 end
 
 -- two-unit money for tight columns: "10g 85s" / "85s 20c" / "34c" —
 -- same coin colors, truncated to the top two units
 function GM.MoneyShort(copper)
 	if not copper then return GM.CC("textDim") .. "—|r" end
-	copper = floor(copper + 0.5)
+	local neg = copper < 0
+	copper = floor((neg and -copper or copper) + 0.5)
 	local g = floor(copper / 10000)
 	local s = floor(copper % 10000 / 100)
+	local out
 	if g > 0 then
-		return GM.COIN_G .. g .. "g|r"
+		out = GM.COIN_G .. g .. "g|r"
 			.. (s > 0 and (" " .. GM.COIN_S .. s .. "s|r") or "")
-	end
-	if s > 0 then
-		return GM.COIN_S .. s .. "s|r"
+	elseif s > 0 then
+		out = GM.COIN_S .. s .. "s|r"
 			.. (copper % 100 > 0
 				and (" " .. GM.COIN_C .. copper % 100 .. "c|r") or "")
+	else
+		out = GM.COIN_C .. copper .. "c|r"
 	end
-	return GM.COIN_C .. copper .. "c|r"
+	return (neg and "-" or "") .. out
 end
 
 -- signed money for profit columns: "+1g 2s" / "-3s 4c" — the sign

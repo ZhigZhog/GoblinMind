@@ -98,12 +98,8 @@ local function Build()
 	title:SetPoint("TOPLEFT", 12, -10)
 	ui.title = title
 
-	local close = CreateFrame("Button", nil, f)
-	close:SetSize(16, 16)
+	local close = W.XBtn(f, 16)
 	close:SetPoint("TOPRIGHT", -6, -6)
-	close.text = GM.MakeFontString(close, GM.FONT_BOLD, 12, "textDim")
-	close.text:SetPoint("CENTER")
-	close.text:SetText("x")
 	close:SetScript("OnClick", function() f:Hide() end)
 	-- every hide that isn't the DONE button = dismissed mid-flow;
 	-- MaybeShow re-opens it at login until the wizard is finished
@@ -170,7 +166,8 @@ local function Build()
 	nameLab:SetText("YOUR NAME (shown to the server)")
 	local nameEb = W.EditBox(p1, 200)
 	nameEb:SetPoint("TOPLEFT", nameLab, "BOTTOMLEFT", -2, -4)
-	nameEb:SetText(UnitName and UnitName("player") or "goblinmind")
+	nameEb:SetText((GM.OwnName and GM.OwnName())
+		or (UnitName and UnitName("player")) or "goblinmind")
 	ui.nameEb = nameEb
 
 	local keyLab = GM.MakeFontString(p1, GM.FONT, 9, "textDim")

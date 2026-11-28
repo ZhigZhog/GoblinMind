@@ -656,8 +656,8 @@ Cmd("ledger ", function(arg)
 		return
 	end
 	for _, r in ipairs(rows) do
-		GM.Print(format("%s %s id=%d q=%d u=%s",
-			date("%H:%M", r.t), r.ty, r.i, r.q,
+		GM.Print(format("%s %s id=%s q=%d u=%s",
+			date("%H:%M", r.t), r.ty, tostring(r.i or "—"), r.q or 0,
 			r.u and GM.Money(r.u) or "—"))
 	end
 end, true)
@@ -717,8 +717,7 @@ function GM.PullInbox()
 			-- MinimapCluster layout).
 			local unread = HasNewMail and HasNewMail()
 			if unread == nil then
-				local n = GetInboxNumItems and GetInboxNumItems() or 0
-				for i = 1, n do
+				for i = 1, GM.MailCount() do
 					local wasRead = select(9, GetInboxHeaderInfo(i))
 					if wasRead == false then unread = true break end
 				end
@@ -731,6 +730,12 @@ function GM.PullInbox()
 			end
 		end)
 	end)
+end
+
+-- THE inbox-count read — live API state (the contents mirror is
+-- Inventory's mailCache; the count itself is cheap truth)
+function GM.MailCount()
+	return GetInboxNumItems and GetInboxNumItems() or 0
 end
 
 -- Character key "Name-Realm" — the SV per-char bucket key. Shared by
@@ -765,10 +770,230 @@ function GM.IsSelfCharKey(key)
 		return false
 	end
 	local kname, krealm = key:match("^(.-)%-(.*)$")
-	if not kname then return key == name end
-	if kname ~= name then return false end
+	if not kname then return GM.SameChar(key, name) == true end
+	if not GM.SameChar(kname, name) then return false end
 	local realm = GetRealmName and GetRealmName() or ""
 	return realm == "" or krealm == realm
+end
+
+-- Forever surnames: UnitName returns the base name ("Unstable") but
+-- mail delivery needs the full "Unstable Haberdasher". FirstName
+-- normalizes any form to the base for identity compares; FullName
+-- resolves base -> deliverable through every source that can carry
+-- surnames, caching hits in GM.db.fullNames (user-seedable: set
+-- GM.db.fullNames["first"] = "First Last" when no source knows it).
+function GM.FirstName(n)
+	if not n then return nil end
+	if Ambiguate then n = Ambiguate(n, "mail") end
+	n = (n:match("^([^%-]+)")) or n            -- strip -Realm
+	return (n:match("^(%S+)")) or n            -- base before the surname
+end
+
+function GM.FullName(n)
+	if not n then return nil end
+	local base = Ambiguate and Ambiguate(n, "mail") or n
+	base = strtrim(base)
+	if base == "" or base:find(" ") then return base end
+	local low = base:lower()
+	-- a surname hit is "<base> <surname…>", not the bare base again
+	local function try(cand)
+		if type(cand) == "table" then cand = cand.name or cand[1] end
+		if type(cand) ~= "string" then return nil end
+		if Ambiguate then cand = Ambiguate(cand, "mail") end
+		cand = strtrim(cand)
+		return cand:lower():sub(1, #low + 1) == low .. " "
+			and cand or nil
+	end
+	local hit = GM.db and GM.db.fullNames and try(GM.db.fullNames[low])
+	if not hit then
+		for _, r in ipairs(GM.Model and GM.Model.Pref
+				and GM.Model.Pref("mailRecent") or {}) do
+			hit = try(r)
+			if hit then break end
+		end
+	end
+	if not hit and C_FriendList and C_FriendList.GetNumFriends then
+		-- counts can be nil/non-number before the friend list loads
+		-- (FullName runs inside the ADDON_LOADED window via Init)
+		for i = 1, tonumber(C_FriendList.GetNumFriends()) or 0 do
+			local info = C_FriendList.GetFriendInfoByIndex(i)
+			hit = info and try(info.name)
+			if hit then break end
+		end
+	end
+	if not hit and IsInGuild and IsInGuild() and GetNumGuildMembers then
+		for i = 1, tonumber(GetNumGuildMembers()) or 0 do
+			hit = try((GetGuildRosterInfo(i)))
+			if hit then break end
+		end
+	end
+	-- last resort: Blizzard's own mail-completion source — the same
+	-- provider its send box's dropdown reads
+	if not hit and SendMailNameEditBox
+			and type(SendMailNameEditBox.autoCompleteSource)
+				== "function" then
+		local ok, res = pcall(SendMailNameEditBox.autoCompleteSource,
+			base, SendMailNameEditBox)
+		if ok and type(res) == "table" then
+			for _, cand in ipairs(res) do
+				hit = try(cand)
+				if hit then break end
+			end
+		end
+	end
+	if hit then
+		if GM.db then
+			GM.db.fullNames = GM.db.fullNames or {}
+			GM.db.fullNames[low] = hit
+		end
+		return hit
+	end
+	return base
+end
+
+-- canonical self-identity — THE way every capture of "me" reads
+-- the player name. UnitName alone returns the short form, and on
+-- Forever two toons can share a first name (only the pair is
+-- unique), so stored/wire identity needs the resolved form.
+-- Anything persisting or transmitting the local char's name goes
+-- through this; anything comparing names goes through SameChar.
+function GM.OwnName()
+	local n = UnitName and UnitName("player")
+	-- the client's own GUID lookup carries the surname on Forever —
+	-- the only source that knows "me" without a mail/friend trail
+	if n and UnitGUID and GetPlayerInfoByGUID then
+		local ok, full = pcall(function()
+			return select(6, GetPlayerInfoByGUID(UnitGUID("player")))
+		end)
+		if ok and type(full) == "string" and full:find(" ") then
+			if GM.db then
+				GM.db.fullNames = GM.db.fullNames or {}
+				GM.db.fullNames[n:lower()] = full
+			end
+			return full
+		end
+	end
+	return (n and GM.FullName(n)) or n
+end
+
+-- the resolved-name cache itself, for surfaces that enumerate all
+-- known full names (mail autocomplete) — the only GM.db.fullNames
+-- read path outside this resolver
+function GM.FullNames()
+	return (GM.db and GM.db.fullNames) or {}
+end
+
+-- form-agnostic identity compare: "Zhig", "Zhig-Realm", and
+-- "Zhig Zhog" all test equal — first name is the key (Forever's
+-- rule: a first OR last name may repeat, never both).
+-- SameChar(x) compares x to the local player.
+function GM.SameChar(a, b)
+	a = GM.FirstName(a)
+	b = GM.FirstName(b ~= nil and b
+		or (UnitName and UnitName("player")))
+	return a ~= nil and b ~= nil and a:lower() == b:lower()
+end
+
+-- class-color companion to FullName: resolve a character's class
+-- TOKEN ("MAGE", "WARLOCK", ...) through every social source that
+-- reports it — own toon, party, guild roster, friends — cached in
+-- GM.db.classOf[first-lower]. UnitClass needs a unit token, so
+-- names we can't observe return nil (callers fall back to the
+-- theme text color). The cache keys off the FIRST name — Forever's
+-- rule is two chars can share first or last, never both.
+local locToToken
+function GM.ClassOf(n)
+	local base = GM.FirstName(n)
+	if not base or base == "" then return nil end
+	local low = base:lower()
+	if GM.SameChar(base) then
+		local tok = select(2, UnitClass("player"))
+		if tok and GM.db then
+			GM.db.classOf = GM.db.classOf or {}
+			GM.db.classOf[low] = tok
+		end
+		return tok
+	end
+	local c = GM.db and GM.db.classOf and GM.db.classOf[low]
+	if c then return c end
+	local tok
+	if UnitName and UnitClass then
+		for _, u in ipairs({ "party1", "party2", "party3", "party4" }) do
+			local un = UnitName(u)
+			if un and GM.FirstName(un):lower() == low then
+				tok = select(2, UnitClass(u))
+				break
+			end
+		end
+	end
+	if not tok and IsInGuild and IsInGuild() and GetGuildRosterInfo then
+		local total = tonumber(GetNumGuildMembers
+			and GetNumGuildMembers()) or 0
+		for i = 1, total do
+			-- return 11 = classFileName, the English token
+			local nm, _, _, _, _, _, _, _, _, _, cls =
+				GetGuildRosterInfo(i)
+			if cls and GM.FirstName(nm or ""):lower() == low then
+				tok = cls
+				break
+			end
+		end
+	end
+	if not tok then
+		-- friends report a LOCALIZED class name — reverse-map once
+		if not locToToken then
+			locToToken = {}
+			for _, tbl in ipairs({ LOCALIZED_CLASS_NAMES_MALE,
+					LOCALIZED_CLASS_NAMES_FEMALE }) do
+				for t, loc in pairs(tbl or {}) do
+					locToToken[loc:lower()] = t
+				end
+			end
+			if not next(locToToken) and FillLocalizedClassList then
+				for _, female in ipairs({ false, true }) do
+					local t = {}
+					FillLocalizedClassList(t, female)
+					for _, c2 in pairs(t) do
+						locToToken[(c2.name or ""):lower()] = c2.token
+					end
+				end
+			end
+		end
+		if C_FriendList and C_FriendList.GetNumFriends
+				and C_FriendList.GetFriendInfoByIndex then
+			for i = 1, C_FriendList.GetNumFriends() do
+				local info = C_FriendList.GetFriendInfoByIndex(i)
+				if info and GM.FirstName(info.name or ""):lower()
+						== low then
+					tok = locToToken[(info.className or ""):lower()]
+					break
+				end
+			end
+		end
+	end
+	if tok and GM.db then
+		GM.db.classOf = GM.db.classOf or {}
+		GM.db.classOf[low] = tok
+	end
+	return tok
+end
+
+-- "|cffRRGGBB" prefix for the name's class color, nil when unknown
+function GM.ClassCC(n)
+	local tok = GM.ClassOf(n)
+	local c = tok and (CUSTOM_CLASS_COLORS or RAID_CLASS_COLORS or {})[tok]
+	return c and string.format("|cff%02x%02x%02x",
+		math.floor(c.r * 255 + 0.5), math.floor(c.g * 255 + 0.5),
+		math.floor(c.b * 255 + 0.5)) or nil
+end
+
+-- resolved full name wrapped in its class color — for fontstring
+-- text and concat contexts alike (embeds |cff, so a plain
+-- SetText already carries the color)
+function GM.NameColored(n)
+	local disp = (GM.FullName and GM.FullName(n)) or n or "?"
+	local cc = GM.ClassCC(n)
+	return cc and (cc .. disp .. "|r") or disp
 end
 
 -- Fold bare-name keys (written during the empty-realm window) into
@@ -896,22 +1121,34 @@ end
 -- economics, tooltip sections, queue rows) — the merge is bucket-
 -- memoized like the inventory maps. Book/mesh freshness tolerance
 -- is a quarter second; entries are read-only by contract.
-local itemEntry = GM.BucketMemo(function(itemID)
+local itemEntry = GM.BucketMemo(function(key)
+	-- key = "<itemID>|<bookKey>" — the bookKey is itemID for base
+	-- items, "v<id>:<sfx>:<lvl>" for variants. Model fields come
+	-- from the base item's emitted row (a suffix doesn't change the
+	-- fundamental market) with any emitted variant row on top; the
+	-- observation overlay reads the VARIANT book row so a variant's
+	-- mb/mbx never conflates into the base item's
+	local itemID, bk = strsplit("|", key)
+	itemID = tonumber(itemID)
+	if not itemID then return nil end
+	bk = bk ~= "" and bk or nil
 	local db = GoblinMindDB
 	if not db then return nil end
 	local r = db.realms and db.realms[GM.Scope()]
 	local t = (r and r.items) or db.items
 	local e = t and t[itemID]
-	local book = GM.AH and GM.AH.book and GM.AH.book[itemID]
+	local ev = bk and t and t[bk]
+	local book = GM.AH and GM.AH.book and GM.AH.book[bk or itemID]
 	local bookLive = book and GM.AH.BookLive and GM.AH.BookLive()
 	local beacon = GM.Mesh and GM.Mesh.LatestMB and GM.Mesh.LatestMB(itemID)
-	if not e and not book and not beacon then return nil end
+	if not e and not ev and not book and not beacon then return nil end
 	local out = {}
 	if e then for k, v in pairs(e) do out[k] = v end end
+	if ev then for k, v in pairs(ev) do out[k] = v end end
 	-- book obs overlay: wins when it's the freshest source (BookLive),
 	-- and is still the fallback when the emit has no row for the item
 	-- at all (stale data with a provenance tag beats a blank)
-	if book and (bookLive or not e) then
+	if book and (bookLive or (not e and not ev)) then
 		out.mb, out.mbx, out.sup, out.n =
 			book.mb, book.mbx, book.sup, book.n
 		out._src, out._srcT = "book", GM.AH.bookT
@@ -927,7 +1164,22 @@ local itemEntry = GM.BucketMemo(function(itemID)
 	end
 	return out
 end)
-GM.ItemEntry = itemEntry
+-- the public signature gains an optional itemKey — callers holding
+-- a suffixed link/owned row pass its key so variant market data
+-- resolves instead of the base item's
+GM.ItemEntry = function(itemID, keyOrBk)
+	-- keyOrBk: an itemKey table, a variant "v…" bookKey string, a
+	-- numeric bookKey (base items — ctx.bookKey arrives this way),
+	-- or nil. Numbers pass through as-is; tables go through BookKey.
+	local bk
+	if type(keyOrBk) == "number" or type(keyOrBk) == "string" then
+		bk = keyOrBk
+	else
+		bk = GM.AH and GM.AH.BookKey
+			and GM.AH.BookKey(itemID, keyOrBk) or itemID
+	end
+	return itemEntry(tostring(itemID) .. "|" .. tostring(bk))
+end
 
 -- TSM fallback price (copper) — the shim's honest baseline before the model lands.
 function GM.TSMMarket(itemID)
@@ -1065,6 +1317,7 @@ end
 -- "insecure scripts exceeded execution limit" kills). One 250ms
 -- bucket rebuild serves every itemID lookup.
 local probeAt = 0
+local lastBagMap
 local BagMap = GM.BucketCache(function()
 	local now = GetTime()
 	if now - probeAt > 3 then
@@ -1076,6 +1329,23 @@ local BagMap = GM.BucketCache(function()
 		function(_, _, id, n)
 			m[id] = (m[id] or 0) + n
 		end)
+	-- the movement detector: every bag-map rebuild diffs against the
+	-- last and reports arrivals/departures to the ledger's
+	-- expectation register — one diff point verifies every Ops verb
+	-- (buy lands, post departs, mailout departs, cancel returns)
+	if lastBagMap and GM.Ledger then
+		for id, n in pairs(m) do
+			local d = n - (lastBagMap[id] or 0)
+			if d > 0 and GM.Ledger.Arrived then
+				GM.Ledger.Arrived(id, d) end
+		end
+		for id, n in pairs(lastBagMap) do
+			local d = n - (m[id] or 0)
+			if d > 0 and GM.Ledger.Departed then
+				GM.Ledger.Departed(id, d) end
+		end
+	end
+	lastBagMap = m
 	return m
 end)
 
@@ -1091,10 +1361,12 @@ function GM.BagItems()
 	return set
 end
 
--- Bank contents are only readable while the bank frame is open.
+-- Bank contents are only readable while the bank is open. The
+-- BANKFRAME_* event flag is authoritative on this client — the
+-- native frame isn't what opens (same rule BankUI/Banking use).
 local BankMap = GM.BucketCache(function()
 	local m = {}
-	if BankFrame and BankFrame:IsShown() then
+	if GM.bankOpen or (BankFrame and BankFrame:IsShown()) then
 		GM.EachBagSlot(GM.BankContainerList(),
 			function(_, _, id, n)
 				m[id] = (m[id] or 0) + n
@@ -1215,6 +1487,184 @@ function GM.ItemNameOr(id)
 	return GM.ItemName(id) or ("item " .. id)
 end
 
+-- ============ variant-aware display resolution ============
+-- ONE resolver for every surface: suffixed items ("…of Defense")
+-- resolve their own name/link/color — never the base item's.
+-- Order: the link's own bracket text → GetItemKeyInfo(key) → a
+-- rebuilt suffixed itemString → the base item name. Callers that
+-- pass neither link nor key get the base item's answer.
+function GM.ItemDisplayName(id, link, key)
+	-- a suffixed key is authoritative — the link's bracket text can
+	-- be a bare-name stub even when its itemString carries nothing
+	if key and (key.itemSuffix or 0) ~= 0 then
+		if C_AuctionHouse and C_AuctionHouse.GetItemKeyInfo then
+			local ok, ki = pcall(C_AuctionHouse.GetItemKeyInfo,
+				key, true)
+			local n = ok and ki and ki.itemName
+			if type(n) == "string" and n ~= "" then return n end
+		end
+		-- a rebuilt itemString carries the suffix alone — GetInfo
+		-- resolves the variant's own name when the item is cached
+		local ok, n = pcall(function()
+			return GetInfo and select(1, GetInfo(format(
+				"item:%d:0:0:0:0:0:%d",
+				(id or key.itemID) or 0, key.itemSuffix)))
+		end)
+		n = ok and n or nil
+		if type(n) == "string" and n ~= "" then return n end
+	end
+	if link then
+		local n = link:match("%[(.-)%]")
+		if n then return n end
+	end
+	return GM.ItemName(id)
+end
+
+-- the display/paste-grade link: base link + itemKey splice (fixes
+-- bare API itemStrings), bracket corrected by the variant name
+function GM.ItemDisplayLink(id, link, key, name)
+	link = link or (id and GM.ItemLink(id))
+	if GM.AH and GM.AH.LinkWithKey then
+		link = GM.AH.LinkWithKey(link, key, name)
+	end
+	return link
+end
+
+-- name text color: the link embeds its own quality hex (survives
+-- items ItemQuality can't resolve); item quality color otherwise
+function GM.ItemDisplayColor(id, link)
+	local hex = link and link:match("|cff(%x%x%x%x%x%x)")
+	if hex then
+		return tonumber(hex:sub(1, 2), 16) / 255,
+			tonumber(hex:sub(3, 4), 16) / 255,
+			tonumber(hex:sub(5, 6), 16) / 255
+	end
+	return GM.NameColor(id)
+end
+
+-- ============ identity context — the spine ============
+-- ONE factory normalizes the (id, link, key) triple into a ctx.
+-- Any of the three may be missing; the ctx fills them in. Views
+-- read ctx fields only — never compose/link/key plumbing — so no
+-- surface can produce a bare itemString or a base-name paste.
+-- Identity fields (link/name/bookKey/rgb) memoize — immutable.
+-- Live fields (counts, asks, ledger, prices) read through on every
+-- access — the BucketCache layers underneath keep repeat reads
+-- cheap; a ctx held across an action must never serve a stale
+-- count. A 200-row list still pays only for what it paints.
+local ctxMT = {}
+ctxMT.__index = function(c, k)
+	if k == "link" then
+		local v = GM.ItemDisplayLink(c.id, c._link, c.key, c.name)
+		c.link = v return v
+	elseif k == "name" then
+		local v = GM.ItemDisplayName(c.id, c._link, c.key)
+		c.name = v return v
+	elseif k == "bookKey" then
+		local v = GM.AH and GM.AH.BookKey
+			and GM.AH.BookKey(c.id, c.key) or c.id
+		c.bookKey = v return v
+	elseif k == "rgb" then
+		-- __index truncates to one value — a field can't hand r,g,b
+		-- to SetTextColor, so the triple rides in a table
+		local r, g, b = GM.ItemDisplayColor(c.id, c.link)
+		local v = { r, g, b }
+		c.rgb = v return v
+	elseif k == "entry" then
+		local v = GM.ItemEntry(c.id, c.bookKey)
+		return v
+	elseif k == "asks" then
+		local v = GM.AH and GM.AH.BookAsks
+			and GM.AH.BookAsks(c.bookKey)
+		return v
+	elseif k == "bags" then
+		local v = GM.BagCount and GM.BagCount(c.id) or 0
+		return v
+	elseif k == "mail" then
+		-- inbox contents mirror (Inventory.Count owns the caches) —
+		-- goods bought, canceled, or mailed sit HERE between the
+		-- transaction and the bags; owned-but-not-carried
+		local v = (c.stock and c.stock.mail) or 0
+		return v
+	elseif k == "bank" or k == "gbank" or k == "alts"
+		or k == "owned" then
+		-- per-location counts off the same Inventory.Count row —
+		-- bank is live-or-snapshot, alts is every other character
+		local s = c.stock or {}
+		local v = k == "bank" and s.bank or k == "gbank" and s.guild
+			or k == "alts" and s.alts or s.total or 0
+		return v
+	elseif k == "mine" or k == "bids" then
+		-- our posted lots / open bids whose bookKey matches — the
+		-- same-variant rule: a suffixed ctx only sees its own rows
+		local src = k == "mine" and "MineRows" or "BidRows"
+		local v = {}
+		local rs = GM.Inventory and GM.Inventory[src]
+			and GM.Inventory[src]() or {}
+		local BK = GM.AH and GM.AH.BookKey
+		for _, r in ipairs(rs) do
+			if r.id == c.id
+				and (not BK or BK(r.id, r.key) == c.bookKey) then
+				v[#v + 1] = r
+			end
+		end
+		return v
+	elseif k == "stock" then
+		-- every-location inventory row {bags bank mail guild auction
+		-- alts total allTotal} — Inventory.Count owns the caches,
+		-- views ask the ctx
+		local v = (GM.Inventory and GM.Inventory.Count
+			and GM.Inventory.Count(c.id))
+			or { bags = 0, bank = 0, mail = 0, guild = 0,
+				auction = 0, alts = 0, total = 0, allTotal = 0 }
+		return v
+	elseif k == "lstats" then
+		-- ledger per-item counters (buyQ/mailOutQ/paidQ…) — the raw
+		-- itemStats row; renamed off "stock" which is the inventory
+		-- row. Ledger.Stats() is the filtered display aggregate
+		local v = GM.Ledger and GM.Ledger.db
+			and GM.Ledger.db.itemStats
+			and GM.Ledger.db.itemStats[c.id]
+		return v
+	elseif k == "points" then
+		-- price-history series for charts — History owns the db
+		local v = (GM.History and GM.History.Points
+			and GM.History.Points(c.bookKey, nil)) or {}
+		return v
+	elseif k == "value" then
+		-- farm-value composition: lowest corroborated market quote
+		-- floored at vendor sell — the zone-value/pricing answer
+		local v = GM.FarmValue and GM.FarmValue(c.id)
+		return v
+	elseif k == "vsell" then
+		local v = GM.VendorSellPrice and GM.VendorSellPrice(c.id)
+		return v
+	elseif k == "quality" then
+		local v = GM.ItemQuality and GM.ItemQuality(c.id)
+		return v
+	elseif k == "basis" then
+		local v = GM.Ledger and GM.Ledger.Basis
+			and GM.Ledger.Basis(c.id) or 0
+		return v
+	end
+end
+
+-- accepts (id, link, key) OR a row table ({id,link,key} or
+-- {itemID,itemLink,itemKey} — both shapes normalize)
+function GM.Ctx(id, link, key)
+	if type(id) == "table" then
+		local r = id
+		id, link, key = r.id or r.itemID,
+			r.link or r.itemLink, r.key or r.itemKey
+	end
+	key = key or (GM.AH and GM.AH.ItemKeyFromLink
+		and GM.AH.ItemKeyFromLink(link)) or nil
+	id = id or (key and key.itemID)
+		or (link and GM.LinkID and GM.LinkID(link)) or nil
+	if not id then return nil end
+	return setmetatable({ id = id, key = key, _link = link }, ctxMT)
+end
+
 function GM.ItemQuality(id)
 	if not id then return end
 	local ok, q = pcall(function()
@@ -1223,6 +1673,34 @@ function GM.ItemQuality(id)
 	if type(q) ~= "number" then q = nil end
 	if not q then ReqOnce(id) end
 	return q
+end
+
+-- field-4 itemLevel — Forever itemStrings can lack it, nil is real
+function GM.ItemILevel(id)
+	if not id then return end
+	local ok, l = pcall(function()
+		return GetInfo and select(4, GetInfo(id)) end)
+	l = ok and l or nil
+	return type(l) == "number" and l or nil
+end
+
+-- field-8 max stack — 0/unsellable stack means nil
+function GM.ItemMaxStack(id)
+	if not id then return end
+	local ok, ms = pcall(function()
+		return GetInfo and select(8, GetInfo(id)) end)
+	ms = ok and ms or nil
+	return (type(ms) == "number" and ms > 0) and ms or nil
+end
+
+-- field-14 bindType: 0 none · 1 BoP · 2 BoE · 3 BoU · 4 quest —
+-- callers name their own meaning (soulbound = 1 or 4)
+function GM.ItemBind(id)
+	if not id then return end
+	local ok, b = pcall(function()
+		return GetInfo and select(14, GetInfo(id)) end)
+	b = ok and b or nil
+	return type(b) == "number" and b or nil
 end
 
 -- BuyMerchantItem fails the whole call when the count crosses the
@@ -1241,11 +1719,7 @@ function GM.MerchantBuy(idx, n)
 	if not max then
 		local link = GetMerchantItemLink and GetMerchantItemLink(idx)
 		local id = link and GM.LinkID(link)
-		if id and GetInfo then
-			local ok, ms = pcall(function()
-				return select(8, GetInfo(id)) end)
-			if ok and type(ms) == "number" and ms > 0 then max = ms end
-		end
+		max = id and GM.ItemMaxStack(id) or nil
 	end
 	if not max then
 		local info = C_MerchantFrame and C_MerchantFrame.GetItemInfo
@@ -1253,10 +1727,28 @@ function GM.MerchantBuy(idx, n)
 		max = info and info.stackCount
 			and info.stackCount > 0 and info.stackCount or n
 	end
+	local want = n
+	-- the BuyMerchantItem hook journals manual purchases — flag ours
+	-- so the journal block below stays the single write for this buy
+	if GM.Vendoring then GM.Vendoring._hookSkip = true end
 	while n > 0 do
 		local c = math.min(n, max)
 		if not pcall(BuyMerchantItem, idx, c) then break end
 		n = n - c
+	end
+	if GM.Vendoring then GM.Vendoring._hookSkip = nil end
+	-- journal what actually bought — the money outflow is the real
+	-- cost basis via ExpectBuy; the merchant slot price is only the
+	-- fallback when no delta ever reads
+	local bought = want - n
+	if bought > 0 and GM.Ledger and GM.Ledger.ExpectBuy then
+		local link = GetMerchantItemLink and GetMerchantItemLink(idx)
+		local id = link and GM.LinkID(link)
+		if id then
+			GM.Ledger.ExpectBuy(id, bought,
+				GM.Vendoring and GM.Vendoring.Price
+				and GM.Vendoring.Price.buy(idx))
+		end
 	end
 end
 
@@ -1314,8 +1806,11 @@ end
 -- chain, not every installed hook — calling the wrapped global
 -- can recurse (C stack overflow on a mat-row click, 2026-11-19).
 local rawHMIC = HandleModifiedItemClick
-function GM.ModifiedItemClick(id)
-	local link = id and GM.ItemLink(id)
+-- callers holding a variant link/key pass it — rebuilding from the
+-- id loses itemString field 7 (the suffix) and the pasted link
+-- reads as the base item ("Hillborne Axe", never "…of Defense")
+function GM.ModifiedItemClick(id, variantLink, itemKey, name)
+	local link = GM.ItemDisplayLink(id, variantLink, itemKey, name)
 	local h = rawHMIC or HandleModifiedItemClick
 	if link and h and h(link) then
 		return true

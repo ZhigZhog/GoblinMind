@@ -15,8 +15,6 @@ local _, GM = ...
 GM.Tooltip = {}
 local TT = GM.Tooltip
 
-local GetInfo = C_Item and C_Item.GetItemInfo or GetItemInfo
-
 -- ============ settings (TSM tooltipOptions schema) ============
 
 local OPT_DEFAULTS = {
@@ -247,8 +245,8 @@ local function P_VendorBuy(t, id)
 end
 
 local function P_VendorSell(t, id)
-	local v = GetInfo and select(11, GetInfo(id))
-	if v and v > 0 then t:AddItemValueLine("Sell to vendor", v) end
+	local v = GM.VendorSellPrice(id)
+	if v then t:AddItemValueLine("Sell to vendor", v) end
 end
 
 local function P_Destroy(t, id)
@@ -267,7 +265,7 @@ local function P_Destroy(t, id)
 	-- suppress when destroying earns nothing over vendoring — herbs,
 	-- ores, and mats only ever show vendor price (mill/prospect don't
 	-- exist on Forever) and the sell line already carries it
-	local vendor = GetInfo and select(11, GetInfo(id)) or 0
+	local vendor = GM.VendorSellPrice(id) or 0
 	if v and v > vendor then t:AddItemValueLine("Disenchant value", v) end
 	if not drops then return end
 	for _, d in ipairs(drops) do
@@ -292,7 +290,8 @@ local function P_Drops(t, id)
 		local pct = format("%d%%", floor(s.rate * 100 + 0.5))
 		if s.low then pct = "~" .. pct end
 		tinsert(parts, nm .. " " .. pct
-			.. (full and GM.CC("textDim") .. " n=" .. s.n .. "|r" or ""))
+			.. (full and GM.CC("textDim")
+				.. (s.static and " est" or " n=" .. s.n) .. "|r" or ""))
 	end
 	-- whole line bounded: names truncated, joined list clipped
 	local line = "Drops: " .. table.concat(parts, " · ")
@@ -325,7 +324,7 @@ local function P_InventoryFull(t, id)
 	local inv = GM.Inventory.Count(id)
 	if inv.total == 0 then return end
 	t:AddTextLine("You own", GM.CC("text") .. inv.total .. "|r")
-	local who = UnitName("player") or "player"
+	local who = (GM.OwnName and GM.OwnName()) or "player"
 	local mine = InvParts(inv.bags, inv.bank, inv.auction, inv.mail)
 	t:AddTextLine("    " .. who,
 		GM.CC("text") .. (mine ~= "" and mine or "0 held") .. "|r")
@@ -350,11 +349,17 @@ end
 
 -- ============ section 2: AuctionDB ============
 
+-- the hovered link's itemKey when it matches the row being priced —
+-- ItemEntry resolves the variant book row instead of the base's
+local function CtxKey(id)
+	return GM.lastTooltipItemID == id and GM.lastTooltipKey or nil
+end
+
 local function A_RightText(id)
 	-- provenance comes from the resolver itself: ItemEntry tags the
 	-- observation source that won (_src/_srcT) — book, mesh, or the
 	-- emitted row — so the label always matches the value shown
-	local e = GM.ItemEntry(id)
+	local e = GM.ItemEntry(id, CtxKey(id))
 	local n = e and e.sup or 0
 	local src, srcT = e and e._src, e and e._srcT
 	local age = srcT and (time() - srcT) or GM.DataAge()
@@ -424,7 +429,7 @@ end
 
 -- GoblinMind extensions
 local function P_Band(t, id)
-	local e = GM.ItemEntry(id)
+	local e = GM.ItemEntry(id, CtxKey(id))
 	if e and e.p10 and e.p90 then
 		-- placeholder math upstream (p × 0.85 / p × 1.15), NOT a real
 		-- percentile band — the label must not read as a forecast
@@ -434,7 +439,7 @@ local function P_Band(t, id)
 end
 
 local function P_VsTSM(t, id)
-	local e = GM.ItemEntry(id)
+	local e = GM.ItemEntry(id, CtxKey(id))
 	local m = GM.TSMMarket(id)
 	if e and e.p and m and m > 0 then
 		local d = (e.p - m) / m * 100
@@ -444,7 +449,7 @@ local function P_VsTSM(t, id)
 end
 
 local function P_Reset(t, id)
-	local e = GM.ItemEntry(id)
+	local e = GM.ItemEntry(id, CtxKey(id))
 	local rs = e and e.reset
 	if type(rs) == "table" then
 		t:AddTextLine("Bargain listed", GM.CC("warn") .. GM.Money(rs.below)
@@ -472,7 +477,8 @@ end
 -- ============ section 3: Accounting ============
 
 local function P_Purchase(t, id, stack)
-	local s = GM.Ledger and GM.Ledger.db and GM.Ledger.db.itemStats[id]
+	local ctx = GM.Ctx and GM.Ctx(id)
+	local s = ctx and ctx.lstats
 	if not s or not s.buyQ or s.buyQ == 0 then return end
 	if stack then
 		t:AddTextLine("You bought ×" .. s.buyQ,
@@ -493,7 +499,8 @@ local function P_Purchase(t, id, stack)
 end
 
 local function P_Sale(t, id, stack)
-	local s = GM.Ledger and GM.Ledger.db and GM.Ledger.db.itemStats[id]
+	local ctx = GM.Ctx and GM.Ctx(id)
+	local s = ctx and ctx.lstats
 	if not s or not s.sellQ or s.sellQ == 0 then return end
 	if stack then
 		t:AddTextLine("You sold ×" .. s.sellQ,
@@ -1113,6 +1120,10 @@ local function Hook(tooltip, data)
 	if not itemID then return end
 	GM.lastTooltipItemID = itemID
 	GM.lastTooltipLink = link
+	-- variant-bearing key for the hovered link — sections pass it to
+	-- ItemEntry so a suffixed item resolves its own book row
+	GM.lastTooltipKey = GM.AH.ItemKeyFromLink
+		and GM.AH.ItemKeyFromLink(link) or nil
 	Fill(itemID, tooltip)
 end
 

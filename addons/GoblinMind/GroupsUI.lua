@@ -41,18 +41,8 @@ local TREE_ROWS, LIST_ROWS = 22, 20
 local NEWG_LBL = (GM.L or function(s) return s end)("new group path…")
 
 local function ColPanel(parent, x, w, title)
-	local p = CreateFrame("Frame", nil, parent)
-	p:SetPoint("TOPLEFT", x, 0)
-	p:SetPoint("BOTTOMLEFT", x, 0)
-	p:SetWidth(w)
-	GM.Panel(p, "contLowest")
-	local t = GM.MakeFontString(p, GM.FONT_MED, 9, "secondary")
-	t:SetPoint("TOPLEFT", 8, -6)
-	t:SetText(title)
-	p.count = GM.MakeFontString(p, GM.FONT, 9, "textDim")
-	p.count:SetPoint("TOPRIGHT", -8, -7)
-	if p.SetClipsChildren then p:SetClipsChildren(true) end
-	return p, t
+	local p = W.ColPanel(parent, x, w, title, 0, 0)
+	return p, p.titleFs
 end
 
 -- item row: the shared W.ItemRow (icon, rarity name, tooltip,
@@ -73,12 +63,8 @@ local function ItemRow(parent, w)
 	-- right text lives in the vel slot — shift it clear of the x
 	row.vel:ClearAllPoints()
 	row.vel:SetPoint("RIGHT", -18, 0)
-	row.x = CreateFrame("Button", nil, row)
-	row.x:SetSize(14, 14)
+	row.x = W.XBtn(row)
 	row.x:SetPoint("RIGHT", -2, 0)
-	row.x.text = GM.MakeFontString(row.x, GM.FONT_BOLD, 9, "textDim")
-	row.x.text:SetPoint("CENTER")
-	row.x.text:SetText("x")
 	row:SetScript("OnMouseDown", function(self, btn)
 		if btn == "LeftButton" and self.id
 			and not IsModifiedClick() then
@@ -478,25 +464,14 @@ local function BuildUI()
 			GM.Panel(d, "contLow", "outline")
 			d.title = GM.MakeFontString(d, GM.FONT_BOLD, 12, "accent")
 			d.title:SetPoint("TOPLEFT", 12, -10)
-			local close = CreateFrame("Button", nil, d)
-			close:SetSize(16, 16)
+			local close = W.XBtn(d, 16)
 			close:SetPoint("TOPRIGHT", -6, -6)
-			close.text = GM.MakeFontString(close, GM.FONT_BOLD, 12, "textDim")
-			close.text:SetPoint("CENTER")
-			close.text:SetText("x")
 			close:SetScript("OnClick", function() d:Hide() end)
-			local scroll = CreateFrame("ScrollFrame", nil, d)
+			local scroll, eb = W.ScrollEdit(d, 524)
 			scroll:SetPoint("TOPLEFT", 10, -30)
 			scroll:SetPoint("BOTTOMRIGHT", -10, 40)
-			local eb = CreateFrame("EditBox", nil, scroll)
-			eb:SetMultiLine(true)
-			eb:SetAutoFocus(false)
-			eb:SetFont(GM.FONT, 10, "")
-			eb:SetTextColor(GM.RGB("text"))
 			eb:SetTextInsets(4, 4, 4, 4)
-			eb:SetWidth(524)
 			eb:SetHeight(340)
-			scroll:SetScrollChild(eb)
 			d.eb = eb
 			d.status = GM.MakeFontString(d, GM.FONT, 9, "secondary")
 			d.status:SetPoint("BOTTOMLEFT", 12, 12)
@@ -790,8 +765,11 @@ function GU.RefreshMembers(vm)
 		local id = ids[i + ui.memOff]
 		if id then
 			row:Show()
-			local e = GM.ItemEntry(id)
-			local own = GM.Inventory.Count and GM.Inventory.Count(id).total or 0
+			local ctx = GM.Ctx and GM.Ctx(id)
+			local e = ctx and ctx.entry or GM.ItemEntry(id)
+			local own = ctx and ctx.stock.total
+				or GM.Inventory.Count and GM.Inventory.Count(id).total
+				or 0
 			FillItemRow(row, id,
 				(e and e.p) and GM.Money(e.p) or "",
 				own > 0 and ("own " .. own) or "")

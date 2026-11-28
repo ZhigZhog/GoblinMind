@@ -113,7 +113,8 @@ local function ScanAsks()
 		return
 	end
 	M.askWait = nil
-	local id, name = M.itemID, GM.ItemName(M.itemID)
+	local id, name = M.itemID,
+		(M.ctx and M.ctx.name) or GM.ItemName(M.itemID)
 	-- throttle-dropped searches answer nothing — retry once before
 	-- declaring the book empty so a lost query doesn't read as "no asks"
 	M.askTries = (M.askTries or 0) + 1
@@ -122,8 +123,8 @@ local function ScanAsks()
 		-- empty callback while the book insists lots exist is a lost
 		-- race — both deserve the retry, a truly unlisted item doesn't
 		if M.itemID ~= id or (M.askTries or 0) >= 3 then return end
-		local e = GM.AH.book and GM.AH.book[id]
-		if not M.asks or (#M.asks == 0 and e and (e.n or 0) > 0) then
+		local n = (M.ctx and M.ctx.entry and M.ctx.entry.n) or 0
+		if not M.asks or (#M.asks == 0 and n > 0) then
 			ScanAsks()
 		end
 	end)
@@ -136,7 +137,7 @@ local function ScanAsks()
 		-- book cleared in seconds. Rebuild the ladder from the book's
 		-- own lot fingerprints (tagged · book) until the next scan
 		if #M.asks == 0 then
-			local fb = GM.AH.BookAsks and GM.AH.BookAsks(id)
+			local fb = M.ctx and M.ctx.asks
 			if fb then
 				M.asks, M.asksBook = fb, true
 				M.askTries = 0 -- the book row already answered —
@@ -154,36 +155,28 @@ local function ScanAsks()
 		-- delivery (suffix-0 scans only — a variant ladder would mint
 		-- item-level marks off a subset). Re-running here would
 		-- double-count suspect scores in the same bucket
-		-- …and freshen the item's book row: mb/sup/n derive from the
-		-- ladder the same way CollectBook derives them, so a page-
-		-- scoped autoscan keeps the chips + NUMBERS live too.
-		-- SUFFIXED scans describe one variant only — writing them into
-		-- the itemID-wide row would shrink a 38-lot market to 1 and
-		-- lie about mb/sup until the per-key book exists (roadmap)
-		local suffixed = M.itemKey and (M.itemKey.itemSuffix or 0) ~= 0
-		if asks[1] and not suffixed then
-			GM.AH.book = GM.AH.book or {}
-			local e = GM.AH.book[id]
-			if not e then e = {} GM.AH.book[id] = e end
-			e.mb, e.sup, e.n = asks[1].unit, 0, #asks
-			e.mbx = math.huge
-			for _, a in ipairs(asks) do
-				e.sup = e.sup + a.qty
-				if not a.own and a.unit < e.mbx then e.mbx = a.unit end
-			end
-		end
+		-- …and freshen the book row: the page-scoped ladder re-derives
+		-- the same obs fields a full scan would (mb/mbx/mbx2/sup/n) so
+		-- the chips + NUMBERS stay live — keyed per variant, so a
+		-- suffixed scan writes its own bookKey row instead of lying
+		-- about the itemID-wide market
+		GM.AH.FreshenBook(GM.AH.BookKey(id, M.itemKey), asks)
 		MU.Refresh()
 	end, M.itemKey)
 end
 
 function MU.SetItem(id, link, key)
-	if not id then return end
+	local ctx = GM.Ctx(id, link, key)
+	if not ctx then return end
 	-- same id under a different suffix is a different market — the
 	-- cached ladder belongs to the old variant's key
-	local changed = M.itemID ~= id
+	local changed = M.itemID ~= ctx.id
 		or (M.itemKey and M.itemKey.itemSuffix or 0)
-			~= (key and key.itemSuffix or 0)
-	M.itemID, M.itemLink, M.itemKey = id, link, key
+			~= (ctx.key and ctx.key.itemSuffix or 0)
+	-- ctx owns normalization — suffix spliced, bracket corrected;
+	-- stored link/key/name/color all read the same resolved shape
+	M.itemID, M.itemKey, M.ctx = ctx.id, ctx.key, ctx
+	M.itemLink = ctx.link
 	if changed then
 		M.asks, M.askT, M.askTries, M.askWait, M.asksBook =
 			nil, nil, nil, nil, nil
@@ -438,9 +431,15 @@ end
 local function RefreshHeader(vm)
 	local id = M.itemID
 	mp.icon:SetTexture(id and GM.ItemIcon(id) or 134400)
-	mp.name:SetText(id and (GM.ItemName(id) or ("item " .. id))
+	-- the stored ctx resolves name + rarity color once — every
+	-- repaint reads the same shape, never re-derives
+	mp.name:SetText(id and (M.ctx and M.ctx.name or "item " .. id)
 		or "no item targeted")
-	mp.name.fontString:SetTextColor(GM.NameColor(id))
+	if M.ctx and M.ctx.rgb then
+		mp.name.fontString:SetTextColor(unpack(M.ctx.rgb))
+	else
+		mp.name.fontString:SetTextColor(GM.ItemDisplayColor(id, M.itemLink))
+	end
 	local entry = vm.entry
 	local chips = {}
 	if entry then
@@ -473,8 +472,7 @@ local function BindAskRow(row, a, idx)
 	-- list updates and flip IsSuspect under a painted row
 	a.solver = a.seller and GM.Intel
 		and GM.Intel.IsSuspect(a.seller) or nil
-	row.bg:SetColorTexture(GM.RGB(idx % 2 == 0
-		and "contMedium" or "contLowest"))
+	W.Zebra(row, idx)
 	row.c1:SetText((a.bait and GM.CC("err") or a.wall and GM.CC("warn")
 		or GM.CC("text")) .. GM.Money(a.unit) .. "|r")
 	row.c2:SetText("×" .. a.qty)
@@ -499,12 +497,10 @@ local function BindAskRow(row, a, idx)
 		row.act.text:SetText("BUY")
 		row.act:SetScript("OnClick", function()
 			if a.id then
-				GM.AH.Execute({ kind = "buy", itemID = M.itemID,
-					auctionID = a.id, qty = a.qty, unit = a.unit,
-					total = a.total })
+				GM.Ops.Buy(M.ctx or M.itemID, a)
 			else
-				GM.AH.Execute({ kind = "buy", commodity = true,
-					itemID = M.itemID, qty = a.qty, unit = a.unit })
+				GM.Ops.Buy(M.ctx or M.itemID,
+					{ commodity = true, qty = a.qty, unit = a.unit })
 			end
 			MU.Refresh()
 		end)
@@ -743,9 +739,11 @@ end
 local function Data()
 	local id = M.itemID
 	return {
-		entry = id and GM.ItemEntry(id),
+		entry = id and (M.ctx and M.ctx.entry
+			or GM.ItemEntry(id)),
 		hist = id and GM.History and GM.History.Points(id, WEEK),
-		marks = id and GM.Intel and GM.Intel.marks[id],
+		marks = id and GM.Intel and GM.Intel.Mark
+			and GM.Intel.Mark(M.ctx and M.ctx.bookKey or id),
 		bookLive = GM.AH.BookLive and GM.AH.BookLive(),
 		bookAge = GM.AH.BookAge and GM.AH.BookAge(),
 		bookLotsT = GM.AH.bookLotsT,

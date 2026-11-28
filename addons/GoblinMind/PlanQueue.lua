@@ -231,6 +231,10 @@ local function Build()
 		"Scan own auctions for undercuts")
 	ui.fullScan = TitleBtn("FULL SCAN", 84, function() GM.AH.FullScan() end,
 		"Refresh the full AH book")
+	-- appears only when the targeted item was captured from ANOTHER
+	-- player's chat link — click → writ compose to that poster
+	ui.writBtn = TitleBtn("WRIT", 130, function() PQ.OpenWrit() end,
+		"Request this craft from the player who linked it")
 
 	ui.age = GM.MakeFontString(frame, GM.FONT, 10, "textDim")
 	ui.age:SetWidth(200)
@@ -239,16 +243,9 @@ local function Build()
 
 	-- close X rides the title corner like every other window —
 	-- frame.closeBtn also gives the module tab strip its right bound
-	local close = CreateFrame("Button", nil, frame)
-	close:SetSize(16, 16)
+	local close = GM.Widgets.XBtn(frame, 16)
 	close:SetPoint("TOPRIGHT", -6, -6)
-	close.text = GM.MakeFontString(close, GM.FONT_BOLD, 12, "textDim")
-	close.text:SetPoint("CENTER")
-	close.text:SetWordWrap(false)
-	close.text:SetText("x")
 	close:SetScript("OnClick", function() frame:Hide() end)
-	close:SetScript("OnEnter", function() close.text:SetTextColor(GM.RGB("text")) end)
-	close:SetScript("OnLeave", function() close.text:SetTextColor(GM.RGB("textDim")) end)
 	frame.closeBtn = close
 	-- freshness text lives on the action-strip row's right edge —
 	-- the title row is title + module tabs now and a long age string
@@ -451,6 +448,11 @@ local function Build()
 	end
 	ActBtn(ui.postScan, 84) ActBtn(ui.cancelScan, 104)
 	ActBtn(ui.fullScan, 84)
+	-- conditional node: SetVisible(false) collapses its slot so the
+	-- strip doesn't carry a dead gap when there is no poster
+	ui.writNode = u:Adopt(ui.writBtn)
+	act:Add(ui.writNode, { width = 130, height = 22 })
+	ui.writNode:SetVisible(false)
 
 	local main = u:Row(root, { gap = "sm" })
 	root:Add(main, { height = "fill" })
@@ -482,6 +484,59 @@ local function Build()
 	-- the managed subtree was created after the home overlay — it
 	-- wins sibling ordering unless the overlay's level climbs past it
 	ui.home:SetFrameLevel(frame:GetFrameLevel() + 200)
+
+	-- ===== writ compose popover =====
+	-- the action-strip WRIT button opens this when the target was
+	-- captured from another player's chat link — a GMW1 mail request
+	-- to that poster. Fielded by hand on purpose: barks have no
+	-- protocol, so the user confirms every field before it mails
+	local pop = CreateFrame("Frame", nil, frame)
+	pop:SetSize(400, 96)
+	GM.Panel(pop, "contHigh")
+	pop:SetFrameLevel(frame:GetFrameLevel() + 60)
+	pop.title = GM.MakeFontString(pop, GM.FONT_BOLD, 9, "secondary")
+	pop.title:SetPoint("TOPLEFT", 8, -5)
+	pop.to = GM.Widgets.EditBox(pop, 130, "recipient…")
+	pop.to:SetPoint("TOPLEFT", 8, -24)
+	pop.qty = GM.Widgets.EditBox(pop, 40, "qty")
+	pop.qty:SetPoint("LEFT", pop.to, "RIGHT", 6, 0)
+	pop.gold = GM.Widgets.GoldEdit(pop, 108)
+	pop.gold:SetPoint("LEFT", pop.qty, "RIGHT", 6, 0)
+	-- GoldEdit paints ~30px past its declared width — mats clears
+	-- the trailing "c" label, not the frame edge
+	pop.mats = GM.Widgets.Btn(pop, 66, "buyer", function()
+		local nx = { buyer = "crafter", crafter = "prepaid",
+			prepaid = "buyer" }
+		pop.mats.text:SetText(nx[pop.mats.text:GetText()] or "buyer")
+	end)
+	pop.mats:SetPoint("LEFT", pop.gold, "RIGHT", 32, 0)
+	pop.note = GM.Widgets.EditBox(pop, 300, "note…")
+	pop.note:SetPoint("TOPLEFT", 8, -46)
+	pop.send = GM.Widgets.Btn(pop, 64, "SEND", function()
+		local char = strtrim(pop.to:GetText() or "")
+		if char == "" then return end
+		local qty = math.max(1, math.floor(
+			tonumber(pop.qty:GetText()) or 1))
+		local wid = GM.Writs and GM.Writs.MailRequest(char, {
+			name = pop.itemName or "work request",
+			ref = pop.itemID and tostring(pop.itemID),
+			itemID = pop.itemID, qty = qty,
+			offer = pop.gold:GetCopper(),
+			mats = pop.mats.text:GetText() or "buyer",
+			deliver = "cod",
+			note = pop.note:GetText() })
+		GM.Print(wid and (GM.CC("accent") ..
+			"mail-writ sent to " .. char .. "|r")
+			or "writ send failed")
+		pop:Hide()
+	end)
+	pop.send:SetPoint("TOPRIGHT", -8, -46)
+	pop.hint = GM.MakeFontString(pop, GM.FONT, 9, "textDim")
+	pop.hint:SetPoint("TOPLEFT", 8, -70)
+	pop.hint:SetText("sends a [GM Writ] letter — the recipient " ..
+		"needs no addon; you track it under MY WRITS")
+	pop:Hide()
+	ui.writPop = pop
 
 	ui.frame = frame
 	-- CreateFrame defaults to visible — Build is called from scan
@@ -688,14 +743,16 @@ end
 
 function PQ.SetItem(itemID, itemLink, key)
 	Build()
+	local ctx = GM.Ctx(itemID, itemLink, key)
+	if not ctx then return end
 	PQ.homeMode = false
-	PQ.itemID = itemID
-	PQ.item = itemLink
-	-- suffixed variants ("of the Bear") need their exact ItemKey —
-	-- suffix-0 scans return zero listings. Callers hand the key from
-	-- browse/owned rows; links carry it in itemString field 8.
-	PQ.itemKey = key or (GM.AH.ItemKeyFromLink
-		and GM.AH.ItemKeyFromLink(itemLink)) or nil
+	PQ.itemID = ctx.id
+	PQ.ctx = ctx
+	-- ctx owns normalization: the key resolves (suffix-0 scans
+	-- return zero listings), PQ.item is the corrected link — pill,
+	-- header and pastes all read the same shape
+	PQ.itemKey = ctx.key
+	PQ.item = ctx.link
 	PQ.scan = nil
 	PQ.scanMode = nil -- retargeting supersedes "rerun last scan"
 	PQ.itemFresh = true -- and outranks the armed plan's mode on rescan
@@ -709,6 +766,40 @@ function PQ.SetItem(itemID, itemLink, key)
 	end
 	PQ.Refresh()
 	if GM.GroupsUI and GM.GroupsUI.Retarget then GM.GroupsUI.Retarget() end
+end
+
+-- a gold figure in the bark wins the prefill ("LFW 5g"), else the
+-- market anchor — either way the field is user-editable before send
+local function barkCopper(msg, itemID)
+	local m = msg and msg:lower() or ""
+	local g = m:match("(%d+)%s*g")
+	if g then return tonumber(g) * 10000 end
+	local s = m:match("(%d+)%s*s")
+	if s then return tonumber(s) * 100 end
+	if itemID and GM.ItemEntry then
+		local e = GM.ItemEntry(itemID)
+		if e then return e.p or e.mkt or e.mb end
+	end
+end
+
+function PQ.OpenWrit()
+	Build()
+	local lf = GM.LinkFrom
+	if not (lf and lf.char and PQ.itemID) then return end
+	local pop = ui.writPop
+	local name = GetInfo and GetInfo(PQ.itemID)
+	pop.itemName, pop.itemID = name, PQ.itemID
+	pop.title:SetText("WRIT » "
+		.. (lf.char:match("^[^-]+") or lf.char) .. " — "
+		.. (name or ("item " .. tostring(PQ.itemID))))
+	pop.to:SetText(lf.char)
+	pop.qty:SetText("1")
+	pop.gold:SetCopper(barkCopper(lf.msg, PQ.itemID))
+	pop.note:SetText("")
+	pop.mats.text:SetText("buyer")
+	pop:ClearAllPoints()
+	pop:SetPoint("TOPLEFT", ui.item, "BOTTOMLEFT", 20, -6)
+	pop:Show()
 end
 
 function PQ.Rescan()
@@ -806,6 +897,12 @@ function PQ.Solve(asks, workID)
 			- math.max(0, GM.BagCount(workID) - pend.base))
 		pend.qty, pend.base = pending, GM.BagCount(workID)
 	end
+	-- the inbox mirror is ground truth for arrived goods (bought,
+	-- canceled, mailed — pendingBuy only sees buys). max() not sum:
+	-- a delivered buy shows in BOTH until bags absorb it.
+	local inMail = (GM.Inventory and GM.Inventory.Count
+		and GM.Inventory.Count(workID) or {}).mail or 0
+	local transit = math.max(pending, inMail)
 	-- the solver strips own asks from buys itself; hand them back
 	-- separately so the cancel-merge can repost off-target listings
 	local ownAsks
@@ -819,7 +916,7 @@ function PQ.Solve(asks, workID)
 		riskBudget = GM.Model.Pref("riskBudget"),
 		minProfitMargin = (tonumber(sOps.belowPct) or 10) / 100,
 		commodity = isCommodity,
-		owned = GM.BagCount(workID) + pending,
+		owned = GM.BagCount(workID) + transit,
 		normal = ev("normal"),
 		minP = ev("min"),
 		maxP = ev("max"),
@@ -840,23 +937,27 @@ function PQ.Solve(asks, workID)
 	end
 	-- the work item's own link — PQ.item is the *inspected* link and
 	-- can belong to a different item when a plan outlives inspection
-	local workLink = select(2, GetInfo and GetInfo(workID)) or PQ.item
+	local workLink = (GM.ItemLink and GM.ItemLink(workID)) or PQ.item
 	for _, step in ipairs(plan.steps) do
 		step.itemID = workID
 		step.item = workLink
 		step.commodity = isCommodity
 	end
-	-- buys arrive by mail — insert a collect step before the post leg
-	-- so the queue models the buy→mailbox→post gap
+	-- goods owed to the bags ride the mailbox — insert a collect step
+	-- before the post leg whenever transit is expected (buys in this
+	-- plan OR the mirror already shows mail for the work item), so a
+	-- post-only plan still routes through the inbox first
 	do
 		local firstPost
 		for i, s in ipairs(plan.steps) do
 			if s.kind == "post" and not firstPost then firstPost = i end
 		end
-		if firstPost and firstPost > 1 then
+		if firstPost and (firstPost > 1 or transit > 0) then
 			tinsert(plan.steps, firstPost,
 				{ kind = "mailcollect", itemID = workID, item = workLink,
-					qty = 1, name = "collect from mail" })
+					qty = transit > 0 and transit or 1,
+					bagBase = GM.BagCount(workID),
+					name = "collect from mail" })
 		end
 	end
 	for _, lot in ipairs(plan.buyLots or {}) do
@@ -934,8 +1035,10 @@ end
 function PQ.ProtectedConfirm(step)
 	local d = BuildProtDialog()
 	d._step = step
-	d.item:SetText((GM.ItemNameOr(step.itemID) or "item")
-		.. GM.CC("textDim") .. "  (protected group)|r")
+	local stepKey = (PQ.plan and PQ.plan.itemKey
+		and step.itemID == PQ.plan.itemID and PQ.plan.itemKey) or nil
+	d.item:SetText((GM.ItemDisplayName(step.itemID, nil, stepKey)
+		or "item") .. GM.CC("textDim") .. "  (protected group)|r")
 	d.item:SetTextColor(GM.NameColor(step.itemID))
 	d.act.text:SetText(step.kind == "post" and "POST ANYWAY"
 		or step.kind == "vendsell" and "SELL ANYWAY"
@@ -1113,11 +1216,9 @@ function PQ.ExecuteNext()
 		return
 	end
 	if result then
-		if (step.kind == "buy" or step.kind == "vendbuy")
-			and GM.Budget and not bagDone then
-			GM.Budget.Record(step, step.cost
-				or (step.unit or 0) * (step.qty or 1))
-		end
+		-- no budget write here: the buy/vendorbuy journal entry is the
+		-- sole envelope mutator (it fires for plan buys and hand buys
+		-- alike); a second debit at click time double-counted the spend
 		PQ.budgetConfirm = nil
 		PQ.budgetWarn = nil
 		PQ.submitFlash = GetTime()
@@ -1408,7 +1509,10 @@ local function Data()
 	local dispLink = scanMode and (curStep.item or curStep.name) or PQ.item
 	vm.stepN, vm.curStep, vm.scanMode = stepN, curStep, scanMode
 	vm.dispID, vm.dispLink = dispID, dispLink
-	vm.entry = dispID and GM.ItemEntry(dispID)
+	vm.entry = dispID and (dispID == PQ.itemID and PQ.ctx
+		and PQ.ctx.entry
+		or GM.ItemEntry(dispID,
+			(dispID == PQ.itemID and PQ.itemKey) or nil))
 	vm.market = dispID and GM.TSMMarket(dispID)
 	vm.bookTxt = scanMode
 		and format(" · step %d/%d", stepN, #PQ.plan.steps)
@@ -1417,18 +1521,17 @@ local function Data()
 				and format(" · book: %d asks · cheapest %s",
 					PQ.scan.n, GM.Money(PQ.scan.cheapest))
 				or " · book: empty")
-			or " · RESCAN to read the book") or ""
+			or (vm.ahBusy and " · scanning…"
+				or " · RESCAN to read the book")) or ""
 	-- a proper link renders its own name — bare "4238" targets fall
 	-- back to the resolved item name
 	vm.nameTxt = (dispLink and dispLink:find("%[") and dispLink)
-		or (dispID and GM.ItemName(dispID))
+		or (dispID == PQ.itemID and PQ.ctx and PQ.ctx.name)
+		or (dispID and GM.ItemDisplayName(dispID, nil,
+			(dispID == PQ.itemID and PQ.itemKey) or nil))
 		or dispLink
 		or (dispID and ("item " .. dispID))
-	vm.icon = dispID and C_Item and C_Item.GetItemIconByID
-		and C_Item.GetItemIconByID(dispID)
-	if not vm.icon and dispID and GetInfo then
-		vm.icon = select(10, GetInfo(dispID))
-	end
+	vm.icon = dispID and GM.ItemIcon and GM.ItemIcon(dispID)
 	local sub = {}
 	if dispID and GetInfo then
 		local _, _, _, _, _, itemType = GetInfo(dispID)
@@ -1439,7 +1542,7 @@ local function Data()
 	-- stack fails the client's own sell check
 	if dispID then
 		local flag
-		local bind = GetInfo and select(14, GetInfo(dispID))
+		local bind = GM.ItemBind and GM.ItemBind(dispID)
 		if bind == 1 or bind == 4 then flag = "soulbound" end
 		local loc = not flag and GM.AH.FindInBags
 			and GM.AH.FindInBags(dispID)
@@ -1465,8 +1568,10 @@ local function Data()
 	end
 	vm.sub = sub
 	-- the summary's solver verdict — one call for both the edge
-	-- color and the headline
-	if PQ.plan then
+	-- color and the headline. Scan plans (mode set — vendoring,
+	-- shopscan, cancelscan…) have no ev to verdict — the loss
+	-- gate's own rule at the confirm path is the same check
+	if PQ.plan and not PQ.plan.mode then
 		vm.verdict, vm.verdictNote =
 			GM.Solver.Verdict(PQ.plan, GM.db)
 	end
@@ -1477,6 +1582,21 @@ function PQ.Refresh(vm)
 	PQ._refreshes = (PQ._refreshes or 0) + 1
 	Build()
 	vm = vm or Data()
+	-- the WRIT action rides only captures that came from another
+	-- player's chat link — id-match on the current target plus a
+	-- freshness TTL, so a stale capture can't arm a later target
+	if ui.writNode then
+		local lf = GM.LinkFrom
+		local armed = lf and lf.id == PQ.itemID
+			and (time() - (lf.t or 0)) < 120
+		ui.writNode:SetVisible(armed and true or false)
+		if armed then
+			ui.writBtn.text:SetText("WRIT » "
+				.. (lf.char:match("^[^-]+") or lf.char))
+		else
+			ui.writPop:Hide()
+		end
+	end
 	-- home mode: dashboard panels replace the plan inspector
 	if ui.home then
 		local h = PQ.homeMode
@@ -1532,6 +1652,16 @@ function PQ.Refresh(vm)
 		local busy = vm.ahBusy
 		ui.fullScan:SetEnabled(not busy)
 		ui.fullScan.text:SetTextColor(GM.RGB(busy and "textDim" or "text"))
+	end
+	-- RESCAN locks the same way — mid-scan the button reads the
+	-- in-flight state instead of promising a read that can't land
+	-- yet (the market page repaints on bookSubs while our solve is
+	-- still queued, which reads as "the market beat the planner")
+	if ui.rescan then
+		local busy = vm.ahBusy
+		ui.rescan:SetEnabled(not busy)
+		ui.rescan.text:SetText(busy and "SCANNING" or "RESCAN")
+		ui.rescan.text:SetTextColor(GM.RGB(busy and "textDim" or "text"))
 	end
 
 	-- header: icon, name, type/id, flow — the vm resolved the
@@ -1640,8 +1770,11 @@ function PQ.Refresh(vm)
 				-- it meant the row never called ItemName, never issued
 				-- the load request, and could never resolve. Shopping
 				-- rows already order it this way.
-				local nm = (step.itemID and GM.ItemName
-						and GM.ItemName(step.itemID))
+				local stepKey = (PQ.plan.itemKey and PQ.plan.itemID
+					and step.itemID == PQ.plan.itemID
+					and PQ.plan.itemKey) or nil
+				local nm = (step.itemID and GM.ItemDisplayName
+						and GM.ItemDisplayName(step.itemID, nil, stepKey))
 					or step.name or ""
 				if #nm > 16 then nm = nm:sub(1, 15) .. "…" end
 				row.qty:SetText((GM.QHex(step.itemID) or "")
@@ -1845,8 +1978,17 @@ end
 -- from AUCTION_HOUSE_SHOW flipping GM.AH.open
 local mev = CreateFrame("Frame")
 pcall(mev.RegisterEvent, mev, "MERCHANT_SHOW")
+pcall(mev.RegisterEvent, mev, "MERCHANT_UPDATE")
 pcall(mev.RegisterEvent, mev, "MERCHANT_CLOSED")
-mev:SetScript("OnEvent", function() PQ.Refresh() end)
+mev:SetScript("OnEvent", function(_, e)
+	PQ.Refresh()
+	if e == "MERCHANT_SHOW" then
+		-- the event precedes MerchantFrame:IsShown() — the instant
+		-- repaint can still read the merchant as closed and gray the
+		-- button; re-check on a beat (same race BANKFRAME_OPENED has)
+		GM.Time.After(0.3, function() PQ.Refresh() end)
+	end
+end)
 
 -- pinned: the planner never hides on Switch — the mode keys
 -- (dash/plan) are the only navigation onto it, and tabbing to any

@@ -189,8 +189,8 @@ function A.PreviewPost(id)
 	local unit, why = A.PriceFor(aOps, id, normal, cheapest)
 	if not unit then return nil, why or "?", normal, cheapest end
 	-- vendor floor: net after 5% cut + deposit must beat vendoring
-	local v = GetInfo and select(11, GetInfo(id))
-	if v and v > 0 then
+	local v = GM.VendorSellPrice(id)
+	if v then
 		local dep = GM.AH.DepositCost(id, 1) or 0
 		if floor(unit * 0.95) - dep < v then
 			return nil, "vendor beats", normal, cheapest
@@ -253,10 +253,6 @@ function A.PostScan(only)
 	-- vendor floor: a listing whose expected net (5% AH cut, minus the
 	-- deposit) loses to the merchant price must never be posted — the
 	-- plan carries a vendoring step so the better move is one click.
-	local function VendorUnit(id)
-		local v = GetInfo and select(11, GetInfo(id))
-		return (v and v > 0) and v or nil
-	end
 
 	-- shared per-item decision → post steps appended to `steps`
 	local function ProcessItem(steps, it, cheapest, baitUnit)
@@ -268,7 +264,7 @@ function A.PostScan(only)
 		local isComm = GM.AH.IsCommodity(it.id)
 		local cap = tonumber(aOps.postCap)
 		local qty = (cap and cap > 0) and math.min(it.qty, cap) or it.qty
-		local vUnit = VendorUnit(it.id)
+		local vUnit = GM.VendorSellPrice(it.id)
 		if vUnit then
 			local dep = GM.AH.DepositCost(it.id, qty) or 0
 			local net = math.floor(unit * 0.95) * qty - dep
@@ -630,8 +626,10 @@ function A.FinishShopScan(steps, spend, mktSum, hits, shopRows)
 	table.sort(shopRows, function(a, b)
 		return (a.name or "") < (b.name or "")
 	end)
-	if GM.AHUI and GM.AHUI.PostShopRows then
-		GM.AHUI.PostShopRows(shopRows)
+	-- the shop driver owns the results pane — PostShopRows notifies
+	-- shopSubs, and AHUI's subscription repaints + resets scroll
+	if GM.AH.PostShopRows then
+		GM.AH.PostShopRows(shopRows)
 	end
 	local n = 0
 	for _ in pairs(hits) do n = n + 1 end

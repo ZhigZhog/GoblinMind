@@ -30,47 +30,34 @@ local function Panel(f, x, y, w, h, title)
 	return p, t
 end
 
--- rotated-texture line segment (chart series / pie spokes)
+-- rotated-texture line segment (chart series / pie spokes) —
+-- key = theme color name or an {r,g,b} triple (per-char wealth
+-- series ride the char's own color, not the theme accent)
 local function Line(parent, x1, y1, x2, y2, key, thick)
 	local t = parent:CreateTexture(nil, "ARTWORK")
 	local dx, dy = x2 - x1, y2 - y1
 	local len = math.max(1, sqrt(dx * dx + dy * dy))
 	t:SetSize(len, thick or 1.5)
 	t:SetPoint("CENTER", parent, "BOTTOMLEFT", (x1 + x2) / 2, (y1 + y2) / 2)
-	t:SetRotation(atan2(dy, dx))
-	t:SetColorTexture(GM.RGB(key))
+	-- WoW's atan2/math.atan return DEGREES; SetRotation takes radians —
+	-- a raw pass tilts every non-horizontal segment (90° input landed
+	-- at 90 rad ≈ 117° — the giant "X" artifacts on steep jumps)
+	t:SetRotation(math.rad(atan2(dy, dx)))
+	if type(key) == "table" then
+		t:SetColorTexture(key[1], key[2], key[3])
+	else
+		t:SetColorTexture(GM.RGB(key))
+	end
 	return t
 end
 
 -- ============ data ============
 
 -- per-item aggregation over one char's transaction stream — the char
--- switcher re-aggregates; itemStats (account-global) stays for detail
+-- switcher re-aggregates; itemStats (account-global) stays for detail.
+-- Ledger.Flow owns the rollup — the view just names its window
 local function TxAgg(ck)
-	local agg = {}
-	for _, e in ipairs(GM.Ledger.TxFor(ck)) do
-		if e.i then
-			local a = agg[e.i]
-			if not a then a = {} agg[e.i] = a end
-			local amt = e.q * (e.u or 0)
-			if e.ty == "buy" then
-				a.buyQ = (a.buyQ or 0) + e.q
-				a.buyT = (a.buyT or 0) + amt
-			elseif e.ty == "sell" then
-				a.sellQ = (a.sellQ or 0) + e.q
-				a.sellT = (a.sellT or 0) + amt
-			elseif e.ty == "cancel" then
-				a.cancelQ = (a.cancelQ or 0) + e.q
-			elseif e.ty == "expire" then
-				a.expireQ = (a.expireQ or 0) + e.q
-			elseif e.ty == "post" then
-				a.postQ = (a.postQ or 0) + e.q
-			elseif e.ty == "mail" then
-				a.mailQ = (a.mailQ or 0) + e.q
-			end
-		end
-	end
-	return agg
+	return GM.Ledger.Flow(ck)
 end
 
 local function ViewChar()
@@ -150,7 +137,7 @@ local function MakeTable(parent, cols, onClick)
 		end)
 		row:SetScript("OnClick", function()
 			if IsModifiedClick() then
-				if row.id then GM.ModifiedItemClick(row.id) end
+				if row.id then GM.Ops.Click(row.id) end
 			elseif row.id and onClick then
 				onClick(row.id)
 			end
@@ -194,6 +181,10 @@ end
 -- ("Banded Girdle of the Bear") — the bare itemID can only give the
 -- base name
 local function TxName(e)
+	if e.ty == "transfer" then
+		return format("%s → %s", e.x and e.x.from or "?",
+			e.x and e.x.to or "?")
+	end
 	return (e.x and e.x.nm)
 		and ((GM.QHex(e.i) or "") .. e.x.nm .. "|r")
 		or QName(e.i)
@@ -203,8 +194,9 @@ end
 local function BuildInventory()
 	local out, total = {}, 0
 	for id in pairs(GM.Inventory.Owned()) do
-		local c = GM.Inventory.Count(id)
-		local e = GM.ItemEntry(id)
+		local ctx = GM.Ctx and GM.Ctx(id)
+		local c = ctx and ctx.stock or GM.Inventory.Count(id)
+		local e = ctx and ctx.entry or GM.ItemEntry(id)
 		local p = GM.Price("dbmarket", id)
 		local v = p and p * c.total or 0
 		total = total + v
@@ -292,6 +284,13 @@ end
 local TX_LABEL = {
 	buy = "Purchased", sell = "Sold", post = "Posted",
 	cancel = "Cancelled", expire = "Expired", mail = "Mail in",
+	vendor = "Vendored", vendorbuy = "Vendor buy",
+	mailout = "Mail out", destroy = "Destroyed",
+	craftout = "Craft in", craftin = "Crafted",
+	loot = "Looted", bid = "Bid", bidwon = "Bid won",
+	transfer = "Transfer",
+	tradein = "Trade in", tradeout = "Trade out",
+	trainer = "Trained",
 }
 
 local function DisplayList(ck)
@@ -333,12 +332,14 @@ function OV.RefreshLog(vm)
 						or (e.ty == "cancel" or e.ty == "expire")
 							and " lost" or ""))
 				or ""
-			fs:SetText(format("%s  %s %s · %s ×%d%s%s",
+			fs:SetText(format("%s  %s %s · %s%s%s%s",
 				date("%H:%M", e.t),
 				e.ty == "sell" and GM.CC("pos") or
 					e.ty == "buy" and GM.CC("warn") or GM.CC("textDim"),
 				TX_LABEL[e.ty] or e.ty,
-				TxName(e), e.q,
+				TxName(e),
+				e.ty == "transfer" and (" " .. GM.Money(e.q))
+					or (" ×" .. e.q),
 				money and (" · " .. GM.Money(money)) or "", depTxt))
 		end
 	end
@@ -347,14 +348,15 @@ end
 -- ============ wealth chart ============
 
 -- one line, one honest answer: "am I getting richer, and how fast".
--- W(t) = gold + pending-AH buyout is wealth-neutral across buys
--- (gold becomes listings ~1:1), so its step line and least-squares
--- slope measure realized P&L + revaluation — fitting the slope to
--- raw gold-on-hand reads a buy spree as "losing money" (the old
--- "-1087g/d" scare line). Posted value draws as a shaded band under
--- the line instead of a second series: same information, no
--- crossings, no legend row. Design: WoWVault/Proposals/
--- ledger-accounts-proposal.md
+-- W(t) = cash + held cost + receivable + deposit escrow + listed
+-- buyout — wealth-neutral across every flow (buys, posts, sells,
+-- collections move value between terms instead of cratering the
+-- line), so the step line and least-squares slope measure realized
+-- P&L + revaluation — fitting the slope to raw gold-on-hand reads
+-- a buy spree as "losing money" (the old "-1087g/d" scare line).
+-- The posted slice draws as a shaded band on top of the
+-- non-posted stack: same information, no crossings, no legend row.
+-- Design: WoWVault/Proposals/ledger-accounts-proposal.md
 
 local WIN_SECS = { ["24H"] = 86400, ["7D"] = 604800 }
 
@@ -363,10 +365,40 @@ function OV.RefreshChart()
 	for _, a in ipairs(ui.art) do a:Hide() end
 	wipe(ui.art)
 	local chart = ui.chart
+	-- window filter hoisted above the plot inset: the account series
+	-- count decides how much right gutter their end labels need
+	local cutoff = WIN_SECS[ui.chartWin or "ALL"]
+	cutoff = cutoff and (time() - cutoff) or -math.huge
+
+	-- per-account signed-balance series in darker shades of the char
+	-- color. Shade index bi runs a bit-reversed (van der Corput)
+	-- fraction — bisecting the shade band each new account keeps any
+	-- count evenly spread: ½, ¼, ¾, ⅛, ⅝, ⅜, ⅞… Point lists are
+	-- built at draw time — they need the wealth axis' tMin/tMax
+	local accts, bi = {}, 0
+	local vk = ViewChar()
+	for _, a in ipairs(GM.Budget and GM.Budget.List() or {}) do
+		local ok = GM.Budget.OwnerKey and GM.Budget.OwnerKey(a)
+		if a.hist and #a.hist > 0
+			and (ok == vk or (ok or ""):gsub("%-.*$", "")
+				== (vk or ""):gsub("%-.*$", "")) then
+			bi = bi + 1
+			local j, f, p = bi, 0, 0.5
+			while j > 0 do
+				if j % 2 == 1 then f = f + p end
+				p = p / 2
+				j = floor(j / 2)
+			end
+			accts[#accts + 1] = { a = a, shade = 0.30 + f * 0.55 }
+		end
+	end
+
 	-- plot inset: left gutter for money labels, top clears the KPI
-	-- strip, bottom holds time labels + the flow footer
+	-- strip, bottom holds time labels + the flow footer, right holds
+	-- the account series' end labels
 	local gx, gy, gt = 56, 20, 56
-	local w = chart:GetWidth() - gx - 14
+	local rg = #accts > 0 and 96 or 14
+	local w = chart:GetWidth() - gx - rg
 	local h = chart:GetHeight() - gt - gy
 
 	-- ---- KPI strip: live numbers, independent of sample history ----
@@ -375,9 +407,13 @@ function OV.RefreshChart()
 		and GM.Inventory.PostedValue() or 0
 	local held = GM.Inventory and GM.Inventory.HeldValue
 		and GM.Inventory.HeldValue() or 0
-	local rcbl = GM.Ledger and GM.Ledger.Accounts
-		and (GM.Ledger.Accounts().rcbl or 0) or 0
-	local now = gold + posted + held + rcbl
+	local dep, rcbl = 0, 0
+	do
+		local acct = GM.Ledger and GM.Ledger.Accounts
+			and GM.Ledger.Accounts() or {}
+		dep, rcbl = acct.dep or 0, acct.rcbl or 0
+	end
+	local now = gold + posted + held + rcbl + dep
 	ui.kpiTotal:SetText("TOTAL " .. GM.Money(now))
 	local split = "on hand " .. GM.MoneyShort(gold)
 	if held > 0 then
@@ -385,6 +421,9 @@ function OV.RefreshChart()
 	end
 	if rcbl > 0 then
 		split = split .. " + incoming " .. GM.MoneyShort(rcbl)
+	end
+	if dep > 0 then
+		split = split .. " + escrow " .. GM.MoneyShort(dep)
 	end
 	if posted > 0 then
 		split = split .. " + posted " .. GM.MoneyShort(posted)
@@ -395,9 +434,7 @@ function OV.RefreshChart()
 	end
 	ui.kpiSplit:SetText(split)
 
-	-- window-filtered samples + stats pass
-	local cutoff = WIN_SECS[ui.chartWin or "ALL"]
-	cutoff = cutoff and (time() - cutoff) or -math.huge
+	-- window-filtered samples + stats pass (cutoff computed above)
 	local hist, tMin, tMax, vMin, vMax =
 		{}, math.huge, 0, math.huge, 0
 	local vals = {}
@@ -409,12 +446,14 @@ function OV.RefreshChart()
 		-- Zero-total samples never draw: pre-tag alts and init races
 		-- wrote them into the shared pool as giant fake dips
 		if p.t >= cutoff
-			and (p.g or 0) + (p.a or 0) + (p.h or 0) + (p.r or 0) > 0
+			and (p.g or 0) + (p.a or 0) + (p.h or 0) + (p.r or 0)
+				+ (p.d or 0) > 0
 			and (not p.c or GM.IsSelfCharKey(p.c)) then
 			hist[#hist + 1] = p
 			if p.t < tMin then tMin = p.t end
 			if p.t > tMax then tMax = p.t end
 			local wv = (p.g or 0) + (p.a or 0) + (p.h or 0) + (p.r or 0)
+				+ (p.d or 0)
 			vals[#vals + 1] = wv
 			if wv > vMax then vMax = wv end
 			if wv < vMin then vMin = wv end
@@ -430,7 +469,8 @@ function OV.RefreshChart()
 	local dayBase
 	for _, p in ipairs(GM.Model.WealthHist()) do
 		if p.t >= midnight
-			and (p.g or 0) + (p.a or 0) + (p.h or 0) + (p.r or 0) > 0 then
+			and (p.g or 0) + (p.a or 0) + (p.h or 0) + (p.r or 0)
+				+ (p.d or 0) > 0 then
 			dayBase = p
 			break
 		end
@@ -439,7 +479,7 @@ function OV.RefreshChart()
 	local deltaTxt = ""
 	if dayBase then
 		local dv = now - (dayBase.g or 0) - (dayBase.a or 0)
-			- (dayBase.h or 0)
+			- (dayBase.h or 0) - (dayBase.r or 0) - (dayBase.d or 0)
 		deltaTxt = GM.Signed(dv) .. GM.CC("textDim") .. " "
 			.. (dayBase.t >= midnight and "today"
 				or "since " .. date("%H:%M", dayBase.t)) .. "|r"
@@ -468,17 +508,12 @@ function OV.RefreshChart()
 	ui.kpiFlow:SetText("")
 	if slopeOK and span >= 43200 then
 		local sell, buy = 0, 0
-		for _, e in ipairs(GM.Ledger.db and GM.Ledger.db.transactions
-			or {}) do
-			if e.t >= tMin and e.t <= tMax then
-				local tot = (e.u or 0) * (e.q or 0)
-				if e.ty == "sell" then sell = sell + tot
-				elseif e.ty == "buy" then buy = buy + tot end
-			end
+		if GM.Ledger.Cashflow then
+			sell, buy = GM.Ledger.Cashflow(tMin, tMax)
 		end
 		if sell > 0 or buy > 0 then
 			local realized = (sell - buy) * 86400 / span
-			ui.kpiFlow:SetText(GM.CC("textDim") .. "realized |r"
+			ui.kpiFlow:SetText(GM.CC("textDim") .. "trading |r"
 				.. GM.Signed(realized) .. GM.CC("textDim")
 				.. "/d · reval |r" .. GM.Signed(slope * 86400 - realized)
 				.. GM.CC("textDim") .. "/d|r")
@@ -515,7 +550,31 @@ function OV.RefreshChart()
 		return
 	end
 	ui.chartMsg:SetText("")
-	tMax = math.max(tMax, tMin + 600)
+	-- the X axis follows the SELECTED window, not the samples'
+	-- extent: 20h of buffer in a 7D view draws in the right sliver
+	-- instead of stretching the same samples edge-to-edge in every
+	-- window — what made the zoom look dead. stats above (span,
+	-- slope, cashflow) stay on the sample span
+	local axisMin = (ui.chartWin ~= "ALL") and cutoff or tMin
+	tMax = math.max(tMax, axisMin + 600)
+
+	-- drawing is bounded by pixels, not samples: samples sharing a
+	-- destination column collapse to the column's last write (the
+	-- terminal state the step line lands on). ~14 samples fall
+	-- inside one pixel at 7D — and a 12k-sample week would paint
+	-- ~24k textures without this
+	local function Decimate(pts)
+		if #pts <= 1 then return pts end
+		local out, lastCol = {}, nil
+		for _, p in ipairs(pts) do
+			local col = math.floor(
+				(p.t - axisMin) / (tMax - axisMin) * w)
+			if col == lastCol then out[#out] = p
+			else out[#out + 1] = p lastCol = col end
+		end
+		return out
+	end
+	local drawHist = Decimate(hist)
 
 	-- normalize the Y range to the sample band + padding: a
 	-- 0-pinned axis compresses the line into a ceiling sliver once
@@ -561,38 +620,113 @@ function OV.RefreshChart()
 		AxisLabel(GM.Money(lo + vspan * i / 4),
 			gx - 4, y - 4, "BOTTOMRIGHT")
 	end
-	AxisLabel(date("%H:%M", tMin), gx, 4)
+	AxisLabel(date("%H:%M", axisMin), gx, 4)
 	AxisLabel(date("%H:%M", tMax), gx + w, 4, "BOTTOMRIGHT")
 
-	-- pending-AH band: a low-alpha-tinted accent fill under each step,
-	-- from gold up to gold+posted — "the slice that's listings now".
-	-- Manual tint (accent * 0.22 toward the near-black panel) rather
-	-- than texture alpha — deterministic on every client.
-	local ar, ag, ab = GM.RGB("accent")
+	-- pending-AH band + wealth line ride the VIEWED char's ledger
+	-- color (class default or custom pick) — the series belongs to
+	-- that char, so it wears their color the way the account rows
+	-- and the gold strip already do
+	-- `X and CharRGB() or RGB()` collapses the RGB triple to one
+	-- return — branch explicitly so cg/cb survive
+	local cr, cg, cb
+	if GM.Budget.CharRGB then
+		cr, cg, cb = GM.Budget.CharRGB(ViewChar())
+	else
+		cr, cg, cb = GM.RGB("accent")
+	end
+	local cc = { cr, cg, cb }
+	local ar, ag, ab = cr * 0.22, cg * 0.22, cb * 0.22
+	local br, bg2, bb = cr * 0.09, cg * 0.09, cb * 0.09
 	local px, pgy, pwv
-	for _, p in ipairs(hist) do
-		local x = gx + (p.t - tMin) / (tMax - tMin) * w
-		local yg = math.max(gy, wy(p.g or 0))
-		local yw = math.min(gy + h, wy((p.g or 0) + (p.a or 0)))
-		if px and pwv > pgy then
-			local band = chart:CreateTexture(nil, "BACKGROUND")
-			band:SetPoint("BOTTOMLEFT", chart, "BOTTOMLEFT", px, pgy)
-			band:SetPoint("TOPRIGHT", chart, "BOTTOMLEFT", x, pwv)
-			band:SetColorTexture(ar * 0.22, ag * 0.22, ab * 0.22)
-			tinsert(ui.art, band)
+	for _, p in ipairs(drawHist) do
+		local x = gx + (p.t - axisMin) / (tMax - axisMin) * w
+		-- the band stacks the non-posted wealth (cash + held +
+		-- receivable + escrow) with the posted slice on top —
+		-- deposits escrowed on live listings count or every post
+		-- draws a dip the size of its fee
+		local yg = math.max(gy, wy((p.g or 0) + (p.h or 0)
+			+ (p.r or 0) + (p.d or 0)))
+		local yw = math.min(gy + h, wy((p.g or 0) + (p.h or 0)
+			+ (p.r or 0) + (p.d or 0) + (p.a or 0)))
+		if px then
+			-- uniform base fill under the line — the posted band
+			-- alone left unshaded gaps wherever a==0 and read as a
+			-- rendering bug rather than "no listings then"
+			local base = chart:CreateTexture(nil, "BACKGROUND")
+			base:SetPoint("BOTTOMLEFT", chart, "BOTTOMLEFT", px, gy)
+			base:SetPoint("TOPRIGHT", chart, "BOTTOMLEFT", x, pgy)
+			base:SetColorTexture(br, bg2, bb)
+			tinsert(ui.art, base)
+			if pwv > pgy then
+				local band = chart:CreateTexture(nil, "BACKGROUND")
+				band:SetPoint("BOTTOMLEFT", chart, "BOTTOMLEFT",
+					px, pgy)
+				band:SetPoint("TOPRIGHT", chart, "BOTTOMLEFT", x, pwv)
+				band:SetColorTexture(ar, ag, ab)
+				tinsert(ui.art, band)
+			end
 		end
 		px, pgy, pwv = x, yg, yw
+	end
+	-- account series beneath the wealth line: each envelope's signed
+	-- balance normalized to its own window range — magnitudes differ
+	-- too far for the shared axis (a −8s hole next to 52g); the
+	-- right-edge labels key which shade is which account
+	for _, s in ipairs(accts) do
+		-- points are clipped to the drawn axis: every sample older
+		-- than tMin collapses into one entry point at the left edge —
+		-- an account born inside the window starts where its data
+		-- starts instead of flat-carrying a value it never had
+		local pts, pre = {}, nil
+		for _, p in ipairs(s.a.hist) do
+			if p.t >= axisMin then pts[#pts + 1] = p
+			else pre = p end
+		end
+		if pre then tinsert(pts, 1, { t = axisMin, v = pre.v }) end
+		local bal = GM.Budget.Balance(s.a)
+		if #pts == 0 or pts[#pts].v ~= bal then
+			pts[#pts + 1] = { t = tMax, v = bal }
+		end
+		if #pts == 1 then pts[2] = { t = tMax, v = pts[1].v } end
+		local loA, hiA = math.huge, -math.huge
+		for _, p in ipairs(pts) do
+			if p.v < loA then loA = p.v end
+			if p.v > hiA then hiA = p.v end
+		end
+		local spanA = hiA - loA
+		local function ay(v)
+			if spanA <= 0 then return gy + h * 0.5 end
+			local cv = math.max(loA, math.min(hiA, v))
+			return gy + h * 0.04 + (cv - loA) / spanA * h * 0.92
+		end
+		s.cc = { cr * s.shade, cg * s.shade, cb * s.shade }
+		local ax, ayv
+		for _, p in ipairs(Decimate(pts)) do
+			local x = gx + (p.t - axisMin) / (tMax - axisMin) * w
+			local y = ay(p.v)
+			if ax then
+				tinsert(ui.art, Line(chart, ax, ayv, x, ayv, s.cc, 1))
+				if y ~= ayv then
+					tinsert(ui.art,
+						Line(chart, x, ayv, x, y, s.cc, 1))
+				end
+			end
+			ax, ayv = x, y
+		end
+		s.endY = ayv
 	end
 	-- the wealth line: step-interpolated W(t) — flat runs + vertical
 	-- jumps, honest to the samples
 	px, pwv = nil, nil
-	for _, p in ipairs(hist) do
-		local x = gx + (p.t - tMin) / (tMax - tMin) * w
-		local yw = wy((p.g or 0) + (p.a or 0))
+	for _, p in ipairs(drawHist) do
+		local x = gx + (p.t - axisMin) / (tMax - axisMin) * w
+		local yw = wy((p.g or 0) + (p.a or 0) + (p.h or 0)
+			+ (p.r or 0) + (p.d or 0))
 		if px then
-			tinsert(ui.art, Line(chart, px, pwv, x, pwv, "accent"))
+			tinsert(ui.art, Line(chart, px, pwv, x, pwv, cc))
 			if yw ~= pwv then
-				tinsert(ui.art, Line(chart, x, pwv, x, yw, "accent"))
+				tinsert(ui.art, Line(chart, x, pwv, x, yw, cc))
 			end
 		end
 		px, pwv = x, yw
@@ -604,7 +738,7 @@ function OV.RefreshChart()
 			return math.max(lo,
 				math.min(hi, mv + slope * (t - mt)))
 		end
-		local ya = wy(vy(tMin))
+		local ya = wy(vy(axisMin))
 		local yb = wy(vy(tMax))
 		for i = 0, 12, 2 do -- dashed: every other seventh
 			local xa = gx + w * i / 14
@@ -613,6 +747,27 @@ function OV.RefreshChart()
 				xb, ya + (yb - ya) * (i + 1) / 14, "secondary", 1))
 		end
 	end
+	-- right-gutter end labels: a dash in the series shade keys the
+	-- line, the name + live balance carry the identity and the
+	-- magnitude the per-series normalization drops. Sorted by
+	-- endpoint, pushed down to a 9px minimum gap
+	table.sort(accts, function(a, b) return a.endY > b.endY end)
+	local nextTop = math.huge
+	for _, s in ipairs(accts) do
+		local y = math.max(4,
+			math.min((s.endY or gy + h * 0.5) - 4, nextTop - 9))
+		local fs = GM.MakeFontString(chart, GM.FONT, 8, "secondary")
+		fs:SetPoint("BOTTOMLEFT", chart, "BOTTOMLEFT",
+			gx + w + 5, y)
+		fs:SetJustifyH("LEFT")
+		fs:SetWordWrap(false)
+		fs:SetText(format("|cff%02x%02x%02x—|r %s %s",
+			floor(s.cc[1] * 255 + 0.5), floor(s.cc[2] * 255 + 0.5),
+			floor(s.cc[3] * 255 + 0.5), s.a.name or "?",
+			GM.MoneyShort(GM.Budget.Balance(s.a))))
+		tinsert(ui.art, fs)
+		nextTop = y
+	end
 end
 
 -- ============ accounts ============
@@ -620,7 +775,9 @@ end
 -- journal legs render in canonical account order, positive delta =
 -- debit (money/value arriving), negative = credit
 local JE_ORDER = { "cash", "stock", "posted", "dep", "rcbl",
-	"pnl", "ext" }
+	"wip", "pnl", "ext" }
+local JE_SET = {}
+for _, a in ipairs(JE_ORDER) do JE_SET[a] = true end
 
 local function PaintJournalRow(r, e)
 	local money = e.u and e.u * e.q
@@ -628,16 +785,31 @@ local function PaintJournalRow(r, e)
 	r[2]:SetText((e.ty == "sell" and GM.CC("pos") or
 		e.ty == "buy" and GM.CC("warn") or GM.CC("textDim"))
 		.. (TX_LABEL[e.ty] or e.ty) .. "|r")
-	r[3]:SetText(format("%s ×%d%s", TxName(e), e.q,
-		money and (" · " .. GM.Money(money)) or ""))
+	if e.ty == "transfer" then
+		r[3]:SetText(format("%s · %s", TxName(e), GM.Money(e.q)))
+	else
+		r[3]:SetText(format("%s ×%d%s", TxName(e), e.q,
+			money and (" · " .. GM.Money(money)) or ""))
+	end
 	if e.je then
-		local dr, cr = {}, {}
+		local dr, cr, extra = {}, {}, {}
 		for _, a in ipairs(JE_ORDER) do
 			local d = e.je[a]
 			if d and d ~= 0 then
 				tinsert(d > 0 and dr or cr,
 					a .. " " .. GM.MoneyShort(math.abs(d)))
 			end
+		end
+		-- memo legs (transfer's acct:* keys) render after the real
+		-- accounts — they net to zero inside the tx
+		for a, d in pairs(e.je) do
+			if not JE_SET[a] and d ~= 0 then tinsert(extra, a) end
+		end
+		sort(extra)
+		for _, a in ipairs(extra) do
+			local d = e.je[a]
+			tinsert(d > 0 and dr or cr,
+				a .. " " .. GM.MoneyShort(math.abs(d)))
 		end
 		r[4]:SetText(table.concat(dr, " · "))
 		r[5]:SetText(table.concat(cr, " · "))
@@ -718,7 +890,9 @@ local function RefreshAccounts()
 		if ch and (ch.g or 0) > 0 then
 			total = total + ch.g
 			parts[#parts + 1] = GM.Budget.Crest(ck)
-				.. GM.Budget.CharCC(ck) .. GM.Budget.CharName(ck)
+				.. GM.Budget.CharCC(ck)
+				.. (GM.Budget.CharDisp and GM.Budget.CharDisp(ck)
+					or GM.Budget.CharName(ck))
 				.. "|r " .. GM.MoneyShort(ch.g)
 		end
 	end
@@ -727,20 +901,71 @@ local function RefreshAccounts()
 		.. table.concat(parts, "   "))
 	local list = GM.Budget.List()
 	local order = GM.Budget.Order()
-	local maxOff = math.max(0, #list - #ui.acctRows)
+	-- nest accounts under their owner's pool: the pool row is the
+	-- foldable header, named accounts indent beneath it. Fold state
+	-- is session-local — default open, nothing hides unless asked
+	local fold = ui.acctFold or {}
+	ui.acctFold = fold
+	local ckSeen, ckOrder = {}, {}
+	for _, idx in ipairs(order) do
+		local ck = GM.Budget.OwnerKey(list[idx])
+		if not ckSeen[ck] then
+			ckSeen[ck] = true
+			ckOrder[#ckOrder + 1] = ck
+		end
+	end
+	local disp = {}
+	for _, ck in ipairs(ckOrder) do
+		local hdr, kids = nil, {}
+		for _, idx in ipairs(order) do
+			local a = list[idx]
+			if GM.Budget.OwnerKey(a) == ck then
+				if a.pool then hdr = { a = a, idx = idx }
+				else kids[#kids + 1] = { a = a, idx = idx } end
+			end
+		end
+		if hdr then
+			disp[#disp + 1] = { e = hdr, ck = ck,
+				fold = #kids > 0
+					and (fold[ck] and "closed" or "open") or nil }
+			if not fold[ck] then
+				for _, k in ipairs(kids) do
+					disp[#disp + 1] = { e = k, indent = 1 }
+				end
+			end
+		else
+			-- no pool row for this owner — render flat
+			for _, k in ipairs(kids) do
+				disp[#disp + 1] = { e = k }
+			end
+		end
+	end
+	local maxOff = math.max(0, #disp - #ui.acctRows)
 	if (ui.aScroll or 0) > maxOff then ui.aScroll = maxOff end
 	for i, row in ipairs(ui.acctRows) do
-		local idx = order[i + (ui.aScroll or 0)]
-		local a = idx and list[idx]
-		if a then
+		local d = disp[i + (ui.aScroll or 0)]
+		if d then
 			row:Show()
-			W.PaintAcctRow(row, a, idx)
+			local ck = d.ck
+			W.PaintAcctRow(row, d.e.a, d.e.idx, {
+				indent = d.indent,
+				fold = d.fold,
+				onFold = d.fold and function()
+					fold[ck] = not fold[ck]
+					RefreshAccounts()
+				end or nil,
+			})
 		else
 			row:Hide()
 		end
 	end
 	-- nudge toward the first real account while this char's seeded
-	-- pool is the whole self-owned list
+	-- pool is the whole self-owned list. Anchor under the LAST
+	-- visible row — the fixed -94 slot assumed a one-row list and
+	-- landed on top of other chars' account rows on an alt
+	ui.acctOnboard:ClearAllPoints()
+	ui.acctOnboard:SetPoint("TOPLEFT", 8,
+		-64 - math.min(#disp, #ui.acctRows) * 26 - 6)
 	local selfAccts = {}
 	for _, a in ipairs(list) do
 		if GM.IsSelfCharKey(GM.Budget.OwnerKey(a)) then
@@ -905,12 +1130,16 @@ local function Build()
 	ui.kpiDelta = GM.MakeFontString(chart, GM.FONT, 9, "textDim")
 	ui.kpiDelta:SetPoint("TOPLEFT", 10, -40)
 	ui.kpiDelta:SetWordWrap(false)
-	ui.kpiFlow = GM.MakeFontString(chart, GM.FONT, 8, "textDim")
-	ui.kpiFlow:SetPoint("BOTTOM", chart, "BOTTOM", 0, 6)
-	ui.kpiFlow:SetWordWrap(false)
+	-- footer strip stacks two rows above the time labels: ledger
+	-- (anchor) then flow CHAINED to its right edge — a long ledger
+	-- line pushes flow rather than painting through it; past the
+	-- gutter labels (x<52) and above the time row (y<12)
 	ui.kpiLedger = GM.MakeFontString(chart, GM.FONT, 8, "textDim")
-	ui.kpiLedger:SetPoint("BOTTOMLEFT", chart, "BOTTOMLEFT", 8, 6)
+	ui.kpiLedger:SetPoint("BOTTOMLEFT", chart, "BOTTOMLEFT", 56, 12)
 	ui.kpiLedger:SetWordWrap(false)
+	ui.kpiFlow = GM.MakeFontString(chart, GM.FONT, 8, "textDim")
+	ui.kpiFlow:SetPoint("LEFT", ui.kpiLedger, "RIGHT", 10, 0)
+	ui.kpiFlow:SetWordWrap(false)
 	-- window segments: filter the sampled window (ALL = whole buffer)
 	ui.chartWin = "ALL"
 	ui.winSegs = {}
@@ -1008,26 +1237,26 @@ local function Build()
 			RefreshAccounts()
 		end
 	end)
+	-- add-row rides the strip right under the gold line — anchored
+	-- to the panel top so the create affordance can never sit below
+	-- a clipped or crowded fold
+	ui.acctAdd = W.AcctAdd(accts)
+	ui.acctAdd:SetPoint("TOPLEFT", 8, -36)
 	ui.acctRows = {}
 	local ACCT_ROWS = 7
 	for i = 1, ACCT_ROWS do
 		local row = W.AcctRow(accts, i, false)
-		-- past the gold strip: rows hang under it like journal rows
-		-- hang under their headers
-		row:SetPoint("TOPLEFT", 8, -44 - (i - 1) * 26)
+		row:SetPoint("TOPLEFT", 8, -64 - (i - 1) * 26)
 		row:SetWidth(696)
 		ui.acctRows[i] = row
 	end
 	-- onboarding line: shows only while the auto-seeded pool is the
-	-- whole list — the add-row is already right there
+	-- whole list — it sits in the empty row slot under the pool
 	ui.acctOnboard = GM.MakeFontString(accts, GM.FONT, 9, "secondary")
-	ui.acctOnboard:SetPoint("TOPLEFT", 8, -72)
+	ui.acctOnboard:SetPoint("TOPLEFT", 8, -94)
 	ui.acctOnboard:SetWordWrap(false)
-	ui.acctOnboard:SetText("create an account below to earmark gold — "
+	ui.acctOnboard:SetText("create an account above to earmark gold — "
 		.. "e.g. a 10% SAVE or an AH float")
-	-- same add-row contract as the dashboard BUDGETS panel
-	ui.acctAdd = W.AcctAdd(accts)
-	ui.acctAdd:SetPoint("BOTTOMLEFT", 10, 26)
 	ui.acctHint = GM.MakeFontString(accts, GM.FONT, 9, "secondary")
 	ui.acctHint:SetPoint("BOTTOMLEFT", 10, 6)
 	ui.acctHint:SetText(
@@ -1057,7 +1286,7 @@ local function Build()
 	itP.iconBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
 	itP.iconBtn:SetScript("OnClick", function()
 		if IsModifiedClick() and ui.itemID then
-			GM.ModifiedItemClick(ui.itemID)
+			GM.Ops.Click(ui.itemID)
 		end
 	end)
 	itP.name = GM.MakeFontString(itP, GM.FONT_BOLD, 13, "text")
@@ -1125,17 +1354,25 @@ end
 local function RefreshItem()
 	local itP, id = ui.pageItem, ui.itemID
 	if not id then return end
+	-- one ctx answers every item question this pane asks — name,
+	-- color, market entry, every-location stock, ledger stats
+	local ctx = GM.Ctx and GM.Ctx(id)
 	itP.icon:SetTexture(GM.ItemIcon and GM.ItemIcon(id)
 		or "Interface\\Icons\\INV_Misc_QuestionMark")
-	itP.name:SetText(ItemName(id))
-	itP.name:SetTextColor(GM.NameColor(id))
-	local e = GM.ItemEntry(id)
-	local m = GM.Price("dbmarket", id)
+	itP.name:SetText(ctx and ctx.name or ItemName(id))
+	if ctx then
+		local r = ctx.rgb
+		itP.name:SetTextColor(r[1], r[2], r[3])
+	else
+		itP.name:SetTextColor(GM.NameColor(id))
+	end
+	local e = ctx and ctx.entry or GM.ItemEntry(id)
+	local m = e and e.p or GM.Price("dbmarket", id)
 	itP.mkt:SetText(m and ("market " .. GM.Money(m)) or "no market data")
 
 	-- account-global aggregates (itemStats is shared by design)
 	local s = GM.Ledger.Stats(id)
-	local c = GM.Inventory.Count(id)
+	local c = ctx and ctx.stock or GM.Inventory.Count(id)
 	local lines = {
 		format("on hand: %d  (bags %d · bank %d · mail %d · gbank %d · ah %d)",
 			c.total, c.bags, c.bank, c.mail, c.guild, c.auction),
@@ -1151,8 +1388,8 @@ local function RefreshItem()
 				s.sellQ, GM.Money(s.sellAvg or 0),
 				GM.Money(s.sellMin or 0), GM.Money(s.sellMax or 0))
 		end
-		local paid = GM.Ledger.Avg(id, "paid")
-		if paid then
+		local paid = (ctx and ctx.basis) or GM.Ledger.Avg(id, "paid")
+		if paid and paid > 0 then
 			lines[#lines + 1] = "stock cost basis " .. GM.Money(paid)
 		end
 		if s.saleRate then
@@ -1292,4 +1529,10 @@ GM.View.Register("overview", {
 	Show = OV.Show, Hide = OV.Hide, Toggle = OV.Toggle,
 	Data = Data,
 	Refresh = OV.Refresh,
+	-- the wealth header is ledger-backed: money/chat deltas settle
+	-- rcbl, bag/inbox/owned changes move stock+posted — repaint on
+	-- all of them so "incoming" drops the moment proceeds collect
+	events = { "CHAT_MSG_MONEY", "PLAYER_MONEY", "BAG_UPDATE",
+		"MAIL_INBOX_UPDATE", "OWNED_AUCTIONS_UPDATED" },
+	evDelay = 0.3,
 	IsShown = function() return ui and ui.frame and ui.frame:IsShown() end })

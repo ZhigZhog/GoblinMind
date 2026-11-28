@@ -17,7 +17,7 @@ local CH_A, CH_B = "goblinmindx", "goblinwritx"
 -- separate buses. Writ records are rare but heavy — a 50-message
 -- snapshot stream must never starve a sale hint, and vice versa.
 local WRIT_KINDS = { T=1, D=1, Q=1, F=1, P=1, N=1, W=1, w=1, Z=1,
-                     I=1, i=1, O=1 }
+                     I=1, i=1, O=1, V=1, y=1 }
 local function ChanFor(kind)
 	return WRIT_KINDS[kind] and CH_B or CH_A
 end
@@ -211,7 +211,9 @@ end
 
 -- ============ broadcast source: book diffs ============
 
-local TL_FP = "^(%d+):(%d+):(%d+):?(%w*)$"
+-- fp = <key>:qty:unit[:tlb] — the key is a plain id or a variant
+-- "v<id>:<sfx>:<lvl>", so fields 2+ parse from the right side
+local TL_FP = "^(.-):(%d+):(%d+):?(%w*)$"
 local function Pref(fp)
 	local a, b, c = fp:match(TL_FP)
 	return a and (a .. ":" .. b .. ":" .. c) or fp, a, b, c
@@ -234,7 +236,7 @@ function M.OnBook(book, lots, prevBook, prevLots, prevT)
 		end
 		for fp, n in pairs(prevLots) do
 			local p = Pref(fp)
-			local t = fp:match("^%d+:%d+:%d+:(%w+)$")
+			local t = select(4, fp:match(TL_FP))
 			oldPref[p] = (oldPref[p] or 0) + n
 			local l = oldTlb[p]
 			if not l then l = {} oldTlb[p] = l end
@@ -244,9 +246,14 @@ function M.OnBook(book, lots, prevBook, prevLots, prevT)
 		for p, on in pairs(oldPref) do
 			local gone = on - (newPref[p] or 0)
 			if gone > 0 then
-				local iid, qty, unit = p:match(TL_FP)
-				iid, qty, unit = tonumber(iid), tonumber(qty),
-					tonumber(unit)
+				local key, qty, unit = p:match(TL_FP)
+				-- the wire anchors %d+ — a variant key carries colons
+				-- and can't ride field 1. Emit its base itemID: a
+				-- variant sale still counts toward the item's market
+				-- vel, and the local lots keep full variant identity
+				local iid = key and (GM.AH.BookID
+					and GM.AH.BookID(key) or tonumber(key))
+				qty, unit = tonumber(qty), tonumber(unit)
 				local cls = "u"
 				local minL
 				for _, t in ipairs(oldTlb[p] or {}) do
@@ -279,8 +286,12 @@ function M.OnBook(book, lots, prevBook, prevLots, prevT)
 	if book and prevBook then
 		local ch = {}
 		for id, e in pairs(book) do
+			-- variant keys stay out: the wire's field-1 %d+ anchor
+			-- can't carry them and N variants beaconed under one
+			-- base iid would fight each other's mb
 			local o = prevBook[id]
-			if e.mb and (not o or o.mb ~= e.mb) then
+			if type(id) == "number" and e.mb
+				and (not o or o.mb ~= e.mb) then
 				ch[#ch + 1] = { i = id, m = e.mb, s = e.sup or 0,
 					w = math.abs(e.mb - (o and o.mb or 0)) }
 			end
@@ -412,6 +423,14 @@ local KINDS = {
 			end
 		end
 	end,
+	-- crafting-writ v2 overlay events — Writs owns its grammar
+	V = function(_, _, body)
+		if GM.Writs and GM.Writs.MeshEvent then
+			for rec in body:gmatch("[^,]+") do
+				GM.Writs.MeshEvent(rec)
+			end
+		end
+	end,
 }
 
 -- snapshot stream rows (W/w/Z) — batched comma-joined; ingest only
@@ -426,6 +445,7 @@ local function StreamRows(kind, _, body, sender)
 	end
 end
 KINDS.W, KINDS.w, KINDS.Z = StreamRows, StreamRows, StreamRows
+KINDS.y = StreamRows   -- roster rows land in the same gen-pinned ingest
 
 local function OnAddon(_, prefix, msg, ctype, sender)
 	if prefix ~= PREFIX then return end
@@ -435,7 +455,8 @@ local function OnAddon(_, prefix, msg, ctype, sender)
 		local n = UnitName("player")
 		if n and n ~= "Unknown Entity" then me = n end
 	end
-	if me and sender and sender:match("^[^-]+") == me then
+	if me and sender and GM.SameChar
+		and GM.SameChar(sender) then
 		return -- own echo
 	end
 	if not GM.db then return end

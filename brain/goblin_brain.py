@@ -254,6 +254,8 @@ VENDOR_BUY_PATH = os.path.join(os.path.dirname(
     os.path.abspath(__file__)), 'vendor_buy.json')
 RECIPE_SOURCES_PATH = os.path.join(os.path.dirname(
     os.path.abspath(__file__)), 'recipe_sources.json')
+DROP_SOURCES_PATH = os.path.join(os.path.dirname(
+    os.path.abspath(__file__)), 'drop_sources.json')
 
 
 def load_recipe_sources():
@@ -264,6 +266,20 @@ def load_recipe_sources():
     {kind,name,cost?/chance?} source records."""
     try:
         with open(RECIPE_SOURCES_PATH, encoding='utf-8') as fh:
+            return {int(k): v for k, v in json.load(fh).items()}
+    except (OSError, ValueError):
+        return {}
+
+
+def load_drop_sources():
+    """item-drop table — frozen artifact built by import_drop_db.py
+    from a vmangos classic-db dump; shipped with the release like
+    vendor_buy.json. Keys are dropped-item ids; values are lists of
+    {src,name,chance,via,qty?} records where src carries the live
+    capture scheme (c<npcID>/o<objectID>/i<itemID> plus d<> disenchant
+    groups and f<> zone ids)."""
+    try:
+        with open(DROP_SOURCES_PATH, encoding='utf-8') as fh:
             return {int(k): v for k, v in json.load(fh).items()}
     except (OSError, ValueError):
         return {}
@@ -425,6 +441,7 @@ def cmd_emit(path, out_path, realm=None):
         'items': flat.get('items', {}),
         'vendorBuy': load_vendor_buy(path),  # TSM VendorSell.Retail → id=cost
         'recipeSources': load_recipe_sources(),
+        'dropSources': load_drop_sources(),
     }
 
     write_db(db, out_path)
@@ -435,16 +452,21 @@ def cmd_emit(path, out_path, realm=None):
 
 
 _IDENT = re.compile(r'[A-Za-z_][A-Za-z0-9_]*\Z')
+_LUA_KW = frozenset(
+    'and break do else elseif end false for function goto if in '
+    'local nil not or repeat return then true until while'.split())
 
 
 def _enc_key(k):
     # numeric keys index directly; identifier-safe names go bare;
     # anything else ("Realm-Faction" scopes, hyphens, spaces) must
     # be bracket-quoted — a bare CAMWOWUS1Realm5PvE-Alliance= breaks
-    # the whole generated file at load
+    # the whole generated file at load. Identifier-shaped Lua
+    # keywords ("in", "end") must bracket too — the writs inbox's
+    # 'in' key broke the emit exactly this way.
     if isinstance(k, int):
         return f'[{k}]'
-    if _IDENT.fullmatch(str(k)):
+    if _IDENT.fullmatch(str(k)) and str(k) not in _LUA_KW:
         return str(k)
     return '["%s"]' % str(k).replace('\\', '\\\\').replace('"', '\\"')
 
@@ -1279,11 +1301,16 @@ def _boards_snapshot():
     the board actually changed."""
     try:
         with open(API_BOOK_PATH, encoding='utf-8') as fh:
-            boards = json.load(fh).get('boards') or {}
+            cur = json.load(fh)
     except (OSError, ValueError):
         return None
+    boards = cur.get('boards') or {}
+    rosters = cur.get('rosters') or {}
+    writs = cur.get('writs') or {}
     return json.dumps(
-        {b: v.get('orders') for b, v in boards.items()},
+        {'o': {b: v.get('orders') for b, v in boards.items()},
+         'r': {b: v.get('rosters') for b, v in rosters.items()},
+         'w': writs},
         sort_keys=True)
 
 
@@ -1292,7 +1319,8 @@ def boards_pull(cfg=None):
     feed. Stored beside the remote books in api_book.json under
     'boards' so cmd_book's emit folds it as GoblinMindDB.boards.
     Boards unconfigured in feeds.json stop pulling (their stored
-    snapshot is dropped)."""
+    snapshot is dropped). The same pass pulls shop rosters and the
+    private writ inbox — identical cadence, one atomic store."""
     cfg = cfg or _backend_cfg()
     if not cfg.get('url'):
         return {}
@@ -1306,6 +1334,7 @@ def boards_pull(cfg=None):
     except (OSError, ValueError):
         cur = {}
     boards = cur.setdefault('boards', {})
+    rosters = cur.setdefault('rosters', {})
     for b in names:
         try:
             d = _backend_req(
@@ -1317,10 +1346,27 @@ def boards_pull(cfg=None):
                       len(d.get('orders') or []))
         except Exception as e:
             LOG.warning('board pull %s failed: %s', b, e)
+        try:
+            d = _backend_req(
+                cfg, '/v1/boards/%s/rosters'
+                % urllib.parse.quote(b, safe=''))
+            rosters[b] = {'t': int(time.time()),
+                          'rosters': d.get('rosters') or []}
+        except Exception as e:
+            LOG.warning('roster pull %s failed: %s', b, e)
     for b in list(boards):
         if b not in names:
             boards.pop(b)
-    if boards or names:
+    for b in list(rosters):
+        if b not in names:
+            rosters.pop(b)
+    try:
+        d = _backend_req(cfg, '/v1/writs')
+        cur['writs'] = {'t': int(time.time()), 'in': d.get('in') or [],
+                        'out': d.get('out') or []}
+    except Exception as e:
+        LOG.warning('writ inbox pull failed: %s', e)
+    if boards or names or 'writs' in cur:
         tmp = API_BOOK_PATH + '.tmp'
         with open(tmp, 'w', encoding='utf-8') as fh:
             json.dump(cur, fh)
@@ -1335,6 +1381,26 @@ def api_boards():
             return (json.load(fh).get('boards') or {})
     except (OSError, ValueError):
         return {}
+
+
+def api_rosters():
+    """Pulled shop rosters {board: {t, rosters[]}} for the emit."""
+    try:
+        with open(API_BOOK_PATH, encoding='utf-8') as fh:
+            return (json.load(fh).get('rosters') or {})
+    except (OSError, ValueError):
+        return {}
+
+
+def api_writs():
+    """Private writ inbox/outbox for the emit — the addon treats it
+    as server truth; local live overlays sit on top."""
+    try:
+        with open(API_BOOK_PATH, encoding='utf-8') as fh:
+            return (json.load(fh).get('writs')
+                    or {'in': [], 'out': [], 't': 0})
+    except (OSError, ValueError):
+        return {'in': [], 'out': [], 't': 0}
 
 
 def _backend_op(cfg, path, body, auth=True):
@@ -1456,6 +1522,14 @@ def _fp_pref(fp):
     return fp.rsplit(':', 1)[0] if fp.count(':') >= 3 else fp
 
 
+def _iid_key(s):
+    """book item key: plain ids normalize to int; 'v<id>:<sfx>:<lvl>'
+    variant keys stay strings. Both survive the JSON emit unchanged
+    (Lua-side RestoreBook does the mirror-image tonumber-or-keep)."""
+    s = str(s)
+    return int(s) if s.isdigit() else s
+
+
 def delta_record(books):
     """books = {scope: book}. Diffs each book's `lots` against the last
     snapshot for that scope and appends sale events to api_state.json.
@@ -1505,7 +1579,7 @@ def delta_record(books):
         gone_by_iid, appt_by_iid, prev_lots_iid = {}, {}, {}
         unit_lots_iid = {}
         for p, on in old_pref.items():
-            iid = p.split(':', 1)[0]
+            iid = p.rsplit(':', 2)[0]
             prev_lots_iid[iid] = prev_lots_iid.get(iid, 0) + on
             try:
                 unit_lots_iid.setdefault(iid, []).append(
@@ -1541,13 +1615,13 @@ def delta_record(books):
             item_events = []
             by_unit, by_qty = {}, {}
             for ap, an in (appt_by_iid.get(iid) or {}).items():
-                _, aq, au = ap.split(':', 2)
+                _, aq, au = ap.rsplit(':', 2)
                 by_unit[au] = by_unit.get(au, 0) + an
                 by_qty[aq] = by_qty.get(aq, 0) + an
             for p, gone in gone_map.items():
                 try:
-                    iid_s, qty_s, unit_s = p.split(':', 2)
-                    iid, qty, unit = int(iid_s), int(qty_s), int(unit_s)
+                    iid_s, qty_s, unit_s = p.rsplit(':', 2)
+                    iid, qty, unit = _iid_key(iid_s), int(qty_s), int(unit_s)
                 except ValueError:
                     continue
                 left = gone
@@ -1644,10 +1718,7 @@ def delta_stats(scope):
         # not the full 7d window — and floored at 1 day so a hot
         # first diff doesn't extrapolate to absurd rates
         span_d = max(now - min(e[0] for e in win), 86400) / 86400
-        try:
-            iid = int(iid_s)
-        except ValueError:
-            continue
+        iid = _iid_key(iid_s)
         out[iid] = {
             'vel': round(units / span_d, 4),
             'veln': len(win),
@@ -1720,7 +1791,7 @@ def cmd_book(sv_arg, out_paths, root=None, feed=None, realm=None):
             continue
         books_by_scope.setdefault(str(s), []).append({
             't': e.get('t') or time.time(),
-            'items': {str(int(iid)): {'mb': e.get('m'),
+            'items': {str(_iid_key(iid)): {'mb': e.get('m'),
                                       'mbx': e.get('m'),
                                       'sup': e.get('sup') or 0, 'n': 1}},
             'remote': True})
@@ -1735,7 +1806,7 @@ def cmd_book(sv_arg, out_paths, root=None, feed=None, realm=None):
             sig = (e.get('t') or 0, e.get('u') or 0,
                    e.get('p') or 0, e.get('l') or 1)
             lst = sales.setdefault(str(s), {}).setdefault(
-                str(int(iid)), [])
+                str(_iid_key(iid)), [])
             if any((x[0], x[1], x[2], x[3]) == sig for x in lst):
                 continue
             lst.append([int(e.get('t') or time.time()),
@@ -1766,13 +1837,13 @@ def cmd_book(sv_arg, out_paths, root=None, feed=None, realm=None):
         for b in books:
             snap_t = int(b.get('t') or now)
             for iid, e in (b.get('items') or {}).items():
-                rec = sh.setdefault(str(int(iid)), [])
+                rec = sh.setdefault(str(_iid_key(iid)), [])
                 # idempotent — a re-run on the same flush must not
                 # double-count the snapshot
                 if not any(r and r[0] == snap_t for r in rec):
                     rec.append([snap_t, e.get('mb'), e.get('sup'),
                                 e.get('n')])
-                sh[str(int(iid))] = [
+                sh[str(_iid_key(iid))] = [
                     r for r in rec
                     if r and r[0] and now - r[0] < HIST_KEEP]
     save_book_hist(hist)
@@ -1843,7 +1914,7 @@ def cmd_book(sv_arg, out_paths, root=None, feed=None, realm=None):
         for b in sorted(books, key=lambda x: x.get('t') or 0):
             latest_t = int(b.get('t') or latest_t)
             for iid, e in (b.get('items') or {}).items():
-                latest[int(iid)] = e
+                latest[_iid_key(iid)] = e
         items = {}
         dstats = delta_stats(scope)
         for iid, e in latest.items():
@@ -2019,6 +2090,11 @@ def cmd_book(sv_arg, out_paths, root=None, feed=None, realm=None):
         # op outcomes keyed by staging rid — Orders.lua watches both
         'boards': api_boards(),
         'orderResults': _order_results_emit(),
+        # crafting writs v2: browsable shop rosters per board plus
+        # the private request inbox/outbox and op acks — Writs.lua
+        'rosters': api_rosters(),
+        'writs': api_writs(),
+        'writResults': _writ_results_emit(),
         # relay-host results — staged relayOut envelopes we've
         # POSTed; the addon whispers register creds (Y) and op
         # failures (X) back to their requesters from this
@@ -2036,6 +2112,7 @@ def cmd_book(sv_arg, out_paths, root=None, feed=None, realm=None):
             _sv_root(sv_arg, root), 'Interface', 'AddOns',
             'TradeSkillMaster_AppHelper', 'AppData.lua')),
         'recipeSources': load_recipe_sources(),
+        'dropSources': load_drop_sources(),
     }
     for out in out_paths:
         write_db(db, out)
@@ -2396,6 +2473,13 @@ BOARD_REQ_RE = re.compile(r'"(bo-(\d+)-[^"|]+)\|([0-9a-fA-F]+)"')
 # forces a boards pull + patch emit this pass so the auto-reload
 # the addon just did lands on fresh data
 BOARD_REFRESH_RE = re.compile(r'"(br-[^"|]+)\|([0-9a-fA-F]+)"')
+# /goblin audit stages 'aud-<ts>-<n>|<hex(report)>' — each new rid's
+# decoded lines are written to brain.log once (drift visibility)
+AUDIT_RE = re.compile(r'"(aud-[^"|]+)\|([0-9a-fA-F]+)"')
+# crafting writs v2 stage in GoblinMindSettings.writQueue as
+# 'wrt-<ts>-<n>|<hex(json)>' — roster publishes and point-to-point
+# request verbs share the queue and the writResults ack table
+WRIT_RE = re.compile(r'"(wrt-[^"|]+)\|([0-9a-fA-F]+)"')
 
 
 def _ord_route(body):
@@ -2486,6 +2570,84 @@ def process_orders(appdata, root=None):
     return dirty
 
 
+def _writ_route(body):
+    """Crafting-writ staged verbs -> server paths. 'roster' publishes
+    the shop on a board; 'wpost' addresses a request; the rest are
+    lifecycle verbs on the writ row itself."""
+    q = lambda s: urllib.parse.quote(str(s or ''), safe='')
+    qi = lambda s: urllib.parse.quote(str(s or ''), safe=':')
+    v, b, wid = body.get('v'), body.get('b'), body.get('wid')
+    if v == 'roster':
+        return '/v1/boards/%s/roster' % q(b) if b else None
+    if v == 'wpost':
+        return '/v1/writs'
+    if v in ('wquote', 'waccept', 'wdecline', 'wship', 'wrecv',
+             'wcancel', 'wmeet'):
+        return ('/v1/writs/%s/%s' % (qi(wid), v)
+                if wid else None)
+    return None
+
+
+def process_writs(appdata, root=None):
+    """POST staged crafting-writ ops (roster publish + request
+    lifecycle) to the backend. api_state.writ_results[rid] feeds
+    GoblinMindDB.writResults for queue clearing — identical
+    idempotent-replay contract to process_orders."""
+    cfg = _backend_cfg()
+    if not cfg.get('url'):
+        return
+    st = _load_api_state()
+    done = st.setdefault('writ_results', {})
+    dirty = False
+    for sv in sv_paths(appdata, root):
+        try:
+            with open(sv, encoding='utf-8', errors='replace') as fh:
+                text = fh.read()
+        except OSError:
+            continue
+        for rid, hexbody in WRIT_RE.findall(text):
+            if rid in done:
+                continue
+            try:
+                body = json.loads(
+                    bytes.fromhex(hexbody).decode('utf-8'))
+            except (ValueError, UnicodeDecodeError):
+                done[rid] = {'ok': False, 'err': 'decode',
+                             't': int(time.time())}
+                dirty = True
+                continue
+            if body.get('rly'):
+                continue
+            path = _writ_route(body)
+            if not path:
+                done[rid] = {'ok': False, 'err': 'verb',
+                             't': int(time.time())}
+                dirty = True
+                continue
+            body['op'] = rid
+            try:
+                code, r = _backend_op(cfg, path, body)
+            except Exception as e:
+                LOG.warning('writ op %s transport failed: %s',
+                            rid, e)
+                continue
+            res = {'ok': 200 <= code < 300, 'code': code,
+                   't': int(time.time())}
+            for k in ('error', 'writ', 'state', 'offers'):
+                if r.get(k) is not None:
+                    res[k] = r[k]
+            done[rid] = res
+            dirty = True
+            LOG.info('writ op %s (%s) -> %d', rid,
+                     body.get('v'), code)
+    if dirty:
+        keys = sorted(done, key=lambda k: done[k].get('t') or 0)
+        while len(done) > 128:
+            done.pop(keys.pop(0), None)
+        _save_api_state(st)
+    return dirty
+
+
 # mesh-relayed ops stage in GoblinMindSettings.relayOut as
 # 'rel-<ts>-<n>|<hex(json {from, b, op, uuid, rtoken, v, ...})>' —
 # a tunneled peer whispers its envelope to a client that CAN reach
@@ -2539,7 +2701,9 @@ def process_relay(appdata, root=None):
                         if r.get(k) is not None:
                             res[k] = r[k]
                 else:
-                    path = _ord_route(env)
+                    # writ verbs tunnel too — envelopes carry the
+                    # same {v,b,wid} body shape, just writ routes
+                    path = _ord_route(env) or _writ_route(env)
                     if not path:
                         done[rid] = dict(res, ok=False, err='verb')
                         dirty = True
@@ -2580,6 +2744,9 @@ def _patch_boards_emit(out_paths):
     to run instead (first run, hand-edited file, TSM-feed output)."""
     updates = {
         'boards': api_boards(),
+        'rosters': api_rosters(),
+        'writs': api_writs(),
+        'writResults': _writ_results_emit(),
         'orderResults': _order_results_emit(),
         'relayResults': _relay_results_emit(),
         'backend': _backend_emit(),
@@ -2694,19 +2861,60 @@ def process_board_refresh(appdata, root=None):
     return True
 
 
+def process_audit(appdata, root=None):
+    """Consume staged 'aud-' audit reports — /goblin audit's invariant
+    checks ride the SV flush; each new rid's decoded lines land in
+    brain.log once (warn/FAIL at WARNING, the rest at INFO). Dedup
+    watermark lives in api_state.audit_seen, capped like
+    board_refresh."""
+    st = _load_api_state()
+    seen = st.setdefault('audit_seen', {})
+    new = []
+    for sv in sv_paths(appdata, root):
+        try:
+            with open(sv, encoding='utf-8', errors='replace') as fh:
+                text = fh.read()
+        except OSError:
+            continue
+        for rid, hexbody in AUDIT_RE.findall(text):
+            if rid in seen:
+                continue
+            try:
+                payload = bytes.fromhex(hexbody).decode('utf-8')
+            except ValueError:
+                continue
+            new.append((rid, payload))
+    if not new:
+        return
+    for rid, payload in new:
+        seen[rid] = int(time.time())
+        for line in payload.splitlines():
+            (LOG.warning if ('[warn]' in line or '[FAIL]' in line)
+             else LOG.info)('audit %s: %s', rid, line)
+    if len(seen) > 200:
+        for rid in sorted(seen, key=seen.get)[:-100]:
+            del seen[rid]
+    _save_api_state(st)
+
+
 # consumer registries — the poll loop runs these instead of parallel
 # per-consumer if-blocks. OPS_CONSUMERS are the latency-critical path
 # (every iteration; a truthy return accelerates the boards pull+emit);
 # SV_CONSUMERS are fire-and-forget staged requests consumed on the SV
 # mtime tick before the emit that follows. process_bugs stays out —
 # its return value gates the tsm re-emit.
-OPS_CONSUMERS = (process_orders, process_relay, process_board_refresh)
+OPS_CONSUMERS = (process_orders, process_writs, process_relay,
+                 process_board_refresh)
 SV_CONSUMERS = (process_backend_reqs, process_api_reqs,
-                process_board_reqs)
+                process_board_reqs, process_audit)
 
 
 def _order_results_emit():
     return (_load_api_state().get('order_results') or {})
+
+
+def _writ_results_emit():
+    return (_load_api_state().get('writ_results') or {})
 
 
 def _api_emit():
