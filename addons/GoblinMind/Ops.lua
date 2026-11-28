@@ -42,7 +42,7 @@ local CHECKS = {
 	bid = function(ctx, lot)
 		if not GM.AH.open then return nil, "open the auction house first" end
 		if not lot then return nil, "no lot" end
-		if not (lot.auctionID or lot.aid) then
+		if not (lot.auctionID or lot.aid or lot.id) then
 			return nil, "missing auction id — rescan first" end
 		if not (lot.total and lot.total > 0) then
 			return nil, "bid needs an amount" end
@@ -230,7 +230,7 @@ function O.Bid(ctx, lot)
 	if not ok then return fail(reason) end
 	return GM.AH.Execute({ kind = "bid", itemID = ctx.id,
 		qty = lot.qty or 1, total = lot.total,
-		auctionID = lot.auctionID or lot.aid })
+		auctionID = lot.auctionID or lot.aid or lot.id })
 end
 
 -- cancel one of our listings — the engine journals cancel and the

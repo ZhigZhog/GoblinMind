@@ -1429,7 +1429,8 @@ function AU.Refresh(vm)
 					or (ui.sel and ui.sel.mkt and a.unit and a.unit < ui.sel.mkt * 0.9)
 						and "pos" or "accent"))
 				local lot = a.total or (a.unit or 0) * (a.qty or 1)
-				row.c3:SetText((a.id and "lot " or "tot ") .. GM.Money(lot)
+				row.c3:SetText((a.bidOnly and "bid "
+					or a.id and "lot " or "tot ") .. GM.Money(lot)
 					.. (a.own and " · yours"
 						or a.seller and (" · " .. (GM.NameColored
 							and GM.NameColored(a.seller) or a.seller))
@@ -1437,9 +1438,11 @@ function AU.Refresh(vm)
 				row.act:Show()
 				local confirming = ui.confirmAsk == a
 				row.act.text:SetText(a.own and "OWN"
-					or confirming and "CONFIRM" or "BUY")
+					or confirming and "CONFIRM"
+					or (a.bidOnly and "BID" or "BUY"))
 				row.act.text:SetTextColor(GM.RGB(a.own and "textDim"
-					or confirming and "warn" or "accent"))
+					or confirming and "warn"
+					or a.bidOnly and "secondary" or "accent"))
 				local ask = a
 				row.act:SetScript("OnClick", function()
 					if confirming then
@@ -1451,6 +1454,13 @@ function AU.Refresh(vm)
 						end
 						ui.confirmAsk = nil
 						AU.Refresh()
+					elseif ask.bidOnly then
+						-- no buyout on this lot — BID routes the real
+						-- bid verb (escrow) instead of the buyout path
+						if not ask.own then
+							GM.Ops.Bid(ui.sel.ctx or ui.sel.id, ask)
+							AU.Refresh()
+						end
 					else
 						BuyAsk(ask)
 					end
@@ -1460,7 +1470,7 @@ function AU.Refresh(vm)
 			end
 		end
 		ui.foot:SetText("one protected call per click · item BUY = lot buyout · "
-			.. "commodity BUY stages a quote → CONFIRM")
+			.. "no-buyout lots show BID · commodity BUY stages a quote → CONFIRM")
 	elseif ui.page == "mine" then
 		-- MINE page: posted auctions on top, our bids underneath
 		local rows = vm.rows

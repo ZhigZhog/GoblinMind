@@ -1980,7 +1980,24 @@ local mev = CreateFrame("Frame")
 pcall(mev.RegisterEvent, mev, "MERCHANT_SHOW")
 pcall(mev.RegisterEvent, mev, "MERCHANT_UPDATE")
 pcall(mev.RegisterEvent, mev, "MERCHANT_CLOSED")
+pcall(mev.RegisterEvent, mev, "PLAYER_REGEN_DISABLED")
+pcall(mev.RegisterEvent, mev, "PLAYER_REGEN_ENABLED")
 mev:SetScript("OnEvent", function(_, e)
+	-- combat locks input to addon frames on this client — a dead
+	-- pinned window is worse than a hidden one; restore on regen
+	if e == "PLAYER_REGEN_DISABLED" then
+		if ui and ui.frame and ui.frame:IsShown() then
+			ui._combatHidden = true
+			ui.frame:Hide()
+		end
+		return
+	elseif e == "PLAYER_REGEN_ENABLED" then
+		if ui and ui._combatHidden then
+			ui._combatHidden = nil
+			if ui.frame then ui.frame:Show() end
+		end
+		return
+	end
 	PQ.Refresh()
 	if e == "MERCHANT_SHOW" then
 		-- the event precedes MerchantFrame:IsShown() — the instant

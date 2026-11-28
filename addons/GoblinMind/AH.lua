@@ -558,7 +558,8 @@ function GM.AH.CollectItemAsks()
 	for i = 1, C_AuctionHouse.GetNumItemSearchResults(key) do
 		local r = C_AuctionHouse.GetItemSearchResultInfo(key, i)
 		if r and r.auctionID then
-			local price = r.buyoutAmount or r.buyout or r.minBid or r.minPrice
+			local buyout = r.buyoutAmount or r.buyout
+			local price = buyout or r.minBid or r.minPrice
 			local qty = r.quantity or r.totalQuantity or 1
 			if price and qty > 0 then
 				-- owners[] uses sentinels on Forever: "player" = our own
@@ -580,6 +581,7 @@ function GM.AH.CollectItemAsks()
 				-- unit is the price directly; total is the lot cost.
 				tinsert(asks, { id = r.auctionID, qty = qty, unit = price, total = price * qty,
 					bid = r.bidAmount, minBid = r.minBid,
+					bidOnly = (not buyout or buyout <= 0) or nil,
 					-- timeLeftSeconds arrives 0 (unpopulated) on this
 					-- client — 0 is truthy in Lua, so without the >0
 					-- guard it shadows the real bucket/estimate with
