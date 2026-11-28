@@ -1362,7 +1362,7 @@ function S.Refresh(vm)
 	ui.age:SetText(tostring(vm.age or ""))
 	ui.yellTTL:SetText(tostring(vm.yellTTL
 		or (GM.Writs and GM.Writs.YellTTL and GM.Writs.YellTTL())
-		or 30))
+		or 10))
 	ui.mmHide.paint()
 	ui.embed.paint()
 	ui.mod.paint()

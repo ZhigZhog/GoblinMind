@@ -1870,7 +1870,7 @@ end
 -- backend. Deliberately loose keyword match; GM.db.yellTerms adds
 -- user terms. Session-only ring, deduped per sender.
 local yellRing, yellSeen = {}, {}
-local YELL_MAX, YELL_TTL = 100, 30
+local YELL_MAX, YELL_TTL = 100, 10
 local YELL_WORDS = { "enchant", "lockpick", "lock pick", "lfw",
 	"will craft", "crafting", "portal", "summon", "wts", "wtb",
 	"selling", "buying" }
@@ -2093,7 +2093,7 @@ local function armSweep()
 	-- while any row lives, disarms when the ring drains
 	if sweepArmed or not GM.After then return end
 	sweepArmed = true
-	GM.After(yellTTL() * 60, function()
+	GM.After(math.min(yellTTL() * 60, 60), function()
 		sweepArmed = false
 		pokeShops()
 		if (W.YellOffers() or {})[1] then armSweep() end
