@@ -160,6 +160,14 @@ local function Build()
 		})
 		row:SetPoint("TOPLEFT", 0, -((i - 1) * ROW_H))
 		row:SetZebra(i)
+		-- the +1c bid gesture lives on the bid cell: PlaceBid is a
+		-- protected call and a double-click's timer defer isn't a
+		-- hardware event, so the upgrade moved off the row click
+		local bidBtn = CreateFrame("Button", nil, row)
+		bidBtn:SetPoint("LEFT", 296, 0)
+		bidBtn:SetSize(64, ROW_H - 2)
+		W.HoverTint(bidBtn) -- the only visible affordance the cell has
+		row.bidBtn = bidBtn
 		-- dismiss: drop the hit without buying
 		local x = W.XBtn(row)
 		x:SetPoint("RIGHT", -3, 0)
@@ -172,7 +180,7 @@ local function Build()
 
 	ui.foot = GM.MakeFontString(f, GM.FONT, 9, "textDim")
 	ui.foot:SetPoint("BOTTOMLEFT", 14, 10)
-	ui.foot:SetText("click = buy flow · double-click = bid +1c · "
+	ui.foot:SetText("click = buy flow · BID cell = bid +1c · "
 		.. "shift-click = plan · x dismisses · deepest discount sorts first")
 
 	-- ============ layout wiring ============
@@ -309,12 +317,11 @@ function SU.Refresh()
 				hit.done = true
 				SU.Refresh()
 			end)
+			row.bidBtn:SetScript("OnClick", function()
+				GM.Shopping.BidHit(hit)
+				SU.Refresh()
+			end)
 			row:SetScript("OnClick", function(_, btn)
-				-- shift/right-click targets the planner. Clicks defer
-				-- ~0.35s so a second tap can upgrade the gesture to a
-				-- +1c BID before any protected call fires — on a ready
-				-- row the first tap would otherwise buy instantly and
-				-- double-click could never reach the bid path.
 				if btn == "RightButton" then
 					if h.itemID then GM.TargetItem(h.itemID) end
 					return
@@ -323,23 +330,10 @@ function SU.Refresh()
 				-- widget's hook already ran it on mousedown; just
 				-- keep it out of the buy path
 				if IsModifiedClick() then return end
-				local now = GetTime()
-				if row.lastClick and now - row.lastClick < 0.4 then
-					row.lastClick, row.pend = nil, nil
-					GM.Shopping.BidHit(hit)
-					SU.Refresh()
-					return
-				end
-				row.lastClick = now
-				row.pend = (row.pend or 0) + 1
-				local pend = row.pend
-				GM.Time.After(0.35, function()
-					if row.pend ~= pend then return end -- a 2nd tap took over
-					row.pend = nil
-					if hit.wantBid then GM.Shopping.BidHit(hit)
-					else GM.Shopping.BuyHit(hit) end
-					SU.Refresh()
-				end)
+				-- no defer — this click IS the hardware event the
+				-- protected buy call needs
+				GM.Shopping.BuyHit(hit)
+				SU.Refresh()
 			end)
 	end
 

@@ -315,6 +315,7 @@ local QT = {}          -- kind -> GetTime() of last dispatch
 local lastDispatch = 0 -- GetTime() of last dispatch, any kind
 local queryQ = {}      -- pending { kind, fn } jobs, FIFO
 local pumpArmed = false
+local throttleSince  -- GetTime() the server-throttle gate first held
 local QGAP = 1.5       -- seconds between any two endpoint calls
 
 function GM.AH.QueryAge(kind)
@@ -339,12 +340,24 @@ local function PumpQ()
 		return
 	end
 	-- the server reports its own pipe readiness — the fixed gap is a
-	-- floor between calls, this is the throttle's actual verdict
-	if C_AuctionHouse.IsThrottledMessageSystemReady
-		and not C_AuctionHouse.IsThrottledMessageSystemReady() then
-		pumpArmed = true
-		GM.Time.After(0.3, PumpQ)
-		return
+	-- floor between calls, this is the throttle's actual verdict. The
+	-- flag can STICK after a silently-dropped send though — past 10s
+	-- of continuous "not ready" the call is more likely to land than
+	-- the wait is to end, so let it try (a drop just costs a retry)
+	local throttled
+	if C_AuctionHouse.IsThrottledMessageSystemReady then
+		local ok, ready = pcall(C_AuctionHouse.IsThrottledMessageSystemReady)
+		throttled = ok and not ready
+	end
+	if throttled then
+		throttleSince = throttleSince or GetTime()
+		if GetTime() - throttleSince < 10 then
+			pumpArmed = true
+			GM.Time.After(0.3, PumpQ)
+			return
+		end
+	else
+		throttleSince = nil
 	end
 	local wait = QGAP - (GetTime() - lastDispatch)
 	if wait > 0 then
@@ -354,7 +367,11 @@ local function PumpQ()
 	end
 	table.remove(queryQ, 1)
 	QT[job.kind], lastDispatch = GetTime(), GetTime()
-	job.fn()
+	local ok, err = pcall(job.fn)
+	if not ok then
+		GM.Print(GM.CC("err") .. "queue job failed: "
+			.. tostring(err) .. "|r")
+	end
 	if queryQ[1] then
 		pumpArmed = true
 		GM.Time.After(QGAP, PumpQ)
@@ -558,7 +575,8 @@ function GM.AH.CollectItemAsks()
 	for i = 1, C_AuctionHouse.GetNumItemSearchResults(key) do
 		local r = C_AuctionHouse.GetItemSearchResultInfo(key, i)
 		if r and r.auctionID then
-			local price = r.buyoutAmount or r.buyout or r.minBid or r.minPrice
+			local buyout = r.buyoutAmount or r.buyout
+			local price = buyout or r.minBid or r.minPrice
 			local qty = r.quantity or r.totalQuantity or 1
 			if price and qty > 0 then
 				-- owners[] uses sentinels on Forever: "player" = our own
@@ -580,6 +598,7 @@ function GM.AH.CollectItemAsks()
 				-- unit is the price directly; total is the lot cost.
 				tinsert(asks, { id = r.auctionID, qty = qty, unit = price, total = price * qty,
 					bid = r.bidAmount, minBid = r.minBid,
+					bidOnly = (not buyout or buyout <= 0) or nil,
 					-- timeLeftSeconds arrives 0 (unpopulated) on this
 					-- client — 0 is truthy in Lua, so without the >0
 					-- guard it shadows the real bucket/estimate with
@@ -736,11 +755,24 @@ function GM.AH.ShopPump()
 		NotifyShop()
 		return
 	end
-	if C_AuctionHouse.IsThrottledMessageSystemReady
-		and not C_AuctionHouse.IsThrottledMessageSystemReady() then
+	local throttled
+	if C_AuctionHouse.IsThrottledMessageSystemReady then
+		local ok, ready = pcall(C_AuctionHouse.IsThrottledMessageSystemReady)
+		throttled = ok and not ready
+	end
+	if throttled then
+		-- same stuck-flag guard as the pump gate — re-arm so the
+		-- search isn't a dead end, and stop trusting the flag past
+		-- 10s (the send is likelier to land than the wait is to end)
+		p.throttleT = p.throttleT or GetTime()
 		GM.AH.shop.status = "waiting for the server…"
 		NotifyShop()
-		return
+		if GetTime() - p.throttleT < 10 then
+			GM.Time.After(0.3, GM.AH.ShopPump)
+			return
+		end
+	else
+		p.throttleT = nil
 	end
 	p.sends = (p.sends or 0) + 1
 	p.gen = (p.gen or 0) + 1
@@ -900,9 +932,23 @@ function GM.AH.FullScan()
 	-- never stack a second replicate pass on an in-flight collect —
 	-- a parallel Poll chain doubles the frame work the loop below does
 	if GM.AH.wantBook or GM.AH.collecting then
-		GM.PlanQueue.ScanStatus(GM.CC("textDim")
-			.. "a full scan is already running|r")
-		return
+		-- self-heal: wantBook outlives its poll chain if the queue
+		-- stalls or a tick throws — a stale stamp means the chain is
+		-- dead, so clear it and let this click retry instead of
+		-- reporting "already running" forever
+		if not GM.AH.collecting and GM.AH.wantBook
+			and GetTime() - (GM.AH.pollT or 0) > 5 then
+			GM.AH.wantBook = nil
+		elseif GM.AH.browse and not GM.AH.browse.sent
+			and GetTime() - (GM.AH.browse.t0 or 0) > 10 then
+			-- queued browse never dispatched (queue stall) — its
+			-- watchdog arms inside the job so nothing can clear it
+			GM.AH.browse = nil
+		else
+			GM.PlanQueue.ScanStatus(GM.CC("textDim")
+				.. "a full scan is already running|r")
+			return
+		end
 	end
 	-- ReplicateItems is heavy: this client enforces a script execution
 	-- limit AND TSM hook-processes every replicate scan too — 30s floor
@@ -934,8 +980,11 @@ function GM.AH.FullScan()
 	GM.AH.dbgEvents = eventsSeen
 	local function Poll()
 		if not GM.AH.wantBook then return end -- collect ran or gave up
+		GM.AH.pollT = GetTime()
 		polls = polls + 1
-		local n = C_AuctionHouse.GetNumReplicateItems() or 0
+		local nOk, n = pcall(C_AuctionHouse.GetNumReplicateItems)
+		if not nOk then n = 0 end
+		n = n or 0
 		if n > 0 then
 			if n == lastN then
 				stable = stable + 1
@@ -999,6 +1048,7 @@ function GM.AH.FullScan()
 			GM.View.Refresh("planner")
 			return
 		end
+		GM.AH.pollT = GetTime()
 		GM.Time.After(0.5, Poll)
 	end)
 	GM.View.Refresh("planner")
@@ -1487,12 +1537,14 @@ function GM.AH.BrowseBook()
 	if not (C_AuctionHouse.SendBrowseQuery and C_AuctionHouse.GetBrowseResults) then
 		return false
 	end
-	local b = { seen = 0, book = {}, rows = {}, tries = 0 }
+	local b = { seen = 0, book = {}, rows = {}, tries = 0,
+		t0 = GetTime() }
 	GM.AH.browse = b
 	-- the query rides the shared queue — GM.AH.browse is set now so
 	-- the wait is visible as busy, but the endpoint call + watchdog
 	-- only arm when the job actually dispatches
 	GM.AH.Dispatch("browse", function()
+		b.sent = true
 		local ok, err = pcall(C_AuctionHouse.SendBrowseQuery, {
 			searchString = "", sorts = BROWSE_SORTS,
 			filters = {}, itemClassFilters = {},

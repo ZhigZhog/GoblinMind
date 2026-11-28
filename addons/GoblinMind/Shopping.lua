@@ -173,6 +173,17 @@ local function Build()
 	GM.Panel(ui.list, "contLowest")
 	ui.rows = {}
 	for i = 1, ROWS do ui.rows[i] = BuildRow(ui.list, i) end
+	-- the fill slot can run shorter than the row pool — clip the
+	-- overflow AND wheel-page the list (craft mode easily outgrows
+	-- 13 rows; rows used to paint past the frame bottom)
+	if ui.list.SetClipsChildren then ui.list:SetClipsChildren(true) end
+	ui.list:EnableMouseWheel(true)
+	ui.list:SetScript("OnMouseWheel", function(_, d)
+		ui.scroll = (ui.scroll or 0) - d * 3
+		S.Refresh()
+	end)
+	ui.listCount = GM.MakeFontString(header, GM.FONT, 9, "textDim")
+	ui.listCount:SetPoint("TOPRIGHT", -8, -4)
 
 	local foot = GM.MakeFontString(f, GM.FONT, 9, "secondary")
 	foot:SetText("one protected call per click · items = PlaceBid · commodities = quote → CONFIRM")
@@ -240,6 +251,7 @@ end
 
 function S.SetMode(mode)
 	ui.mode = mode
+	if ui then ui.scroll = 0 end
 	S.Refresh()
 end
 
@@ -307,8 +319,11 @@ function S.BuyRow(row)
 end
 
 -- sniper hit: click 1 re-queries the item's book; click 2 buys the
--- matching listing — the two clicks keep purchases hardware-driven
+-- matching listing — the two clicks keep purchases hardware-driven.
+-- The row click fires this directly (no defer): PlaceBid is a
+-- protected call and a timer callback isn't a hardware event
 function S.BuyHit(h)
+	if h.done then return end
 	if not GM.AH.open then
 		GM.Print(GM.CC("warn") .. "sniper needs the auction house open|r")
 		return
@@ -389,12 +404,13 @@ function S.BuyHit(h)
 	end, GM.AH.ItemKeyFromLink(h.link))
 end
 
--- sniper bid: double-click places a +1c bid over the current bid (or
+-- sniper bid: the BID cell places a +1c bid over the current bid (or
 -- the listing's minimum when nobody's bid yet). auctionID needs the
--- live re-query — without h.live the first double-click arms the row
--- and scans; the next click fires PlaceBid (protected calls stay on
+-- live re-query — without h.live the first cell click arms the row
+-- and scans; the next fires PlaceBid (protected calls stay on
 -- hardware clicks).
 function S.BidHit(h)
+	if h.done then return end
 	if not GM.AH.open then
 		GM.Print(GM.CC("warn") .. "sniper needs the auction house open|r")
 		return
@@ -446,7 +462,7 @@ function S.BidHit(h)
 				tl = cheapest.tl }
 			h.state = "ready"
 			if cheapest.id then
-				GM.Print(GM.CC("textDim") .. "bid armed — click the row to place +1c|r")
+				GM.Print(GM.CC("textDim") .. "bid armed — click the BID cell to place +1c|r")
 			else
 				-- aggregate rows have no bid endpoint — don't arm a
 				-- +1c that can never fire
@@ -568,8 +584,11 @@ function S.Refresh(vm)
 		S.Status(GM.CC("textDim") .. vm.empty .. "|r")
 	end
 
+	local maxScroll = math.max(0, #display - ROWS)
+	ui.scroll = math.min(ui.scroll or 0, maxScroll)
+	GM.Widgets.ScrollText(ui.listCount, ui.scroll, ROWS, #display)
 	for i = 1, ROWS do
-		local row, e = ui.rows[i], display[i]
+		local row, e = ui.rows[i], display[i + ui.scroll]
 		if not e then
 			row:Hide()
 		elseif e.craft then
