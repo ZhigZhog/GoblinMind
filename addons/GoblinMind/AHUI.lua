@@ -722,7 +722,8 @@ local function Build()
 	-- client-side filters over the shared browse array — changes
 	-- re-render instantly, no re-query
 	local fb = CreateFrame("Frame", nil, f)
-	fb:SetSize(216, 150)
+	-- 166: CLEAR's top edge used to shave the max-price copper box
+	fb:SetSize(216, 166)
 	-- pops under its button — a fixed frame offset put it over the
 	-- pane header and buried the toggle that closes it
 	fb:SetPoint("TOPRIGHT", ui.fltBtn, "BOTTOMRIGHT", 0, -4)
